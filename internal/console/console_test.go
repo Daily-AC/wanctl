@@ -19,6 +19,8 @@ func newSvc(t *testing.T) *Service {
 func TestAskBlocksUntilDecide(t *testing.T) {
 	s := newSvc(t)
 	s.timeout = time.Second
+	_, cancel := s.Subscribe()
+	defer cancel()
 	done := make(chan policy.Decision, 1)
 	go func() { done <- s.Ask(policy.Request{Kind: policy.KindExec, Cmd: "echo hi"}) }()
 
@@ -46,6 +48,8 @@ func TestAskBlocksUntilDecide(t *testing.T) {
 func TestAskTimeoutDenies(t *testing.T) {
 	s := newSvc(t)
 	s.timeout = 50 * time.Millisecond
+	_, cancel := s.Subscribe()
+	defer cancel()
 	d := s.Ask(policy.Request{Kind: policy.KindExec, Cmd: "x"})
 	if d.Allow {
 		t.Fatal("timeout should deny")
@@ -68,6 +72,8 @@ func TestSubscribeNotifiedOnPending(t *testing.T) {
 func TestDecideVerdicts(t *testing.T) {
 	s := newSvc(t)
 	s.timeout = time.Second
+	_, cancel := s.Subscribe()
+	defer cancel()
 	for _, tc := range []struct {
 		v            string
 		allow, remem bool
@@ -96,5 +102,18 @@ func TestDecideVerdicts(t *testing.T) {
 		if d.Allow != tc.allow || d.Remember != tc.remem || d.Scope != tc.scope {
 			t.Fatalf("verdict %q -> %+v", tc.v, d)
 		}
+	}
+}
+
+func TestAskDeniesWhenNoFrontend(t *testing.T) {
+	s := newSvc(t)
+	s.timeout = 10 * time.Second // long, to prove we DON'T wait for it
+	start := time.Now()
+	d := s.Ask(policy.Request{Kind: policy.KindExec, Cmd: "x"})
+	if d.Allow {
+		t.Fatal("no front-end subscribed: must deny")
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("denied too slowly (%v): should be immediate when no subscribers", time.Since(start))
 	}
 }

@@ -68,7 +68,20 @@ func New(engine *policy.Engine, log *eventlog.Logger, info Info) *Service {
 
 // Ask implements policy.Approver: enqueue and block until a front-end decides
 // or the timeout elapses (then deny).
+//
+// If no console front-end is subscribed (headless: no portal session, no TTY
+// prompt), we deny immediately rather than blocking until timeout. Operators
+// pre-load allow-rules so that legitimate operations are never enqueued at all.
 func (s *Service) Ask(req policy.Request) policy.Decision {
+	s.mu.Lock()
+	hasFrontend := len(s.subs) > 0
+	s.mu.Unlock()
+	if !hasFrontend {
+		// No console front-end is listening (headless: no portal session, no TTY
+		// prompt). Deny by default rather than blocking until timeout; operators
+		// pre-load rules to allow specific operations.
+		return policy.Decision{Allow: false}
+	}
 	id := newID()
 	p := &pending{
 		view: Pending{

@@ -87,6 +87,10 @@ func TestConsoleApproverUnblocksGate(t *testing.T) {
 	if a.console == nil {
 		t.Fatal("expected a console service")
 	}
+	// Subscribe before calling gate so that Ask enqueues (deny-by-default when
+	// no front-end is listening; real portal/TTY sessions always subscribe first).
+	_, cancelSub := a.console.Subscribe()
+	defer cancelSub()
 	go func() {
 		var id string
 		for id == "" {
