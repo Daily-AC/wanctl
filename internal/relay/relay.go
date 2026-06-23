@@ -154,6 +154,9 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	r.agents[key] = ac
 	r.mu.Unlock()
+	if r.admin != nil {
+		r.admin.UpsertDevice(ns, reg.Device)
+	}
 	defer func() {
 		r.mu.Lock()
 		if r.agents[key] == ac {
