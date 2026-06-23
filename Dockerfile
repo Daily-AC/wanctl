@@ -9,5 +9,7 @@ RUN CGO_ENABLED=0 go build -o /out/wanctl .
 FROM alpine:3.20
 COPY --from=build /out/wanctl /usr/local/bin/wanctl
 EXPOSE 8080
-ENV WANCTL_TOKENS=""
-CMD ["wanctl", "relay", "--addr", ":8080"]
+# Role is chosen at runtime: WANCTL_ROLE=relay (default) or portal. Same image
+# serves both thunderbox apps (relay = public + DB; portal = internal SSO + DB).
+ENV WANCTL_ROLE=relay
+CMD ["sh", "-c", "wanctl ${WANCTL_ROLE} --addr :8080"]

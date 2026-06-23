@@ -21,6 +21,7 @@ import (
 	"wanctl/internal/client"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/policy"
+	"wanctl/internal/portal"
 	"wanctl/internal/relay"
 	"wanctl/internal/transport"
 )
@@ -28,7 +29,8 @@ import (
 const usage = `wanctl — control a device across the internet over an encrypted, relayed channel
 
 USAGE
-  wanctl relay [--addr :8080]                 run the relay (thunderbox); tokens from WANCTL_TOKENS
+  wanctl relay  [--addr :8080]                run the relay (thunderbox); DATABASE_URL or WANCTL_TOKENS
+  wanctl portal [--addr :8080]                run the team portal (thunderbox, internal SSO); DATABASE_URL
   wanctl agent [--name N] [--relay URL] [--token T] [--yes] [--shell S]
   wanctl exec  [--target NS/DEV] [--oneshot] <command...>
   wanctl push  [--target NS/DEV] <local> <remote>
@@ -51,6 +53,8 @@ func main() {
 	switch os.Args[1] {
 	case "relay":
 		err = cmdRelay(os.Args[2:])
+	case "portal":
+		err = cmdPortal(os.Args[2:])
 	case "agent":
 		err = cmdAgent(ctx, os.Args[2:])
 	case "exec":
@@ -114,6 +118,22 @@ func cmdRelay(args []string) error {
 	}
 	fmt.Printf("wanctl relay listening on %s\n", *addr)
 	return http.ListenAndServe(*addr, r.Handler())
+}
+
+func cmdPortal(args []string) error {
+	fs := flag.NewFlagSet("portal", flag.ExitOnError)
+	addr := fs.String("addr", ":8080", "listen address")
+	fs.Parse(args)
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		return fmt.Errorf("portal requires DATABASE_URL (shared relay Postgres)")
+	}
+	p, err := portal.New(dsn, os.Getenv("PORTAL_USER_HEADER"))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("wanctl portal listening on %s (identity header: %q)\n", *addr, envOr("PORTAL_USER_HEADER", "X-Forwarded-User"))
+	return http.ListenAndServe(*addr, p.Handler())
 }
 
 func cmdAgent(ctx context.Context, args []string) error {
