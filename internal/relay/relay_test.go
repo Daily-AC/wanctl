@@ -105,4 +105,11 @@ func TestDialAllowedPortal(t *testing.T) {
 	if _, _, _, ok := r.dialAllowed("alice", "bob/box"); ok {
 		t.Fatal("alice should not dial bob without ACL")
 	}
+
+	// unset portalNS: the portal path must be entirely inert (no bypass)
+	r2 := New(EnvTokenStore("ptok:portal,utok:alice"))
+	// SetPortalNS intentionally NOT called
+	if _, _, _, ok := r2.dialAllowed("portal", "alice/legion"); ok {
+		t.Fatal("unset portalNS must not grant any dial bypass")
+	}
 }
