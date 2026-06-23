@@ -32,6 +32,10 @@ WANCTL_TOKENS="tok:teamA" wanctl relay --addr :8080
 
 # Device to be controlled:
 wanctl agent --relay wss://wanctl-relay.***REMOVED***.***REMOVED***.com --token tok --name home-pc
+# Behind a reverse proxy that strips WebSocket upgrades (e.g. thunderbox nginx),
+# use the proxy-agnostic HTTP transport instead:
+wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token tok --name home-pc --transport http
+# ...and on the controller: export WANCTL_TRANSPORT=http
 
 # Controller:
 export WANCTL_RELAY=wss://wanctl-relay.***REMOVED***.***REMOVED***.com WANCTL_TOKEN=tok
