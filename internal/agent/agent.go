@@ -27,10 +27,8 @@ import (
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
 
-	"golang.org/x/term" //nolint:typecheck // used by Task 4 (runConsolePrompt)
+	"golang.org/x/term"
 )
-
-var _ = term.IsTerminal // keep import until Task 4 adds runConsolePrompt
 
 // Options configures an agent run.
 type Options struct {
@@ -61,8 +59,9 @@ type Agent struct {
 }
 
 // New constructs an Agent with loaded identity, controller allow-list, and
-// policy engine. The approver is the device console when attended, deny when
-// running headless (so unattended agents are safe unless in bypass mode).
+// policy engine. The approver is the queue-backed console service; a local CLI
+// terminal and/or a connected portal can both feed decisions into the same
+// queue. Headless + no portal connected means the 60 s timeout deny fires.
 func New(opts Options) (*Agent, error) {
 	id, err := transport.LoadOrCreateIdentity()
 	if err != nil {
@@ -163,6 +162,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	fmt.Printf("wanctl agent %q online via %s\n  fingerprint: %s\n", a.opts.Name, a.opts.RelayURL, a.id.Fingerprint)
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		go a.runConsolePrompt(ctx)
+	}
 
 	dec := json.NewDecoder(bufio.NewReader(nc))
 	for {
@@ -200,7 +202,14 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
 	defer conn.Close()
 
 	hello, err := protocol.ReadMessage(conn)
-	if err != nil || hello.Kind != protocol.KindHello {
+	if err != nil {
+		return
+	}
+	if hello.Kind == protocol.KindConsoleHello {
+		a.serveConsole(ctx, conn)
+		return
+	}
+	if hello.Kind != protocol.KindHello {
 		return
 	}
 	if !a.authorize(fp, hello.Name) {
@@ -398,4 +407,134 @@ func (a *Agent) session(fp string) (*server.ShellSession, error) {
 	}
 	a.sessions[fp] = sess
 	return sess, nil
+}
+
+// handleConsoleRPC dispatches a single console RPC message and returns the response.
+// It is a pure function: no goroutines, no writes to conn.
+func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
+	switch msg.Kind {
+	case protocol.KindConsoleState:
+		snap := a.console.State()
+		data, _ := json.Marshal(snap)
+		return protocol.Message{Kind: protocol.KindConsoleState, Data: json.RawMessage(data)}
+
+	case protocol.KindDecide:
+		ok := a.console.Decide(msg.ApprovalID, msg.Verdict)
+		verdict := "ok"
+		if !ok {
+			verdict = "not-found"
+		}
+		return protocol.Message{Kind: protocol.KindDecide, Verdict: verdict}
+
+	case protocol.KindRuleAdd:
+		err := a.console.AddRule(policy.Rule{
+			Kind:    policy.Kind(msg.RuleKind),
+			Pattern: msg.Pattern,
+			Dir:     msg.Dir,
+			Scope:   policy.Scope(msg.Scope),
+		})
+		resp := protocol.Message{Kind: protocol.KindRuleAdd}
+		if err != nil {
+			errJSON, _ := json.Marshal(err.Error())
+			resp.Data = json.RawMessage(errJSON)
+		}
+		return resp
+
+	case protocol.KindRuleRm:
+		err := a.console.RemoveRule(msg.Index)
+		resp := protocol.Message{Kind: protocol.KindRuleRm}
+		if err != nil {
+			errJSON, _ := json.Marshal(err.Error())
+			resp.Data = json.RawMessage(errJSON)
+		}
+		return resp
+
+	case protocol.KindModeSet:
+		a.console.SetMode(policy.Mode(msg.ConsoleMode))
+		return protocol.Message{Kind: protocol.KindModeSet}
+
+	default:
+		return protocol.Message{Kind: protocol.KindError, Data: json.RawMessage(`"unknown RPC kind"`)}
+	}
+}
+
+// serveConsole handles an E2E console session with a portal. All writes go
+// through a single write mutex so async approval notifications and RPC
+// responses never interleave on the wire.
+func (a *Agent) serveConsole(ctx context.Context, conn net.Conn) {
+	var wmu sync.Mutex
+	send := func(m protocol.Message) {
+		wmu.Lock()
+		defer wmu.Unlock()
+		_ = json.NewEncoder(conn).Encode(m)
+	}
+
+	// Push approval notifications asynchronously.
+	ch, unsub := a.console.Subscribe()
+	defer unsub()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case _, ok := <-ch:
+				if !ok {
+					return
+				}
+				snap := a.console.State()
+				if len(snap.Pending) == 0 {
+					continue
+				}
+				p := snap.Pending[0]
+				send(protocol.Message{
+					Kind:       protocol.KindApprovalNotif,
+					ApprovalID: p.ID,
+					Data:       json.RawMessage(`"` + p.Cmd + `"`),
+				})
+			}
+		}
+	}()
+
+	dec := json.NewDecoder(conn)
+	for {
+		var msg protocol.Message
+		if err := dec.Decode(&msg); err != nil {
+			return
+		}
+		resp := a.handleConsoleRPC(msg)
+		send(resp)
+	}
+}
+
+// runConsolePrompt is a local CLI front-end for approval requests. It runs in a
+// goroutine when the agent is launched in an interactive terminal. Decisions feed
+// into the same queue as remote portal decisions; first answer wins.
+func (a *Agent) runConsolePrompt(ctx context.Context) {
+	ch, unsub := a.console.Subscribe()
+	defer unsub()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		}
+		snap := a.console.State()
+		for _, p := range snap.Pending {
+			fmt.Printf("\n--- approval request ---\n")
+			fmt.Printf("ID:  %s\n", p.ID)
+			fmt.Printf("Cmd: %s\n", p.Cmd)
+			fmt.Printf("Allow? [y/N]: ")
+			var line string
+			fmt.Scanln(&line)
+			line = strings.TrimSpace(strings.ToLower(line))
+			verdict := "deny"
+			if line == "y" || line == "yes" {
+				verdict = "allow"
+			}
+			a.console.Decide(p.ID, verdict)
+		}
+	}
 }
