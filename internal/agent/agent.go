@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"wanctl/internal/console"
 	"wanctl/internal/eventlog"
-	"wanctl/internal/gui"
 	"wanctl/internal/httpconn"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
@@ -27,8 +27,10 @@ import (
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
 
-	"golang.org/x/term"
+	"golang.org/x/term" //nolint:typecheck // used by Task 4 (runConsolePrompt)
 )
+
+var _ = term.IsTerminal // keep import until Task 4 adds runConsolePrompt
 
 // Options configures an agent run.
 type Options struct {
@@ -39,19 +41,19 @@ type Options struct {
 	AutoYes   bool
 	Transport string      // "ws" (default) or "http" (proxy-agnostic)
 	Mode      policy.Mode // "normal" (default) or "bypass"
-	GUIPort   int         // >0 enables the local web GUI (approvals/monitor) on 127.0.0.1:GUIPort
+	PortalFP  string      // pre-trusted portal fingerprint ("SHA256:..."), enrolled at install time
 }
 
 // Agent is a running controlled node.
 type Agent struct {
-	id     *transport.Identity
-	known  *transport.Store
-	opts   Options
-	engine *policy.Engine
-	gui    *gui.Server
-	log    *eventlog.Logger
-	apprMu sync.Mutex
-	appr   policy.Approver
+	id      *transport.Identity
+	known   *transport.Store
+	opts    Options
+	engine  *policy.Engine
+	console *console.Service
+	log     *eventlog.Logger
+	apprMu  sync.Mutex
+	appr    policy.Approver
 
 	sessMu   sync.Mutex
 	sessions map[string]*server.ShellSession
@@ -95,16 +97,18 @@ func New(opts Options) (*Agent, error) {
 		id: id, known: known, opts: opts, engine: engine, log: logger,
 		sessions: map[string]*server.ShellSession{}, stdin: bufio.NewReader(os.Stdin),
 	}
-	switch {
-	case opts.Mode == policy.ModeBypass:
+	if opts.PortalFP != "" && !known.Has(opts.PortalFP) {
+		_ = known.Add(opts.PortalFP, "portal")
+	}
+	a.console = console.New(engine, logger, console.Info{
+		Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL,
+	})
+	if opts.Mode == policy.ModeBypass {
 		a.appr = policy.AllowApprover{}
-	case opts.GUIPort > 0:
-		a.gui = gui.New(engine, logger, gui.Info{Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL})
-		a.appr = a.gui // humans approve in the browser
-	case term.IsTerminal(int(os.Stdin.Fd())):
-		a.appr = policy.NewConsoleApprover(os.Stdin, os.Stdout)
-	default:
-		a.appr = policy.DenyApprover{} // headless + miss = deny (pre-load rules to allow)
+	} else {
+		// Queue-backed approver: the remote portal and/or the local CLI terminal
+		// feed decisions into the same queue. Headless + no portal -> timeout deny.
+		a.appr = a.console
 	}
 	return a, nil
 }
@@ -142,14 +146,6 @@ func (a *Agent) gate(req policy.Request) (bool, string) {
 
 // Run connects the control channel and serves sessions until ctx is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
-	if a.gui != nil {
-		addr := fmt.Sprintf("127.0.0.1:%d", a.opts.GUIPort)
-		go func() {
-			if err := a.gui.Serve(ctx, addr); err != nil && ctx.Err() == nil {
-				fmt.Fprintf(os.Stderr, "wanctl: GUI server stopped: %v\n", err)
-			}
-		}()
-	}
 	if a.opts.Transport == "http" {
 		return a.runHTTP(ctx)
 	}

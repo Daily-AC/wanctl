@@ -77,3 +77,27 @@ func TestAgentExecOverRelay(t *testing.T) {
 		t.Fatalf("exec result: code=%d out=%q", code, out.String())
 	}
 }
+
+func TestConsoleApproverUnblocksGate(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	a, err := New(Options{RelayURL: "ws://x", Token: "t", Name: "dev1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.console == nil {
+		t.Fatal("expected a console service")
+	}
+	go func() {
+		var id string
+		for id == "" {
+			if p := a.console.State().Pending; len(p) > 0 {
+				id = p[0].ID
+			}
+		}
+		a.console.Decide(id, "y")
+	}()
+	ok, decision := a.gate(policy.Request{Kind: policy.KindExec, Cmd: "echo hi"})
+	if !ok || decision != "approved" {
+		t.Fatalf("gate: ok=%v decision=%q", ok, decision)
+	}
+}
