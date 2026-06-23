@@ -12,6 +12,7 @@ import (
 	"wanctl/internal/agent"
 	"wanctl/internal/policy"
 	"wanctl/internal/relay"
+	"wanctl/internal/transport"
 )
 
 func TestClientExecAndFileRoundTrip(t *testing.T) {
@@ -58,5 +59,18 @@ func TestClientExecAndFileRoundTrip(t *testing.T) {
 	got, _ := os.ReadFile(back)
 	if string(got) != "payload-123" {
 		t.Fatalf("round trip mismatch: %q", got)
+	}
+}
+
+func TestNewWithWiring(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	id, err := transport.LoadOrCreateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	known, _ := transport.OpenStore("known_servers.json")
+	c := NewWith(id, known, "wss://relay.example/", "tok", "http")
+	if c.relayURL != "wss://relay.example" || c.token != "tok" || c.transport != "http" {
+		t.Fatalf("wiring: %+v", c)
 	}
 }

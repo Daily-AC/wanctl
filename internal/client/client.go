@@ -45,10 +45,16 @@ func New() (*Client, error) {
 		return nil, fmt.Errorf("set WANCTL_RELAY and WANCTL_TOKEN")
 	}
 	tr := os.Getenv("WANCTL_TRANSPORT")
+	return NewWith(id, known, relayURL, token, tr), nil
+}
+
+// NewWith builds a client from explicit config (used by the portal, which has
+// its own identity/token and does not read controller env vars).
+func NewWith(id *transport.Identity, known *transport.Store, relayURL, token, tr string) *Client {
 	if tr == "" {
 		tr = "ws"
 	}
-	return &Client{id: id, known: known, relayURL: strings.TrimRight(relayURL, "/"), token: token, transport: tr}, nil
+	return &Client{id: id, known: known, relayURL: strings.TrimRight(relayURL, "/"), token: token, transport: tr}
 }
 
 // Identity exposes this controller's fingerprint.
@@ -101,6 +107,10 @@ func (c *Client) resolve(ctx context.Context, target string) (string, error) {
 }
 
 func (c *Client) connect(ctx context.Context, target string) (*tls.Conn, error) {
+	return c.connectKind(ctx, target, protocol.KindHello)
+}
+
+func (c *Client) connectKind(ctx context.Context, target, helloKind string) (*tls.Conn, error) {
 	target, err := c.resolve(ctx, target)
 	if err != nil {
 		return nil, err
@@ -114,7 +124,7 @@ func (c *Client) connect(ctx context.Context, target string) (*tls.Conn, error) 
 	if err != nil {
 		return nil, err
 	}
-	return c.finishHandshake(ctx, nc, target)
+	return c.finishHandshake(ctx, nc, target, helloKind)
 }
 
 func (c *Client) dialWS(ctx context.Context, target string) (net.Conn, error) {
@@ -149,7 +159,7 @@ func (c *Client) dialHTTP(ctx context.Context, target string) (net.Conn, error) 
 	return httpconn.Dial(ctx, base, out.Session, "client", c.token)
 }
 
-func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target string) (*tls.Conn, error) {
+func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target, helloKind string) (*tls.Conn, error) {
 	dr, err := transport.ClientHandshake(ctx, nc, pinName(target), c.id, c.known)
 	if err != nil {
 		return nil, err
@@ -158,7 +168,7 @@ func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target string
 		fmt.Fprintf(os.Stderr, "wanctl: pinned new device %q identity %s\n", target, transport.ShortFingerprint(dr.PeerFP))
 	}
 	host, _ := os.Hostname()
-	if err := protocol.WriteMessage(dr.Conn, protocol.Message{Kind: protocol.KindHello, Role: "client", Name: host, Version: "1"}); err != nil {
+	if err := protocol.WriteMessage(dr.Conn, protocol.Message{Kind: helloKind, Role: "client", Name: host, Version: "1"}); err != nil {
 		dr.Conn.Close()
 		return nil, err
 	}
@@ -176,6 +186,13 @@ func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target string
 		return nil, fmt.Errorf("unexpected device reply: %s", reply.Kind)
 	}
 	return dr.Conn, nil
+}
+
+// OpenConsole dials target and opens a control-plane (console) session,
+// returning the authenticated TLS conn. The caller drives the console RPC /
+// notification protocol over it (see internal/portal/deviceconn.go).
+func (c *Client) OpenConsole(ctx context.Context, target string) (*tls.Conn, error) {
+	return c.connectKind(ctx, target, protocol.KindConsoleHello)
 }
 
 // Logs pulls matching event-log lines from the target device and streams them to
