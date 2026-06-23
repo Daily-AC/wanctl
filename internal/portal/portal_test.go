@@ -65,3 +65,30 @@ func TestRequireDeviceRejectsForeign(t *testing.T) {
 		t.Fatalf("want 403, got %d", w.Code)
 	}
 }
+
+func TestRequireDeviceAllowsOwn(t *testing.T) {
+	// fake relay admin: resolve-user -> "alice"; devices -> only "legion"
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "alice"})
+		case "/admin/devices":
+			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{{"name": "legion"}}})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer relay.Close()
+
+	s := New(Config{RelayAdminURL: relay.URL, AdminSecret: "x", UserHeader: "X-User"})
+	req := httptest.NewRequest("GET", "/api/devices/console?device=legion", nil)
+	req.Header.Set("X-User", "alice@corp")
+	w := httptest.NewRecorder()
+	ns, ok := s.requireDevice(w, req, "legion")
+	if !ok {
+		t.Fatalf("expected own device to be allowed, got ok=false (status %d)", w.Code)
+	}
+	if ns != "alice" {
+		t.Fatalf("expected ns=alice, got %q", ns)
+	}
+}

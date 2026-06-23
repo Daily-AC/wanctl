@@ -260,6 +260,10 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 
 // requireDevice authenticates the user, resolves their namespace, and verifies
 // the named device belongs to it (queried from the relay admin device list).
+// Security precondition: the relay's /admin/devices endpoint honours the
+// namespace query parameter (WHERE owner_namespace = $1), so the returned list
+// contains only the caller-namespace's devices and a foreign device name is
+// never matched.
 func (s *Server) requireDevice(w http.ResponseWriter, r *http.Request, device string) (string, bool) {
 	ns, ok := s.requireNS(w, r)
 	if !ok {
@@ -289,6 +293,10 @@ func (s *Server) requireDevice(w http.ResponseWriter, r *http.Request, device st
 }
 
 // deviceConnFor returns a warm console connection to ns/device, dialing if needed.
+// It uses double-checked locking so that two concurrent callers for the same absent
+// device (e.g. /api/devices/console and /api/devices/events on page load) do not
+// both dial and leak the losing connection. The goroutine that loses the post-dial
+// re-check closes its own conn and returns the winner's.
 func (s *Server) deviceConnFor(ctx context.Context, ns, device string) (*deviceConn, error) {
 	if s.dialer == nil {
 		return nil, fmt.Errorf("portal console not wired (set WANCTL_RELAY, WANCTL_PORTAL_TOKEN)")
@@ -306,6 +314,11 @@ func (s *Server) deviceConnFor(ctx context.Context, ns, device string) (*deviceC
 	}
 	d := newDeviceConn(conn)
 	s.mu.Lock()
+	if existing := s.conns[key]; existing != nil {
+		s.mu.Unlock()
+		d.close() // lost the race: close our dial, use the winner
+		return existing, nil
+	}
 	s.conns[key] = d
 	s.mu.Unlock()
 	return d, nil
