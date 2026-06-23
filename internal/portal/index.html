@@ -1,143 +1,201 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>wanctl · team portal</title>
+<title>wanctl 控制台</title>
 <style>
-  :root{
-    --bg:#0f1216;--panel:#171b21;--panel2:#1d232b;--line:#2a323c;
+  :root{--bg:#0f1216;--panel:#171b21;--panel2:#1d232b;--line:#2a323c;
     --ink:#e8edf2;--dim:#8b97a6;--accent:#5db0ff;--ok:#39d98a;--warn:#ffb454;--bad:#ff6b6b;
-    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  }
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-  header{display:flex;align-items:center;gap:12px;padding:16px 22px;border-bottom:1px solid var(--line);background:var(--panel)}
-  header .logo{width:26px;height:26px;color:var(--accent)}
-  header h1{font-size:15px;font-weight:650;margin:0;letter-spacing:.3px}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header .logo{width:24px;height:24px;color:var(--accent)}
+  header h1{font-size:15px;font-weight:650;margin:0}
   header .me{margin-left:auto;color:var(--dim);font-size:12.5px;font-family:var(--mono)}
   header .me b{color:var(--ink)}
-  main{max-width:980px;margin:0 auto;padding:22px;display:grid;gap:22px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
-  .card>h2{margin:0;padding:13px 18px;font-size:12.5px;font-weight:650;letter-spacing:.6px;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
-  .card>h2 svg{width:15px;height:15px}
-  .body{padding:14px 18px}
+  .shell{display:grid;grid-template-columns:200px 1fr;min-height:calc(100vh - 53px)}
+  nav{border-right:1px solid var(--line);background:var(--panel);padding:14px 10px}
+  nav .lbl{font-size:10px;letter-spacing:.6px;color:var(--dim);padding:6px 10px}
+  nav a{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;color:var(--ink);cursor:pointer;font-size:13.5px;text-decoration:none}
+  nav a svg{width:16px;height:16px;color:var(--dim)}
+  nav a.active{background:var(--panel2);font-weight:600}
+  nav a.active svg{color:var(--accent)}
+  main{padding:20px 24px;max-width:960px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:20px}
+  .card>h2{margin:0;padding:12px 16px;font-size:12px;letter-spacing:.5px;color:var(--dim);border-bottom:1px solid var(--line)}
+  .body{padding:14px 16px}
   table{width:100%;border-collapse:collapse;font-size:13px}
   td,th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);font-family:var(--mono)}
-  th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  th{color:var(--dim);font-weight:600;font-size:11px}
   tr:last-child td{border-bottom:none}
-  .empty{color:var(--dim);font-size:13px;padding:6px 0}
+  .empty{color:var(--dim);padding:6px 0}
   .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
   input,select{font:13px var(--mono);background:var(--panel2);border:1px solid var(--line);color:var(--ink);padding:8px 10px;border-radius:8px}
   input{flex:1;min-width:120px}
-  button{font:600 13px inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 14px;border-radius:8px;cursor:pointer}
+  button{font:600 13px inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 13px;border-radius:8px;cursor:pointer}
   button:hover{border-color:var(--accent)}
   button.primary{background:rgba(93,176,255,.14);border-color:transparent;color:var(--accent)}
-  .rm{color:var(--dim);cursor:pointer;border:none;background:none}
-  .rm:hover{color:var(--bad)}
-  .revoked{opacity:.5;text-decoration:line-through}
+  .rm{color:var(--dim);border:none;background:none;cursor:pointer}.rm:hover{color:var(--bad)}
+  .devrow{cursor:pointer}.devrow:hover td{background:var(--panel2)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+  .on{background:var(--ok)}.off{background:#5a6470}
+  .pill{font:600 11px var(--mono);padding:3px 10px;border-radius:20px}
+  .pill.normal{background:rgba(57,217,138,.16);color:var(--ok)}
+  .pill.bypass{background:rgba(255,107,107,.18);color:var(--bad)}
+  .crumb{color:var(--dim);cursor:pointer;font-size:13px;margin-bottom:8px;display:inline-block}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:8px 0 16px}
+  .tabs .t{padding:8px 14px;cursor:pointer;color:var(--dim);border-bottom:2px solid transparent}
+  .tabs .t.active{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+  .req{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin-bottom:12px}
+  .kind{font:600 10px var(--mono);padding:2px 8px;border-radius:20px;text-transform:uppercase}
+  .k-exec{background:rgba(93,176,255,.16);color:var(--accent)}
+  .k-write{background:rgba(255,107,107,.16);color:var(--bad)}
+  .k-read{background:rgba(57,217,138,.16);color:var(--ok)}
+  .detail{font-family:var(--mono);margin:9px 0;word-break:break-all}
+  .sub{color:var(--dim);font-size:12px;font-family:var(--mono)}
+  .btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .b-y{background:rgba(57,217,138,.14);border-color:transparent;color:var(--ok)}
+  .b-n{background:rgba(255,107,107,.14);border-color:transparent;color:var(--bad)}
+  .danger{margin-top:10px;color:var(--bad);font-size:12.5px;display:none}
+  .err{background:#2a1416;border:1px solid var(--bad);color:#ffd2d2;padding:10px 14px;border-radius:10px;margin-bottom:14px;display:none}
   .tokenbox{margin-top:12px;background:#10241a;border:1px solid var(--ok);border-radius:8px;padding:12px 14px;display:none}
-  .tokenbox code{font-family:var(--mono);color:var(--ok);word-break:break-all;font-size:13px}
-  .tokenbox .note{color:var(--dim);font-size:12px;margin-top:6px}
-  .err{background:#2a1416;border:1px solid var(--bad);color:#ffd2d2;padding:12px 16px;border-radius:10px;margin-bottom:14px;display:none;font-size:13px}
-  a{color:var(--accent)}
+  .tokenbox code{font-family:var(--mono);color:var(--ok);word-break:break-all}
+  .hide{display:none}
 </style>
 </head>
 <body>
 <header>
   <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2 4 6v6c0 4.4 3.4 8 8 10 4.6-2 8-5.6 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg>
-  <h1>wanctl team portal</h1>
-  <div class="me" id="me">…</div>
+  <h1>wanctl 控制台</h1>
+  <div class="me" id="me">...</div>
 </header>
-<main>
-  <div class="err" id="err"></div>
+<div class="shell">
+  <nav>
+    <div class="lbl">团队</div>
+    <a data-sec="devices" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>设备</a>
+    <a data-sec="tokens"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8"/></svg>访问令牌</a>
+    <a data-sec="acl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 11a4 4 0 1 0-8 0M2 21a8 8 0 0 1 20 0"/></svg>共享授权</a>
+    <a data-sec="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Relay 审计</a>
+  </nav>
+  <main>
+    <div class="err" id="err"></div>
 
-  <section class="card">
-    <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>Access tokens</h2>
-    <div class="body">
-      <table id="tokens"><thead><tr><th>id</th><th>label</th><th>created</th><th>expires</th><th>status</th><th></th></tr></thead><tbody></tbody></table>
-      <div class="row">
-        <input id="tlabel" placeholder="label (e.g. laptop, ci)">
-        <input id="tdays" type="number" min="0" placeholder="expires in N days (0 = never)" style="max-width:240px">
-        <button class="primary" id="tissue">Issue token</button>
+    <section data-pane="devices">
+      <div class="card"><h2>设备</h2><div class="body">
+        <table id="devices"><thead><tr><th>名称</th><th>状态</th><th>指纹</th><th>最近在线</th><th></th></tr></thead><tbody></tbody></table>
+      </div></div>
+    </section>
+
+    <section data-pane="tokens" class="hide">
+      <div class="card"><h2>访问令牌</h2><div class="body">
+        <table id="tokens"><thead><tr><th>id</th><th>标签</th><th>创建</th><th>过期</th><th>状态</th><th></th></tr></thead><tbody></tbody></table>
+        <div class="row">
+          <input id="tlabel" placeholder="标签(如 laptop、ci)">
+          <input id="tdays" type="number" min="0" placeholder="N 天后过期(0=永不)" style="max-width:220px">
+          <button class="primary" id="tissue">签发令牌</button>
+        </div>
+        <div class="tokenbox" id="tokenbox"><code id="tokenval"></code><button class="rm" id="tcopy" style="margin-left:10px;color:var(--accent)">复制</button><div class="sub" style="margin-top:6px">立即复制 —— 只显示这一次。设为控制端的 WANCTL_TOKEN。</div></div>
+      </div></div>
+    </section>
+
+    <section data-pane="acl" class="hide">
+      <div class="card"><h2>共享授权 (ACL)</h2><div class="body">
+        <table id="acl"><thead><tr><th>id</th><th>设备</th><th>被授权命名空间</th><th>权限</th><th></th></tr></thead><tbody></tbody></table>
+        <div class="row">
+          <input id="adev" placeholder="设备名"><input id="agrantee" placeholder="被授权命名空间">
+          <input id="aperms" placeholder="权限(exec,read,write)" style="max-width:200px">
+          <button id="aadd">授权</button>
+        </div>
+      </div></div>
+    </section>
+
+    <section data-pane="audit" class="hide">
+      <div class="card"><h2>Relay 审计 · 最近 100</h2><div class="body">
+        <table id="audit"><thead><tr><th>时间</th><th>设备</th><th>事件</th></tr></thead><tbody></tbody></table>
+      </div></div>
+    </section>
+
+    <section data-pane="device" class="hide">
+      <span class="crumb" id="crumb">&#8249; 返回设备列表</span>
+      <div class="card"><h2 style="display:flex;align-items:center;gap:10px"><span id="dname" class="mono" style="color:var(--ink);font-size:14px"></span><span class="dot" id="ddot"></span><span id="dstatus" class="sub"></span><span class="pill" id="dmode" style="margin-left:auto"></span></h2>
+        <div class="body">
+          <div class="tabs">
+            <div class="t active" data-tab="approvals">待审批</div>
+            <div class="t" data-tab="rules">规则</div>
+            <div class="t" data-tab="mode">模式</div>
+            <div class="t" data-tab="activity">活动日志</div>
+          </div>
+          <div data-tabpane="approvals" id="pending"><div class="empty">暂无待审批请求。</div></div>
+          <div data-tabpane="rules" class="hide">
+            <table id="rules"><thead><tr><th>#</th><th>类型</th><th>模式</th><th>作用域</th><th></th></tr></thead><tbody></tbody></table>
+            <div class="row">
+              <select id="rk"><option value="exec">exec</option><option value="read">read</option><option value="write">write</option></select>
+              <input id="rp" placeholder="命令(echo *)或目录(/data)"><button id="radd">添加规则</button>
+            </div>
+          </div>
+          <div data-tabpane="mode" class="hide">
+            <div>当前:<span class="pill" id="modePill"></span> <button id="modeToggle">切换</button></div>
+            <div class="danger" id="bypassWarn"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h16.9a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>BYPASS:所有命令与文件操作自动放行,不再询问。仅用于可信、隔离的设备。</div>
+          </div>
+          <div data-tabpane="activity" class="hide">
+            <table id="logs"><thead><tr><th>时间</th><th>类型</th><th>详情</th><th>决策</th><th>退出码</th></tr></thead><tbody></tbody></table>
+          </div>
+        </div>
       </div>
-      <div class="tokenbox" id="tokenbox"><code id="tokenval"></code><div class="note">Copy it now — it is shown only once. Set it as WANCTL_TOKEN on the controller.</div></div>
-    </div>
-  </section>
-
-  <section class="card">
-    <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>My devices</h2>
-    <div class="body"><table id="devices"><thead><tr><th>name</th><th>fingerprint</th><th>last seen</th></tr></thead><tbody></tbody></table></div>
-  </section>
-
-  <section class="card">
-    <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 11a4 4 0 1 0-8 0M2 21a8 8 0 0 1 20 0"/></svg>Shared access (ACL)</h2>
-    <div class="body">
-      <table id="acl"><thead><tr><th>id</th><th>device</th><th>grantee namespace</th><th>perms</th><th></th></tr></thead><tbody></tbody></table>
-      <div class="row">
-        <input id="adev" placeholder="device name">
-        <input id="agrantee" placeholder="grantee namespace">
-        <input id="aperms" placeholder="perms (exec,read,write)" style="max-width:220px">
-        <button id="aadd">Grant</button>
-      </div>
-    </div>
-  </section>
-
-  <section class="card">
-    <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Relay audit (last 100)</h2>
-    <div class="body"><table id="audit"><thead><tr><th>time</th><th>device</th><th>event</th></tr></thead><tbody></tbody></table></div>
-  </section>
-</main>
+    </section>
+  </main>
+</div>
 <script>
-const $=s=>document.querySelector(s);
-function esc(s){return (''+(s??'')).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
-function showErr(m){const e=$('#err');e.textContent=m;e.style.display='block'}
+const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
+function esc(s){return(''+(s??'')).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function err(m){const e=$('#err');e.textContent=m;e.style.display='block'}
 function fmt(t){return t?new Date(t).toLocaleString():'—'}
-
 async function jget(u){const r=await fetch(u);if(!r.ok)throw new Error(await r.text());return r.json()}
 async function jpost(u,b){const r=await fetch(u,{method:'POST',body:JSON.stringify(b||{})});if(!r.ok)throw new Error(await r.text());return r}
 
-async function loadMe(){
-  try{const m=await jget('/api/me');$('#me').innerHTML=`namespace <b>${esc(m.namespace)}</b> · ${esc(m.identity)}`}
-  catch(e){showErr('Not signed in: '+e.message+'  (open /whoami to find the SSO header)')}
-}
-async function loadTokens(){
-  const d=await jget('/api/tokens');const tb=$('#tokens tbody');const ts=d.tokens||[];
-  tb.innerHTML=ts.length?ts.map(t=>{
-    const revoked=!!t.revoked_at;const exp=t.expires_at?fmt(t.expires_at):'never';
-    const status=revoked?'revoked':'active';
-    return `<tr class="${revoked?'revoked':''}"><td>${t.id}</td><td>${esc(t.label)}</td><td>${fmt(t.created_at)}</td><td>${exp}</td><td>${status}</td>
-      <td>${revoked?'':`<button class="rm" onclick="revokeToken(${t.id})">revoke</button>`}</td></tr>`}).join(''):'<tr><td colspan="6" class="empty">No tokens yet.</td></tr>';
-}
-async function loadDevices(){
-  const d=await jget('/api/devices');const tb=$('#devices tbody');const xs=d.devices||[];
-  tb.innerHTML=xs.length?xs.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc((x.fingerprint||'').slice(0,28))}</td><td>${fmt(x.last_seen)}</td></tr>`).join(''):'<tr><td colspan="3" class="empty">No devices recorded yet.</td></tr>';
-}
-async function loadACL(){
-  const d=await jget('/api/acl');const tb=$('#acl tbody');const xs=d.acl||[];
-  tb.innerHTML=xs.length?xs.map(x=>`<tr><td>${x.id}</td><td>${esc(x.device)}</td><td>${esc(x.grantee)}</td><td>${esc(x.perms)}</td>
-     <td><button class="rm" onclick="revokeACL(${x.id})">revoke</button></td></tr>`).join(''):'<tr><td colspan="5" class="empty">No grants.</td></tr>';
-}
-async function loadAudit(){
-  const d=await jget('/api/audit');const tb=$('#audit tbody');const xs=d.audit||[];
-  tb.innerHTML=xs.length?xs.map(x=>`<tr><td>${fmt(x.ts)}</td><td>${esc(x.device)}</td><td>${esc(x.event)}</td></tr>`).join(''):'<tr><td colspan="3" class="empty">No activity.</td></tr>';
-}
-async function revokeToken(id){await jpost('/api/tokens/revoke',{id});loadTokens()}
-async function revokeACL(id){await jpost('/api/acl/revoke',{id});loadACL()}
-$('#tissue').onclick=async()=>{
-  try{
-    const label=$('#tlabel').value.trim();const days=parseInt($('#tdays').value||'0',10)||0;
-    const r=await jpost('/api/tokens',{label,days});const j=await r.json();
-    $('#tokenval').textContent=j.token;$('#tokenbox').style.display='block';
-    $('#tlabel').value='';$('#tdays').value='';loadTokens();
-  }catch(e){showErr(e.message)}
-};
-$('#aadd').onclick=async()=>{
-  try{await jpost('/api/acl',{device:$('#adev').value.trim(),grantee:$('#agrantee').value.trim(),perms:$('#aperms').value.trim()});
-    $('#adev').value='';$('#agrantee').value='';$('#aperms').value='';loadACL();
-  }catch(e){showErr(e.message)}
-};
-loadMe();loadTokens();loadDevices();loadACL();loadAudit();
+let cur=null, es=null;
+function showPane(p){$$('[data-pane]').forEach(el=>el.classList.toggle('hide',el.dataset.pane!==p))}
+$$('nav a[data-sec]').forEach(a=>a.onclick=()=>{$$('nav a').forEach(x=>x.classList.remove('active'));a.classList.add('active');closeDevice();showPane(a.dataset.sec)});
+$('#crumb').onclick=()=>{closeDevice();$$('nav a').forEach(x=>x.classList.remove('active'));$('nav a[data-sec="devices"]').classList.add('active');showPane('devices');loadDevices()};
+$$('.tabs .t').forEach(t=>t.onclick=()=>{$$('.tabs .t').forEach(x=>x.classList.remove('active'));t.classList.add('active');$$('[data-tabpane]').forEach(el=>el.classList.toggle('hide',el.dataset.tabpane!==t.dataset.tab))});
+
+async function loadMe(){try{const m=await jget('/api/me');$('#me').innerHTML='命名空间 <b>'+esc(m.namespace)+'</b> · '+esc(m.identity)}catch(e){err('未登录:'+e.message)}}
+async function loadDevices(){const d=await jget('/api/devices');const xs=d.devices||[];const tb=$('#devices tbody');
+  tb.innerHTML=xs.length?xs.map(x=>{const on=x.last_seen&&(Date.now()-new Date(x.last_seen))<120000;
+    return '<tr class="devrow" data-dev="'+esc(x.name)+'"><td>'+esc(x.name)+'</td><td><span class="dot '+(on?'on':'off')+'"></span>'+(on?'在线':'离线')+'</td><td>'+esc((x.fingerprint||'').slice(0,22))+'</td><td>'+fmt(x.last_seen)+'</td><td>&#8594;</td></tr>'}).join(''):'<tr><td colspan="5" class="empty">暂无设备。</td></tr>';
+  $$('#devices .devrow').forEach(r=>r.onclick=()=>openDevice(r.dataset.dev));}
+async function loadTokens(){const d=await jget('/api/tokens');const ts=d.tokens||[];$('#tokens tbody').innerHTML=ts.length?ts.map(t=>{const rev=!!t.revoked_at;return '<tr style="'+(rev?'opacity:.5':'')+'"><td>'+t.id+'</td><td>'+esc(t.label)+'</td><td>'+fmt(t.created_at)+'</td><td>'+(t.expires_at?fmt(t.expires_at):'永不')+'</td><td>'+(rev?'已吊销':'有效')+'</td><td>'+(rev?'':'<button class="rm" onclick="revTok('+t.id+')">吊销</button>')+'</td></tr>'}).join(''):'<tr><td colspan="6" class="empty">暂无令牌。</td></tr>'}
+async function loadACL(){const d=await jget('/api/acl');const xs=d.acl||[];$('#acl tbody').innerHTML=xs.length?xs.map(x=>'<tr><td>'+x.id+'</td><td>'+esc(x.device)+'</td><td>'+esc(x.grantee)+'</td><td>'+esc(x.perms)+'</td><td><button class="rm" onclick="revACL('+x.id+')">吊销</button></td></tr>').join(''):'<tr><td colspan="5" class="empty">暂无授权。</td></tr>'}
+async function loadAudit(){const d=await jget('/api/audit');const xs=d.audit||[];$('#audit tbody').innerHTML=xs.length?xs.map(x=>'<tr><td>'+fmt(x.ts)+'</td><td>'+esc(x.device)+'</td><td>'+esc(x.event)+'</td></tr>').join(''):'<tr><td colspan="3" class="empty">暂无活动。</td></tr>'}
+window.revTok=async id=>{await jpost('/api/tokens/revoke',{id});loadTokens()};
+window.revACL=async id=>{await jpost('/api/acl/revoke',{id});loadACL()};
+$('#tissue').onclick=async()=>{try{const r=await jpost('/api/tokens',{label:$('#tlabel').value.trim(),days:parseInt($('#tdays').value||'0',10)||0});const j=await r.json();$('#tokenval').textContent=j.token;$('#tokenbox').style.display='block';$('#tlabel').value='';$('#tdays').value='';loadTokens()}catch(e){err(e.message)}};
+$('#tcopy').onclick=()=>navigator.clipboard&&navigator.clipboard.writeText($('#tokenval').textContent);
+$('#aadd').onclick=async()=>{try{await jpost('/api/acl',{device:$('#adev').value.trim(),grantee:$('#agrantee').value.trim(),perms:$('#aperms').value.trim()});$('#adev').value=$('#agrantee').value=$('#aperms').value='';loadACL()}catch(e){err(e.message)}};
+
+function openDevice(name){cur=name;showPane('device');$('#dname').textContent=name;renderConsole();
+  if(es)es.close();es=new EventSource('/api/devices/events?device='+encodeURIComponent(name));
+  es.onmessage=ev=>{try{applyState(JSON.parse(ev.data))}catch(_){}};loadDeviceLogs();}
+function closeDevice(){if(es){es.close();es=null}cur=null}
+async function renderConsole(){try{applyState(await jget('/api/devices/console?device='+encodeURIComponent(cur)))}catch(e){err(e.message)}}
+function applyState(st){if(!st||!st.mode)return;
+  $('#dmode').textContent='模式:'+st.mode;$('#dmode').className='pill '+st.mode;
+  $('#modePill').textContent=st.mode;$('#modePill').className='pill '+st.mode;
+  $('#bypassWarn').style.display=st.mode==='bypass'?'block':'none';
+  const pend=st.pending||[];$('#pending').innerHTML=pend.length?pend.map(p=>{const det=p.kind==='exec'?esc(p.cmd):esc(p.path);
+    return '<div class="req"><span class="kind k-'+p.kind+'">'+p.kind+'</span> <span class="sub">来自 '+esc((p.peer||'').slice(0,18))+'</span><div class="detail">'+det+'</div>'+(p.cwd?'<div class="sub">cwd: '+esc(p.cwd)+'</div>':'')+'<div class="btns"><button class="b-y" onclick="decide(\''+p.id+'\',\'y\')">允许一次</button><button onclick="decide(\''+p.id+'\',\'a\')">允许+记住本目录</button><button onclick="decide(\''+p.id+'\',\'g\')">允许+全局记住</button><button class="b-n" onclick="decide(\''+p.id+'\',\'n\')">拒绝</button></div></div>'}).join(''):'<div class="empty">暂无待审批请求。</div>';
+  const rules=st.rules||[];$('#rules tbody').innerHTML=rules.length?rules.map((r,i)=>{const sc=r.scope==='dir'?(r.kind==='exec'?'dir:'+esc(r.dir):'dir'):'global';return '<tr><td>'+i+'</td><td>'+r.kind+'</td><td>'+esc(r.pattern)+'</td><td>'+sc+'</td><td><button class="rm" onclick="rmRule('+i+')">删除</button></td></tr>'}).join(''):'<tr><td colspan="5" class="empty">暂无规则。</td></tr>';}
+window.decide=async(id,v)=>{try{await jpost('/api/devices/decide',{device:cur,id,verdict:v});renderConsole()}catch(e){err(e.message)}};
+window.rmRule=async i=>{try{await jpost('/api/devices/rules',{device:cur,op:'rm',index:i});renderConsole()}catch(e){err(e.message)}};
+$('#radd').onclick=async()=>{const kind=$('#rk').value,pattern=$('#rp').value.trim();if(!pattern)return;const scope=kind!=='exec'?'dir':'global';try{await jpost('/api/devices/rules',{device:cur,op:'add',kind,pattern,scope});$('#rp').value='';renderConsole()}catch(e){err(e.message)}};
+$('#modeToggle').onclick=async()=>{const next=$('#modePill').textContent==='bypass'?'normal':'bypass';if(next==='bypass'&&!confirm('启用 BYPASS?所有命令/文件操作将自动放行。'))return;try{await jpost('/api/devices/mode',{device:cur,mode:next});renderConsole()}catch(e){err(e.message)}};
+async function loadDeviceLogs(){/* 活动日志:本期复用门户审计;设备级日志拉取留待后续(KindLogs over console) */}
+
+loadMe();loadDevices();
+// 切换到团队各页时按需加载
+$$('nav a[data-sec]').forEach(a=>a.addEventListener('click',()=>{const s=a.dataset.sec;if(s==='tokens')loadTokens();if(s==='acl')loadACL();if(s==='audit')loadAudit()}));
 </script>
 </body>
 </html>
