@@ -1,0 +1,118 @@
+package portal
+
+import (
+	"encoding/json"
+	"fmt"
+	"net"
+	"sync"
+
+	"wanctl/internal/console"
+	"wanctl/internal/protocol"
+)
+
+// deviceConn drives one authenticated console session to a device: it
+// demultiplexes the read stream into RPC responses and unsolicited approval
+// notifications, and serializes outgoing RPCs.
+type deviceConn struct {
+	conn    net.Conn
+	rpcMu   sync.Mutex // serialize request/response round-trips
+	wmu     sync.Mutex // serialize writes
+	respCh  chan protocol.Message
+	notifCh chan console.State
+	closed  chan struct{}
+	once    sync.Once
+}
+
+func newDeviceConn(conn net.Conn) *deviceConn {
+	d := &deviceConn{
+		conn:    conn,
+		respCh:  make(chan protocol.Message, 1),
+		notifCh: make(chan console.State, 8),
+		closed:  make(chan struct{}),
+	}
+	go d.readLoop()
+	return d
+}
+
+func (d *deviceConn) readLoop() {
+	defer d.close()
+	for {
+		m, err := protocol.ReadMessage(d.conn)
+		if err != nil {
+			return
+		}
+		if m.Kind == protocol.KindApprovalNotif {
+			var st console.State
+			if json.Unmarshal(m.Data, &st) == nil {
+				select {
+				case d.notifCh <- st:
+				default:
+				}
+			}
+			continue
+		}
+		select {
+		case d.respCh <- m:
+		case <-d.closed:
+			return
+		}
+	}
+}
+
+func (d *deviceConn) rpc(req protocol.Message) (protocol.Message, error) {
+	d.rpcMu.Lock()
+	defer d.rpcMu.Unlock()
+	d.wmu.Lock()
+	err := protocol.WriteMessage(d.conn, req)
+	d.wmu.Unlock()
+	if err != nil {
+		return protocol.Message{}, err
+	}
+	select {
+	case m := <-d.respCh:
+		if m.Kind == protocol.KindError {
+			return m, fmt.Errorf("%s", m.Reason)
+		}
+		return m, nil
+	case <-d.closed:
+		return protocol.Message{}, fmt.Errorf("device connection closed")
+	}
+}
+
+func (d *deviceConn) state() (console.State, error) {
+	m, err := d.rpc(protocol.Message{Kind: protocol.KindConsoleState})
+	if err != nil {
+		return console.State{}, err
+	}
+	var st console.State
+	return st, json.Unmarshal(m.Data, &st)
+}
+
+func (d *deviceConn) decide(id, verdict, approver string) error {
+	_, err := d.rpc(protocol.Message{Kind: protocol.KindDecide, ApprovalID: id, Verdict: verdict, Approver: approver})
+	return err
+}
+
+func (d *deviceConn) addRule(kind, pattern, dir, scope string) error {
+	_, err := d.rpc(protocol.Message{Kind: protocol.KindRuleAdd, RuleKind: kind, Pattern: pattern, Dir: dir, Scope: scope})
+	return err
+}
+
+func (d *deviceConn) removeRule(i int) error {
+	_, err := d.rpc(protocol.Message{Kind: protocol.KindRuleRm, Index: i})
+	return err
+}
+
+func (d *deviceConn) setMode(mode string) error {
+	_, err := d.rpc(protocol.Message{Kind: protocol.KindModeSet, ConsoleMode: mode})
+	return err
+}
+
+func (d *deviceConn) notifs() <-chan console.State { return d.notifCh }
+
+func (d *deviceConn) close() {
+	d.once.Do(func() {
+		close(d.closed)
+		d.conn.Close()
+	})
+}
