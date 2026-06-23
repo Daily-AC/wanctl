@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,14 +17,77 @@ type httpAgent struct {
 	lastSeen   time.Time
 }
 
-// httpSession is one relayed session. Two io.Pipes carry the two directions; the
-// relay never inspects the bytes (they are end-to-end TLS).
-type httpSession struct {
-	toClientR, toAgentR *io.PipeReader
-	toClientW, toAgentW *io.PipeWriter
+// sideQueue is one direction of a session's byte flow. The relay never inspects
+// the bytes (they are end-to-end TLS). It is drained by long-poll /h/down GETs
+// rather than a single streaming response, so it survives reverse proxies that
+// buffer responses (e.g. thunderbox's nginx ignores X-Accel-Buffering).
+type sideQueue struct {
+	ch   chan []byte
+	done chan struct{}
+	once sync.Once
 }
 
-const httpAgentTTL = 40 * time.Second
+func newSideQueue() *sideQueue {
+	return &sideQueue{ch: make(chan []byte, 256), done: make(chan struct{})}
+}
+
+func (q *sideQueue) push(b []byte) bool {
+	cp := make([]byte, len(b))
+	copy(cp, b)
+	select {
+	case q.ch <- cp:
+		return true
+	case <-q.done:
+		return false
+	}
+}
+
+func (q *sideQueue) close() { q.once.Do(func() { close(q.done) }) }
+
+// drain returns bytes available within timeout, coalescing any queued chunks.
+// closed is true only when the queue is closed and no more bytes remain.
+func (q *sideQueue) drain(timeout time.Duration) (data []byte, closed bool) {
+	collect := func(first []byte) []byte {
+		out := append([]byte{}, first...)
+		for {
+			select {
+			case b := <-q.ch:
+				out = append(out, b...)
+			default:
+				return out
+			}
+		}
+	}
+	select {
+	case b := <-q.ch:
+		return collect(b), false
+	default:
+	}
+	select {
+	case b := <-q.ch:
+		return collect(b), false
+	case <-time.After(timeout):
+		return nil, false
+	case <-q.done:
+		select {
+		case b := <-q.ch:
+			return collect(b), false
+		default:
+			return nil, true
+		}
+	}
+}
+
+// httpSession carries the two directions of a relayed session.
+type httpSession struct {
+	toClient *sideQueue // bytes the controller will read
+	toAgent  *sideQueue // bytes the agent will read
+}
+
+const (
+	httpAgentTTL = 40 * time.Second
+	downPollWait = 20 * time.Second
+)
 
 func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	ns, ok := r.auth(req)
@@ -78,9 +142,7 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	sid := newID()
-	tcR, tcW := io.Pipe()
-	taR, taW := io.Pipe()
-	r.hsess[sid] = &httpSession{toClientR: tcR, toClientW: tcW, toAgentR: taR, toAgentW: taW}
+	r.hsess[sid] = &httpSession{toClient: newSideQueue(), toAgent: newSideQueue()}
 	r.hmu.Unlock()
 
 	select {
@@ -122,12 +184,17 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
 	}
-	dst := s.toAgentW // role=client writes toward the agent
-	if req.URL.Query().Get("role") == "agent" {
-		dst = s.toClientW
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
 	}
-	if _, err := io.Copy(dst, req.Body); err != nil {
-		http.Error(w, "stream closed", http.StatusGone)
+	dst := s.toAgent // role=client writes toward the agent
+	if req.URL.Query().Get("role") == "agent" {
+		dst = s.toClient
+	}
+	if len(body) > 0 && !dst.push(body) {
+		http.Error(w, "session closed", http.StatusGone)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -143,32 +210,22 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
 	}
-	src := s.toClientR // role=client reads bytes destined for the client
+	src := s.toClient // role=client reads bytes destined for the client
 	if req.URL.Query().Get("role") == "agent" {
-		src = s.toAgentR
+		src = s.toAgent
+	}
+	data, closed := src.drain(downPollWait)
+	if closed && len(data) == 0 {
+		http.Error(w, "session closed", http.StatusGone)
+		return
+	}
+	if len(data) == 0 {
+		w.WriteHeader(http.StatusNoContent) // no data this round; client re-polls
+		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("X-Accel-Buffering", "no") // ask nginx not to buffer this stream
 	w.WriteHeader(http.StatusOK)
-	flusher, _ := w.(http.Flusher)
-	if flusher != nil {
-		flusher.Flush()
-	}
-	buf := make([]byte, 32<<10)
-	for {
-		n, err := src.Read(buf)
-		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
-		if err != nil {
-			return
-		}
-	}
+	w.Write(data)
 }
 
 func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
@@ -182,10 +239,8 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 	delete(r.hsess, sid)
 	r.hmu.Unlock()
 	if s != nil {
-		s.toClientW.Close()
-		s.toAgentW.Close()
-		s.toClientR.Close()
-		s.toAgentR.Close()
+		s.toClient.close()
+		s.toAgent.close()
 	}
 	w.WriteHeader(http.StatusOK)
 }

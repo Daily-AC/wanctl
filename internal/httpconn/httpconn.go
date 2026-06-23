@@ -1,16 +1,17 @@
 // Package httpconn provides a net.Conn that tunnels bytes over plain HTTP, so
 // the end-to-end TLS handshake and framed protocol can run through any reverse
-// proxy — including ones (like thunderbox's nginx edge) that do not forward the
-// WebSocket Upgrade header. It is the proxy-agnostic alternative to wsconn.
+// proxy — including ones (like thunderbox's nginx edge) that strip the WebSocket
+// Upgrade header AND buffer streaming responses. It is the proxy-agnostic
+// alternative to wsconn.
 //
-// A session uses two HTTP request shapes against the relay:
+// A session uses two HTTP request shapes against the relay, both finite
+// request/response pairs (no upgrade, no streaming body) so a buffering proxy
+// forwards them promptly:
 //
-//	down: GET  /h/down?session=&role=&token=   — a long-lived chunked response
-//	      carrying relay->endpoint bytes (relay sets X-Accel-Buffering: no so
-//	      nginx streams it instead of buffering).
-//	up:   POST /h/up?session=&role=&token=     — one request per Write, body =
-//	      the bytes; nginx buffers the small body then forwards it, so per-chunk
-//	      POSTs work where a single streaming POST body would not.
+//	up:   POST /h/up?session=&role=&token=     — one request per Write, body = bytes.
+//	down: GET  /h/down?session=&role=&token=   — long-poll: returns available bytes
+//	      (200), 204 if none within the poll window (client re-polls), or 410 when
+//	      the session is closed (-> io.EOF).
 package httpconn
 
 import (
@@ -32,30 +33,25 @@ type conn struct {
 	token   string
 	hc      *http.Client
 
-	down   io.ReadCloser
+	readM    sync.Mutex
+	leftover []byte
+	eof      bool
+
 	writeM sync.Mutex
 	closed bool
 }
 
-// Dial opens the down stream for a session/role and returns a net.Conn. base is
-// the relay's HTTP origin (http:// or https://, no path).
+// Dial constructs a net.Conn for a session/role. base is the relay's HTTP origin
+// (http:// or https://, or ws(s):// which is normalized). No network I/O happens
+// here; the first Read long-polls the down channel.
 func Dial(ctx context.Context, base, session, role, token string) (net.Conn, error) {
-	base = normalizeBase(base)
-	hc := &http.Client{Timeout: 0} // no overall timeout: streams are long-lived
-	q := url.Values{"session": {session}, "role": {role}, "token": {token}}
-	req, err := http.NewRequestWithContext(context.Background(), "GET", base+"/h/down?"+q.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("down stream: relay returned %d", resp.StatusCode)
-	}
-	return &conn{base: base, session: session, role: role, token: token, hc: hc, down: resp.Body}, nil
+	return &conn{
+		base:    normalizeBase(base),
+		session: session,
+		role:    role,
+		token:   token,
+		hc:      &http.Client{Timeout: 60 * time.Second},
+	}, nil
 }
 
 func normalizeBase(b string) string {
@@ -68,7 +64,59 @@ func normalizeBase(b string) string {
 	return b
 }
 
-func (c *conn) Read(p []byte) (int, error) { return c.down.Read(p) }
+func (c *conn) Read(p []byte) (int, error) {
+	c.readM.Lock()
+	defer c.readM.Unlock()
+	if len(c.leftover) > 0 {
+		n := copy(p, c.leftover)
+		c.leftover = c.leftover[n:]
+		return n, nil
+	}
+	if c.eof {
+		return 0, io.EOF
+	}
+	q := url.Values{"session": {c.session}, "role": {c.role}, "token": {c.token}}
+	downURL := c.base + "/h/down?" + q.Encode()
+	for {
+		if c.isClosed() {
+			return 0, io.EOF
+		}
+		req, err := http.NewRequest("GET", downURL, nil)
+		if err != nil {
+			return 0, err
+		}
+		resp, err := c.hc.Do(req)
+		if err != nil {
+			if c.isClosed() {
+				return 0, io.EOF
+			}
+			return 0, err
+		}
+		switch resp.StatusCode {
+		case http.StatusNoContent:
+			resp.Body.Close()
+			continue // no data this round; poll again
+		case http.StatusOK:
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if len(body) == 0 {
+				continue
+			}
+			n := copy(p, body)
+			if n < len(body) {
+				c.leftover = body[n:]
+			}
+			return n, nil
+		case http.StatusGone, http.StatusNotFound:
+			resp.Body.Close()
+			c.eof = true
+			return 0, io.EOF
+		default:
+			resp.Body.Close()
+			return 0, fmt.Errorf("down poll: relay returned %d", resp.StatusCode)
+		}
+	}
+}
 
 func (c *conn) Write(p []byte) (int, error) {
 	c.writeM.Lock()
@@ -94,6 +142,12 @@ func (c *conn) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+func (c *conn) isClosed() bool {
+	c.writeM.Lock()
+	defer c.writeM.Unlock()
+	return c.closed
+}
+
 func (c *conn) Close() error {
 	c.writeM.Lock()
 	if c.closed {
@@ -102,7 +156,6 @@ func (c *conn) Close() error {
 	}
 	c.closed = true
 	c.writeM.Unlock()
-	// Best-effort teardown signal to the relay.
 	q := url.Values{"session": {c.session}, "token": {c.token}}
 	req, _ := http.NewRequest("POST", c.base+"/h/close?"+q.Encode(), nil)
 	if req != nil {
@@ -110,7 +163,7 @@ func (c *conn) Close() error {
 			resp.Body.Close()
 		}
 	}
-	return c.down.Close()
+	return nil
 }
 
 type addr struct{ s string }
@@ -121,9 +174,8 @@ func (a addr) String() string  { return a.s }
 func (c *conn) LocalAddr() net.Addr  { return addr{"httpconn-local"} }
 func (c *conn) RemoteAddr() net.Addr { return addr{c.base} }
 
-// Deadlines are reported as satisfied (no-op): the HTTP body readers/writers do
-// not support deadlines, and handshake cancellation is driven by context +
-// Close instead.
+// Deadlines are no-ops: requests carry their own client timeout and handshake
+// cancellation is driven by Close.
 func (c *conn) SetDeadline(t time.Time) error      { return nil }
 func (c *conn) SetReadDeadline(t time.Time) error  { return nil }
 func (c *conn) SetWriteDeadline(t time.Time) error { return nil }
