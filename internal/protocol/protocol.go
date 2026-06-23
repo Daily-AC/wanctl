@@ -47,13 +47,13 @@ const (
 	KindLogs     = "logs"      // client -> server, request event-log lines
 
 	// console session (portal <-> device control plane)
-	KindConsoleHello  = "console_hello"   // portal -> device, opens a control-plane session
-	KindConsoleState  = "console_state"   // both: request state / device replies with Data
-	KindDecide        = "decide"          // portal -> device, resolve a pending approval
-	KindRuleAdd       = "rule_add"        // portal -> device, add an allow-list rule
-	KindRuleRm        = "rule_rm"         // portal -> device, remove rule by Index
-	KindModeSet       = "mode_set"        // portal -> device, set normal/bypass
-	KindApprovalNotif = "approval_notif"  // device -> portal, UNSOLICITED: pending set changed
+	KindConsoleHello  = "console_hello"  // portal -> device, opens a control-plane session
+	KindConsoleState  = "console_state"  // both: request state / device replies with Data
+	KindDecide        = "decide"         // portal -> device, resolve a pending approval
+	KindRuleAdd       = "rule_add"       // portal -> device, add an allow-list rule
+	KindRuleRm        = "rule_rm"        // portal -> device, remove rule by Index
+	KindModeSet       = "mode_set"       // portal -> device, set normal/bypass
+	KindApprovalNotif = "approval_notif" // device -> portal, UNSOLICITED: pending set changed
 )
 
 // Message is the JSON body of a FrameJSON frame. Fields are reused across kinds;
@@ -89,16 +89,16 @@ type Message struct {
 	Limit   int    `json:"limit,omitempty"`
 
 	// console session control plane
-	Verdict    string          `json:"verdict,omitempty"`     // decide: y/a/g/n
-	ApprovalID string          `json:"approval_id,omitempty"` // decide: which pending
+	Verdict     string          `json:"verdict,omitempty"`      // decide: y/a/g/n
+	ApprovalID  string          `json:"approval_id,omitempty"`  // decide: which pending
 	Approver    string          `json:"approver,omitempty"`     // decide: "portal:<email>" for audit
 	ConsoleMode string          `json:"console_mode,omitempty"` // mode_set: normal/bypass
-	RuleKind   string          `json:"rule_kind,omitempty"`   // rule_add: exec/read/write
-	Pattern    string          `json:"pattern,omitempty"`     // rule_add: command or dir
-	Dir        string          `json:"dir,omitempty"`         // rule_add: exec dir scope
-	Scope      string          `json:"scope,omitempty"`       // rule_add: dir/global
-	Index      int             `json:"index,omitempty"`       // rule_rm
-	Data       json.RawMessage `json:"data,omitempty"`        // console_state / approval_notif payload
+	RuleKind    string          `json:"rule_kind,omitempty"`    // rule_add: exec/read/write
+	Pattern     string          `json:"pattern,omitempty"`      // rule_add: command or dir
+	Dir         string          `json:"dir,omitempty"`          // rule_add: exec dir scope
+	Scope       string          `json:"scope,omitempty"`        // rule_add: dir/global
+	Index       int             `json:"index,omitempty"`        // rule_rm
+	Data        json.RawMessage `json:"data,omitempty"`         // console_state / approval_notif payload
 }
 
 // WriteFrame writes a single framed payload.

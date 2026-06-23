@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestConsoleMessageRoundTrip(t *testing.T) {
+func TestConsoleControlMessageRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
 	state := json.RawMessage(`{"mode":"normal","pending":[]}`)
 	in := Message{Kind: KindModeSet, ConsoleMode: "normal", Data: state}
