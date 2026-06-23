@@ -33,7 +33,7 @@ func (c *Client) Push(ctx context.Context, target, local, remotePath string) err
 		Kind: protocol.KindFilePut,
 		Path: remotePath,
 		Size: info.Size(),
-		Mode: uint32(info.Mode().Perm()),
+		// Mode field is now repurposed for console control, not file permissions
 	}); err != nil {
 		return err
 	}
@@ -99,11 +99,8 @@ func (c *Client) Pull(ctx context.Context, target, remotePath, local string) err
 		return fmt.Errorf("unexpected reply: %s", meta.Kind)
 	}
 
-	mode := os.FileMode(meta.Mode)
-	if mode == 0 {
-		mode = 0o644
-	}
-	f, err := os.OpenFile(local, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	// Default to 0644 permissions (Mode field is now repurposed for console control)
+	f, err := os.OpenFile(local, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
