@@ -458,43 +458,54 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 	}
 }
 
+// pumpApprovalNotifs forwards console state changes as KindApprovalNotif frames
+// until ctx is cancelled or a send fails.
+func pumpApprovalNotifs(ctx context.Context, changes <-chan struct{}, svc *console.Service, send func(protocol.Message) error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-changes:
+			if !ok {
+				return
+			}
+			snap := svc.State()
+			if len(snap.Pending) == 0 {
+				continue
+			}
+			p := snap.Pending[0]
+			cmdJSON, _ := json.Marshal(p.Cmd)
+			if send(protocol.Message{
+				Kind:       protocol.KindApprovalNotif,
+				ApprovalID: p.ID,
+				Data:       json.RawMessage(cmdJSON),
+			}) != nil {
+				return
+			}
+		}
+	}
+}
+
 // serveConsole handles an E2E console session with a portal. All writes go
 // through a single write mutex so async approval notifications and RPC
 // responses never interleave on the wire.
 func (a *Agent) serveConsole(ctx context.Context, conn net.Conn) {
+	// Derive a per-session context so the pump goroutine exits when this
+	// session ends, regardless of the long-lived agent Run context.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	var wmu sync.Mutex
-	send := func(m protocol.Message) {
+	send := func(m protocol.Message) error {
 		wmu.Lock()
 		defer wmu.Unlock()
-		_ = json.NewEncoder(conn).Encode(m)
+		return json.NewEncoder(conn).Encode(m)
 	}
 
 	// Push approval notifications asynchronously.
 	ch, unsub := a.console.Subscribe()
 	defer unsub()
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case _, ok := <-ch:
-				if !ok {
-					return
-				}
-				snap := a.console.State()
-				if len(snap.Pending) == 0 {
-					continue
-				}
-				p := snap.Pending[0]
-				cmdJSON, _ := json.Marshal(p.Cmd)
-				send(protocol.Message{
-					Kind:       protocol.KindApprovalNotif,
-					ApprovalID: p.ID,
-					Data:       json.RawMessage(cmdJSON),
-				})
-			}
-		}
-	}()
+	go pumpApprovalNotifs(ctx, ch, a.console, send)
 
 	dec := json.NewDecoder(conn)
 	for {
@@ -503,7 +514,7 @@ func (a *Agent) serveConsole(ctx context.Context, conn net.Conn) {
 			return
 		}
 		resp := a.handleConsoleRPC(msg)
-		send(resp)
+		_ = send(resp)
 	}
 }
 

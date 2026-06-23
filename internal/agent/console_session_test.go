@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"wanctl/internal/console"
 	"wanctl/internal/eventlog"
@@ -81,5 +83,40 @@ func TestConsoleRPCDecide(t *testing.T) {
 	}
 	if resp.Verdict != "not-found" {
 		t.Fatalf("want verdict %q, got %q", "not-found", resp.Verdict)
+	}
+}
+
+// mkConsole returns a minimal console.Service for use in pump tests.
+func mkConsole(t *testing.T) *console.Service {
+	t.Helper()
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	eng, err := policy.Open("rules.json", policy.ModeNormal)
+	if err != nil {
+		t.Fatalf("policy.Open: %v", err)
+	}
+	logger, err := eventlog.Open("events.jsonl")
+	if err != nil {
+		t.Fatalf("eventlog.Open: %v", err)
+	}
+	return console.New(eng, logger, console.Info{Device: "test-dev"})
+}
+
+func TestPumpApprovalNotifsStopsOnCancel(t *testing.T) {
+	svc := mkConsole(t)
+	changes, cancelSub := svc.Subscribe()
+	defer cancelSub()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		pumpApprovalNotifs(ctx, changes, svc, func(protocol.Message) error { return nil })
+		close(done)
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pump did not exit on context cancel (goroutine leak)")
 	}
 }
