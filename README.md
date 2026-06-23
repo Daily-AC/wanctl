@@ -87,4 +87,11 @@ the policy engine.
 - **E2E mutual TLS 1.3** (relay sees only ciphertext) — Ed25519 identity reused from lanctl.
 - **TOFU fingerprint pinning** both directions.
 
+## Driving it from an agent (the skill)
+
+`skill/SKILL.md` is a Claude Code skill that teaches an agent to drive the
+controller CLI: setup env, run/transfer/log commands, and correctly read
+"denied by policy" / "blocked on approval" / TOFU-pairing outcomes. Install by
+copying `skill/` to `~/.claude/skills/wanctl/`.
+
 See `docs/superpowers/specs/2026-06-23-wanctl-design.md` for the full design.
