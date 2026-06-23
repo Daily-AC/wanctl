@@ -91,6 +91,7 @@ func (r *Relay) Handler() http.Handler {
 	mux.HandleFunc("/h/down", r.handleHDown)
 	mux.HandleFunc("/h/close", r.handleHClose)
 	r.registerAdmin(mux)
+	r.registerDist(mux)
 	return mux
 }
 

@@ -86,8 +86,25 @@ The user (at the device) can pre-authorize it so it stops prompting:
 Explain these options to the user; you cannot approve on their behalf from the
 controller side.
 
+## Enrolling a new device (the controlled side)
+
+If you have shell access to a machine that should become controllable (or are
+telling the user how), enroll it in one line — no Go needed, the relay serves a
+prebuilt binary + installer:
+
+```bash
+curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | WANCTL_TOKEN=<token> sh
+```
+
+Detects OS/arch, installs `wanctl`, runs the agent (foreground). To persist as a
+background service: add `WANCTL_INSTALL_ONLY=1` to just install, then
+`nohup wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token <token> --transport http --name "$(hostname)" &`.
+Optional env: `WANCTL_NAME`, `WANCTL_MODE=bypass` (auto-allow; trusted devices
+only), `WANCTL_GUI_PORT=7600` (local approval UI). Tokens come from the portal
+`https://wanctl.***REMOVED***.***REMOVED***.com` (Feishu login → issue token, shown once).
+
 ## Notes
 
 - One Go binary plays controller, agent, and relay. As a controller you only use
-  the commands above.
-- Source / design: `~/projects/wanctl` (branch `http-transport`).
+  the controller commands above.
+- Source / design: `~/projects/wanctl` (mainline branch `main`).

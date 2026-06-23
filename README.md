@@ -46,7 +46,32 @@ wanctl logs                      # run on the device itself: read the local log
 ```
 Content stays on the device (E2E — the relay never sees it).
 
-## Build
+## Enroll a device in one line (curl | sh)
+
+On the machine you want to control (the agent), no Go needed — the relay serves a
+prebuilt binary and an installer. Get a token from the portal, then:
+
+```bash
+curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | WANCTL_TOKEN=<token> sh
+```
+
+It detects OS/arch, installs `wanctl`, and runs the agent (foreground; wrap in
+`systemd`/`nohup &` to persist). Optional env: `WANCTL_NAME` (default hostname),
+`WANCTL_MODE=bypass`, `WANCTL_GUI_PORT=7600`, `WANCTL_INSTALL_ONLY=1` (install,
+don't run). Run as a background service:
+
+```bash
+curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | WANCTL_INSTALL_ONLY=1 sh
+nohup wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token <token> \
+      --transport http --name "$(hostname)" >/tmp/wanctl-agent.log 2>&1 &
+```
+
+> **For AI agents:** how to *drive* a device (run commands, transfer files, read
+> logs, and interpret approval/denial) is in **[`skill/SKILL.md`](skill/SKILL.md)** —
+> read it first. It's also installable as a Claude Code skill (copy `skill/` to
+> `~/.claude/skills/wanctl/`).
+
+## Build from source
 
 ```bash
 go build -o wanctl .                                  # this machine
