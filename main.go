@@ -107,6 +107,11 @@ func cmdRelay(args []string) error {
 		r = relay.New(pg)
 		r.SetACL(pg)
 		r.SetAuditor(pg)
+		r.SetAdmin(pg)
+		if sec := os.Getenv("WANCTL_ADMIN_SECRET"); sec != "" {
+			r.SetAdminSecret(sec)
+			fmt.Println("wanctl relay: admin API enabled (portal access)")
+		}
 		fmt.Println("wanctl relay: token store = postgres (hashed tokens + ACL + audit)")
 	} else {
 		spec := os.Getenv("WANCTL_TOKENS")
@@ -124,12 +129,9 @@ func cmdPortal(args []string) error {
 	fs := flag.NewFlagSet("portal", flag.ExitOnError)
 	addr := fs.String("addr", ":8080", "listen address")
 	fs.Parse(args)
-	dsn := os.Getenv("DATABASE_URL") // empty is allowed: / and /whoami still serve
-	p, err := portal.New(dsn, os.Getenv("PORTAL_USER_HEADER"))
-	if err != nil {
-		return err
-	}
-	fmt.Printf("wanctl portal listening on %s (identity header: %q)\n", *addr, envOr("PORTAL_USER_HEADER", "X-Forwarded-User"))
+	// Portal is a thin SSO proxy to the relay's admin API (no DB of its own).
+	p := portal.New(os.Getenv("RELAY_ADMIN_URL"), os.Getenv("WANCTL_ADMIN_SECRET"), os.Getenv("PORTAL_USER_HEADER"))
+	fmt.Printf("wanctl portal listening on %s (identity header: %q, relay: %q)\n", *addr, envOr("PORTAL_USER_HEADER", "X-Auth-Request-Email"), os.Getenv("RELAY_ADMIN_URL"))
 	return http.ListenAndServe(*addr, p.Handler())
 }
 

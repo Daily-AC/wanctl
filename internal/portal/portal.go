@@ -1,24 +1,20 @@
 // Package portal is the team web app (humans, behind thunderbox Feishu SSO). It
-// identifies the logged-in user from an SSO-injected request header, maps them to
-// a namespace, and lets them issue/revoke access tokens, view their devices and
-// shared-access (ACL) grants, and read the relay audit. It shares the relay's
-// Postgres. Tokens are stored hashed with the same scheme the relay resolves.
+// identifies the logged-in user from an SSO-injected request header, resolves a
+// namespace, and proxies token/device/ACL/audit operations to the relay's
+// secret-gated admin API. It holds no database of its own — the relay owns the
+// Postgres — so it needs only the relay URL and a shared admin secret.
 package portal
 
 import (
-	"crypto/rand"
-	"database/sql"
+	"bytes"
 	"embed"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
-
-	"wanctl/internal/relay"
-
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 //go:embed index.html
@@ -26,31 +22,25 @@ var assets embed.FS
 
 // Server is the portal web app.
 type Server struct {
-	db         *sql.DB
-	userHeader string
+	relayURL    string // e.g. https://wanctl-relay.***REMOVED***.***REMOVED***.com
+	adminSecret string
+	userHeader  string
+	hc          *http.Client
 }
 
-// New configures the identity header and, if dsn is non-empty, opens the shared
-// Postgres. With an empty dsn the server still starts so / and /whoami work
-// (useful for discovering the SSO header before the DB is wired); DB-backed
-// endpoints then return 503 until DATABASE_URL is set.
-func New(dsn, userHeader string) (*Server, error) {
+// New configures the portal. With an empty relayURL/secret the server still
+// starts so / and /whoami work (for SSO-header discovery); data endpoints then
+// return 503 until configured.
+func New(relayURL, adminSecret, userHeader string) *Server {
 	if userHeader == "" {
-		userHeader = "X-Forwarded-User"
+		userHeader = "X-Auth-Request-Email"
 	}
-	s := &Server{userHeader: userHeader}
-	if dsn == "" {
-		return s, nil
+	return &Server{
+		relayURL:    strings.TrimRight(relayURL, "/"),
+		adminSecret: adminSecret,
+		userHeader:  userHeader,
+		hc:          &http.Client{Timeout: 15 * time.Second},
 	}
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return nil, err
-	}
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("ping postgres: %w", err)
-	}
-	s.db = db
-	return s, nil
 }
 
 // Handler returns the portal mux.
@@ -78,8 +68,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-// handleWhoami dumps request headers so we can discover which one carries the
-// SSO identity. Safe to leave in (shows only the caller's own headers).
+// handleWhoami dumps request headers so we can discover the SSO identity header.
 func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprintf(w, "configured identity header: %q\nresolved identity: %q\n\nall request headers:\n", s.userHeader, r.Header.Get(s.userHeader))
@@ -88,54 +77,36 @@ func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// identity returns the SSO-provided identity (header value), or "".
 func (s *Server) identity(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get(s.userHeader))
 }
 
-// deriveNS turns an identity (often an email) into a namespace slug.
-func deriveNS(identity string) string {
-	s := identity
-	if i := strings.Index(s, "@"); i > 0 {
-		s = s[:i]
+// adminReq calls the relay admin API with the shared secret.
+func (s *Server) adminReq(method, path string, query url.Values, body any) (*http.Response, error) {
+	u := s.relayURL + path
+	if len(query) > 0 {
+		u += "?" + query.Encode()
 	}
-	s = strings.ToLower(s)
-	var b strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			b.WriteRune(r)
-		} else {
-			b.WriteRune('-')
-		}
+	var rdr io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rdr = bytes.NewReader(b)
 	}
-	return strings.Trim(b.String(), "-")
+	req, err := http.NewRequest(method, u, rdr)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Admin-Secret", s.adminSecret)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return s.hc.Do(req)
 }
 
-// resolveUser maps an identity to a namespace, creating/linking the users row.
-func (s *Server) resolveUser(identity string) (string, error) {
-	var ns string
-	err := s.db.QueryRow(`SELECT namespace FROM users WHERE feishu_open_id = $1`, identity).Scan(&ns)
-	if err == nil {
-		return ns, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", err
-	}
-	ns = deriveNS(identity)
-	// Link to an existing namespace row if present, else create.
-	err = s.db.QueryRow(
-		`INSERT INTO users (feishu_open_id, namespace, name) VALUES ($1,$2,$3)
-		   ON CONFLICT (namespace) DO UPDATE SET feishu_open_id = EXCLUDED.feishu_open_id
-		   RETURNING namespace`,
-		identity, ns, identity,
-	).Scan(&ns)
-	return ns, err
-}
-
-// requireNS resolves the caller's namespace or writes a 401 and returns ok=false.
+// requireNS authenticates the caller and resolves their namespace via the relay.
 func (s *Server) requireNS(w http.ResponseWriter, r *http.Request) (string, bool) {
-	if s.db == nil {
-		http.Error(w, "database not configured yet (set DATABASE_URL on this app)", http.StatusServiceUnavailable)
+	if s.relayURL == "" || s.adminSecret == "" {
+		http.Error(w, "portal not wired yet (set RELAY_ADMIN_URL and WANCTL_ADMIN_SECRET)", http.StatusServiceUnavailable)
 		return "", false
 	}
 	id := s.identity(r)
@@ -143,12 +114,58 @@ func (s *Server) requireNS(w http.ResponseWriter, r *http.Request) (string, bool
 		http.Error(w, "no SSO identity header ("+s.userHeader+"); open /whoami to find the right header", http.StatusUnauthorized)
 		return "", false
 	}
-	ns, err := s.resolveUser(id)
+	resp, err := s.adminReq("POST", "/admin/resolve-user", nil, map[string]string{"identity": id})
 	if err != nil {
-		http.Error(w, "resolve user: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "relay unreachable: "+err.Error(), http.StatusBadGateway)
 		return "", false
 	}
-	return ns, true
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		http.Error(w, "relay admin error", resp.StatusCode)
+		return "", false
+	}
+	var out struct{ Namespace string }
+	json.NewDecoder(resp.Body).Decode(&out)
+	if out.Namespace == "" {
+		http.Error(w, "could not resolve namespace", http.StatusInternalServerError)
+		return "", false
+	}
+	return out.Namespace, true
+}
+
+// proxyGet forwards a GET to the relay admin (scoped by namespace) to the client.
+func (s *Server) proxyGet(w http.ResponseWriter, ns, path string) {
+	resp, err := s.adminReq("GET", path, url.Values{"namespace": {ns}}, nil)
+	if err != nil {
+		http.Error(w, "relay unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	copyResp(w, resp)
+}
+
+// proxyPost merges the namespace into the client's JSON body and forwards a POST.
+func (s *Server) proxyPost(w http.ResponseWriter, r *http.Request, ns, path string) {
+	body := map[string]any{}
+	if r.Body != nil {
+		json.NewDecoder(r.Body).Decode(&body)
+	}
+	body["namespace"] = ns
+	resp, err := s.adminReq("POST", path, nil, body)
+	if err != nil {
+		http.Error(w, "relay unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	copyResp(w, resp)
+}
+
+func copyResp(w http.ResponseWriter, resp *http.Response) {
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +173,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, map[string]any{"identity": s.identity(r), "namespace": ns})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"identity": s.identity(r), "namespace": ns})
 }
 
 func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
@@ -165,89 +183,22 @@ func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "POST" {
-		var body struct {
-			Label string `json:"label"`
-			Days  int    `json:"days"`
-		}
-		json.NewDecoder(r.Body).Decode(&body)
-		raw := "wanctl_" + randHex(20)
-		var expires any
-		if body.Days > 0 {
-			expires = time.Now().AddDate(0, 0, body.Days)
-		}
-		_, err := s.db.Exec(
-			`INSERT INTO tokens (namespace, kind, hash, label, expires_at) VALUES ($1,'access',$2,$3,$4)`,
-			ns, relay.HashToken(raw), body.Label, expires,
-		)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, map[string]string{"token": raw}) // shown once
+		s.proxyPost(w, r, ns, "/admin/tokens/issue")
 		return
 	}
-	rows, err := s.db.Query(
-		`SELECT id, COALESCE(label,''), created_at, expires_at, revoked_at
-		   FROM tokens WHERE namespace = $1 ORDER BY id DESC`, ns)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-	var out []map[string]any
-	for rows.Next() {
-		var id int
-		var label string
-		var created time.Time
-		var expires, revoked sql.NullTime
-		rows.Scan(&id, &label, &created, &expires, &revoked)
-		out = append(out, map[string]any{
-			"id": id, "label": label, "created_at": created,
-			"expires_at": nullTime(expires), "revoked_at": nullTime(revoked),
-		})
-	}
-	writeJSON(w, map[string]any{"tokens": out})
+	s.proxyGet(w, ns, "/admin/tokens")
 }
 
 func (s *Server) handleTokenRevoke(w http.ResponseWriter, r *http.Request) {
-	ns, ok := s.requireNS(w, r)
-	if !ok {
-		return
+	if ns, ok := s.requireNS(w, r); ok {
+		s.proxyPost(w, r, ns, "/admin/tokens/revoke")
 	}
-	var body struct {
-		ID int `json:"id"`
-	}
-	json.NewDecoder(r.Body).Decode(&body)
-	_, err := s.db.Exec(
-		`UPDATE tokens SET revoked_at = now() WHERE id = $1 AND namespace = $2 AND revoked_at IS NULL`,
-		body.ID, ns)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
-	ns, ok := s.requireNS(w, r)
-	if !ok {
-		return
+	if ns, ok := s.requireNS(w, r); ok {
+		s.proxyGet(w, ns, "/admin/devices")
 	}
-	rows, err := s.db.Query(
-		`SELECT name, COALESCE(fingerprint,''), last_seen FROM devices WHERE owner_namespace = $1 ORDER BY name`, ns)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-	var out []map[string]any
-	for rows.Next() {
-		var name, fp string
-		var seen sql.NullTime
-		rows.Scan(&name, &fp, &seen)
-		out = append(out, map[string]any{"name": name, "fingerprint": fp, "last_seen": nullTime(seen)})
-	}
-	writeJSON(w, map[string]any{"devices": out})
 }
 
 func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
@@ -256,97 +207,20 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "POST" {
-		var body struct {
-			Device  string `json:"device"`
-			Grantee string `json:"grantee"`
-			Perms   string `json:"perms"`
-		}
-		json.NewDecoder(r.Body).Decode(&body)
-		if body.Perms == "" {
-			body.Perms = "exec,read,write"
-		}
-		_, err := s.db.Exec(
-			`INSERT INTO acl (owner_namespace, device, grantee_namespace, perms) VALUES ($1,$2,$3,$4)`,
-			ns, body.Device, body.Grantee, body.Perms)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
+		s.proxyPost(w, r, ns, "/admin/acl")
 		return
 	}
-	rows, err := s.db.Query(
-		`SELECT id, device, grantee_namespace, perms, created_at FROM acl
-		   WHERE owner_namespace = $1 AND revoked_at IS NULL ORDER BY id DESC`, ns)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-	var out []map[string]any
-	for rows.Next() {
-		var id int
-		var device, grantee, perms string
-		var created time.Time
-		rows.Scan(&id, &device, &grantee, &perms, &created)
-		out = append(out, map[string]any{"id": id, "device": device, "grantee": grantee, "perms": perms, "created_at": created})
-	}
-	writeJSON(w, map[string]any{"acl": out})
+	s.proxyGet(w, ns, "/admin/acl")
 }
 
 func (s *Server) handleACLRevoke(w http.ResponseWriter, r *http.Request) {
-	ns, ok := s.requireNS(w, r)
-	if !ok {
-		return
+	if ns, ok := s.requireNS(w, r); ok {
+		s.proxyPost(w, r, ns, "/admin/acl/revoke")
 	}
-	var body struct {
-		ID int `json:"id"`
-	}
-	json.NewDecoder(r.Body).Decode(&body)
-	_, err := s.db.Exec(`UPDATE acl SET revoked_at = now() WHERE id = $1 AND owner_namespace = $2`, body.ID, ns)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
-	ns, ok := s.requireNS(w, r)
-	if !ok {
-		return
+	if ns, ok := s.requireNS(w, r); ok {
+		s.proxyGet(w, ns, "/admin/audit")
 	}
-	rows, err := s.db.Query(
-		`SELECT ts, device, event FROM audit WHERE namespace = $1 ORDER BY id DESC LIMIT 100`, ns)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-	var out []map[string]any
-	for rows.Next() {
-		var ts time.Time
-		var device, event string
-		rows.Scan(&ts, &device, &event)
-		out = append(out, map[string]any{"ts": ts, "device": device, "event": event})
-	}
-	writeJSON(w, map[string]any{"audit": out})
-}
-
-func randHex(n int) string {
-	b := make([]byte, n)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-func nullTime(t sql.NullTime) any {
-	if t.Valid {
-		return t.Time
-	}
-	return nil
-}
-
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
 }

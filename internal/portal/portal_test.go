@@ -3,54 +3,38 @@ package portal
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
-func TestDeriveNS(t *testing.T) {
-	cases := map[string]string{
-		"***REMOVED***@***REMOVED***": "***REMOVED***",
-		"Alice.Bo@x.com":            "alice-bo",
-		"bob":                       "bob",
-		"ou_abc123":                 "ou-abc123",
-	}
-	for in, want := range cases {
-		if got := deriveNS(in); got != want {
-			t.Errorf("deriveNS(%q)=%q want %q", in, got, want)
-		}
+func TestRequireNSNotWired503(t *testing.T) {
+	s := New("", "", "") // no relay URL / secret
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/me", nil)
+	req.Header.Set("X-Auth-Request-Email", "someone@x.com")
+	s.handleMe(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503 when unwired, got %d", rec.Code)
 	}
 }
 
-func TestRequireNSNoDB503(t *testing.T) {
-	s := &Server{userHeader: "X-Forwarded-User"} // db nil
+func TestNoIdentity401(t *testing.T) {
+	s := New("https://relay.example", "secret", "")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/me", nil)
-	req.Header.Set("X-Forwarded-User", "someone@x.com")
+	req := httptest.NewRequest("GET", "/api/me", nil) // no identity header
 	s.handleMe(rec, req)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("want 503 when DB unconfigured, got %d", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401 without identity, got %d", rec.Code)
 	}
 }
 
 func TestWhoamiDumpsHeaders(t *testing.T) {
-	s := &Server{userHeader: "X-Forwarded-User"}
+	s := New("", "", "X-Auth-Request-Email")
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/whoami", nil)
-	req.Header.Set("X-Forwarded-User", "someone@x.com")
+	req.Header.Set("X-Auth-Request-Email", "someone@x.com")
 	s.handleWhoami(rec, req)
-	body := rec.Body.String()
-	if rec.Code != 200 || !contains(body, "someone@x.com") {
-		t.Fatalf("whoami missing identity: %d %s", rec.Code, body)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "someone@x.com") {
+		t.Fatalf("whoami missing identity: %d %s", rec.Code, rec.Body.String())
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (indexOf(s, sub) >= 0)
-}
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }

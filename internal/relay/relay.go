@@ -49,9 +49,11 @@ type Auditor interface {
 
 // Relay is the broker.
 type Relay struct {
-	ts    TokenStore
-	acl   ACLChecker
-	audit Auditor
+	ts          TokenStore
+	acl         ACLChecker
+	audit       Auditor
+	admin       AdminStore
+	adminSecret string
 
 	mu      sync.Mutex
 	agents  map[string]*agentConn      // key "ns/device" (WebSocket transport)
@@ -88,8 +90,12 @@ func (r *Relay) Handler() http.Handler {
 	mux.HandleFunc("/h/up", r.handleHUp)
 	mux.HandleFunc("/h/down", r.handleHDown)
 	mux.HandleFunc("/h/close", r.handleHClose)
+	r.registerAdmin(mux)
 	return mux
 }
+
+// SetAdmin installs the admin store backing the /admin/* endpoints.
+func (r *Relay) SetAdmin(a AdminStore) { r.admin = a }
 
 func (r *Relay) auth(req *http.Request) (ns string, ok bool) {
 	return r.ts.Resolve(req.URL.Query().Get("token"))
