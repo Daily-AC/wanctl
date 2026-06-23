@@ -209,6 +209,8 @@ func (c *Client) Exec(ctx context.Context, target, command string, oneShot bool,
 				return m.Code, nil
 			case protocol.KindError:
 				return -1, fmt.Errorf("remote error: %s", m.Reason)
+			case protocol.KindReject:
+				return -1, fmt.Errorf("%s", m.Reason)
 			}
 		}
 	}
