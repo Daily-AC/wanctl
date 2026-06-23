@@ -109,7 +109,7 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	a.lastSeen = time.Now()
 	r.hmu.Unlock()
 	if r.admin != nil {
-		r.admin.UpsertDevice(ns, device)
+		r.admin.UpsertDevice(ns, device, req.URL.Query().Get("fp"))
 	}
 
 	select {

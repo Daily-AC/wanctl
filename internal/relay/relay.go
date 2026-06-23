@@ -143,7 +143,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	nc := wsconn.FromAccepted(req.Context(), c)
 	dec := json.NewDecoder(nc)
 	var reg struct {
-		Op, Device string
+		Op, Device, Fingerprint string
 	}
 	if err := dec.Decode(&reg); err != nil || reg.Op != "register" || reg.Device == "" {
 		c.Close(websocket.StatusPolicyViolation, "expected register")
@@ -155,7 +155,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	r.agents[key] = ac
 	r.mu.Unlock()
 	if r.admin != nil {
-		r.admin.UpsertDevice(ns, reg.Device)
+		r.admin.UpsertDevice(ns, reg.Device, reg.Fingerprint)
 	}
 	defer func() {
 		r.mu.Lock()

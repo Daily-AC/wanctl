@@ -163,7 +163,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	defer nc.Close()
 	enc := json.NewEncoder(nc)
-	if err := enc.Encode(map[string]string{"op": "register", "device": a.opts.Name}); err != nil {
+	if err := enc.Encode(map[string]string{"op": "register", "device": a.opts.Name, "fingerprint": a.id.Fingerprint}); err != nil {
 		return err
 	}
 	fmt.Printf("wanctl agent %q online via %s\n  fingerprint: %s\n", a.opts.Name, a.opts.RelayURL, a.id.Fingerprint)
@@ -351,7 +351,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 	base := httpBase(a.opts.RelayURL)
 	fmt.Printf("wanctl agent %q online via %s (http transport)\n  fingerprint: %s\n", a.opts.Name, base, a.id.Fingerprint)
 	hc := &http.Client{Timeout: 35 * time.Second}
-	q := url.Values{"token": {a.opts.Token}, "device": {a.opts.Name}}.Encode()
+	q := url.Values{"token": {a.opts.Token}, "device": {a.opts.Name}, "fp": {a.id.Fingerprint}}.Encode()
 	pollURL := base + "/h/poll?" + q
 	for {
 		if ctx.Err() != nil {

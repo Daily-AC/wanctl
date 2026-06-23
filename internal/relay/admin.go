@@ -172,7 +172,7 @@ func (r *Relay) adminAudit(w http.ResponseWriter, req *http.Request) {
 // AdminStore is the DB surface the admin endpoints need.
 type AdminStore interface {
 	ResolveUser(identity string) (string, error)
-	UpsertDevice(namespace, name string)
+	UpsertDevice(namespace, name, fingerprint string)
 	IssueToken(namespace, label string, days int) (string, error)
 	ListTokens(namespace string) ([]map[string]any, error)
 	RevokeToken(namespace string, id int) error
@@ -226,11 +226,13 @@ func (p *PGStore) ResolveUser(identity string) (string, error) {
 
 // UpsertDevice records (or refreshes last_seen for) an online device.
 // Best-effort: never blocks registration on a DB hiccup.
-func (p *PGStore) UpsertDevice(namespace, name string) {
+func (p *PGStore) UpsertDevice(namespace, name, fingerprint string) {
 	_, _ = p.db.Exec(
-		`INSERT INTO devices (owner_namespace, name, last_seen) VALUES ($1,$2,now())
-		   ON CONFLICT (owner_namespace, name) DO UPDATE SET last_seen = now()`,
-		namespace, name)
+		`INSERT INTO devices (owner_namespace, name, fingerprint, last_seen) VALUES ($1,$2,NULLIF($3,''),now())
+		   ON CONFLICT (owner_namespace, name) DO UPDATE
+		     SET last_seen = now(),
+		         fingerprint = COALESCE(NULLIF(EXCLUDED.fingerprint,''), devices.fingerprint)`,
+		namespace, name, fingerprint)
 }
 
 func (p *PGStore) IssueToken(namespace, label string, days int) (string, error) {
