@@ -1,0 +1,4 @@
+wanctl
+*.exe
+docs/
+.git/
