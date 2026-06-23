@@ -93,3 +93,16 @@ func TestRelayRejectsBadToken(t *testing.T) {
 		t.Fatalf("status = %d, want 401", resp.StatusCode)
 	}
 }
+
+func TestDialAllowedPortal(t *testing.T) {
+	r := New(EnvTokenStore("ptok:portal,utok:alice"))
+	r.SetPortalNS("portal")
+	// portal may dial any namespace's device
+	if _, _, _, ok := r.dialAllowed("portal", "alice/legion"); !ok {
+		t.Fatal("portal should be allowed to dial alice/legion")
+	}
+	// a normal user still cannot cross namespaces without ACL
+	if _, _, _, ok := r.dialAllowed("alice", "bob/box"); ok {
+		t.Fatal("alice should not dial bob without ACL")
+	}
+}

@@ -54,6 +54,7 @@ type Relay struct {
 	audit       Auditor
 	admin       AdminStore
 	adminSecret string
+	portalNS    string
 
 	mu      sync.Mutex
 	agents  map[string]*agentConn      // key "ns/device" (WebSocket transport)
@@ -108,6 +109,10 @@ func (r *Relay) SetACL(c ACLChecker) { r.acl = c }
 // SetAuditor installs a metadata audit sink.
 func (r *Relay) SetAuditor(a Auditor) { r.audit = a }
 
+// SetPortalNS marks a namespace as the privileged portal: tokens resolving to it
+// may dial any device (the device still enforces E2E trust + policy).
+func (r *Relay) SetPortalNS(ns string) { r.portalNS = ns }
+
 // dialAllowed splits target into namespace/device and checks access for caller.
 func (r *Relay) dialAllowed(callerNS, target string) (targetKey, targetNS, device string, ok bool) {
 	if !strings.Contains(target, "/") {
@@ -115,6 +120,9 @@ func (r *Relay) dialAllowed(callerNS, target string) (targetKey, targetNS, devic
 	}
 	i := strings.Index(target, "/")
 	targetNS, device = target[:i], target[i+1:]
+	if r.portalNS != "" && callerNS == r.portalNS {
+		return target, targetNS, device, true
+	}
 	if targetNS == callerNS {
 		return target, targetNS, device, true
 	}
