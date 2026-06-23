@@ -32,8 +32,19 @@ Every remote command and file op is gated on the device:
 
 `wanctl agent --gui-port 7600` opens a localhost UI (`http://127.0.0.1:7600`) for
 the human at the device: live approval queue (click `y/a/g/n`), rule management,
-and a mode toggle (with a bypass danger banner). When `--gui-port` is set, the
-browser is the approver.
+a mode toggle (with a bypass danger banner), and an activity timeline. When
+`--gui-port` is set, the browser is the approver.
+
+### Activity log (M5)
+
+The device records every connect/exec/file action to `<config>/logs/events.jsonl`
+with the decision and exit code. Query it:
+
+```bash
+wanctl logs --target home-pc --type exec --grep deploy --since 2026-06-23T00:00:00Z
+wanctl logs                      # run on the device itself: read the local log
+```
+Content stays on the device (E2E — the relay never sees it).
 
 ## Build
 

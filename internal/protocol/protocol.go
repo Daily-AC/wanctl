@@ -44,6 +44,7 @@ const (
 	KindFileGet  = "file_get"  // client -> server, request download
 	KindFileMeta = "file_meta" // server -> client, download metadata
 	KindEOF      = "eof"       // end of a FrameData stream
+	KindLogs     = "logs"      // client -> server, request event-log lines
 )
 
 // Message is the JSON body of a FrameJSON frame. Fields are reused across kinds;
@@ -71,6 +72,12 @@ type Message struct {
 	Path string `json:"path,omitempty"`
 	Size int64  `json:"size,omitempty"`
 	Mode uint32 `json:"mode,omitempty"`
+
+	// logs
+	LogType string `json:"log_type,omitempty"`
+	Grep    string `json:"grep,omitempty"`
+	Since   string `json:"since,omitempty"` // RFC3339
+	Limit   int    `json:"limit,omitempty"`
 }
 
 // WriteFrame writes a single framed payload.

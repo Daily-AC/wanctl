@@ -178,6 +178,41 @@ func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target string
 	return dr.Conn, nil
 }
 
+// Logs pulls matching event-log lines from the target device and streams them to
+// stdout (JSON lines). Filters: type, grep, since (RFC3339), limit (0 = all).
+func (c *Client) Logs(ctx context.Context, target, logType, grep, since string, limit int) error {
+	conn, err := c.connect(ctx, target)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := protocol.WriteMessage(conn, protocol.Message{
+		Kind: protocol.KindLogs, LogType: logType, Grep: grep, Since: since, Limit: limit,
+	}); err != nil {
+		return err
+	}
+	for {
+		ft, payload, err := protocol.ReadFrame(conn)
+		if err != nil {
+			return err
+		}
+		switch ft {
+		case protocol.FrameStdout:
+			os.Stdout.Write(payload)
+		case protocol.FrameJSON:
+			m, _ := protocol.DecodeMessage(payload)
+			switch m.Kind {
+			case protocol.KindExit:
+				return nil
+			case protocol.KindError:
+				return fmt.Errorf("remote error: %s", m.Reason)
+			case protocol.KindReject:
+				return fmt.Errorf("%s", m.Reason)
+			}
+		}
+	}
+}
+
 // Exec runs a command on target, streaming output, returning the remote code.
 // cwd (optional) sets the working directory and is the policy scope on the device.
 func (c *Client) Exec(ctx context.Context, target, command string, oneShot bool, cwd string) (int, error) {

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"wanctl/internal/eventlog"
 	"wanctl/internal/policy"
 )
 
@@ -44,6 +45,7 @@ type pending struct {
 // Server is the local GUI + approver.
 type Server struct {
 	engine  *policy.Engine
+	log     *eventlog.Logger
 	info    Info
 	timeout time.Duration
 
@@ -52,10 +54,11 @@ type Server struct {
 	subs map[chan struct{}]struct{}
 }
 
-// New builds a GUI server bound to a policy engine.
-func New(engine *policy.Engine, info Info) *Server {
+// New builds a GUI server bound to a policy engine and event log.
+func New(engine *policy.Engine, log *eventlog.Logger, info Info) *Server {
 	return &Server{
 		engine:  engine,
+		log:     log,
 		info:    info,
 		timeout: 60 * time.Second,
 		pend:    map[string]*pending{},
@@ -107,7 +110,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/rules/add", s.handleRuleAdd)
 	mux.HandleFunc("/api/rules/rm", s.handleRuleRm)
 	mux.HandleFunc("/api/mode", s.handleMode)
+	mux.HandleFunc("/api/logs", s.handleLogs)
 	return mux
+}
+
+func (s *Server) handleLogs(w http.ResponseWriter, _ *http.Request) {
+	var events []eventlog.Event
+	if s.log != nil {
+		events, _ = s.log.Read(eventlog.Filter{Limit: 100})
+	}
+	writeJSON(w, map[string]any{"events": events})
 }
 
 // Serve starts the GUI on addr (e.g. "127.0.0.1:7600") until ctx is cancelled.

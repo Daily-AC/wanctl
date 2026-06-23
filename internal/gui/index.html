@@ -93,6 +93,13 @@
       </div>
     </div>
   </section>
+
+  <section class="card">
+    <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Activity (last 100)</h2>
+    <div class="body">
+      <table id="logs"><thead><tr><th>time</th><th>type</th><th>detail</th><th>decision</th><th>exit</th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
 </main>
 <div class="flash" id="flash"></div>
 <script>
@@ -135,6 +142,23 @@ async function render(){
     return `<tr><td>${i}</td><td>${r.kind}</td><td>${esc(r.pattern)}</td><td>${scope}</td>
       <td><button class="rm" onclick="rmRule(${i})">remove</button></td></tr>`;
   }).join('') : '<tr><td colspan="5" class="empty">No rules yet.</td></tr>';
+
+  renderLogs();
+}
+async function renderLogs(){
+  const lt=$('#logs tbody');
+  try{
+    const d = await (await fetch('/api/logs')).json();
+    const evs=(d.events||[]).slice().reverse();
+    lt.innerHTML = evs.length ? evs.map(e=>{
+      const t=new Date(e.ts).toLocaleTimeString();
+      const dec=e.decision||'';
+      const col = dec==='denied'?'var(--bad)':(dec.startsWith('remember')||dec==='approved'?'var(--accent)':'var(--dim)');
+      const ex = (e.exit===0||e.exit)?e.exit:'';
+      return `<tr><td>${t}</td><td>${e.type}</td><td>${esc(e.detail||'')}</td>
+        <td style="color:${col}">${dec}</td><td>${ex}</td></tr>`;
+    }).join('') : '<tr><td colspan="5" class="empty">No activity yet.</td></tr>';
+  }catch(_){}
 }
 async function decide(id,v){ await fetch('/api/decide',{method:'POST',body:JSON.stringify({id,verdict:v})}); flash('Decision recorded'); render(); }
 async function rmRule(i){ await fetch('/api/rules/rm',{method:'POST',body:JSON.stringify({index:i})}); render(); }

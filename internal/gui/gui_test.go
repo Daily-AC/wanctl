@@ -24,7 +24,7 @@ func newEngine(t *testing.T) *policy.Engine {
 
 func TestAskResolvedByDecideRecordsRule(t *testing.T) {
 	eng := newEngine(t)
-	s := New(eng, Info{Device: "dev"})
+	s := New(eng, nil, Info{Device: "dev"})
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
@@ -70,7 +70,7 @@ func TestAskResolvedByDecideRecordsRule(t *testing.T) {
 
 func TestAskTimesOutToDeny(t *testing.T) {
 	eng := newEngine(t)
-	s := New(eng, Info{Device: "dev"})
+	s := New(eng, nil, Info{Device: "dev"})
 	s.timeout = 150 * time.Millisecond // shorten for the test
 	d := s.Ask(policy.Request{Kind: policy.KindWrite, Path: "/x"})
 	if d.Allow {
@@ -80,7 +80,7 @@ func TestAskTimesOutToDeny(t *testing.T) {
 
 func TestStateServesInfoAndMode(t *testing.T) {
 	eng := newEngine(t)
-	s := New(eng, Info{Device: "dev", Relay: "wss://r"})
+	s := New(eng, nil, Info{Device: "dev", Relay: "wss://r"})
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/api/state")

@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -14,9 +15,11 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"wanctl/internal/agent"
 	"wanctl/internal/client"
+	"wanctl/internal/eventlog"
 	"wanctl/internal/policy"
 	"wanctl/internal/relay"
 	"wanctl/internal/transport"
@@ -64,6 +67,8 @@ func main() {
 		err = cmdTrust(os.Args[2:])
 	case "rules":
 		err = cmdRules(os.Args[2:])
+	case "logs":
+		err = cmdLogs(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return
@@ -199,6 +204,44 @@ func cmdID() error {
 	}
 	dir, _ := transport.ConfigDir()
 	fmt.Printf("fingerprint: %s\nconfig dir:  %s\n", id.Fingerprint, dir)
+	return nil
+}
+
+func cmdLogs(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("logs", flag.ExitOnError)
+	target := fs.String("target", "", "pull from this device over the relay (omit to read local device log)")
+	logType := fs.String("type", "", "filter: connect | exec | file")
+	grep := fs.String("grep", "", "filter: substring of the detail field")
+	since := fs.String("since", "", "filter: RFC3339 timestamp lower bound")
+	limit := fs.Int("limit", 0, "keep only the last N matching events")
+	fs.Parse(args)
+
+	if *target != "" {
+		c, err := client.New()
+		if err != nil {
+			return err
+		}
+		return c.Logs(ctx, *target, *logType, *grep, *since, *limit)
+	}
+	// Local read (run on the device itself).
+	lg, err := eventlog.Open("events.jsonl")
+	if err != nil {
+		return err
+	}
+	f := eventlog.Filter{Type: *logType, Grep: *grep, Limit: *limit}
+	if *since != "" {
+		if ts, perr := time.Parse(time.RFC3339, *since); perr == nil {
+			f.Since = ts
+		}
+	}
+	events, err := lg.Read(f)
+	if err != nil {
+		return err
+	}
+	for _, e := range events {
+		b, _ := json.Marshal(e)
+		fmt.Println(string(b))
+	}
 	return nil
 }
 

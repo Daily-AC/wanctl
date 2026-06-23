@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"wanctl/internal/eventlog"
 	"wanctl/internal/gui"
 	"wanctl/internal/httpconn"
 	"wanctl/internal/policy"
@@ -48,6 +49,7 @@ type Agent struct {
 	opts   Options
 	engine *policy.Engine
 	gui    *gui.Server
+	log    *eventlog.Logger
 	apprMu sync.Mutex
 	appr   policy.Approver
 
@@ -85,15 +87,19 @@ func New(opts Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	logger, err := eventlog.Open("events.jsonl")
+	if err != nil {
+		return nil, err
+	}
 	a := &Agent{
-		id: id, known: known, opts: opts, engine: engine,
+		id: id, known: known, opts: opts, engine: engine, log: logger,
 		sessions: map[string]*server.ShellSession{}, stdin: bufio.NewReader(os.Stdin),
 	}
 	switch {
 	case opts.Mode == policy.ModeBypass:
 		a.appr = policy.AllowApprover{}
 	case opts.GUIPort > 0:
-		a.gui = gui.New(engine, gui.Info{Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL})
+		a.gui = gui.New(engine, logger, gui.Info{Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL})
 		a.appr = a.gui // humans approve in the browser
 	case term.IsTerminal(int(os.Stdin.Fd())):
 		a.appr = policy.NewConsoleApprover(os.Stdin, os.Stdout)
@@ -111,25 +117,27 @@ func (a *Agent) setApprover(ap policy.Approver) {
 }
 
 // gate authorizes a request: bypass/pre-approved pass; otherwise ask the
-// approver and optionally remember a rule. Returns true if the op may proceed.
-func (a *Agent) gate(req policy.Request) bool {
+// approver and optionally remember a rule. Returns whether the op may proceed
+// and a short decision string for the audit log.
+func (a *Agent) gate(req policy.Request) (bool, string) {
 	if a.engine.Mode() == policy.ModeBypass {
-		return true
+		return true, "bypass"
 	}
 	if a.engine.Allowed(req) {
-		return true
+		return true, "pre-approved"
 	}
 	a.apprMu.Lock()
 	appr := a.appr
 	a.apprMu.Unlock()
 	d := appr.Ask(req)
 	if !d.Allow {
-		return false
+		return false, "denied"
 	}
 	if d.Remember {
 		a.engine.Add(policy.RuleFor(req, d.Scope))
+		return true, "remembered:" + string(d.Scope)
 	}
-	return true
+	return true, "approved"
 }
 
 // Run connects the control channel and serves sessions until ctx is cancelled.
@@ -204,7 +212,8 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
 		return
 	}
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindOK, Name: a.opts.Name})
-	a.serve(conn, fp)
+	a.log.Append(eventlog.Event{Type: "connect", PeerFP: fp, PeerName: hello.Name})
+	a.serve(conn, fp, hello.Name)
 }
 
 func (a *Agent) authorize(fp, name string) bool {
@@ -230,7 +239,7 @@ func (a *Agent) authorize(fp, name string) bool {
 	return false
 }
 
-func (a *Agent) serve(conn *tls.Conn, fp string) {
+func (a *Agent) serve(conn *tls.Conn, fp, peerName string) {
 	for {
 		m, err := protocol.ReadMessage(conn)
 		if err != nil {
@@ -238,15 +247,21 @@ func (a *Agent) serve(conn *tls.Conn, fp string) {
 		}
 		switch m.Kind {
 		case protocol.KindExec:
-			a.doExec(conn, fp, m)
+			a.doExec(conn, fp, peerName, m)
+		case protocol.KindLogs:
+			a.doLogs(conn, m)
 		case protocol.KindFilePut:
-			if !a.gate(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp}) {
+			ok, decision := a.gate(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp})
+			a.log.Append(eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "PUT " + m.Path, Decision: decision})
+			if !ok {
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "write denied by device policy: " + m.Path})
 				continue
 			}
 			server.HandleFilePut(conn, m)
 		case protocol.KindFileGet:
-			if !a.gate(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp}) {
+			ok, decision := a.gate(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp})
+			a.log.Append(eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "GET " + m.Path, Decision: decision})
+			if !ok {
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "read denied by device policy: " + m.Path})
 				continue
 			}
@@ -258,8 +273,10 @@ func (a *Agent) serve(conn *tls.Conn, fp string) {
 	}
 }
 
-func (a *Agent) doExec(conn *tls.Conn, fp string, m protocol.Message) {
-	if !a.gate(policy.Request{Kind: policy.KindExec, Cmd: m.Command, Cwd: m.Cwd, Peer: fp}) {
+func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) {
+	ok, decision := a.gate(policy.Request{Kind: policy.KindExec, Cmd: m.Command, Cwd: m.Cwd, Peer: fp})
+	if !ok {
+		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision})
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "command denied by device policy: " + m.Command})
 		return
 	}
@@ -278,10 +295,33 @@ func (a *Agent) doExec(conn *tls.Conn, fp string, m protocol.Message) {
 		code, err = sess.Exec(command, out)
 	}
 	if err != nil {
+		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision})
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return
 	}
+	a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code})
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExit, Code: code})
+}
+
+// doLogs streams matching local events back to the controller as JSON lines.
+func (a *Agent) doLogs(conn *tls.Conn, m protocol.Message) {
+	f := eventlog.Filter{Type: m.LogType, Grep: m.Grep, Limit: int(m.Limit)}
+	if m.Since != "" {
+		if ts, err := time.Parse(time.RFC3339, m.Since); err == nil {
+			f.Since = ts
+		}
+	}
+	events, err := a.log.Read(f)
+	if err != nil {
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
+		return
+	}
+	out := server.FrameWriter(conn, protocol.FrameStdout)
+	for _, e := range events {
+		b, _ := json.Marshal(e)
+		out.Write(append(b, '\n'))
+	}
+	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExit, Code: 0})
 }
 
 // withCwd prefixes a directory change so the command runs in cwd. Uses ';' so it
