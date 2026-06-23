@@ -17,6 +17,7 @@ import (
 
 	"wanctl/internal/agent"
 	"wanctl/internal/client"
+	"wanctl/internal/policy"
 	"wanctl/internal/relay"
 	"wanctl/internal/transport"
 )
@@ -61,6 +62,8 @@ func main() {
 		err = cmdID()
 	case "trust":
 		err = cmdTrust(os.Args[2:])
+	case "rules":
+		err = cmdRules(os.Args[2:])
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return
@@ -102,11 +105,15 @@ func cmdAgent(ctx context.Context, args []string) error {
 	shell := fs.String("shell", "", "shell (default powershell on Windows, /bin/sh elsewhere)")
 	yes := fs.Bool("yes", false, "auto-trust new controllers (unattended)")
 	tr := fs.String("transport", envOr("WANCTL_TRANSPORT", "ws"), "transport: ws or http (http is proxy-agnostic)")
+	mode := fs.String("mode", "normal", "policy mode: normal (prompt on miss) or bypass (auto-allow, DANGEROUS)")
 	fs.Parse(args)
 	if *relayURL == "" || *token == "" {
 		return fmt.Errorf("provide --relay and --token (or WANCTL_RELAY/WANCTL_TOKEN)")
 	}
-	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr})
+	if *mode == "bypass" {
+		fmt.Fprintln(os.Stderr, "wanctl: ⚠ BYPASS mode — every command and file op is auto-allowed without prompting. Use only on trusted, isolated devices.")
+	}
+	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode)})
 	if err != nil {
 		return err
 	}
@@ -119,6 +126,7 @@ func cmdExec(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("exec", flag.ExitOnError)
 	target := fs.String("target", "", "device (NS/DEV or DEV)")
 	oneShot := fs.Bool("oneshot", false, "fresh shell, no session state")
+	cwd := fs.String("cwd", "", "working directory on the device (also the policy scope)")
 	fs.Parse(args)
 	command := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if command == "" {
@@ -128,7 +136,7 @@ func cmdExec(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	code, err := c.Exec(ctx, *target, command, *oneShot)
+	code, err := c.Exec(ctx, *target, command, *oneShot, *cwd)
 	if err != nil {
 		return err
 	}
@@ -191,6 +199,77 @@ func cmdID() error {
 	dir, _ := transport.ConfigDir()
 	fmt.Printf("fingerprint: %s\nconfig dir:  %s\n", id.Fingerprint, dir)
 	return nil
+}
+
+func cmdRules(args []string) error {
+	eng, err := policy.Open("rules.json", policy.ModeNormal)
+	if err != nil {
+		return err
+	}
+	sub := "list"
+	if len(args) > 0 {
+		sub = args[0]
+		args = args[1:]
+	}
+	switch sub {
+	case "list":
+		rules := eng.List()
+		fmt.Printf("policy rules: %d\n", len(rules))
+		for i, r := range rules {
+			scope := string(r.Scope)
+			if r.Scope == policy.ScopeDir {
+				scope = "dir:" + r.Dir
+				if r.Kind != policy.KindExec {
+					scope = "dir:" + r.Pattern
+				}
+			}
+			fmt.Printf("  [%d] %-5s %-30q %s\n", i, r.Kind, r.Pattern, scope)
+		}
+		return nil
+	case "add":
+		fs := flag.NewFlagSet("rules add", flag.ExitOnError)
+		kind := fs.String("kind", "exec", "exec | read | write")
+		pattern := fs.String("pattern", "", "exec: command (+arg prefix, trailing * ok); file: directory")
+		dir := fs.String("dir", "", "for exec dir-scope: the working directory")
+		fs.Parse(args)
+		if *pattern == "" && *dir == "" {
+			return fmt.Errorf("usage: wanctl rules add --kind exec|read|write --pattern P [--dir D]")
+		}
+		r := policy.Rule{Kind: policy.Kind(*kind), Pattern: *pattern, Scope: policy.ScopeGlobal}
+		switch policy.Kind(*kind) {
+		case policy.KindExec:
+			if *dir != "" { // exec dir-scope: command pattern restricted to a working dir
+				r.Scope = policy.ScopeDir
+				r.Dir = *dir
+			}
+		case policy.KindRead, policy.KindWrite:
+			if *pattern != "" { // a file pattern is itself a directory restriction
+				r.Scope = policy.ScopeDir
+			}
+		default:
+			return fmt.Errorf("invalid --kind %q (want exec|read|write)", *kind)
+		}
+		if err := eng.Add(r); err != nil {
+			return err
+		}
+		fmt.Println("rule added")
+		return nil
+	case "rm":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: wanctl rules rm <index>")
+		}
+		var i int
+		if _, err := fmt.Sscanf(args[0], "%d", &i); err != nil {
+			return fmt.Errorf("invalid index %q", args[0])
+		}
+		if err := eng.Remove(i); err != nil {
+			return fmt.Errorf("remove rule %d: %w", i, err)
+		}
+		fmt.Println("rule removed")
+		return nil
+	default:
+		return fmt.Errorf("usage: wanctl rules [list|add|rm]")
+	}
 }
 
 func cmdTrust(args []string) error {

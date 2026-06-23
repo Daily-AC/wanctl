@@ -179,13 +179,14 @@ func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target string
 }
 
 // Exec runs a command on target, streaming output, returning the remote code.
-func (c *Client) Exec(ctx context.Context, target, command string, oneShot bool) (int, error) {
+// cwd (optional) sets the working directory and is the policy scope on the device.
+func (c *Client) Exec(ctx context.Context, target, command string, oneShot bool, cwd string) (int, error) {
 	conn, err := c.connect(ctx, target)
 	if err != nil {
 		return -1, err
 	}
 	defer conn.Close()
-	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExec, Command: command, OneShot: oneShot}); err != nil {
+	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExec, Command: command, OneShot: oneShot, Cwd: cwd}); err != nil {
 		return -1, err
 	}
 	for {

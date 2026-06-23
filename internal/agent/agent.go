@@ -19,10 +19,13 @@ import (
 	"time"
 
 	"wanctl/internal/httpconn"
+	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/server"
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
+
+	"golang.org/x/term"
 )
 
 // Options configures an agent run.
@@ -32,21 +35,27 @@ type Options struct {
 	Name      string
 	Shell     string
 	AutoYes   bool
-	Transport string // "ws" (default) or "http" (proxy-agnostic)
+	Transport string      // "ws" (default) or "http" (proxy-agnostic)
+	Mode      policy.Mode // "normal" (default) or "bypass"
 }
 
 // Agent is a running controlled node.
 type Agent struct {
-	id    *transport.Identity
-	known *transport.Store
-	opts  Options
+	id     *transport.Identity
+	known  *transport.Store
+	opts   Options
+	engine *policy.Engine
+	apprMu sync.Mutex
+	appr   policy.Approver
 
 	sessMu   sync.Mutex
 	sessions map[string]*server.ShellSession
 	stdin    *bufio.Reader
 }
 
-// New constructs an Agent with loaded identity and controller allow-list.
+// New constructs an Agent with loaded identity, controller allow-list, and
+// policy engine. The approver is the device console when attended, deny when
+// running headless (so unattended agents are safe unless in bypass mode).
 func New(opts Options) (*Agent, error) {
 	id, err := transport.LoadOrCreateIdentity()
 	if err != nil {
@@ -59,6 +68,9 @@ func New(opts Options) (*Agent, error) {
 	if opts.Shell == "" {
 		opts.Shell = server.DefaultShell()
 	}
+	if opts.Mode == "" {
+		opts.Mode = policy.ModeNormal
+	}
 	if opts.Name == "" {
 		h, _ := os.Hostname()
 		if h == "" {
@@ -66,7 +78,52 @@ func New(opts Options) (*Agent, error) {
 		}
 		opts.Name = h
 	}
-	return &Agent{id: id, known: known, opts: opts, sessions: map[string]*server.ShellSession{}, stdin: bufio.NewReader(os.Stdin)}, nil
+	engine, err := policy.Open("rules.json", opts.Mode)
+	if err != nil {
+		return nil, err
+	}
+	var appr policy.Approver
+	switch {
+	case opts.Mode == policy.ModeBypass:
+		appr = policy.AllowApprover{}
+	case term.IsTerminal(int(os.Stdin.Fd())):
+		appr = policy.NewConsoleApprover(os.Stdin, os.Stdout)
+	default:
+		appr = policy.DenyApprover{} // headless + miss = deny (pre-load rules to allow)
+	}
+	return &Agent{
+		id: id, known: known, opts: opts, engine: engine, appr: appr,
+		sessions: map[string]*server.ShellSession{}, stdin: bufio.NewReader(os.Stdin),
+	}, nil
+}
+
+// setApprover overrides the approver (used by tests).
+func (a *Agent) setApprover(ap policy.Approver) {
+	a.apprMu.Lock()
+	a.appr = ap
+	a.apprMu.Unlock()
+}
+
+// gate authorizes a request: bypass/pre-approved pass; otherwise ask the
+// approver and optionally remember a rule. Returns true if the op may proceed.
+func (a *Agent) gate(req policy.Request) bool {
+	if a.engine.Mode() == policy.ModeBypass {
+		return true
+	}
+	if a.engine.Allowed(req) {
+		return true
+	}
+	a.apprMu.Lock()
+	appr := a.appr
+	a.apprMu.Unlock()
+	d := appr.Ask(req)
+	if !d.Allow {
+		return false
+	}
+	if d.Remember {
+		a.engine.Add(policy.RuleFor(req, d.Scope))
+	}
+	return true
 }
 
 // Run connects the control channel and serves sessions until ctx is cancelled.
@@ -169,8 +226,16 @@ func (a *Agent) serve(conn *tls.Conn, fp string) {
 		case protocol.KindExec:
 			a.doExec(conn, fp, m)
 		case protocol.KindFilePut:
+			if !a.gate(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp}) {
+				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "write denied by device policy: " + m.Path})
+				continue
+			}
 			server.HandleFilePut(conn, m)
 		case protocol.KindFileGet:
+			if !a.gate(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp}) {
+				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "read denied by device policy: " + m.Path})
+				continue
+			}
 			server.HandleFileGet(conn, m)
 		default:
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "unknown request: " + m.Kind})
@@ -180,24 +245,38 @@ func (a *Agent) serve(conn *tls.Conn, fp string) {
 }
 
 func (a *Agent) doExec(conn *tls.Conn, fp string, m protocol.Message) {
+	if !a.gate(policy.Request{Kind: policy.KindExec, Cmd: m.Command, Cwd: m.Cwd, Peer: fp}) {
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "command denied by device policy: " + m.Command})
+		return
+	}
+	command := withCwd(m.Cwd, m.Command)
 	out := server.FrameWriter(conn, protocol.FrameStdout)
 	var code int
 	var err error
 	if m.OneShot {
-		code, err = server.RunOneShot(a.opts.Shell, m.Command, out)
+		code, err = server.RunOneShot(a.opts.Shell, command, out)
 	} else {
 		sess, serr := a.session(fp)
 		if serr != nil {
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: serr.Error()})
 			return
 		}
-		code, err = sess.Exec(m.Command, out)
+		code, err = sess.Exec(command, out)
 	}
 	if err != nil {
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return
 	}
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExit, Code: code})
+}
+
+// withCwd prefixes a directory change so the command runs in cwd. Uses ';' so it
+// works in both POSIX sh and PowerShell.
+func withCwd(cwd, cmd string) string {
+	if cwd == "" {
+		return cmd
+	}
+	return "cd \"" + cwd + "\"; " + cmd
 }
 
 // httpBase converts the relay URL to an HTTP(S) origin for the HTTP transport.

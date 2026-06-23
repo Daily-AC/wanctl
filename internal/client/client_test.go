@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"wanctl/internal/agent"
+	"wanctl/internal/policy"
 	"wanctl/internal/relay"
 )
 
@@ -20,7 +21,7 @@ func TestClientExecAndFileRoundTrip(t *testing.T) {
 
 	// Agent.
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
-	ag, err := agent.New(agent.Options{RelayURL: base, Token: "tok", Name: "home-pc", AutoYes: true})
+	ag, err := agent.New(agent.Options{RelayURL: base, Token: "tok", Name: "home-pc", AutoYes: true, Mode: policy.ModeBypass})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,7 @@ func TestClientExecAndFileRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, err := c.Exec(context.Background(), "home-pc", "echo hi", true)
+	code, err := c.Exec(context.Background(), "home-pc", "echo hi", true, "")
 	if err != nil || code != 0 {
 		t.Fatalf("exec: code=%d err=%v", code, err)
 	}

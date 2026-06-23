@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"wanctl/internal/agent"
+	"wanctl/internal/policy"
 	"wanctl/internal/relay"
 )
 
@@ -22,7 +23,7 @@ func TestHTTPTransportExecAndFileRoundTrip(t *testing.T) {
 
 	// Agent over HTTP transport.
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
-	ag, err := agent.New(agent.Options{RelayURL: base, Token: "tok", Name: "home-pc", AutoYes: true, Transport: "http"})
+	ag, err := agent.New(agent.Options{RelayURL: base, Token: "tok", Name: "home-pc", AutoYes: true, Transport: "http", Mode: policy.ModeBypass})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +47,7 @@ func TestHTTPTransportExecAndFileRoundTrip(t *testing.T) {
 		t.Fatalf("peers: %v err=%v", devs, err)
 	}
 
-	code, err := c.Exec(context.Background(), "home-pc", "echo http-hi", true)
+	code, err := c.Exec(context.Background(), "home-pc", "echo http-hi", true, "")
 	if err != nil || code != 0 {
 		t.Fatalf("exec: code=%d err=%v", code, err)
 	}

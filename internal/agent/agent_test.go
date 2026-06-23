@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/relay"
 	"wanctl/internal/transport"
@@ -21,7 +22,7 @@ func TestAgentExecOverRelay(t *testing.T) {
 
 	// Agent identity in its own config dir, auto-trust the controller.
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
-	ag, err := New(Options{RelayURL: base, Token: "tok", Name: "home-pc", AutoYes: true})
+	ag, err := New(Options{RelayURL: base, Token: "tok", Name: "home-pc", AutoYes: true, Mode: policy.ModeBypass})
 	if err != nil {
 		t.Fatal(err)
 	}

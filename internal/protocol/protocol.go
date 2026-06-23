@@ -59,6 +59,7 @@ type Message struct {
 	// exec
 	Command string `json:"command,omitempty"`
 	OneShot bool   `json:"oneshot,omitempty"`
+	Cwd     string `json:"cwd,omitempty"` // working directory for the command (policy scope)
 
 	// exit
 	Code int `json:"code,omitempty"`
