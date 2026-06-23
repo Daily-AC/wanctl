@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,7 +9,7 @@ import (
 )
 
 func TestRequireNSNotWired503(t *testing.T) {
-	s := New("", "", "") // no relay URL / secret
+	s := New(Config{RelayAdminURL: "", AdminSecret: "", UserHeader: ""}) // no relay URL / secret
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/me", nil)
 	req.Header.Set("X-Auth-Request-Email", "someone@x.com")
@@ -19,7 +20,7 @@ func TestRequireNSNotWired503(t *testing.T) {
 }
 
 func TestNoIdentity401(t *testing.T) {
-	s := New("https://relay.example", "secret", "")
+	s := New(Config{RelayAdminURL: "https://relay.example", AdminSecret: "secret", UserHeader: ""})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/me", nil) // no identity header
 	s.handleMe(rec, req)
@@ -29,12 +30,38 @@ func TestNoIdentity401(t *testing.T) {
 }
 
 func TestWhoamiDumpsHeaders(t *testing.T) {
-	s := New("", "", "X-Auth-Request-Email")
+	s := New(Config{RelayAdminURL: "", AdminSecret: "", UserHeader: "X-Auth-Request-Email"})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/whoami", nil)
 	req.Header.Set("X-Auth-Request-Email", "someone@x.com")
 	s.handleWhoami(rec, req)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "someone@x.com") {
 		t.Fatalf("whoami missing identity: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRequireDeviceRejectsForeign(t *testing.T) {
+	// fake relay admin: resolve-user -> "alice"; devices -> only "legion"
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "alice"})
+		case "/admin/devices":
+			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{{"name": "legion"}}})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer relay.Close()
+
+	s := New(Config{RelayAdminURL: relay.URL, AdminSecret: "x", UserHeader: "X-User"})
+	req := httptest.NewRequest("GET", "/api/devices/console?device=evil", nil)
+	req.Header.Set("X-User", "alice@corp")
+	w := httptest.NewRecorder()
+	if ns, ok := s.requireDevice(w, req, "evil"); ok {
+		t.Fatalf("expected reject of foreign device, got ns=%s", ns)
+	}
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d", w.Code)
 	}
 }

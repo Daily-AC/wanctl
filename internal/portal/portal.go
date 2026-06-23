@@ -7,6 +7,7 @@ package portal
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -14,33 +15,60 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
+
+	"wanctl/internal/client"
+	"wanctl/internal/transport"
 )
 
 //go:embed index.html
 var assets embed.FS
 
+// Config holds all parameters for New.
+type Config struct {
+	RelayAdminURL string // https://relay  (admin /admin/* proxy target)
+	AdminSecret   string
+	UserHeader    string
+	RelayDialURL  string // ws(s)://relay  (controller dial target for console sessions)
+	PortalToken   string // privileged token whose namespace == relay portalNS
+	Transport     string // "ws" or "http"
+	Identity      *transport.Identity
+	Known         *transport.Store
+}
+
 // Server is the portal web app.
 type Server struct {
-	relayURL    string // e.g. https://wanctl-relay.***REMOVED***.***REMOVED***.com
+	relayURL    string
 	adminSecret string
 	userHeader  string
 	hc          *http.Client
+
+	dialer *client.Client // controller used to open console sessions
+
+	mu    sync.Mutex
+	conns map[string]*deviceConn // key "ns/device"
 }
 
 // New configures the portal. With an empty relayURL/secret the server still
 // starts so / and /whoami work (for SSO-header discovery); data endpoints then
 // return 503 until configured.
-func New(relayURL, adminSecret, userHeader string) *Server {
-	if userHeader == "" {
-		userHeader = "X-Auth-Request-Email"
+func New(cfg Config) *Server {
+	uh := cfg.UserHeader
+	if uh == "" {
+		uh = "X-Auth-Request-Email"
 	}
-	return &Server{
-		relayURL:    strings.TrimRight(relayURL, "/"),
-		adminSecret: adminSecret,
-		userHeader:  userHeader,
+	s := &Server{
+		relayURL:    strings.TrimRight(cfg.RelayAdminURL, "/"),
+		adminSecret: cfg.AdminSecret,
+		userHeader:  uh,
 		hc:          &http.Client{Timeout: 15 * time.Second},
+		conns:       map[string]*deviceConn{},
 	}
+	if cfg.Identity != nil && cfg.RelayDialURL != "" && cfg.PortalToken != "" {
+		s.dialer = client.NewWith(cfg.Identity, cfg.Known, cfg.RelayDialURL, cfg.PortalToken, cfg.Transport)
+	}
+	return s
 }
 
 // Handler returns the portal mux.
@@ -55,6 +83,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/acl", s.handleACL)
 	mux.HandleFunc("/api/acl/revoke", s.handleACLRevoke)
 	mux.HandleFunc("/api/audit", s.handleAudit)
+	mux.HandleFunc("/api/devices/console", s.handleDeviceConsole)
+	mux.HandleFunc("/api/devices/decide", s.handleDeviceDecide)
+	mux.HandleFunc("/api/devices/rules", s.handleDeviceRules)
+	mux.HandleFunc("/api/devices/mode", s.handleDeviceMode)
+	mux.HandleFunc("/api/devices/events", s.handleDeviceEvents)
 	return mux
 }
 
@@ -222,5 +255,186 @@ func (s *Server) handleACLRevoke(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if ns, ok := s.requireNS(w, r); ok {
 		s.proxyGet(w, ns, "/admin/audit")
+	}
+}
+
+// requireDevice authenticates the user, resolves their namespace, and verifies
+// the named device belongs to it (queried from the relay admin device list).
+func (s *Server) requireDevice(w http.ResponseWriter, r *http.Request, device string) (string, bool) {
+	ns, ok := s.requireNS(w, r)
+	if !ok {
+		return "", false
+	}
+	if device == "" {
+		http.Error(w, "missing device", http.StatusBadRequest)
+		return "", false
+	}
+	resp, err := s.adminReq("GET", "/admin/devices", url.Values{"namespace": {ns}}, nil)
+	if err != nil {
+		http.Error(w, "relay unreachable", http.StatusBadGateway)
+		return "", false
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Devices []struct{ Name string } `json:"devices"`
+	}
+	json.NewDecoder(resp.Body).Decode(&out)
+	for _, d := range out.Devices {
+		if d.Name == device {
+			return ns, true
+		}
+	}
+	http.Error(w, "device not in your namespace", http.StatusForbidden)
+	return "", false
+}
+
+// deviceConnFor returns a warm console connection to ns/device, dialing if needed.
+func (s *Server) deviceConnFor(ctx context.Context, ns, device string) (*deviceConn, error) {
+	if s.dialer == nil {
+		return nil, fmt.Errorf("portal console not wired (set WANCTL_RELAY, WANCTL_PORTAL_TOKEN)")
+	}
+	key := ns + "/" + device
+	s.mu.Lock()
+	if d := s.conns[key]; d != nil {
+		s.mu.Unlock()
+		return d, nil
+	}
+	s.mu.Unlock()
+	conn, err := s.dialer.OpenConsole(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	d := newDeviceConn(conn)
+	s.mu.Lock()
+	s.conns[key] = d
+	s.mu.Unlock()
+	return d, nil
+}
+
+func (s *Server) dropConn(ns, device string) {
+	key := ns + "/" + device
+	s.mu.Lock()
+	if d := s.conns[key]; d != nil {
+		d.close()
+		delete(s.conns, key)
+	}
+	s.mu.Unlock()
+}
+
+func (s *Server) handleDeviceConsole(w http.ResponseWriter, r *http.Request) {
+	device := r.URL.Query().Get("device")
+	ns, ok := s.requireDevice(w, r, device)
+	if !ok {
+		return
+	}
+	d, err := s.deviceConnFor(r.Context(), ns, device)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	st, err := d.state()
+	if err != nil {
+		s.dropConn(ns, device)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	json.NewEncoder(w).Encode(st)
+}
+
+func (s *Server) handleDeviceDecide(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Device, ID, Verdict string }
+	json.NewDecoder(r.Body).Decode(&body)
+	ns, ok := s.requireDevice(w, r, body.Device)
+	if !ok {
+		return
+	}
+	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err := d.decide(body.ID, body.Verdict, "portal:"+s.identity(r)); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleDeviceRules(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Device, Op, Kind, Pattern, Dir, Scope string
+		Index                                 int
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	ns, ok := s.requireDevice(w, r, body.Device)
+	if !ok {
+		return
+	}
+	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	var err2 error
+	if body.Op == "rm" {
+		err2 = d.removeRule(body.Index)
+	} else {
+		err2 = d.addRule(body.Kind, body.Pattern, body.Dir, body.Scope)
+	}
+	if err2 != nil {
+		http.Error(w, err2.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleDeviceMode(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Device, Mode string }
+	json.NewDecoder(r.Body).Decode(&body)
+	ns, ok := s.requireDevice(w, r, body.Device)
+	if !ok {
+		return
+	}
+	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err := d.setMode(body.Mode); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleDeviceEvents(w http.ResponseWriter, r *http.Request) {
+	device := r.URL.Query().Get("device")
+	ns, ok := s.requireDevice(w, r, device)
+	if !ok {
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "no stream", http.StatusInternalServerError)
+		return
+	}
+	d, err := s.deviceConnFor(r.Context(), ns, device)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	fmt.Fprint(w, "data: hello\n\n")
+	flusher.Flush()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case st := <-d.notifs():
+			b, _ := json.Marshal(st)
+			fmt.Fprintf(w, "data: %s\n\n", b)
+			flusher.Flush()
+		}
 	}
 }
