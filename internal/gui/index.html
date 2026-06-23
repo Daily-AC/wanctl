@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wanctl · device console</title>
+<style>
+  :root{
+    --bg:#0f1216; --panel:#171b21; --panel2:#1d232b; --line:#2a323c;
+    --ink:#e8edf2; --dim:#8b97a6; --accent:#5db0ff; --ok:#39d98a; --warn:#ffb454; --bad:#ff6b6b;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:16px 22px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header .logo{width:26px;height:26px;color:var(--accent)}
+  header h1{font-size:15px;font-weight:650;margin:0;letter-spacing:.3px}
+  header .meta{margin-left:auto;display:flex;gap:18px;color:var(--dim);font-size:12px;font-family:var(--mono)}
+  header .meta b{color:var(--ink);font-weight:600}
+  main{max-width:920px;margin:0 auto;padding:22px;display:grid;gap:22px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .card>h2{margin:0;padding:13px 18px;font-size:12.5px;font-weight:650;letter-spacing:.6px;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .card>h2 svg{width:15px;height:15px}
+  .body{padding:14px 18px}
+  .empty{color:var(--dim);font-size:13px;padding:6px 0}
+  .req{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin-bottom:12px}
+  .req:last-child{margin-bottom:0}
+  .req .kind{display:inline-block;font:600 10.5px var(--mono);letter-spacing:.5px;padding:2px 8px;border-radius:20px;text-transform:uppercase}
+  .k-exec{background:rgba(93,176,255,.16);color:var(--accent)}
+  .k-write{background:rgba(255,107,107,.16);color:var(--bad)}
+  .k-read{background:rgba(57,217,138,.16);color:var(--ok)}
+  .req .detail{font-family:var(--mono);font-size:13px;margin:9px 0;word-break:break-all}
+  .req .sub{color:var(--dim);font-size:12px;font-family:var(--mono)}
+  .btns{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  button{font:600 13px inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:7px 13px;border-radius:8px;cursor:pointer;transition:.12s}
+  button:hover{border-color:var(--accent)}
+  .b-y{background:rgba(57,217,138,.14);border-color:transparent;color:var(--ok)}
+  .b-a,.b-g{background:rgba(93,176,255,.12);border-color:transparent;color:var(--accent)}
+  .b-n{background:rgba(255,107,107,.14);border-color:transparent;color:var(--bad)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td,th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);font-family:var(--mono)}
+  th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  tr:last-child td{border-bottom:none}
+  .rm{color:var(--dim);cursor:pointer;border:none;background:none;padding:2px 6px}
+  .rm:hover{color:var(--bad)}
+  .mode{display:flex;align-items:center;gap:12px}
+  .pill{font:600 12px var(--mono);padding:4px 11px;border-radius:20px}
+  .pill.normal{background:rgba(57,217,138,.16);color:var(--ok)}
+  .pill.bypass{background:rgba(255,107,107,.18);color:var(--bad)}
+  .danger{margin-top:10px;color:var(--bad);font-size:12.5px;display:none}
+  .addrow{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .addrow select,.addrow input{font:13px var(--mono);background:var(--panel2);border:1px solid var(--line);color:var(--ink);padding:7px 9px;border-radius:8px}
+  .addrow input{flex:1;min-width:140px}
+  .flash{position:fixed;top:14px;right:14px;background:var(--panel2);border:1px solid var(--accent);color:var(--ink);padding:9px 14px;border-radius:8px;opacity:0;transition:.25s;font-size:13px}
+  .flash.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2 4 6v6c0 4.4 3.4 8 8 10 4.6-2 8-5.6 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg>
+  <h1>wanctl device console</h1>
+  <div class="meta">
+    <span>device <b id="m-dev">—</b></span>
+    <span>relay <b id="m-relay">—</b></span>
+    <span id="m-fp">—</span>
+  </div>
+</header>
+<main>
+  <section class="card">
+    <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>Pending approvals</h2>
+    <div class="body" id="pending"><div class="empty">No requests waiting.</div></div>
+  </section>
+
+  <section class="card">
+    <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7"/></svg>Mode</h2>
+    <div class="body">
+      <div class="mode">
+        <span>Current:</span><span class="pill" id="modePill">—</span>
+        <button id="modeToggle">Toggle</button>
+      </div>
+      <div class="danger" id="bypassWarn">⚠ BYPASS: every command and file op is auto-allowed without prompting. Use only on trusted, isolated devices.</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Allow-list rules</h2>
+    <div class="body">
+      <table id="rules"><thead><tr><th>#</th><th>kind</th><th>pattern</th><th>scope</th><th></th></tr></thead><tbody></tbody></table>
+      <div class="addrow">
+        <select id="rk"><option value="exec">exec</option><option value="read">read</option><option value="write">write</option></select>
+        <input id="rp" placeholder="command (echo *) or directory (/data)">
+        <button id="radd">Add rule</button>
+      </div>
+    </div>
+  </section>
+</main>
+<div class="flash" id="flash"></div>
+<script>
+const $ = s => document.querySelector(s);
+function flash(t){const f=$('#flash');f.textContent=t;f.classList.add('show');setTimeout(()=>f.classList.remove('show'),1600);}
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+async function render(){
+  const st = await (await fetch('/api/state')).json();
+  $('#m-dev').textContent = st.info.device||'—';
+  $('#m-relay').textContent = (st.info.relay||'').replace(/^wss?:\/\//,'').replace(/^https?:\/\//,'')||'—';
+  $('#m-fp').textContent = (st.info.fingerprint||'').slice(0,21)+'…';
+
+  const pend = st.pending||[];
+  const pc = $('#pending');
+  if(!pend.length){ pc.innerHTML='<div class="empty">No requests waiting.</div>'; }
+  else pc.innerHTML = pend.map(p=>{
+    const detail = p.kind==='exec' ? esc(p.cmd) : esc(p.path);
+    const sub = p.kind==='exec' && p.cwd ? 'cwd: '+esc(p.cwd) : '';
+    return `<div class="req">
+      <span class="kind k-${p.kind}">${p.kind}</span>
+      <span class="sub" style="margin-left:8px">from ${esc(p.peer).slice(0,20)||'unknown'}</span>
+      <div class="detail">${detail}</div>
+      ${sub?`<div class="sub">${sub}</div>`:''}
+      <div class="btns">
+        <button class="b-y" onclick="decide('${p.id}','y')">Allow once</button>
+        <button class="b-a" onclick="decide('${p.id}','a')">Allow + remember dir</button>
+        <button class="b-g" onclick="decide('${p.id}','g')">Allow + remember global</button>
+        <button class="b-n" onclick="decide('${p.id}','n')">Deny</button>
+      </div></div>`;
+  }).join('');
+
+  const pill=$('#modePill'); pill.textContent=st.mode; pill.className='pill '+st.mode;
+  $('#bypassWarn').style.display = st.mode==='bypass'?'block':'none';
+
+  const tb=$('#rules tbody');
+  const rules=st.rules||[];
+  tb.innerHTML = rules.length ? rules.map((r,i)=>{
+    let scope = r.scope==='dir' ? (r.kind==='exec'?('dir:'+esc(r.dir)):'dir') : 'global';
+    return `<tr><td>${i}</td><td>${r.kind}</td><td>${esc(r.pattern)}</td><td>${scope}</td>
+      <td><button class="rm" onclick="rmRule(${i})">remove</button></td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="empty">No rules yet.</td></tr>';
+}
+async function decide(id,v){ await fetch('/api/decide',{method:'POST',body:JSON.stringify({id,verdict:v})}); flash('Decision recorded'); render(); }
+async function rmRule(i){ await fetch('/api/rules/rm',{method:'POST',body:JSON.stringify({index:i})}); render(); }
+$('#radd').onclick=async()=>{
+  const kind=$('#rk').value, pattern=$('#rp').value.trim(); if(!pattern)return;
+  const scope = (kind!=='exec') ? 'dir' : 'global';
+  await fetch('/api/rules/add',{method:'POST',body:JSON.stringify({kind,pattern,scope})});
+  $('#rp').value=''; flash('Rule added'); render();
+};
+$('#modeToggle').onclick=async()=>{
+  const cur=$('#modePill').textContent;
+  const next=cur==='bypass'?'normal':'bypass';
+  if(next==='bypass' && !confirm('Enable BYPASS? Every command and file op will be auto-allowed.'))return;
+  await fetch('/api/mode',{method:'POST',body:JSON.stringify({mode:next})}); render();
+};
+const ev=new EventSource('/api/events'); ev.onmessage=()=>render();
+render();
+</script>
+</body>
+</html>

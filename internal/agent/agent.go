@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"wanctl/internal/gui"
 	"wanctl/internal/httpconn"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
@@ -37,6 +38,7 @@ type Options struct {
 	AutoYes   bool
 	Transport string      // "ws" (default) or "http" (proxy-agnostic)
 	Mode      policy.Mode // "normal" (default) or "bypass"
+	GUIPort   int         // >0 enables the local web GUI (approvals/monitor) on 127.0.0.1:GUIPort
 }
 
 // Agent is a running controlled node.
@@ -45,6 +47,7 @@ type Agent struct {
 	known  *transport.Store
 	opts   Options
 	engine *policy.Engine
+	gui    *gui.Server
 	apprMu sync.Mutex
 	appr   policy.Approver
 
@@ -82,19 +85,22 @@ func New(opts Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	var appr policy.Approver
+	a := &Agent{
+		id: id, known: known, opts: opts, engine: engine,
+		sessions: map[string]*server.ShellSession{}, stdin: bufio.NewReader(os.Stdin),
+	}
 	switch {
 	case opts.Mode == policy.ModeBypass:
-		appr = policy.AllowApprover{}
+		a.appr = policy.AllowApprover{}
+	case opts.GUIPort > 0:
+		a.gui = gui.New(engine, gui.Info{Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL})
+		a.appr = a.gui // humans approve in the browser
 	case term.IsTerminal(int(os.Stdin.Fd())):
-		appr = policy.NewConsoleApprover(os.Stdin, os.Stdout)
+		a.appr = policy.NewConsoleApprover(os.Stdin, os.Stdout)
 	default:
-		appr = policy.DenyApprover{} // headless + miss = deny (pre-load rules to allow)
+		a.appr = policy.DenyApprover{} // headless + miss = deny (pre-load rules to allow)
 	}
-	return &Agent{
-		id: id, known: known, opts: opts, engine: engine, appr: appr,
-		sessions: map[string]*server.ShellSession{}, stdin: bufio.NewReader(os.Stdin),
-	}, nil
+	return a, nil
 }
 
 // setApprover overrides the approver (used by tests).
@@ -128,6 +134,14 @@ func (a *Agent) gate(req policy.Request) bool {
 
 // Run connects the control channel and serves sessions until ctx is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
+	if a.gui != nil {
+		addr := fmt.Sprintf("127.0.0.1:%d", a.opts.GUIPort)
+		go func() {
+			if err := a.gui.Serve(ctx, addr); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "wanctl: GUI server stopped: %v\n", err)
+			}
+		}()
+	}
 	if a.opts.Transport == "http" {
 		return a.runHTTP(ctx)
 	}

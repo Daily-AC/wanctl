@@ -106,6 +106,7 @@ func cmdAgent(ctx context.Context, args []string) error {
 	yes := fs.Bool("yes", false, "auto-trust new controllers (unattended)")
 	tr := fs.String("transport", envOr("WANCTL_TRANSPORT", "ws"), "transport: ws or http (http is proxy-agnostic)")
 	mode := fs.String("mode", "normal", "policy mode: normal (prompt on miss) or bypass (auto-allow, DANGEROUS)")
+	guiPort := fs.Int("gui-port", 0, "enable local web GUI (approvals/monitor) on 127.0.0.1:PORT")
 	fs.Parse(args)
 	if *relayURL == "" || *token == "" {
 		return fmt.Errorf("provide --relay and --token (or WANCTL_RELAY/WANCTL_TOKEN)")
@@ -113,7 +114,7 @@ func cmdAgent(ctx context.Context, args []string) error {
 	if *mode == "bypass" {
 		fmt.Fprintln(os.Stderr, "wanctl: ⚠ BYPASS mode — every command and file op is auto-allowed without prompting. Use only on trusted, isolated devices.")
 	}
-	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode)})
+	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), GUIPort: *guiPort})
 	if err != nil {
 		return err
 	}

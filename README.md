@@ -28,6 +28,13 @@ Every remote command and file op is gated on the device:
 - Manage rules on the device: `wanctl rules list|add|rm`.
 - `wanctl exec --cwd /path "cmd"` runs in (and scopes the rule to) that directory.
 
+### Local web console (M3)
+
+`wanctl agent --gui-port 7600` opens a localhost UI (`http://127.0.0.1:7600`) for
+the human at the device: live approval queue (click `y/a/g/n`), rule management,
+and a mode toggle (with a bypass danger banner). When `--gui-port` is set, the
+browser is the approver.
+
 ## Build
 
 ```bash
