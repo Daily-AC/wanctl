@@ -486,10 +486,11 @@ func (a *Agent) serveConsole(ctx context.Context, conn net.Conn) {
 					continue
 				}
 				p := snap.Pending[0]
+				cmdJSON, _ := json.Marshal(p.Cmd)
 				send(protocol.Message{
 					Kind:       protocol.KindApprovalNotif,
 					ApprovalID: p.ID,
-					Data:       json.RawMessage(`"` + p.Cmd + `"`),
+					Data:       json.RawMessage(cmdJSON),
 				})
 			}
 		}
