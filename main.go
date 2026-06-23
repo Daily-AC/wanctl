@@ -74,6 +74,13 @@ func main() {
 	}
 }
 
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
 func cmdRelay(args []string) error {
 	fs := flag.NewFlagSet("relay", flag.ExitOnError)
 	addr := fs.String("addr", ":8080", "listen address")
@@ -94,11 +101,12 @@ func cmdAgent(ctx context.Context, args []string) error {
 	token := fs.String("token", os.Getenv("WANCTL_TOKEN"), "access/registration token")
 	shell := fs.String("shell", "", "shell (default powershell on Windows, /bin/sh elsewhere)")
 	yes := fs.Bool("yes", false, "auto-trust new controllers (unattended)")
+	tr := fs.String("transport", envOr("WANCTL_TRANSPORT", "ws"), "transport: ws or http (http is proxy-agnostic)")
 	fs.Parse(args)
 	if *relayURL == "" || *token == "" {
 		return fmt.Errorf("provide --relay and --token (or WANCTL_RELAY/WANCTL_TOKEN)")
 	}
-	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes})
+	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr})
 	if err != nil {
 		return err
 	}

@@ -9,10 +9,12 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 
+	"wanctl/internal/httpconn"
 	"wanctl/internal/protocol"
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
@@ -20,10 +22,11 @@ import (
 
 // Client is the controller node.
 type Client struct {
-	id       *transport.Identity
-	known    *transport.Store
-	relayURL string
-	token    string
+	id        *transport.Identity
+	known     *transport.Store
+	relayURL  string
+	token     string
+	transport string // "ws" (default) or "http"
 }
 
 // New loads identity + config from env (WANCTL_RELAY, WANCTL_TOKEN).
@@ -41,7 +44,11 @@ func New() (*Client, error) {
 	if relayURL == "" || token == "" {
 		return nil, fmt.Errorf("set WANCTL_RELAY and WANCTL_TOKEN")
 	}
-	return &Client{id: id, known: known, relayURL: strings.TrimRight(relayURL, "/"), token: token}, nil
+	tr := os.Getenv("WANCTL_TRANSPORT")
+	if tr == "" {
+		tr = "ws"
+	}
+	return &Client{id: id, known: known, relayURL: strings.TrimRight(relayURL, "/"), token: token, transport: tr}, nil
 }
 
 // Identity exposes this controller's fingerprint.
@@ -49,7 +56,11 @@ func (c *Client) Identity() *transport.Identity { return c.id }
 
 // Peers lists online devices the token can see.
 func (c *Client) Peers(ctx context.Context) ([]string, error) {
-	httpURL := strings.Replace(c.relayURL, "ws", "http", 1) + "/peers?token=" + c.token
+	path := "/peers"
+	if c.transport == "http" {
+		path = "/h/peers"
+	}
+	httpURL := strings.Replace(c.relayURL, "ws", "http", 1) + path + "?token=" + c.token
 	req, _ := http.NewRequestWithContext(ctx, "GET", httpURL, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -94,6 +105,19 @@ func (c *Client) connect(ctx context.Context, target string) (*tls.Conn, error) 
 	if err != nil {
 		return nil, err
 	}
+	var nc net.Conn
+	if c.transport == "http" {
+		nc, err = c.dialHTTP(ctx, target)
+	} else {
+		nc, err = c.dialWS(ctx, target)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return c.finishHandshake(ctx, nc, target)
+}
+
+func (c *Client) dialWS(ctx context.Context, target string) (net.Conn, error) {
 	url := c.relayURL + "/dial?token=" + c.token + "&target=" + target
 	nc, resp, err := wsconn.Dial(ctx, url, nil)
 	if err != nil {
@@ -102,6 +126,30 @@ func (c *Client) connect(ctx context.Context, target string) (*tls.Conn, error) 
 		}
 		return nil, err
 	}
+	return nc, nil
+}
+
+func (c *Client) dialHTTP(ctx context.Context, target string) (net.Conn, error) {
+	base := strings.Replace(c.relayURL, "ws", "http", 1)
+	dialURL := base + "/h/dial?token=" + c.token + "&target=" + target
+	req, _ := http.NewRequestWithContext(ctx, "GET", dialURL, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("dial relay (%d): is %q online?", resp.StatusCode, target)
+	}
+	var out struct{ Session string }
+	json.NewDecoder(resp.Body).Decode(&out)
+	if out.Session == "" {
+		return nil, fmt.Errorf("relay did not assign a session")
+	}
+	return httpconn.Dial(ctx, base, out.Session, "client", c.token)
+}
+
+func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target string) (*tls.Conn, error) {
 	dr, err := transport.ClientHandshake(ctx, nc, pinName(target), c.id, c.known)
 	if err != nil {
 		return nil, err

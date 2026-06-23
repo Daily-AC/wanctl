@@ -42,13 +42,23 @@ type Relay struct {
 	ts TokenStore
 
 	mu      sync.Mutex
-	agents  map[string]*agentConn      // key "ns/device"
-	pending map[string]*pendingSession // key session id
+	agents  map[string]*agentConn      // key "ns/device" (WebSocket transport)
+	pending map[string]*pendingSession // key session id (WebSocket transport)
+
+	hmu     sync.Mutex
+	hagents map[string]*httpAgent   // key "ns/device" (HTTP transport)
+	hsess   map[string]*httpSession // key session id (HTTP transport)
 }
 
 // New constructs a Relay backed by the given TokenStore.
 func New(ts TokenStore) *Relay {
-	return &Relay{ts: ts, agents: map[string]*agentConn{}, pending: map[string]*pendingSession{}}
+	return &Relay{
+		ts:      ts,
+		agents:  map[string]*agentConn{},
+		pending: map[string]*pendingSession{},
+		hagents: map[string]*httpAgent{},
+		hsess:   map[string]*httpSession{},
+	}
 }
 
 // Handler returns the relay's HTTP mux.
@@ -59,6 +69,13 @@ func (r *Relay) Handler() http.Handler {
 	mux.HandleFunc("/dial", r.handleDial)
 	mux.HandleFunc("/session/", r.handleSession)
 	mux.HandleFunc("/peers", r.handlePeers)
+	// HTTP transport (proxy-agnostic; no WebSocket upgrade required).
+	mux.HandleFunc("/h/poll", r.handleHPoll)
+	mux.HandleFunc("/h/dial", r.handleHDial)
+	mux.HandleFunc("/h/peers", r.handleHPeers)
+	mux.HandleFunc("/h/up", r.handleHUp)
+	mux.HandleFunc("/h/down", r.handleHDown)
+	mux.HandleFunc("/h/close", r.handleHClose)
 	return mux
 }
 
