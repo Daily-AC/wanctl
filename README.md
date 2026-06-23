@@ -12,10 +12,21 @@ controller (you)          relay (public, thunderbox)        device (agent)
        └──────── mutual-TLS E2E tunnel over the pipe ──────────┘
 ```
 
-> **Status:** Foundation milestone (M1). Cross-internet transport, relay, device
-> bind, and exec/file transfer all work end-to-end. The Claude-Code-style policy
-> engine, local Web GUI, Feishu-SSO portal + Postgres + sharing ACL, and JSONL
-> logging are later milestones — see `docs/superpowers/plans/`.
+> **Status:** M1 (cross-internet transport, relay, exec/file) + M2 (policy &
+> approval) done and verified over the public thunderbox relay. On `http-transport`
+> the proxy-agnostic HTTP transport works through thunderbox's nginx (which strips
+> WS upgrades). Remaining: local Web GUI (M3), Feishu-SSO portal + Postgres +
+> sharing ACL (M4), JSONL logging (M5), the skill (M6) — see `docs/superpowers/plans/`.
+
+## Permissions (Claude-Code style)
+
+Every remote command and file op is gated on the device:
+- pre-approved by a rule → runs; otherwise the device prompts `y` (once) / `a`
+  (remember this dir) / `g` (remember global) / `n` (deny).
+- `wanctl agent --mode bypass` auto-allows everything (warns; for trusted/isolated devices).
+- Headless agents deny on a miss — pre-load rules with `wanctl rules add`.
+- Manage rules on the device: `wanctl rules list|add|rm`.
+- `wanctl exec --cwd /path "cmd"` runs in (and scopes the rule to) that directory.
 
 ## Build
 
