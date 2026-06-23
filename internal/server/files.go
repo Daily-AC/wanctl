@@ -13,9 +13,7 @@ const fileChunk = 64 << 10
 // HandleFilePut receives an uploaded file from the controller and writes it to
 // m.Path.
 func HandleFilePut(conn *tls.Conn, m protocol.Message) {
-	// Default to 0644 permissions if not specified
-	// (Mode is now repurposed for console control, not file permissions)
-	f, err := os.OpenFile(m.Path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(m.Path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(m.Mode))
 	if err != nil {
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return
@@ -69,7 +67,7 @@ func HandleFileGet(conn *tls.Conn, m protocol.Message) {
 	if err := protocol.WriteMessage(conn, protocol.Message{
 		Kind: protocol.KindFileMeta,
 		Size: info.Size(),
-		// Mode field is now repurposed for console control, not file permissions
+		Mode: uint32(info.Mode().Perm()),
 	}); err != nil {
 		return
 	}

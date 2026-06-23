@@ -9,7 +9,7 @@ import (
 func TestConsoleMessageRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
 	state := json.RawMessage(`{"mode":"normal","pending":[]}`)
-	in := Message{Kind: KindConsoleState, Mode: "normal", Data: state}
+	in := Message{Kind: KindModeSet, ConsoleMode: "normal", Data: state}
 	if err := WriteMessage(&buf, in); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -17,7 +17,7 @@ func TestConsoleMessageRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if out.Kind != KindConsoleState || out.Mode != "normal" {
+	if out.Kind != KindModeSet || out.ConsoleMode != "normal" {
 		t.Fatalf("bad header: %+v", out)
 	}
 	if string(out.Data) != string(state) {

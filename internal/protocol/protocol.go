@@ -80,6 +80,7 @@ type Message struct {
 	// file_put / file_get / file_meta
 	Path string `json:"path,omitempty"`
 	Size int64  `json:"size,omitempty"`
+	Mode uint32 `json:"mode,omitempty"` // file permission bits
 
 	// logs
 	LogType string `json:"log_type,omitempty"`
@@ -90,8 +91,8 @@ type Message struct {
 	// console session control plane
 	Verdict    string          `json:"verdict,omitempty"`     // decide: y/a/g/n
 	ApprovalID string          `json:"approval_id,omitempty"` // decide: which pending
-	Approver   string          `json:"approver,omitempty"`    // decide: "portal:<email>" for audit
-	Mode       string          `json:"mode,omitempty"`        // mode_set / state
+	Approver    string          `json:"approver,omitempty"`     // decide: "portal:<email>" for audit
+	ConsoleMode string          `json:"console_mode,omitempty"` // mode_set: normal/bypass
 	RuleKind   string          `json:"rule_kind,omitempty"`   // rule_add: exec/read/write
 	Pattern    string          `json:"pattern,omitempty"`     // rule_add: command or dir
 	Dir        string          `json:"dir,omitempty"`         // rule_add: exec dir scope
