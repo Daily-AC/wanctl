@@ -20,13 +20,14 @@ func TestDeriveNS(t *testing.T) {
 	}
 }
 
-func TestRequireNSNoHeader401(t *testing.T) {
-	s := &Server{userHeader: "X-Forwarded-User"} // db unused on this path
+func TestRequireNSNoDB503(t *testing.T) {
+	s := &Server{userHeader: "X-Forwarded-User"} // db nil
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/me", nil)
+	req.Header.Set("X-Forwarded-User", "someone@x.com")
 	s.handleMe(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("want 401 without identity header, got %d", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503 when DB unconfigured, got %d", rec.Code)
 	}
 }
 
