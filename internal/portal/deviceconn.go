@@ -66,6 +66,12 @@ func (d *deviceConn) rpc(req protocol.Message) (protocol.Message, error) {
 	err := protocol.WriteMessage(d.conn, req)
 	d.wmu.Unlock()
 	if err != nil {
+		// Conn is broken. Drain any late response so it cannot contaminate a
+		// future RPC's read on the shared respCh (cap 1, single in-flight).
+		select {
+		case <-d.respCh:
+		default:
+		}
 		return protocol.Message{}, err
 	}
 	select {
