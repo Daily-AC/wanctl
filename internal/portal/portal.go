@@ -30,8 +30,18 @@ type Server struct {
 	userHeader string
 }
 
-// New opens the shared Postgres and configures the identity header.
+// New configures the identity header and, if dsn is non-empty, opens the shared
+// Postgres. With an empty dsn the server still starts so / and /whoami work
+// (useful for discovering the SSO header before the DB is wired); DB-backed
+// endpoints then return 503 until DATABASE_URL is set.
 func New(dsn, userHeader string) (*Server, error) {
+	if userHeader == "" {
+		userHeader = "X-Forwarded-User"
+	}
+	s := &Server{userHeader: userHeader}
+	if dsn == "" {
+		return s, nil
+	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
@@ -39,10 +49,8 @@ func New(dsn, userHeader string) (*Server, error) {
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
-	if userHeader == "" {
-		userHeader = "X-Forwarded-User"
-	}
-	return &Server{db: db, userHeader: userHeader}, nil
+	s.db = db
+	return s, nil
 }
 
 // Handler returns the portal mux.
@@ -126,6 +134,10 @@ func (s *Server) resolveUser(identity string) (string, error) {
 
 // requireNS resolves the caller's namespace or writes a 401 and returns ok=false.
 func (s *Server) requireNS(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if s.db == nil {
+		http.Error(w, "database not configured yet (set DATABASE_URL on this app)", http.StatusServiceUnavailable)
+		return "", false
+	}
 	id := s.identity(r)
 	if id == "" {
 		http.Error(w, "no SSO identity header ("+s.userHeader+"); open /whoami to find the right header", http.StatusUnauthorized)

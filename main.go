@@ -124,10 +124,7 @@ func cmdPortal(args []string) error {
 	fs := flag.NewFlagSet("portal", flag.ExitOnError)
 	addr := fs.String("addr", ":8080", "listen address")
 	fs.Parse(args)
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		return fmt.Errorf("portal requires DATABASE_URL (shared relay Postgres)")
-	}
+	dsn := os.Getenv("DATABASE_URL") // empty is allowed: / and /whoami still serve
 	p, err := portal.New(dsn, os.Getenv("PORTAL_USER_HEADER"))
 	if err != nil {
 		return err
