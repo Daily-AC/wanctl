@@ -93,11 +93,25 @@ func cmdRelay(args []string) error {
 	fs := flag.NewFlagSet("relay", flag.ExitOnError)
 	addr := fs.String("addr", ":8080", "listen address")
 	fs.Parse(args)
-	spec := os.Getenv("WANCTL_TOKENS")
-	if spec == "" {
-		return fmt.Errorf("set WANCTL_TOKENS=\"token:namespace,...\"")
+
+	var r *relay.Relay
+	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+		pg, err := relay.OpenPG(dsn)
+		if err != nil {
+			return fmt.Errorf("postgres: %w", err)
+		}
+		r = relay.New(pg)
+		r.SetACL(pg)
+		r.SetAuditor(pg)
+		fmt.Println("wanctl relay: token store = postgres (hashed tokens + ACL + audit)")
+	} else {
+		spec := os.Getenv("WANCTL_TOKENS")
+		if spec == "" {
+			return fmt.Errorf("set DATABASE_URL (postgres) or WANCTL_TOKENS=\"token:namespace,...\"")
+		}
+		r = relay.New(relay.EnvTokenStore(spec))
+		fmt.Println("wanctl relay: token store = env (WANCTL_TOKENS)")
 	}
-	r := relay.New(relay.EnvTokenStore(spec))
 	fmt.Printf("wanctl relay listening on %s\n", *addr)
 	return http.ListenAndServe(*addr, r.Handler())
 }

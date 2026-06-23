@@ -37,9 +37,21 @@ type pendingSession struct {
 	clientSide chan io.ReadWriteCloser
 }
 
+// ACLChecker authorizes cross-namespace dials (nil = same-namespace only).
+type ACLChecker interface {
+	AllowedDial(callerNS, targetNS, device string) bool
+}
+
+// Auditor records relay-side metadata events (nil = no audit).
+type Auditor interface {
+	Audit(namespace, device, event string)
+}
+
 // Relay is the broker.
 type Relay struct {
-	ts TokenStore
+	ts    TokenStore
+	acl   ACLChecker
+	audit Auditor
 
 	mu      sync.Mutex
 	agents  map[string]*agentConn      // key "ns/device" (WebSocket transport)
@@ -81,6 +93,28 @@ func (r *Relay) Handler() http.Handler {
 
 func (r *Relay) auth(req *http.Request) (ns string, ok bool) {
 	return r.ts.Resolve(req.URL.Query().Get("token"))
+}
+
+// SetACL installs an ACL checker for cross-namespace dials.
+func (r *Relay) SetACL(c ACLChecker) { r.acl = c }
+
+// SetAuditor installs a metadata audit sink.
+func (r *Relay) SetAuditor(a Auditor) { r.audit = a }
+
+// dialAllowed splits target into namespace/device and checks access for caller.
+func (r *Relay) dialAllowed(callerNS, target string) (targetKey, targetNS, device string, ok bool) {
+	if !strings.Contains(target, "/") {
+		target = callerNS + "/" + target
+	}
+	i := strings.Index(target, "/")
+	targetNS, device = target[:i], target[i+1:]
+	if targetNS == callerNS {
+		return target, targetNS, device, true
+	}
+	if r.acl != nil && r.acl.AllowedDial(callerNS, targetNS, device) {
+		return target, targetNS, device, true
+	}
+	return target, targetNS, device, false
 }
 
 func newID() string {
@@ -136,21 +170,20 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	target := req.URL.Query().Get("target") // "NS/DEVICE"; default NS = caller's
-	if !strings.Contains(target, "/") {
-		target = ns + "/" + target
-	}
-	// Foundation milestone: only same-namespace access (ACL is a later milestone).
-	if !strings.HasPrefix(target, ns+"/") {
+	targetKey, targetNS, device, ok := r.dialAllowed(ns, req.URL.Query().Get("target"))
+	if !ok {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	r.mu.Lock()
-	ac := r.agents[target]
+	ac := r.agents[targetKey]
 	r.mu.Unlock()
 	if ac == nil {
 		http.Error(w, "device offline", http.StatusNotFound)
 		return
+	}
+	if r.audit != nil {
+		r.audit.Audit(targetNS, device, "dial")
 	}
 	sid := newID()
 	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), clientSide: make(chan io.ReadWriteCloser, 1)}

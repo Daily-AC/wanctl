@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -125,17 +124,13 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	target := req.URL.Query().Get("target")
-	if !strings.Contains(target, "/") {
-		target = ns + "/" + target
-	}
-	// Foundation milestone: only same-namespace access (ACL is a later milestone).
-	if !strings.HasPrefix(target, ns+"/") {
+	targetKey, targetNS, device, ok := r.dialAllowed(ns, req.URL.Query().Get("target"))
+	if !ok {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	r.hmu.Lock()
-	a := r.hagents[target]
+	a := r.hagents[targetKey]
 	if a == nil || time.Since(a.lastSeen) > httpAgentTTL {
 		r.hmu.Unlock()
 		http.Error(w, "device offline", http.StatusNotFound)
@@ -153,6 +148,9 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 		r.hmu.Unlock()
 		http.Error(w, "agent busy", http.StatusServiceUnavailable)
 		return
+	}
+	if r.audit != nil {
+		r.audit.Audit(targetNS, device, "dial")
 	}
 	writeJSON(w, map[string]string{"session": sid})
 }
