@@ -30,8 +30,8 @@ const usage = `wanctl — control a device across the internet over an encrypted
 
 USAGE
   wanctl relay  [--addr :8080]                run the relay (thunderbox); DATABASE_URL or WANCTL_TOKENS
-  wanctl portal [--addr :8080]                run the team portal (thunderbox, internal SSO); DATABASE_URL
-  wanctl agent [--name N] [--relay URL] [--token T] [--yes] [--shell S]
+  wanctl portal [--addr :8080]                run the team portal (thunderbox, internal SSO)
+  wanctl agent [--name N] [--relay URL] [--token T] [--yes] [--shell S] [--portal-pk FP]
   wanctl exec  [--target NS/DEV] [--oneshot] <command...>
   wanctl push  [--target NS/DEV] <local> <remote>
   wanctl pull  [--target NS/DEV] <remote> <local>
@@ -40,7 +40,10 @@ USAGE
   wanctl trust [clients|servers]
 
 ENV (controller): WANCTL_RELAY=wss://wanctl-relay.***REMOVED***.***REMOVED***.com  WANCTL_TOKEN=...
-ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"
+ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"  WANCTL_ADMIN_SECRET=...  WANCTL_PORTAL_NS=...
+ENV (portal):     RELAY_ADMIN_URL=...  WANCTL_ADMIN_SECRET=...  PORTAL_USER_HEADER=...
+              WANCTL_RELAY=...  WANCTL_PORTAL_TOKEN=...  WANCTL_TRANSPORT=http
+ENV (agent):      WANCTL_PORTAL_PK=SHA256:...
 `
 
 func main() {
@@ -121,6 +124,9 @@ func cmdRelay(args []string) error {
 		r = relay.New(relay.EnvTokenStore(spec))
 		fmt.Println("wanctl relay: token store = env (WANCTL_TOKENS)")
 	}
+	if pns := os.Getenv("WANCTL_PORTAL_NS"); pns != "" {
+		r.SetPortalNS(pns)
+	}
 	fmt.Printf("wanctl relay listening on %s\n", *addr)
 	return http.ListenAndServe(*addr, r.Handler())
 }
@@ -129,9 +135,27 @@ func cmdPortal(args []string) error {
 	fs := flag.NewFlagSet("portal", flag.ExitOnError)
 	addr := fs.String("addr", ":8080", "listen address")
 	fs.Parse(args)
-	// Portal is a thin SSO proxy to the relay's admin API (no DB of its own).
-	p := portal.New(os.Getenv("RELAY_ADMIN_URL"), os.Getenv("WANCTL_ADMIN_SECRET"), os.Getenv("PORTAL_USER_HEADER"))
-	fmt.Printf("wanctl portal listening on %s (identity header: %q, relay: %q)\n", *addr, envOr("PORTAL_USER_HEADER", "X-Auth-Request-Email"), os.Getenv("RELAY_ADMIN_URL"))
+	id, err := transport.LoadOrCreateIdentity()
+	if err != nil {
+		return err
+	}
+	known, err := transport.OpenStore("known_servers.json")
+	if err != nil {
+		return err
+	}
+	p := portal.New(portal.Config{
+		RelayAdminURL: os.Getenv("RELAY_ADMIN_URL"),
+		AdminSecret:   os.Getenv("WANCTL_ADMIN_SECRET"),
+		UserHeader:    os.Getenv("PORTAL_USER_HEADER"),
+		RelayDialURL:  os.Getenv("WANCTL_RELAY"),
+		PortalToken:   os.Getenv("WANCTL_PORTAL_TOKEN"),
+		Transport:     envOr("WANCTL_TRANSPORT", "http"),
+		Identity:      id,
+		Known:         known,
+	})
+	fmt.Printf("wanctl portal on %s\n  identity:      %s\n  identity hdr:  %q\n  relay(admin):  %q\n  relay(dial):   %q\n",
+		*addr, id.Fingerprint, envOr("PORTAL_USER_HEADER", "X-Auth-Request-Email"),
+		os.Getenv("RELAY_ADMIN_URL"), os.Getenv("WANCTL_RELAY"))
 	return http.ListenAndServe(*addr, p.Handler())
 }
 
@@ -144,15 +168,15 @@ func cmdAgent(ctx context.Context, args []string) error {
 	yes := fs.Bool("yes", false, "auto-trust new controllers (unattended)")
 	tr := fs.String("transport", envOr("WANCTL_TRANSPORT", "ws"), "transport: ws or http (http is proxy-agnostic)")
 	mode := fs.String("mode", "normal", "policy mode: normal (prompt on miss) or bypass (auto-allow, DANGEROUS)")
-	guiPort := fs.Int("gui-port", 0, "enable local web GUI (approvals/monitor) on 127.0.0.1:PORT")
+	portalPK := fs.String("portal-pk", os.Getenv("WANCTL_PORTAL_PK"), "pre-trust this portal fingerprint (enrolled at install time)")
 	fs.Parse(args)
 	if *relayURL == "" || *token == "" {
 		return fmt.Errorf("provide --relay and --token (or WANCTL_RELAY/WANCTL_TOKEN)")
 	}
 	if *mode == "bypass" {
-		fmt.Fprintln(os.Stderr, "wanctl: ⚠ BYPASS mode — every command and file op is auto-allowed without prompting. Use only on trusted, isolated devices.")
+		fmt.Fprintln(os.Stderr, "wanctl: BYPASS mode — every command and file op is auto-allowed. Use only on trusted, isolated devices.")
 	}
-	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), GUIPort: *guiPort})
+	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFP: *portalPK})
 	if err != nil {
 		return err
 	}
