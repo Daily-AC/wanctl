@@ -81,10 +81,15 @@ func TestDecideVerdicts(t *testing.T) {
 		got := make(chan policy.Decision, 1)
 		go func() { got <- s.Ask(policy.Request{Kind: policy.KindExec, Cmd: "z"}) }()
 		var id string
-		for id == "" {
+		for i := 0; i < 200 && id == ""; i++ {
 			if p := s.State().Pending; len(p) > 0 {
 				id = p[0].ID
+				break
 			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if id == "" {
+			t.Fatalf("verdict %q: pending never appeared", tc.v)
 		}
 		s.Decide(id, tc.v)
 		d := <-got
