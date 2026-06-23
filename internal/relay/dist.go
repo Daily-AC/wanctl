@@ -29,20 +29,23 @@ func (r *Relay) handleInstall(w http.ResponseWriter, req *http.Request) {
 		scheme = xf
 	}
 	base := scheme + "://" + req.Host
+	portalFP := os.Getenv("WANCTL_PORTAL_FP")
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
-	fmt.Fprintf(w, installScript, base)
+	fmt.Fprintf(w, installScript, base, portalFP)
 }
 
-// installScript is a POSIX sh installer. %s is the relay base URL. It detects the
+// installScript is a POSIX sh installer. %[1]s is the relay base URL,
+// %[2]s is the portal public-key fingerprint (may be empty). It detects the
 // OS/arch, downloads the matching binary, installs it, and (unless
 // WANCTL_INSTALL_ONLY=1) runs the agent. Token comes from $WANCTL_TOKEN.
 const installScript = `#!/bin/sh
 # wanctl agent installer.  Usage:
 #   curl -fsSL %[1]s/install.sh | WANCTL_TOKEN=<token> sh
 # Optional env: WANCTL_NAME (default hostname), WANCTL_MODE (normal|bypass),
-#   WANCTL_GUI_PORT, WANCTL_BIN (install path), WANCTL_INSTALL_ONLY=1 (don't run).
+#   WANCTL_BIN (install path), WANCTL_INSTALL_ONLY=1 (don't run).
 set -eu
 RELAY="%[1]s"
+PORTAL_PK="%[2]s"
 if [ -z "${WANCTL_TOKEN:-}" ]; then echo "error: set WANCTL_TOKEN (get one from the portal)"; exit 1; fi
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -72,9 +75,9 @@ if [ "${WANCTL_INSTALL_ONLY:-}" = "1" ]; then
 fi
 
 NAME="${WANCTL_NAME:-$(hostname)}"
+[ -n "$PORTAL_PK" ] && export WANCTL_PORTAL_PK="$PORTAL_PK"
 set -- agent --relay "$RELAY" --token "$WANCTL_TOKEN" --transport http --name "$NAME"
 [ -n "${WANCTL_MODE:-}" ] && set -- "$@" --mode "$WANCTL_MODE"
-[ -n "${WANCTL_GUI_PORT:-}" ] && set -- "$@" --gui-port "$WANCTL_GUI_PORT"
 echo "starting agent as '$NAME' (Ctrl-C to stop; wrap in systemd/nohup to persist)"
 exec "$DEST" "$@"
 `
