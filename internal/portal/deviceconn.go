@@ -5,10 +5,20 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"wanctl/internal/console"
 	"wanctl/internal/protocol"
 )
+
+// rpcTimeout bounds a single console RPC round-trip. A relayed conn can go
+// half-open: the agent process dies but our long-poll leg to the relay stays
+// up, so readLoop's ReadMessage never errors and `closed` never fires. Without
+// a deadline rpc() would block forever, and alive() would keep reporting the
+// dead conn as usable so the pool never re-dials. On timeout we tear the conn
+// down (closing `closed` -> alive()==false) so the pool evicts it and the next
+// request re-dials a fresh session. A var (not const) so tests can shrink it.
+var rpcTimeout = 12 * time.Second
 
 // deviceConn drives one authenticated console session to a device: it
 // demultiplexes the read stream into RPC responses and unsolicited approval
@@ -82,6 +92,12 @@ func (d *deviceConn) rpc(req protocol.Message) (protocol.Message, error) {
 		return m, nil
 	case <-d.closed:
 		return protocol.Message{}, fmt.Errorf("device connection closed")
+	case <-time.After(rpcTimeout):
+		// Half-open relayed conn: the agent vanished but our leg to the relay
+		// stayed up, so readLoop never errored. Tear it down so the pool evicts
+		// this conn and the next request re-dials.
+		d.close()
+		return protocol.Message{}, fmt.Errorf("device did not respond within %s (re-dialing)", rpcTimeout)
 	}
 }
 
