@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"testing"
 	"time"
 
@@ -11,6 +12,98 @@ import (
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 )
+
+// TestServeConsoleFramedWireAndNotif is the integration test the per-task unit
+// tests stepped around: it drives a real agent.serveConsole over a pipe using
+// the SAME framed protocol the portal's deviceConn speaks, proving (a) the wire
+// format matches end-to-end and (b) a new pending pushes the FULL console.State
+// (not just the command), and (c) a remote y-decision unblocks the gate.
+func TestServeConsoleFramedWireAndNotif(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	a, err := New(Options{RelayURL: "ws://x", Token: "t", Name: "dev1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dev, portal := net.Pipe()
+	defer dev.Close()
+	defer portal.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.serveConsole(ctx, dev)
+
+	// portal-side reader: split async notifs from RPC responses (like deviceConn).
+	notifCh := make(chan console.State, 8)
+	respCh := make(chan protocol.Message, 8)
+	go func() {
+		for {
+			m, err := protocol.ReadMessage(portal)
+			if err != nil {
+				return
+			}
+			if m.Kind == protocol.KindApprovalNotif {
+				var st console.State
+				if json.Unmarshal(m.Data, &st) == nil {
+					notifCh <- st
+				}
+				continue
+			}
+			respCh <- m
+		}
+	}()
+
+	// 1) state RPC round-trips over the framed wire (catches the encoding mismatch).
+	if err := protocol.WriteMessage(portal, protocol.Message{Kind: protocol.KindConsoleState}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case m := <-respCh:
+		if m.Kind != protocol.KindConsoleState {
+			t.Fatalf("state resp kind = %s", m.Kind)
+		}
+		var st console.State
+		if err := json.Unmarshal(m.Data, &st); err != nil {
+			t.Fatalf("state data not a console.State: %v", err)
+		}
+		if st.Mode != policy.ModeNormal {
+			t.Fatalf("mode = %s", st.Mode)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no state response (framed wire mismatch?)")
+	}
+
+	// 2) a new pending pushes a FULL console.State notif (catches the cmd-only bug).
+	askDone := make(chan policy.Decision, 1)
+	go func() { askDone <- a.console.Ask(policy.Request{Kind: policy.KindExec, Cmd: "rm -rf /tmp"}) }()
+	var id string
+	select {
+	case ns := <-notifCh:
+		if len(ns.Pending) != 1 {
+			t.Fatalf("notif Pending = %d, want 1 (full State expected, not cmd-only)", len(ns.Pending))
+		}
+		if ns.Pending[0].Cmd != "rm -rf /tmp" {
+			t.Fatalf("notif cmd = %q", ns.Pending[0].Cmd)
+		}
+		id = ns.Pending[0].ID
+	case <-time.After(2 * time.Second):
+		t.Fatal("no approval notif pushed")
+	}
+
+	// 3) a remote y-decision unblocks the gate.
+	if err := protocol.WriteMessage(portal, protocol.Message{
+		Kind: protocol.KindDecide, ApprovalID: id, Verdict: "y", Approver: "portal:me@corp",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case d := <-askDone:
+		if !d.Allow {
+			t.Fatal("remote y-decision should allow")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("remote decide did not unblock Ask")
+	}
+}
 
 // newTestAgent returns a minimal Agent with a wired console service for unit tests.
 func newTestAgent(t *testing.T) *Agent {

@@ -469,17 +469,11 @@ func pumpApprovalNotifs(ctx context.Context, changes <-chan struct{}, svc *conso
 			if !ok {
 				return
 			}
-			snap := svc.State()
-			if len(snap.Pending) == 0 {
-				continue
-			}
-			p := snap.Pending[0]
-			cmdJSON, _ := json.Marshal(p.Cmd)
-			if send(protocol.Message{
-				Kind:       protocol.KindApprovalNotif,
-				ApprovalID: p.ID,
-				Data:       json.RawMessage(cmdJSON),
-			}) != nil {
+			// Push the full console State so the portal/SPA can re-render the
+			// pending list, rules, and mode — including when the pending set
+			// becomes empty (a resolved approval must clear from the UI).
+			data, _ := json.Marshal(svc.State())
+			if send(protocol.Message{Kind: protocol.KindApprovalNotif, Data: json.RawMessage(data)}) != nil {
 				return
 			}
 		}
@@ -499,7 +493,7 @@ func (a *Agent) serveConsole(ctx context.Context, conn net.Conn) {
 	send := func(m protocol.Message) error {
 		wmu.Lock()
 		defer wmu.Unlock()
-		return json.NewEncoder(conn).Encode(m)
+		return protocol.WriteMessage(conn, m)
 	}
 
 	// Push approval notifications asynchronously.
@@ -507,13 +501,18 @@ func (a *Agent) serveConsole(ctx context.Context, conn net.Conn) {
 	defer unsub()
 	go pumpApprovalNotifs(ctx, ch, a.console, send)
 
-	dec := json.NewDecoder(conn)
+	// Speak the same framed protocol the controller/portal uses (the hello/OK
+	// handshake in handleSession was framed too) — NOT raw json.Encoder.
 	for {
-		var msg protocol.Message
-		if err := dec.Decode(&msg); err != nil {
+		msg, err := protocol.ReadMessage(conn)
+		if err != nil {
 			return
 		}
 		resp := a.handleConsoleRPC(msg)
+		// Audit who decided remotely (spec: approver=portal:<email>).
+		if msg.Kind == protocol.KindDecide && msg.Approver != "" && resp.Kind != protocol.KindError {
+			a.log.Append(eventlog.Event{Type: "connect", Detail: "remote decision " + msg.Verdict + " by " + msg.Approver})
+		}
 		_ = send(resp)
 	}
 }
@@ -538,13 +537,14 @@ func (a *Agent) runConsolePrompt(ctx context.Context) {
 			fmt.Printf("\n--- approval request ---\n")
 			fmt.Printf("ID:  %s\n", p.ID)
 			fmt.Printf("Cmd: %s\n", p.Cmd)
-			fmt.Printf("Allow? [y/N]: ")
+			fmt.Printf("Allow? [y] once  [a] remember dir  [g] remember global  [n] deny: ")
 			var line string
 			fmt.Scanln(&line)
-			line = strings.TrimSpace(strings.ToLower(line))
-			verdict := "deny"
-			if line == "y" || line == "yes" {
-				verdict = "allow"
+			// console.Decide speaks the y/a/g/n vocabulary directly; anything
+			// else (incl. empty) maps to deny.
+			verdict := strings.TrimSpace(strings.ToLower(line))
+			if verdict == "" {
+				verdict = "n"
 			}
 			a.console.Decide(p.ID, verdict)
 		}
