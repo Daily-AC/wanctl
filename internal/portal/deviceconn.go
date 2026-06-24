@@ -116,6 +116,18 @@ func (d *deviceConn) setMode(mode string) error {
 
 func (d *deviceConn) notifs() <-chan console.State { return d.notifCh }
 
+// alive reports whether the connection is still usable (its read loop has not
+// torn down). A device restart / network drop closes the conn from the read
+// side; the pool must not hand back a dead conn.
+func (d *deviceConn) alive() bool {
+	select {
+	case <-d.closed:
+		return false
+	default:
+		return true
+	}
+}
+
 func (d *deviceConn) close() {
 	d.once.Do(func() {
 		close(d.closed)

@@ -57,3 +57,16 @@ func TestDeviceConnRPCAndNotif(t *testing.T) {
 		t.Fatal("no notif")
 	}
 }
+
+func TestDeviceConnAlive(t *testing.T) {
+	cli, srv := net.Pipe()
+	defer srv.Close()
+	d := newDeviceConn(cli)
+	if !d.alive() {
+		t.Fatal("fresh conn should be alive")
+	}
+	d.close()
+	if d.alive() {
+		t.Fatal("closed conn must not be alive (so the pool re-dials)")
+	}
+}

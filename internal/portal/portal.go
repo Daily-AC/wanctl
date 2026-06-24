@@ -304,8 +304,13 @@ func (s *Server) deviceConnFor(ctx context.Context, ns, device string) (*deviceC
 	key := ns + "/" + device
 	s.mu.Lock()
 	if d := s.conns[key]; d != nil {
-		s.mu.Unlock()
-		return d, nil
+		if d.alive() {
+			s.mu.Unlock()
+			return d, nil
+		}
+		// Stale (device restarted / dropped). Evict and re-dial.
+		d.close()
+		delete(s.conns, key)
 	}
 	s.mu.Unlock()
 	conn, err := s.dialer.OpenConsole(ctx, key)
@@ -314,7 +319,7 @@ func (s *Server) deviceConnFor(ctx context.Context, ns, device string) (*deviceC
 	}
 	d := newDeviceConn(conn)
 	s.mu.Lock()
-	if existing := s.conns[key]; existing != nil {
+	if existing := s.conns[key]; existing != nil && existing.alive() {
 		s.mu.Unlock()
 		d.close() // lost the race: close our dial, use the winner
 		return existing, nil
