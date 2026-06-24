@@ -452,15 +452,15 @@ func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`}`))
 }
 
+// eventPollWait bounds one long-poll on /api/devices/events. Shorter than the
+// relay's own poll windows so the request returns a finite response well before
+// any proxy idle timeout; the browser immediately re-polls.
+const eventPollWait = 25 * time.Second
+
 func (s *Server) handleDeviceEvents(w http.ResponseWriter, r *http.Request) {
 	device := r.URL.Query().Get("device")
 	ns, ok := s.requireDevice(w, r, device)
 	if !ok {
-		return
-	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "no stream", http.StatusInternalServerError)
 		return
 	}
 	d, err := s.deviceConnFor(r.Context(), ns, device)
@@ -468,18 +468,17 @@ func (s *Server) handleDeviceEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	fmt.Fprint(w, "data: hello\n\n")
-	flusher.Flush()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case st := <-d.notifs():
-			b, _ := json.Marshal(st)
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			flusher.Flush()
-		}
+	// Long-poll, not SSE: thunderbox's nginx buffers streaming responses (and
+	// ignores X-Accel-Buffering), so an open text/event-stream never reaches the
+	// browser. Block for one approval-state push (or time out), return a finite
+	// JSON response nginx forwards promptly, and let the client re-poll.
+	select {
+	case <-r.Context().Done():
+		w.WriteHeader(http.StatusNoContent)
+	case st := <-d.notifs():
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(st)
+	case <-time.After(eventPollWait):
+		w.WriteHeader(http.StatusNoContent) // no event this round; client re-polls
 	}
 }

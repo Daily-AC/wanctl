@@ -464,7 +464,7 @@ const faceOn='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
 const faceOff='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 10h.01M16 10h.01M9 15c1-.8 5-.8 6 0" stroke-linecap="round"/></svg>';
 
 /* ---- nav ---- */
-let cur=null, es=null, curMode='normal';
+let cur=null, pollGen=0, curMode='normal';
 function showView(v){$$('.view').forEach(x=>x.classList.toggle('show',x.dataset.view===v));}
 $$('nav button').forEach(b=>b.onclick=()=>{
   $$('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');closeDevice();
@@ -501,12 +501,24 @@ function openDevice(name){
   cur=name;$('#dName').textContent=name;showView('device');selTab('approve');
   $('#pending').innerHTML='<div class="empty">连接设备中…</div>';
   renderConsole();
-  if(es)es.close();
-  es=new EventSource('/api/devices/events?device='+encodeURIComponent(name));
-  es.onmessage=ev=>{try{applyState(JSON.parse(ev.data))}catch(_){ }};
-  es.onerror=()=>{/* SSE will auto-retry; console fetch already seeded state */};
+  pollEvents(name);
 }
-function closeDevice(){if(es){es.close();es=null}cur=null}
+/* Long-poll for live approval-state pushes. SSE is buffered by the thunderbox
+   edge, so /api/devices/events returns one finite response (200 with state, or
+   204 on idle timeout) and we re-poll. A generation guard stops the loop when
+   the user switches or leaves the device. */
+async function pollEvents(name){
+  const gen=++pollGen;
+  while(cur===name&&gen===pollGen){
+    try{
+      const r=await fetch('/api/devices/events?device='+encodeURIComponent(name));
+      if(gen!==pollGen)return;
+      if(r.status===200){applyState(await r.json());}
+      else if(r.status!==204){await new Promise(s=>setTimeout(s,2000));}
+    }catch(_){if(gen!==pollGen)return;await new Promise(s=>setTimeout(s,2000));}
+  }
+}
+function closeDevice(){pollGen++;cur=null}
 $('#back').onclick=()=>{closeDevice();$$('nav button').forEach(x=>x.classList.toggle('on',x.dataset.sec==='devices'));showView('devices');loadOverview();};
 function selTab(t){$$('#tabs .t').forEach(x=>x.classList.toggle('on',x.dataset.tab===t));
   $$('[data-pane]').forEach(p=>p.classList.toggle('show',p.dataset.pane===t));
