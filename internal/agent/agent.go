@@ -205,19 +205,22 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
 	if err != nil {
 		return
 	}
-	if hello.Kind == protocol.KindConsoleHello {
-		a.serveConsole(ctx, conn)
+	if hello.Kind != protocol.KindHello && hello.Kind != protocol.KindConsoleHello {
 		return
 	}
-	if hello.Kind != protocol.KindHello {
-		return
-	}
+	// Authorize (TOFU / pre-trusted portal key) and reply OK for BOTH exec and
+	// console sessions BEFORE serving — the controller/portal blocks on this OK,
+	// and a console session must be gated by the same trust check as an exec one.
 	if !a.authorize(fp, hello.Name) {
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "not authorized by the device"})
 		return
 	}
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindOK, Name: a.opts.Name})
 	a.log.Append(eventlog.Event{Type: "connect", PeerFP: fp, PeerName: hello.Name})
+	if hello.Kind == protocol.KindConsoleHello {
+		a.serveConsole(ctx, conn)
+		return
+	}
 	a.serve(conn, fp, hello.Name)
 }
 
