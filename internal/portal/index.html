@@ -242,6 +242,23 @@
     font-size:13px;padding:12px 18px;margin:14px 0 0;align-items:center;gap:9px}
   .errbar.show{display:flex}.errbar svg{width:17px;height:17px;flex:none}
 
+  .btn.danger{background:linear-gradient(180deg,#ff9a9a,#fa6a6a);box-shadow:0 5px 0 #dd4f4f;color:#fff}
+  .btn.danger:active{box-shadow:0 2px 0 #dd4f4f}
+  .modal-ov{position:fixed;inset:0;z-index:60;background:rgba(107,84,70,.34);backdrop-filter:blur(5px);
+    display:none;place-items:center;padding:24px}
+  .modal-ov.show{display:grid;animation:mfade .25s ease}
+  @keyframes mfade{from{opacity:0}to{opacity:1}}
+  .modal{background:var(--card);border:2px solid var(--line);border-radius:28px;box-shadow:var(--sh-lg);
+    max-width:430px;width:100%;padding:30px 30px 26px;text-align:center;
+    animation:pop .42s cubic-bezier(.34,1.5,.5,1) both}
+  .modal .m-ico{width:66px;height:66px;margin:0 auto 16px;border-radius:50%;display:grid;place-items:center;
+    background:linear-gradient(160deg,#ffb0b0,#fa6a6a);box-shadow:0 10px 22px -10px rgba(250,106,106,.8)}
+  .modal .m-ico svg{width:34px;height:34px;color:#fff}
+  .modal .m-title{font-family:var(--serif);font-size:22px;color:var(--ink);letter-spacing:.02em}
+  .modal .m-msg{font-size:13.5px;color:var(--ink-2);margin-top:11px;line-height:1.75}
+  .modal .m-btns{display:flex;gap:12px;justify-content:center;margin-top:24px}
+  .modal .m-btns .btn{min-width:118px;text-align:center}
+
   footer{padding:24px 4px 48px;display:flex;gap:8px 18px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;color:var(--ink-3)}
   footer .k{font-family:var(--round);font-weight:600;color:var(--peach-d)}
 
@@ -391,11 +408,22 @@
 
   <footer>
     <span class="k">wanctl</span> 穿越公网 · 端到端加密 · 你点头，设备才动
-    <span class="k">RELAY</span> ***REMOVED***.cn <span class="k">E2EE</span> X25519
   </footer>
 </div>
 
 <div class="toast" id="toast"></div>
+
+<div class="modal-ov" id="modal">
+  <div class="modal">
+    <div class="m-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 9v4M12 17h.01M10.3 4 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0Z" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="m-title" id="mTitle"></div>
+    <div class="m-msg" id="mMsg"></div>
+    <div class="m-btns">
+      <button class="btn soft" id="mCancel">再想想</button>
+      <button class="btn danger" id="mOk">确定</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
@@ -535,9 +563,20 @@ $('#radd').onclick=async()=>{
   const scope=kind!=='exec'?'dir':'global';
   try{await jpost('/api/devices/rules',{device:cur,op:'add',kind,pattern,scope});$('#rp').value='';renderConsole()}catch(e){err('加规则失败：'+e.message)}
 };
+function askCute(o){return new Promise(res=>{
+  const ov=$('#modal');$('#mTitle').textContent=o.title;$('#mMsg').textContent=o.msg;
+  const ok=$('#mOk');ok.textContent=o.okText||'确定';ov.classList.add('show');
+  function done(v){ov.classList.remove('show');ok.onclick=null;$('#mCancel').onclick=null;ov.onclick=null;document.onkeydown=null;res(v);}
+  ok.onclick=()=>done(true);$('#mCancel').onclick=()=>done(false);
+  ov.onclick=e=>{if(e.target===ov)done(false);};
+  document.onkeydown=e=>{if(e.key==='Escape')done(false);};
+});}
 $('#toggle').onclick=async()=>{
   const next=curMode==='bypass'?'normal':'bypass';
-  if(next==='bypass'&&!confirm('切到「放飞」(BYPASS)？所有命令和文件操作都会自动放行、不再问你哦。'))return;
+  if(next==='bypass'){
+    const ok=await askCute({title:'切到放飞模式？',msg:'所有命令和文件操作都会自动放行、不再问你哦。只给可信、隔离的设备用～',okText:'确定放飞'});
+    if(!ok)return;
+  }
   try{await jpost('/api/devices/mode',{device:cur,mode:next});renderConsole()}catch(e){err('切换模式失败：'+e.message)}
 };
 
