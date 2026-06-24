@@ -13,10 +13,12 @@ controller (you)          relay (public, thunderbox)        device (agent)
 ```
 
 > **Status:** M1 (cross-internet transport, relay, exec/file) + M2 (policy &
-> approval) done and verified over the public thunderbox relay. On `http-transport`
-> the proxy-agnostic HTTP transport works through thunderbox's nginx (which strips
-> WS upgrades). Remaining: local Web GUI (M3), Feishu-SSO portal + Postgres +
-> sharing ACL (M4), JSONL logging (M5), the skill (M6) — see `docs/superpowers/plans/`.
+> approval) + M4 (Feishu-SSO portal + Postgres + sharing ACL) + M5 (JSONL logging)
+> + M6 (skill) done and verified over the public thunderbox relay. The
+> proxy-agnostic HTTP transport works through thunderbox's nginx (which strips WS
+> upgrades). The device console (approvals/rules/mode/activity) is driven from the
+> team portal over the E2E tunnel — there is no device-local web UI. See
+> `docs/superpowers/plans/`.
 
 ## Permissions (Claude-Code style)
 
@@ -28,12 +30,14 @@ Every remote command and file op is gated on the device:
 - Manage rules on the device: `wanctl rules list|add|rm`.
 - `wanctl exec --cwd /path "cmd"` runs in (and scopes the rule to) that directory.
 
-### Local web console (M3)
+### Device console (CLI + remote portal)
 
-`wanctl agent --gui-port 7600` opens a localhost UI (`http://127.0.0.1:7600`) for
-the human at the device: live approval queue (click `y/a/g/n`), rule management,
-a mode toggle (with a bypass danger banner), and an activity timeline. When
-`--gui-port` is set, the browser is the approver.
+The device itself has no web UI. A human at the device approves requests at the
+CLI (`y/a/g/n`) when running in an interactive terminal. The single web console
+lives in the **team portal**: open a device there to drive its live approval
+queue, rule management, mode toggle (with a bypass danger banner), and activity —
+remotely over the E2E tunnel. With no front-end attending (headless, no portal
+session, no TTY), a rule-miss is denied immediately.
 
 ### Activity log (M5)
 
@@ -57,8 +61,8 @@ curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | WAN
 
 It detects OS/arch, installs `wanctl`, and runs the agent (foreground; wrap in
 `systemd`/`nohup &` to persist). Optional env: `WANCTL_NAME` (default hostname),
-`WANCTL_MODE=bypass`, `WANCTL_GUI_PORT=7600`, `WANCTL_INSTALL_ONLY=1` (install,
-don't run). Run as a background service:
+`WANCTL_MODE=bypass`, `WANCTL_INSTALL_ONLY=1` (install, don't run). Run as a
+background service:
 
 ```bash
 curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | WANCTL_INSTALL_ONLY=1 sh

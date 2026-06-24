@@ -52,9 +52,11 @@ wanctl id                                 # this controller's fingerprint
   with `wanctl: command denied by device policy: <cmd>` (or `write/read denied
   …`). This is NOT a tool failure — it means the human at the device must allow
   it (see below). Do not retry blindly; tell the user it needs approval.
-- **Blocked on approval**: if the device runs in normal mode with a human
-  present (console or web GUI), your `exec` may **hang up to ~60s** while the
-  human clicks allow/deny. That's expected. If it times out it returns a denial.
+- **Blocked on approval**: if the device runs in normal mode with a front-end
+  attending (the device's CLI prompt, or someone watching it in the team portal),
+  your `exec` may **hang up to ~60s** while the human approves/denies. That's
+  expected; a timeout returns a denial. With no front-end attending (headless, no
+  portal session, no TTY) a rule-miss is denied immediately.
 - **Pairing**: the very first connection from a new controller fingerprint must
   be approved once on the device (TOFU). Until then you get a reject telling you
   to approve it on the device.
@@ -78,8 +80,8 @@ and never sees it).
 The user (at the device) can pre-authorize it so it stops prompting:
 
 - On the device: `wanctl rules add --kind exec --pattern "git status"` (or a
-  directory rule: `--kind write --pattern /srv/app`), or click **Allow + remember**
-  in the device web console (`wanctl agent --gui-port 7600`).
+  directory rule: `--kind write --pattern /srv/app`), or choose **Allow + remember**
+  when approving (at the device CLI prompt, or in the team portal's device console).
 - For trusted, isolated devices only: the device can run `--mode bypass` to
   auto-allow everything (dangerous; everything is still logged).
 
@@ -100,7 +102,7 @@ Detects OS/arch, installs `wanctl`, runs the agent (foreground). To persist as a
 background service: add `WANCTL_INSTALL_ONLY=1` to just install, then
 `nohup wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token <token> --transport http --name "$(hostname)" &`.
 Optional env: `WANCTL_NAME`, `WANCTL_MODE=bypass` (auto-allow; trusted devices
-only), `WANCTL_GUI_PORT=7600` (local approval UI). Tokens come from the portal
+only). Tokens come from the portal
 `https://wanctl.***REMOVED***.***REMOVED***.com` (Feishu login → issue token, shown once).
 
 ## Notes

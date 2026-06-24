@@ -179,7 +179,7 @@ func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target, hello
 	}
 	if reply.Kind == protocol.KindReject {
 		dr.Conn.Close()
-		return nil, fmt.Errorf("device rejected this controller: %s\n  -> approve it on the device (GUI/console pairing prompt)", reply.Reason)
+		return nil, fmt.Errorf("device rejected this controller: %s\n  -> approve it on the device (console pairing prompt)", reply.Reason)
 	}
 	if reply.Kind != protocol.KindOK {
 		dr.Conn.Close()
