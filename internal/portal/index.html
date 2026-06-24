@@ -4,198 +4,585 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>wanctl 控制台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Baloo+2:wght@500;600;700&family=Fredoka:wght@400;500;600&family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  :root{--bg:#0f1216;--panel:#171b21;--panel2:#1d232b;--line:#2a323c;
-    --ink:#e8edf2;--dim:#8b97a6;--accent:#5db0ff;--ok:#39d98a;--warn:#ffb454;--bad:#ff6b6b;
-    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  :root{
+    --cream:#fff6ea; --cream-2:#ffeede; --card:#fffdf9; --milk:#ffffff;
+    --ink:#6b5446; --ink-2:#a08977; --ink-3:#c9b6a6; --line:#f3e4d3; --line-2:#ecd9c4;
+    --peach:#ffb487; --peach-d:#ff9e66;
+    --berry:#ff7d9c; --berry-d:#ff5f86;
+    --straw:#ff8585; --straw-d:#fa6a6a;
+    --mint:#74cfa6; --mint-d:#52bd8d;
+    --butter:#ffce6a; --butter-d:#ffbe3d;
+    --lav:#c2abf0; --sky:#8fd0f2; --caramel:#c98f5d;
+    --serif:"ZCOOL KuaiLe",cursive; --round:"Baloo 2","Fredoka",cursive;
+    --sans:"Noto Sans SC",system-ui,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+    --sh:0 10px 26px -12px rgba(180,120,80,.30);
+    --sh-lg:0 22px 50px -22px rgba(180,120,80,.40);
+  }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif}
-  header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
-  header .logo{width:24px;height:24px;color:var(--accent)}
-  header h1{font-size:15px;font-weight:650;margin:0}
-  header .me{margin-left:auto;color:var(--dim);font-size:12.5px;font-family:var(--mono)}
-  header .me b{color:var(--ink)}
-  .shell{display:grid;grid-template-columns:200px 1fr;min-height:calc(100vh - 53px)}
-  nav{border-right:1px solid var(--line);background:var(--panel);padding:14px 10px}
-  nav .lbl{font-size:10px;letter-spacing:.6px;color:var(--dim);padding:6px 10px}
-  nav a{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;color:var(--ink);cursor:pointer;font-size:13.5px;text-decoration:none}
-  nav a svg{width:16px;height:16px;color:var(--dim)}
-  nav a.active{background:var(--panel2);font-weight:600}
-  nav a.active svg{color:var(--accent)}
-  main{padding:20px 24px;max-width:960px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:20px}
-  .card>h2{margin:0;padding:12px 16px;font-size:12px;letter-spacing:.5px;color:var(--dim);border-bottom:1px solid var(--line)}
-  .body{padding:14px 16px}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  td,th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);font-family:var(--mono)}
-  th{color:var(--dim);font-weight:600;font-size:11px}
-  tr:last-child td{border-bottom:none}
-  .empty{color:var(--dim);padding:6px 0}
-  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-  input,select{font:13px var(--mono);background:var(--panel2);border:1px solid var(--line);color:var(--ink);padding:8px 10px;border-radius:8px}
-  input{flex:1;min-width:120px}
-  button{font:600 13px inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 13px;border-radius:8px;cursor:pointer}
-  button:hover{border-color:var(--accent)}
-  button.primary{background:rgba(93,176,255,.14);border-color:transparent;color:var(--accent)}
-  .rm{color:var(--dim);border:none;background:none;cursor:pointer}.rm:hover{color:var(--bad)}
-  .devrow{cursor:pointer}.devrow:hover td{background:var(--panel2)}
-  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
-  .on{background:var(--ok)}.off{background:#5a6470}
-  .pill{font:600 11px var(--mono);padding:3px 10px;border-radius:20px}
-  .pill.normal{background:rgba(57,217,138,.16);color:var(--ok)}
-  .pill.bypass{background:rgba(255,107,107,.18);color:var(--bad)}
-  .crumb{color:var(--dim);cursor:pointer;font-size:13px;margin-bottom:8px;display:inline-block}
-  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:8px 0 16px}
-  .tabs .t{padding:8px 14px;cursor:pointer;color:var(--dim);border-bottom:2px solid transparent}
-  .tabs .t.active{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
-  .req{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin-bottom:12px}
-  .kind{font:600 10px var(--mono);padding:2px 8px;border-radius:20px;text-transform:uppercase}
-  .k-exec{background:rgba(93,176,255,.16);color:var(--accent)}
-  .k-write{background:rgba(255,107,107,.16);color:var(--bad)}
-  .k-read{background:rgba(57,217,138,.16);color:var(--ok)}
-  .detail{font-family:var(--mono);margin:9px 0;word-break:break-all}
-  .sub{color:var(--dim);font-size:12px;font-family:var(--mono)}
-  .btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
-  .b-y{background:rgba(57,217,138,.14);border-color:transparent;color:var(--ok)}
-  .b-n{background:rgba(255,107,107,.14);border-color:transparent;color:var(--bad)}
-  .danger{margin-top:10px;color:var(--bad);font-size:12.5px;display:none}
-  .err{background:#2a1416;border:1px solid var(--bad);color:#ffd2d2;padding:10px 14px;border-radius:10px;margin-bottom:14px;display:none}
-  .tokenbox{margin-top:12px;background:#10241a;border:1px solid var(--ok);border-radius:8px;padding:12px 14px;display:none}
-  .tokenbox code{font-family:var(--mono);color:var(--ok);word-break:break-all}
-  .hide{display:none}
+  html,body{margin:0}
+  body{font-family:var(--sans);color:var(--ink);font-weight:400;line-height:1.7;-webkit-font-smoothing:antialiased;
+    min-height:100vh;
+    background:
+      radial-gradient(60% 40% at 88% -6%, rgba(255,180,135,.30), transparent 60%),
+      radial-gradient(55% 38% at 6% 4%, rgba(255,206,106,.26), transparent 58%),
+      radial-gradient(60% 45% at 50% 108%, rgba(194,171,240,.22), transparent 60%),
+      var(--cream);}
+  .blob{position:fixed;border-radius:50%;filter:blur(8px);opacity:.5;z-index:0;pointer-events:none;
+    animation:float 9s ease-in-out infinite}
+  .blob.b1{width:90px;height:90px;background:#ffd9c2;top:18%;left:7%;animation-delay:0s}
+  .blob.b2{width:60px;height:60px;background:#d7eecb;top:62%;left:12%;animation-delay:1.4s}
+  .blob.b3{width:70px;height:70px;background:#ffe1ec;top:30%;right:9%;animation-delay:.7s}
+  .blob.b4{width:48px;height:48px;background:#d9ecff;top:74%;right:14%;animation-delay:2.1s}
+  @keyframes float{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-16px) scale(1.06)}}
+  .stage{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:0 24px}
+
+  header{display:flex;align-items:center;gap:14px;padding:26px 4px 18px}
+  .logo{width:52px;height:52px;flex:none;filter:drop-shadow(0 6px 10px rgba(255,140,90,.35));animation:bob 4s ease-in-out infinite}
+  @keyframes bob{0%,100%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-5px) rotate(2deg)}}
+  .brand .zh{font-family:var(--serif);font-size:25px;color:var(--ink);letter-spacing:.04em;line-height:1}
+  .brand .en{font-family:var(--round);font-weight:600;font-size:10.5px;letter-spacing:.18em;color:var(--peach-d);text-transform:uppercase}
+  .who{margin-left:auto;display:flex;align-items:center;gap:11px;background:var(--card);border:2px solid var(--line);
+    border-radius:24px;padding:7px 8px 7px 16px;box-shadow:var(--sh)}
+  .who .ns{font-size:12.5px;color:var(--ink-2)}.who .ns b{font-family:var(--round);font-weight:600;color:var(--ink)}
+  .who .fp{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);margin-top:1px}
+  .who .ava{width:34px;height:34px;border-radius:50%;background:linear-gradient(150deg,#ffd6a5,#ffb4d0);
+    display:grid;place-items:center;box-shadow:inset 0 2px 4px rgba(255,255,255,.6)}
+  .who .ava svg{width:20px;height:20px;color:#fff}
+
+  nav{display:flex;gap:8px;flex-wrap:wrap;padding:6px 2px 0}
+  nav button{font-family:var(--round);font-weight:600;font-size:14px;color:var(--ink-2);cursor:pointer;
+    background:var(--card);border:2px solid var(--line);border-radius:18px;padding:9px 16px;
+    display:inline-flex;align-items:center;gap:8px;box-shadow:0 4px 0 0 rgba(243,228,211,.9);
+    transition:transform .18s cubic-bezier(.34,1.6,.5,1),box-shadow .18s,background .25s,color .25s,border-color .25s}
+  nav button svg{width:17px;height:17px}
+  nav button:hover{transform:translateY(-2px)}
+  nav button:active{transform:translateY(2px);box-shadow:0 1px 0 0 rgba(243,228,211,.9)}
+  nav button.on{background:linear-gradient(180deg,#ffd9a8,#ffc187);color:#7a4a22;border-color:#ffbe7e;
+    box-shadow:0 6px 0 0 #f0a85e}
+  nav button.on svg{color:#9a5a26}
+
+  main{padding:26px 2px 70px;min-height:54vh}
+  .view{display:none}.view.show{display:block;animation:pop .55s cubic-bezier(.34,1.5,.5,1) both}
+  @keyframes pop{from{opacity:0;transform:translateY(16px) scale(.98)}to{opacity:1;transform:none}}
+  .htitle{font-family:var(--serif);font-size:clamp(26px,4vw,36px);color:var(--ink);letter-spacing:.03em;margin:8px 0 0;
+    display:flex;align-items:center;gap:12px}
+  .htitle .puff{width:30px;height:30px}
+  .sub{color:var(--ink-2);font-size:14px;margin-top:8px;max-width:58ch}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:18px;margin-top:24px}
+  .devcard{background:var(--card);border:2px solid var(--line);border-radius:26px;padding:20px;cursor:pointer;
+    box-shadow:var(--sh);position:relative;overflow:hidden;
+    transition:transform .2s cubic-bezier(.34,1.5,.5,1),box-shadow .2s,border-color .2s;
+    opacity:0;transform:translateY(18px);animation:rise .6s cubic-bezier(.34,1.5,.5,1) forwards}
+  .devcard:nth-child(2){animation-delay:.08s}.devcard:nth-child(3){animation-delay:.16s}
+  .devcard:nth-child(4){animation-delay:.24s}.devcard:nth-child(5){animation-delay:.32s}
+  .devcard:hover{transform:translateY(-5px) rotate(-.6deg);box-shadow:var(--sh-lg);border-color:var(--peach)}
+  @keyframes rise{to{opacity:1;transform:none}}
+  .devcard .top{display:flex;align-items:center;gap:13px}
+  .face{width:54px;height:54px;border-radius:18px;flex:none;display:grid;place-items:center;position:relative;
+    box-shadow:inset 0 3px 6px rgba(255,255,255,.7),0 6px 12px -6px rgba(180,120,80,.4)}
+  .face.on{background:linear-gradient(160deg,#b7ecd3,#7fd1ae)}
+  .face.off{background:linear-gradient(160deg,#f0e2d6,#dcc9ba)}
+  .face svg{width:30px;height:30px;color:#fff;opacity:.95}
+  .devcard .nm{font-family:var(--round);font-weight:700;font-size:22px;color:var(--ink);line-height:1.1;word-break:break-all}
+  .devcard .fp{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-top:2px}
+  .pill{font-family:var(--round);font-weight:600;font-size:11.5px;padding:4px 12px;border-radius:14px;display:inline-flex;align-items:center;gap:5px;flex:none}
+  .pill .d{width:7px;height:7px;border-radius:50%}
+  .pill.on{background:#e0f6ec;color:var(--mint-d)}.pill.on .d{background:var(--mint);box-shadow:0 0 0 3px rgba(116,207,166,.3)}
+  .pill.off{background:#f3eae3;color:var(--ink-2)}.pill.off .d{background:var(--ink-3)}
+  .devcard .meta{margin-top:16px;display:flex;align-items:center;justify-content:space-between;
+    border-top:2px dashed var(--line-2);padding-top:13px}
+  .devcard .seen{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+  .devcard .enter{font-family:var(--round);font-weight:600;font-size:12.5px;color:var(--peach-d);display:inline-flex;align-items:center;gap:5px}
+  .devcard .enter svg{width:15px;height:15px;transition:transform .2s}
+  .devcard:hover .enter svg{transform:translateX(4px)}
+  .devcard .badge{position:absolute;top:14px;right:14px;font-family:var(--round);font-weight:700;font-size:11px;
+    background:linear-gradient(180deg,#ff97b0,#ff7d9c);color:#fff;border-radius:13px;padding:3px 10px;
+    box-shadow:0 5px 10px -4px rgba(255,125,156,.7);animation:wob 2.4s ease-in-out infinite}
+  @keyframes wob{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg)}}
+
+  .stats{display:flex;gap:12px;flex-wrap:wrap;margin-top:22px}
+  .stat{flex:1;min-width:130px;background:var(--card);border:2px solid var(--line);border-radius:20px;padding:14px 18px;box-shadow:var(--sh)}
+  .stat .n{font-family:var(--round);font-weight:700;font-size:28px;line-height:1}
+  .stat.s1 .n{color:var(--berry-d)}.stat.s2 .n{color:var(--butter-d)}.stat.s3 .n{color:var(--mint-d)}.stat.s4 .n{color:var(--sky)}
+  .stat .l{font-size:11.5px;color:var(--ink-2);margin-top:5px}
+
+  .back{font-family:var(--round);font-weight:600;font-size:13px;color:var(--ink-2);cursor:pointer;
+    display:inline-flex;align-items:center;gap:7px;background:var(--card);border:2px solid var(--line);
+    border-radius:16px;padding:7px 14px;box-shadow:0 4px 0 rgba(243,228,211,.9);margin-bottom:18px;
+    transition:transform .15s}
+  .back:hover{transform:translateY(-2px)}.back:active{transform:translateY(2px)}
+  .back svg{width:15px;height:15px}
+  .dhead{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .dhead .face{width:60px;height:60px;border-radius:20px}
+  .dhead .nm{font-family:var(--serif);font-size:34px;color:var(--ink);line-height:1;word-break:break-all}
+  .modechip{margin-left:auto;display:inline-flex;align-items:center;gap:9px}
+  .modechip .lab{font-size:11.5px;color:var(--ink-2)}
+  .mtag{font-family:var(--round);font-weight:700;font-size:13px;padding:7px 16px;border-radius:16px}
+  .mtag.normal{background:#e0f6ec;color:var(--mint-d)}
+  .mtag.bypass{background:linear-gradient(180deg,#ff9a9a,#ff7d7d);color:#fff;box-shadow:0 6px 14px -5px rgba(250,106,106,.8);animation:shake 1.8s ease-in-out infinite}
+  @keyframes shake{0%,100%{transform:rotate(-2deg)}50%{transform:rotate(2deg)}}
+
+  .tabs{display:flex;gap:8px;margin:24px 0 22px;flex-wrap:wrap}
+  .tabs .t{font-family:var(--round);font-weight:600;font-size:13.5px;color:var(--ink-2);cursor:pointer;
+    background:var(--card);border:2px solid var(--line);border-radius:16px;padding:8px 15px;
+    box-shadow:0 4px 0 rgba(243,228,211,.9);transition:transform .15s,background .2s,color .2s,border-color .2s}
+  .tabs .t:hover{transform:translateY(-2px)}.tabs .t:active{transform:translateY(2px)}
+  .tabs .t.on{background:linear-gradient(180deg,#ffe1b0,#ffd093);color:#7a4a22;border-color:#ffc788;box-shadow:0 5px 0 #efb877}
+  .tabs .t .b{font-family:var(--round);font-weight:700;background:var(--berry);color:#fff;border-radius:10px;padding:0 7px;font-size:10.5px;margin-left:6px;display:none}
+  .tabs .t .b.show{display:inline}
+  .pane{display:none}.pane.show{display:block;animation:pop .45s cubic-bezier(.34,1.5,.5,1) both}
+
+  .note{background:var(--card);border:2px solid #ffd2cf;border-radius:28px;box-shadow:var(--sh-lg);overflow:hidden;position:relative;margin-bottom:16px;
+    transition:opacity .35s,transform .35s}
+  .note.gone{opacity:0;transform:scale(.96) translateY(-8px)}
+  .note .ribbon{background:repeating-linear-gradient(45deg,#ff9a9a 0 16px,#ffb0b0 16px 32px);
+    padding:11px 24px;display:flex;align-items:center;gap:11px;color:#fff}
+  .note .ribbon .warnico{width:26px;height:26px;background:#fff;border-radius:50%;display:grid;place-items:center;flex:none}
+  .note .ribbon .warnico svg{width:16px;height:16px;color:var(--straw-d)}
+  .note .ribbon .txt{font-family:var(--round);font-weight:700;font-size:15px;letter-spacing:.02em}
+  .note .ribbon .req{margin-left:auto;font-family:var(--mono);font-size:11px;opacity:.92}
+  .note .body{padding:24px 26px}
+  .stmt{font-size:13.5px;color:var(--ink-2);margin-bottom:14px}
+  .stmt b{color:var(--straw-d);font-family:var(--round);font-weight:600}
+  .term{background:linear-gradient(180deg,#fff8f0,#fff2e4);border:2px solid var(--line-2);border-radius:18px;
+    padding:18px 20px;position:relative}
+  .term .dots{position:absolute;top:13px;left:16px;display:flex;gap:6px}
+  .term .dots i{width:10px;height:10px;border-radius:50%}
+  .term .dots i:nth-child(1){background:#ff9a9a}.term .dots i:nth-child(2){background:#ffce6a}.term .dots i:nth-child(3){background:#7fd1ae}
+  .cmd{font-family:var(--mono);font-size:clamp(17px,2.6vw,24px);font-weight:500;color:var(--ink);margin-top:18px;word-break:break-all;line-height:1.4}
+  .cmd .rm{color:var(--straw-d);font-weight:600}
+  .facts{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+  .fact{flex:1;min-width:150px;background:#fdf3e8;border:2px dashed var(--line-2);border-radius:16px;padding:12px 15px}
+  .fact .k{font-family:var(--round);font-weight:600;font-size:10.5px;color:var(--ink-3);letter-spacing:.04em}
+  .fact .v{font-family:var(--mono);font-size:12.5px;color:var(--ink);margin-top:4px;word-break:break-all}
+  .fact .v.warn{color:var(--straw-d)}
+  .decide{display:flex;gap:11px;flex-wrap:wrap;margin-top:22px}
+  .candy{font-family:var(--round);font-weight:700;font-size:14.5px;cursor:pointer;border:none;border-radius:20px;
+    padding:14px 22px;color:#fff;position:relative;box-shadow:0 7px 0 0 var(--sh-c,#e8a06a);
+    transition:transform .14s cubic-bezier(.34,1.6,.5,1),box-shadow .14s;display:inline-flex;align-items:center;gap:8px}
+  .candy::before{content:"";position:absolute;left:14px;right:14px;top:6px;height:8px;border-radius:8px;background:rgba(255,255,255,.45)}
+  .candy svg{width:17px;height:17px}
+  .candy:hover{transform:translateY(-2px)}
+  .candy:active{transform:translateY(5px);box-shadow:0 2px 0 0 var(--sh-c,#e8a06a)}
+  .candy.allow{background:linear-gradient(180deg,#86d9b3,#5fc699);--sh-c:#43ab7e}
+  .candy.allow2{background:linear-gradient(180deg,#a7d8f0,#84c5ec);--sh-c:#5fa6cf;color:#1f5a78}
+  .candy.allow3{background:linear-gradient(180deg,#d4c2f4,#bfa6ee);--sh-c:#9a7fd6}
+  .candy.deny{background:linear-gradient(180deg,#ff9a9a,#fa6a6a);--sh-c:#dd4f4f;margin-left:auto}
+  @media(max-width:620px){.candy.deny{margin-left:0}}
+
+  .blank{text-align:center;padding:40px 20px}
+  .blank .em{width:78px;height:78px;margin:0 auto 14px;border-radius:50%;display:grid;place-items:center;
+    background:linear-gradient(160deg,#d7eecb,#b7ecd3);box-shadow:var(--sh)}
+  .blank .em svg{width:40px;height:40px;color:#fff}
+  .blank .w{font-family:var(--serif);font-size:20px;color:var(--ink)}
+  .blank .t2{font-size:12.5px;color:var(--ink-2);margin-top:6px}
+
+  .tablecard{background:var(--card);border:2px solid var(--line);border-radius:24px;box-shadow:var(--sh);overflow:hidden;margin-top:8px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:13px 18px;font-size:13px}
+  th{font-family:var(--round);font-weight:600;font-size:11px;letter-spacing:.06em;color:var(--ink-2);background:#fdf3e8;text-transform:uppercase}
+  td{font-family:var(--mono);color:var(--ink);border-top:2px solid var(--line);word-break:break-all}
+  .verdotk{color:var(--mint-d);font-family:var(--round);font-weight:700}
+  .verdotn{color:var(--straw-d);font-family:var(--round);font-weight:700}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+  input,select{font:400 13px var(--sans);background:var(--milk);border:2px solid var(--line);color:var(--ink);
+    padding:11px 15px;border-radius:16px;outline:none;transition:border-color .2s}
+  input:focus,select:focus{border-color:var(--peach)}
+  input{flex:1;min-width:140px;font-family:var(--mono)}
+  input::placeholder{color:var(--ink-3)}
+  .btn{font-family:var(--round);font-weight:700;font-size:13.5px;cursor:pointer;border:none;border-radius:16px;
+    padding:11px 22px;color:#fff;background:linear-gradient(180deg,#ffc187,#ff9e66);box-shadow:0 5px 0 #ef8b4f;
+    transition:transform .14s}
+  .btn:hover{transform:translateY(-2px)}.btn:active{transform:translateY(3px);box-shadow:0 2px 0 #ef8b4f}
+  .btn.soft{background:var(--card);color:var(--ink-2);border:2px solid var(--line);box-shadow:0 4px 0 rgba(243,228,211,.9)}
+  .rmx{font-family:var(--round);font-weight:600;color:var(--ink-3);cursor:pointer;background:none;border:none;font-size:12.5px}
+  .rmx:hover{color:var(--straw-d)}
+
+  .slip{margin-top:18px;border:2px dashed var(--berry);background:linear-gradient(180deg,#fff4f7,#ffe9ef);
+    border-radius:24px;padding:20px 22px;display:none;position:relative;box-shadow:var(--sh)}
+  .slip.show{display:block;animation:pop .5s cubic-bezier(.34,1.6,.5,1) both}
+  .slip .tag{position:absolute;right:18px;top:-14px;font-family:var(--round);font-weight:700;font-size:12px;color:#fff;
+    background:linear-gradient(180deg,#ff97b0,#ff7d9c);padding:5px 14px;border-radius:14px;box-shadow:0 6px 12px -5px rgba(255,125,156,.8)}
+  .slip .cap{font-family:var(--round);font-weight:600;font-size:13px;color:var(--berry-d);margin-bottom:9px}
+  .slip code{font-family:var(--mono);font-size:14px;color:var(--ink);word-break:break-all;display:block;
+    background:var(--milk);border:2px solid #ffd9e2;border-radius:14px;padding:12px 14px}
+  .slip .once{font-size:11.5px;color:var(--ink-2);margin-top:11px}
+  .slip .row{margin-top:13px}
+
+  .modecard{background:var(--card);border:2px solid var(--line);border-radius:24px;padding:22px 24px;box-shadow:var(--sh);max-width:580px}
+  .modecard .now{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .modecard .now .txt{font-size:14px;color:var(--ink);flex:1;min-width:180px}
+  .modecard .now .txt b{font-family:var(--round);font-weight:700}
+  .toggle{margin-left:auto;width:72px;height:36px;border-radius:22px;background:#e0f6ec;cursor:pointer;position:relative;
+    border:2px solid #c2ecd8;transition:background .3s,border-color .3s;flex:none}
+  .toggle .k{position:absolute;top:2px;left:2px;width:28px;height:28px;border-radius:50%;background:#fff;
+    box-shadow:0 3px 6px rgba(180,120,80,.4);transition:left .3s cubic-bezier(.34,1.6,.5,1)}
+  .toggle.bypass{background:#ffd9d9;border-color:#ffb3b3}.toggle.bypass .k{left:40px}
+  .warn{margin-top:18px;background:#fff0f0;border:2px dashed #ffb3b3;border-radius:18px;padding:13px 17px;
+    font-size:12.5px;color:var(--straw-d);display:none}
+  .warn.show{display:block}.warn b{font-family:var(--round);font-weight:700}
+
+  .empty{font-family:var(--round);font-weight:500;color:var(--ink-3);text-align:center;padding:30px}
+
+  .toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(20px);z-index:40;
+    font-family:var(--round);font-weight:600;font-size:14px;color:#fff;padding:13px 24px;border-radius:20px;
+    box-shadow:var(--sh-lg);opacity:0;pointer-events:none;transition:opacity .3s,transform .3s;display:flex;align-items:center;gap:9px}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast.ok{background:linear-gradient(180deg,#86d9b3,#5fc699)}
+  .toast.no{background:linear-gradient(180deg,#ff9a9a,#fa6a6a)}
+  .toast svg{width:18px;height:18px}
+
+  .errbar{display:none;background:#fff0f0;border:2px dashed #ffb3b3;border-radius:18px;color:var(--straw-d);
+    font-size:13px;padding:12px 18px;margin:14px 0 0;align-items:center;gap:9px}
+  .errbar.show{display:flex}.errbar svg{width:17px;height:17px;flex:none}
+
+  footer{padding:24px 4px 48px;display:flex;gap:8px 18px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+  footer .k{font-family:var(--round);font-weight:600;color:var(--peach-d)}
+
+  #intro{position:fixed;inset:0;z-index:50;background:var(--cream);display:grid;place-items:center;
+    animation:fade .6s ease 1.2s forwards}
+  @keyframes fade{to{opacity:0;visibility:hidden}}
+  #intro svg{width:96px;height:96px;animation:bob 1.3s ease-in-out infinite}
 </style>
 </head>
 <body>
-<header>
-  <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2 4 6v6c0 4.4 3.4 8 8 10 4.6-2 8-5.6 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg>
-  <h1>wanctl 控制台</h1>
-  <div class="me" id="me">...</div>
-</header>
-<div class="shell">
+<div id="intro"><svg viewBox="0 0 64 64"><path d="M32 7 13 16v15c0 12 8 19 19 23 11-4 19-11 19-23V16L32 7Z" fill="#ffc187" stroke="#ef8b4f" stroke-width="2.4" stroke-linejoin="round"/><path d="M24 33l6 6 11-12" fill="none" stroke="#fff" stroke-width="4.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+
+<div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div>
+
+<div class="stage">
+  <header>
+    <svg class="logo" viewBox="0 0 64 64"><path d="M32 7 13 16v15c0 12 8 19 19 23 11-4 19-11 19-23V16L32 7Z" fill="#ffc187" stroke="#ef8b4f" stroke-width="2.4" stroke-linejoin="round"/><circle cx="25" cy="28" r="2.6" fill="#fff"/><circle cx="39" cy="28" r="2.6" fill="#fff"/><path d="M26 36c2 2.6 10 2.6 12 0" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round"/></svg>
+    <div class="brand"><div class="zh">wanctl 控制台</div><div class="en">cream &amp; cute · remote control</div></div>
+    <div class="who">
+      <div><div class="ns">命名空间 <b id="ns">…</b></div><div class="fp" id="fp">连接中…</div></div>
+      <div class="ava"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></div>
+    </div>
+  </header>
+
   <nav>
-    <div class="lbl">团队</div>
-    <a data-sec="devices" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>设备</a>
-    <a data-sec="tokens"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8"/></svg>访问令牌</a>
-    <a data-sec="acl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 11a4 4 0 1 0-8 0M2 21a8 8 0 0 1 20 0"/></svg>共享授权</a>
-    <a data-sec="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Relay 审计</a>
+    <button data-sec="devices" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="12" rx="3"/><path d="M8 21h8"/></svg>设备</button>
+    <button data-sec="tokens"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="M11 12 21 2M17 6l2 2"/></svg>访问令牌</button>
+    <button data-sec="acl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11l2 2 4-4"/></svg>共享授权</button>
+    <button data-sec="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Relay 审计</button>
   </nav>
+
+  <div class="errbar" id="err"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 9v4M12 17h.01M10.3 4 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0Z"/></svg><span id="errmsg"></span></div>
+
   <main>
-    <div class="err" id="err"></div>
-
-    <section data-pane="devices">
-      <div class="card"><h2>设备</h2><div class="body">
-        <table id="devices"><thead><tr><th>名称</th><th>状态</th><th>指纹</th><th>最近在线</th><th></th></tr></thead><tbody></tbody></table>
-      </div></div>
+    <!-- devices -->
+    <section class="view show" data-view="devices">
+      <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none"><path d="M6 16a4 4 0 0 1 .5-8 5 5 0 0 1 9.7-1A4 4 0 0 1 18 16Z" fill="#ffe1b0" stroke="#ef8b4f" stroke-width="1.6"/></svg>我的小设备们</h1>
+      <p class="sub">经飞书 SSO 登录后纳管的设备。绿脸在线、灰脸离线，点一张卡片进去远程审批它待办的高危操作～</p>
+      <div class="grid" id="grid"><div class="empty">正在召唤设备们…</div></div>
+      <div class="stats">
+        <div class="stat s1"><div class="n" id="stDev">·</div><div class="l">在册设备</div></div>
+        <div class="stat s3"><div class="n" id="stOn">·</div><div class="l">在线设备</div></div>
+        <div class="stat s2"><div class="n" id="stTok">·</div><div class="l">活跃令牌</div></div>
+        <div class="stat s4"><div class="n" id="stAcl">·</div><div class="l">共享授权</div></div>
+      </div>
     </section>
 
-    <section data-pane="tokens" class="hide">
-      <div class="card"><h2>访问令牌</h2><div class="body">
-        <table id="tokens"><thead><tr><th>id</th><th>标签</th><th>创建</th><th>过期</th><th>状态</th><th></th></tr></thead><tbody></tbody></table>
+    <!-- device drill -->
+    <section class="view" data-view="device">
+      <div class="back" id="back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m15 18-6-6 6-6"/></svg>回到设备们</div>
+      <div class="dhead">
+        <div class="face on" id="dFace"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="12" rx="3"/><path d="M8 21h8"/></svg></div>
+        <div class="nm" id="dName">—</div>
+        <div class="modechip"><span class="lab">执行模式</span><span class="mtag normal" id="dMtag">乖乖 / NORMAL</span></div>
+      </div>
+
+      <div class="tabs" id="tabs">
+        <div class="t on" data-tab="approve">待审批<span class="b" id="pBadge">0</span></div>
+        <div class="t" data-tab="rules">规则</div>
+        <div class="t" data-tab="mode">模式</div>
+        <div class="t" data-tab="log">活动日志</div>
+      </div>
+
+      <div class="pane show" data-pane="approve">
+        <div id="pending"><div class="empty">连接设备中…</div></div>
+      </div>
+
+      <div class="pane" data-pane="rules">
+        <div class="tablecard"><table>
+          <thead><tr><th>#</th><th>类型</th><th>模式</th><th>作用域</th><th></th></tr></thead>
+          <tbody id="rules"></tbody>
+        </table></div>
         <div class="row">
-          <input id="tlabel" placeholder="标签(如 laptop、ci)">
-          <input id="tdays" type="number" min="0" placeholder="N 天后过期(0=永不)" style="max-width:220px">
-          <button class="primary" id="tissue">签发令牌</button>
+          <select id="rk"><option value="exec">exec</option><option value="read">read</option><option value="write">write</option></select>
+          <input id="rp" placeholder="命令(echo *) 或 目录(/data)">
+          <button class="btn soft" id="radd">加条规则</button>
         </div>
-        <div class="tokenbox" id="tokenbox"><code id="tokenval"></code><button class="rm" id="tcopy" style="margin-left:10px;color:var(--accent)">复制</button><div class="sub" style="margin-top:6px">立即复制 —— 只显示这一次。设为控制端的 WANCTL_TOKEN。</div></div>
-      </div></div>
-    </section>
+      </div>
 
-    <section data-pane="acl" class="hide">
-      <div class="card"><h2>共享授权 (ACL)</h2><div class="body">
-        <table id="acl"><thead><tr><th>id</th><th>设备</th><th>被授权命名空间</th><th>权限</th><th></th></tr></thead><tbody></tbody></table>
-        <div class="row">
-          <input id="adev" placeholder="设备名"><input id="agrantee" placeholder="被授权命名空间">
-          <input id="aperms" placeholder="权限(exec,read,write)" style="max-width:200px">
-          <button id="aadd">授权</button>
+      <div class="pane" data-pane="mode">
+        <div class="modecard">
+          <div class="now">
+            <span class="mtag normal" id="mTag">乖乖 / NORMAL</span>
+            <span class="txt" id="mTxt"><b>乖乖模式</b>：没命中规则就来问你，逐条点头</span>
+            <div class="toggle" id="toggle"><span class="k"></span></div>
+          </div>
+          <div class="warn" id="warnbox"><b>放飞模式（BYPASS）：</b>所有命令和文件操作都自动放行、不再问你啦！只给可信、隔离的设备用哦，这段时间会一直记进审计。</div>
         </div>
-      </div></div>
-    </section>
+      </div>
 
-    <section data-pane="audit" class="hide">
-      <div class="card"><h2>Relay 审计 · 最近 100</h2><div class="body">
-        <table id="audit"><thead><tr><th>时间</th><th>设备</th><th>事件</th></tr></thead><tbody></tbody></table>
-      </div></div>
-    </section>
-
-    <section data-pane="device" class="hide">
-      <span class="crumb" id="crumb">&#8249; 返回设备列表</span>
-      <div class="card"><h2 style="display:flex;align-items:center;gap:10px"><span id="dname" class="mono" style="color:var(--ink);font-size:14px"></span><span class="dot" id="ddot"></span><span id="dstatus" class="sub"></span><span class="pill" id="dmode" style="margin-left:auto"></span></h2>
-        <div class="body">
-          <div class="tabs">
-            <div class="t active" data-tab="approvals">待审批</div>
-            <div class="t" data-tab="rules">规则</div>
-            <div class="t" data-tab="mode">模式</div>
-            <div class="t" data-tab="activity">活动日志</div>
-          </div>
-          <div data-tabpane="approvals" id="pending"><div class="empty">暂无待审批请求。</div></div>
-          <div data-tabpane="rules" class="hide">
-            <table id="rules"><thead><tr><th>#</th><th>类型</th><th>模式</th><th>作用域</th><th></th></tr></thead><tbody></tbody></table>
-            <div class="row">
-              <select id="rk"><option value="exec">exec</option><option value="read">read</option><option value="write">write</option></select>
-              <input id="rp" placeholder="命令(echo *)或目录(/data)"><button id="radd">添加规则</button>
-            </div>
-          </div>
-          <div data-tabpane="mode" class="hide">
-            <div>当前:<span class="pill" id="modePill"></span> <button id="modeToggle">切换</button></div>
-            <div class="danger" id="bypassWarn"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h16.9a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>BYPASS:所有命令与文件操作自动放行,不再询问。仅用于可信、隔离的设备。</div>
-          </div>
-          <div data-tabpane="activity" class="hide">
-            <table id="logs"><thead><tr><th>时间</th><th>类型</th><th>详情</th><th>决策</th><th>退出码</th></tr></thead><tbody></tbody></table>
-          </div>
+      <div class="pane" data-pane="log">
+        <div class="blank">
+          <div class="em" style="background:linear-gradient(160deg,#ffe1b0,#ffce6a)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+          <div class="w">设备级活动日志</div>
+          <div class="t2">逐条 exec / 文件操作的时间线，即将上线～现在可以先在「Relay 审计」看拨号事件。</div>
         </div>
       </div>
     </section>
+
+    <!-- tokens -->
+    <section class="view" data-view="tokens">
+      <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><circle cx="9" cy="15" r="4"/><path d="M12 12 21 3M17 7l2 2"/></svg>访问令牌</h1>
+      <p class="sub">令牌是控制端的小钥匙。明文只在签发那一下下出现一次，记得马上收好～</p>
+      <div class="tablecard" style="margin-top:18px"><table>
+        <thead><tr><th>id</th><th>标签</th><th>创建</th><th>过期</th><th>状态</th><th></th></tr></thead>
+        <tbody id="tokens"></tbody>
+      </table></div>
+      <div class="row">
+        <input id="tlabel" placeholder="给它起个名（laptop、ci…）">
+        <input id="tdays" type="number" min="0" placeholder="N 天后过期（0=永不）" style="max-width:220px">
+        <button class="btn" id="tissue">签发令牌</button>
+      </div>
+      <div class="slip" id="slip">
+        <span class="tag">只出现这一次</span>
+        <div class="cap">新令牌来啦，悄悄收好～</div>
+        <code id="tval"></code>
+        <div class="once">设为控制端的 WANCTL_TOKEN。离开这页就再也看不到咯。</div>
+        <div class="row"><button class="btn soft" id="tcopy">复制收好</button></div>
+      </div>
+    </section>
+
+    <!-- acl -->
+    <section class="view" data-view="acl">
+      <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11l2 2 4-4"/></svg>共享授权</h1>
+      <p class="sub">把某台设备的部分权限，分享给命名空间之外的小伙伴。</p>
+      <div class="tablecard" style="margin-top:18px"><table>
+        <thead><tr><th>id</th><th>设备</th><th>被授权命名空间</th><th>权限</th><th></th></tr></thead>
+        <tbody id="acl"></tbody>
+      </table></div>
+      <div class="row">
+        <input id="adev" placeholder="设备名"><input id="agrantee" placeholder="被授权命名空间">
+        <input id="aperms" placeholder="权限（exec,read,write）" style="max-width:220px">
+        <button class="btn soft" id="aadd">授权</button>
+      </div>
+    </section>
+
+    <!-- audit -->
+    <section class="view" data-view="audit">
+      <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Relay 审计</h1>
+      <p class="sub">中继只看得到元数据和拨号事件，密文从中间穿过去，它偷看不到内容～</p>
+      <div class="tablecard" style="margin-top:18px"><table>
+        <thead><tr><th>时间</th><th>设备</th><th>事件</th></tr></thead>
+        <tbody id="audit"></tbody>
+      </table></div>
+    </section>
   </main>
+
+  <footer>
+    <span class="k">wanctl</span> 穿越公网 · 端到端加密 · 你点头，设备才动
+    <span class="k">RELAY</span> ***REMOVED***.cn <span class="k">E2EE</span> X25519
+  </footer>
 </div>
+
+<div class="toast" id="toast"></div>
+
 <script>
 const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
-function esc(s){return(''+(s??'')).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
-function err(m){const e=$('#err');e.textContent=m;e.style.display='block'}
-function fmt(t){return t?new Date(t).toLocaleString():'—'}
-async function jget(u){const r=await fetch(u);if(!r.ok)throw new Error(await r.text());return r.json()}
-async function jpost(u,b){const r=await fetch(u,{method:'POST',body:JSON.stringify(b||{})});if(!r.ok)throw new Error(await r.text());return r}
+function esc(s){return(''+(s??'')).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function err(m){const e=$('#err');$('#errmsg').textContent=m;e.classList.add('show');clearTimeout(err._t);err._t=setTimeout(()=>e.classList.remove('show'),6000)}
+function ago(t){if(!t)return '从未';const d=new Date(t);if(isNaN(d))return esc(t);const s=(Date.now()-d.getTime())/1000;
+  if(s<0)return '刚刚';if(s<60)return '刚刚';if(s<3600)return Math.floor(s/60)+' 分钟前';if(s<86400)return Math.floor(s/3600)+' 小时前';
+  if(s<2592000)return Math.floor(s/86400)+' 天前';return d.toLocaleDateString()}
+function fmt(t){if(!t)return '—';const d=new Date(t);return isNaN(d)?esc(t):d.toLocaleString()}
+function isOnline(t){if(!t)return false;const d=new Date(t);return !isNaN(d)&&(Date.now()-d.getTime())<120000}
+async function jget(u){const r=await fetch(u);if(!r.ok)throw new Error(await r.text()||r.status);return r.json()}
+async function jpost(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});if(!r.ok)throw new Error(await r.text()||r.status);return r}
+function toast(kind,msg){const t=$('#toast');t.className='toast '+kind;
+  t.innerHTML=(kind==='ok'?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M18 6 6 18M6 6l12 12" stroke-linecap="round"/></svg>')+'<span>'+esc(msg)+'</span>';
+  requestAnimationFrame(()=>t.classList.add('show'));clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove('show'),2200)}
 
-let cur=null, es=null;
-function showPane(p){$$('[data-pane]').forEach(el=>el.classList.toggle('hide',el.dataset.pane!==p))}
-$$('nav a[data-sec]').forEach(a=>a.onclick=()=>{$$('nav a').forEach(x=>x.classList.remove('active'));a.classList.add('active');closeDevice();showPane(a.dataset.sec)});
-$('#crumb').onclick=()=>{closeDevice();$$('nav a').forEach(x=>x.classList.remove('active'));$('nav a[data-sec="devices"]').classList.add('active');showPane('devices');loadDevices()};
-$$('.tabs .t').forEach(t=>t.onclick=()=>{$$('.tabs .t').forEach(x=>x.classList.remove('active'));t.classList.add('active');$$('[data-tabpane]').forEach(el=>el.classList.toggle('hide',el.dataset.tabpane!==t.dataset.tab))});
+const faceOn='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="10" r="1.4" fill="currentColor"/><circle cx="15" cy="10" r="1.4" fill="currentColor"/><path d="M9 14c1.4 1.6 4.6 1.6 6 0" stroke-linecap="round"/></svg>';
+const faceOff='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 10h.01M16 10h.01M9 15c1-.8 5-.8 6 0" stroke-linecap="round"/></svg>';
 
-async function loadMe(){try{const m=await jget('/api/me');$('#me').innerHTML='命名空间 <b>'+esc(m.namespace)+'</b> · '+esc(m.identity)}catch(e){err('未登录:'+e.message)}}
-async function loadDevices(){const d=await jget('/api/devices');const xs=d.devices||[];const tb=$('#devices tbody');
-  tb.innerHTML=xs.length?xs.map(x=>{const on=x.last_seen&&(Date.now()-new Date(x.last_seen))<120000;
-    return '<tr class="devrow" data-dev="'+esc(x.name)+'"><td>'+esc(x.name)+'</td><td><span class="dot '+(on?'on':'off')+'"></span>'+(on?'在线':'离线')+'</td><td>'+esc((x.fingerprint||'').slice(0,22))+'</td><td>'+fmt(x.last_seen)+'</td><td>&#8594;</td></tr>'}).join(''):'<tr><td colspan="5" class="empty">暂无设备。</td></tr>';
-  $$('#devices .devrow').forEach(r=>r.onclick=()=>openDevice(r.dataset.dev));}
-async function loadTokens(){const d=await jget('/api/tokens');const ts=d.tokens||[];$('#tokens tbody').innerHTML=ts.length?ts.map(t=>{const rev=!!t.revoked_at;return '<tr style="'+(rev?'opacity:.5':'')+'"><td>'+t.id+'</td><td>'+esc(t.label)+'</td><td>'+fmt(t.created_at)+'</td><td>'+(t.expires_at?fmt(t.expires_at):'永不')+'</td><td>'+(rev?'已吊销':'有效')+'</td><td>'+(rev?'':'<button class="rm" onclick="revTok('+t.id+')">吊销</button>')+'</td></tr>'}).join(''):'<tr><td colspan="6" class="empty">暂无令牌。</td></tr>'}
-async function loadACL(){const d=await jget('/api/acl');const xs=d.acl||[];$('#acl tbody').innerHTML=xs.length?xs.map(x=>'<tr><td>'+x.id+'</td><td>'+esc(x.device)+'</td><td>'+esc(x.grantee)+'</td><td>'+esc(x.perms)+'</td><td><button class="rm" onclick="revACL('+x.id+')">吊销</button></td></tr>').join(''):'<tr><td colspan="5" class="empty">暂无授权。</td></tr>'}
-async function loadAudit(){const d=await jget('/api/audit');const xs=d.audit||[];$('#audit tbody').innerHTML=xs.length?xs.map(x=>'<tr><td>'+fmt(x.ts)+'</td><td>'+esc(x.device)+'</td><td>'+esc(x.event)+'</td></tr>').join(''):'<tr><td colspan="3" class="empty">暂无活动。</td></tr>'}
-window.revTok=async id=>{await jpost('/api/tokens/revoke',{id});loadTokens()};
-window.revACL=async id=>{await jpost('/api/acl/revoke',{id});loadACL()};
-$('#tissue').onclick=async()=>{try{const r=await jpost('/api/tokens',{label:$('#tlabel').value.trim(),days:parseInt($('#tdays').value||'0',10)||0});const j=await r.json();$('#tokenval').textContent=j.token;$('#tokenbox').style.display='block';$('#tlabel').value='';$('#tdays').value='';loadTokens()}catch(e){err(e.message)}};
-$('#tcopy').onclick=()=>navigator.clipboard&&navigator.clipboard.writeText($('#tokenval').textContent);
-$('#aadd').onclick=async()=>{try{await jpost('/api/acl',{device:$('#adev').value.trim(),grantee:$('#agrantee').value.trim(),perms:$('#aperms').value.trim()});$('#adev').value=$('#agrantee').value=$('#aperms').value='';loadACL()}catch(e){err(e.message)}};
+/* ---- nav ---- */
+let cur=null, es=null, curMode='normal';
+function showView(v){$$('.view').forEach(x=>x.classList.toggle('show',x.dataset.view===v));}
+$$('nav button').forEach(b=>b.onclick=()=>{
+  $$('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');closeDevice();
+  const s=b.dataset.sec;showView(s);
+  if(s==='devices')loadOverview();if(s==='tokens')loadTokens();if(s==='acl')loadACL();if(s==='audit')loadAudit();
+});
 
-function openDevice(name){cur=name;showPane('device');$('#dname').textContent=name;renderConsole();
-  if(es)es.close();es=new EventSource('/api/devices/events?device='+encodeURIComponent(name));
-  es.onmessage=ev=>{try{applyState(JSON.parse(ev.data))}catch(_){}};loadDeviceLogs();}
+/* ---- overview (devices + stats) ---- */
+async function loadOverview(){
+  try{
+    const d=await jget('/api/devices');const xs=d.devices||[];
+    const on=xs.filter(x=>isOnline(x.last_seen)).length;
+    $('#grid').innerHTML=xs.length?xs.map((x,i)=>{
+      const o=isOnline(x.last_seen);
+      return `<div class="devcard" data-dev="${esc(x.name)}">
+        <div class="top">
+          <div class="face ${o?'on':'off'}">${o?faceOn:faceOff}</div>
+          <div style="flex:1"><div class="nm">${esc(x.name)}</div><div class="fp">${esc((x.fingerprint||'—').slice(0,26))}</div></div>
+          <span class="pill ${o?'on':'off'}"><span class="d"></span>${o?'在线':'离线'}</span>
+        </div>
+        <div class="meta"><span class="seen">最近 · ${ago(x.last_seen)}</span>
+          <span class="enter">进去看看<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span></div>
+      </div>`;}).join(''):'<div class="empty">还没有设备～用 relay 的 install.sh 把第一台接进来吧。</div>';
+    $$('#grid .devcard').forEach(c=>c.onclick=()=>openDevice(c.dataset.dev));
+    $('#stDev').textContent=xs.length;$('#stOn').textContent=on;
+  }catch(e){err('设备列表加载失败：'+e.message);$('#grid').innerHTML='<div class="empty">加载失败，刷新页面再试试～</div>';}
+  // stats that need other endpoints, best-effort
+  jget('/api/tokens').then(d=>{$('#stTok').textContent=(d.tokens||[]).filter(t=>!t.revoked_at).length;}).catch(()=>{});
+  jget('/api/acl').then(d=>{$('#stAcl').textContent=(d.acl||[]).length;}).catch(()=>{});
+}
+
+/* ---- device drill ---- */
+function openDevice(name){
+  cur=name;$('#dName').textContent=name;showView('device');selTab('approve');
+  $('#pending').innerHTML='<div class="empty">连接设备中…</div>';
+  renderConsole();
+  if(es)es.close();
+  es=new EventSource('/api/devices/events?device='+encodeURIComponent(name));
+  es.onmessage=ev=>{try{applyState(JSON.parse(ev.data))}catch(_){ }};
+  es.onerror=()=>{/* SSE will auto-retry; console fetch already seeded state */};
+}
 function closeDevice(){if(es){es.close();es=null}cur=null}
-async function renderConsole(){try{applyState(await jget('/api/devices/console?device='+encodeURIComponent(cur)))}catch(e){err(e.message)}}
-function applyState(st){if(!st||!st.mode)return;
-  $('#dmode').textContent='模式:'+st.mode;$('#dmode').className='pill '+st.mode;
-  $('#modePill').textContent=st.mode;$('#modePill').className='pill '+st.mode;
-  $('#bypassWarn').style.display=st.mode==='bypass'?'block':'none';
-  const pend=st.pending||[];$('#pending').innerHTML=pend.length?pend.map(p=>{const det=p.kind==='exec'?esc(p.cmd):esc(p.path);
-    return '<div class="req"><span class="kind k-'+p.kind+'">'+p.kind+'</span> <span class="sub">来自 '+esc((p.peer||'').slice(0,18))+'</span><div class="detail">'+det+'</div>'+(p.cwd?'<div class="sub">cwd: '+esc(p.cwd)+'</div>':'')+'<div class="btns"><button class="b-y" onclick="decide(\''+p.id+'\',\'y\')">允许一次</button><button onclick="decide(\''+p.id+'\',\'a\')">允许+记住本目录</button><button onclick="decide(\''+p.id+'\',\'g\')">允许+全局记住</button><button class="b-n" onclick="decide(\''+p.id+'\',\'n\')">拒绝</button></div></div>'}).join(''):'<div class="empty">暂无待审批请求。</div>';
-  const rules=st.rules||[];$('#rules tbody').innerHTML=rules.length?rules.map((r,i)=>{const sc=r.scope==='dir'?(r.kind==='exec'?'dir:'+esc(r.dir):'dir'):'global';return '<tr><td>'+i+'</td><td>'+r.kind+'</td><td>'+esc(r.pattern)+'</td><td>'+sc+'</td><td><button class="rm" onclick="rmRule('+i+')">删除</button></td></tr>'}).join(''):'<tr><td colspan="5" class="empty">暂无规则。</td></tr>';}
-window.decide=async(id,v)=>{try{await jpost('/api/devices/decide',{device:cur,id,verdict:v});renderConsole()}catch(e){err(e.message)}};
-window.rmRule=async i=>{try{await jpost('/api/devices/rules',{device:cur,op:'rm',index:i});renderConsole()}catch(e){err(e.message)}};
-$('#radd').onclick=async()=>{const kind=$('#rk').value,pattern=$('#rp').value.trim();if(!pattern)return;const scope=kind!=='exec'?'dir':'global';try{await jpost('/api/devices/rules',{device:cur,op:'add',kind,pattern,scope});$('#rp').value='';renderConsole()}catch(e){err(e.message)}};
-$('#modeToggle').onclick=async()=>{const next=$('#modePill').textContent==='bypass'?'normal':'bypass';if(next==='bypass'&&!confirm('启用 BYPASS?所有命令/文件操作将自动放行。'))return;try{await jpost('/api/devices/mode',{device:cur,mode:next});renderConsole()}catch(e){err(e.message)}};
-async function loadDeviceLogs(){/* 活动日志:本期复用门户审计;设备级日志拉取留待后续(KindLogs over console) */}
+$('#back').onclick=()=>{closeDevice();$$('nav button').forEach(x=>x.classList.toggle('on',x.dataset.sec==='devices'));showView('devices');loadOverview();};
+function selTab(t){$$('#tabs .t').forEach(x=>x.classList.toggle('on',x.dataset.tab===t));
+  $$('[data-pane]').forEach(p=>p.classList.toggle('show',p.dataset.pane===t));}
+$$('#tabs .t').forEach(t=>t.onclick=()=>selTab(t.dataset.tab));
 
-loadMe();loadDevices();
-// 切换到团队各页时按需加载
-$$('nav a[data-sec]').forEach(a=>a.addEventListener('click',()=>{const s=a.dataset.sec;if(s==='tokens')loadTokens();if(s==='acl')loadACL();if(s==='audit')loadAudit()}));
+async function renderConsole(){try{applyState(await jget('/api/devices/console?device='+encodeURIComponent(cur)))}catch(e){err('连接设备失败：'+e.message);$('#pending').innerHTML='<div class="empty">连不上这台设备，可能它不在线。</div>'}}
+
+const kindLabel={exec:'命令',read:'读取文件',write:'写入文件'};
+const DANGER=/^(rm|rmdir|dd|mkfs\S*|shutdown|reboot|halt|poweroff|kill|killall|pkill|chmod|chown|chgrp|truncate|format|del|fdisk|wipefs)$/;
+function hlCmd(c){c=''+(c||'');const sp=c.indexOf(' ');const head=sp<0?c:c.slice(0,sp);const rest=sp<0?'':c.slice(sp);
+  return DANGER.test(head)?('<span class="rm">'+esc(head)+'</span>'+esc(rest)):esc(c);}
+function applyState(st){
+  if(!st||!st.mode)return;
+  curMode=st.mode;
+  // mode
+  const by=st.mode==='bypass';
+  const tagTxt=by?'放飞 / BYPASS':'乖乖 / NORMAL';
+  $('#dMtag').className='mtag '+(by?'bypass':'normal');$('#dMtag').textContent=tagTxt;
+  $('#mTag').className='mtag '+(by?'bypass':'normal');$('#mTag').textContent=tagTxt;
+  $('#mTxt').innerHTML=by?'<b>放飞模式</b>：所有操作都自动放行，不再问你':'<b>乖乖模式</b>：没命中规则就来问你，逐条点头';
+  $('#toggle').classList.toggle('bypass',by);$('#warnbox').classList.toggle('show',by);
+  // face: device is reachable since console answered → treat as online
+  $('#dFace').className='face on';$('#dFace').innerHTML=faceOn;
+  // pending
+  const pend=st.pending||[];
+  const badge=$('#pBadge');badge.textContent=pend.length;badge.classList.toggle('show',pend.length>0);
+  $('#pending').innerHTML=pend.length?pend.map(p=>{
+    const isExec=p.kind==='exec';
+    const detail=isExec?hlCmd(p.cmd):esc(p.path);
+    const impact=isExec?'执行命令 · 谨慎放行':(p.kind==='write'?'写入 / 删除文件 · 删了就没啦':'读取文件内容');
+    return `<div class="note" data-pid="${esc(p.id)}">
+      <div class="ribbon"><span class="warnico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 9v4M12 17h.01M10.3 4 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0Z"/></svg></span>
+        <span class="txt">有一个高危操作在等你点头！</span><span class="req">${esc((p.id||'').slice(0,8))} · ${kindLabel[p.kind]||p.kind}</span></div>
+      <div class="body">
+        <div class="stmt">设备 <b>${esc(cur)}</b> 想${isExec?'执行下面这条命令':'操作下面这个文件'}，先问问你可不可以～</div>
+        <div class="term"><div class="dots"><i></i><i></i><i></i></div><div class="cmd">${detail||'<span style=\"color:var(--ink-3)\">（空）</span>'}</div></div>
+        <div class="facts">
+          <div class="fact"><div class="k">来源 from</div><div class="v">${esc((p.peer||'—').slice(0,26))}</div></div>
+          ${p.cwd?`<div class="fact"><div class="k">工作目录 cwd</div><div class="v">${esc(p.cwd)}</div></div>`:''}
+          <div class="fact"><div class="k">影响 impact</div><div class="v warn">${impact}</div></div>
+        </div>
+        <div class="decide">
+          <button class="candy allow" data-v="y"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"/></svg>允许一次</button>
+          <button class="candy allow2" data-v="a">记住本目录</button>
+          <button class="candy allow3" data-v="g">全局都行</button>
+          <button class="candy deny" data-v="n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M18 6 6 18M6 6l12 12"/></svg>不行，拒绝</button>
+        </div>
+      </div>
+    </div>`;}).join(''):
+    `<div class="blank"><div class="em"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="10" r="1.2" fill="currentColor"/><circle cx="15" cy="10" r="1.2" fill="currentColor"/><path d="M9 14c1.4 1.6 4.6 1.6 6 0" stroke-linecap="round"/></svg></div><div class="w">现在没有待审批～</div><div class="t2">乖乖的，有新的高危请求会自动冒出来。</div></div>`;
+  $$('#pending .note').forEach(n=>{
+    n.querySelectorAll('.candy').forEach(b=>b.onclick=()=>decide(n.dataset.pid,b.dataset.v,n));
+  });
+  // rules
+  const rules=st.rules||[];
+  $('#rules').innerHTML=rules.length?rules.map((r,i)=>{
+    const sc=r.scope==='dir'?('dir:'+esc(r.dir||'')):'global';
+    return `<tr><td>${i}</td><td>${esc(r.kind)}</td><td>${esc(r.pattern)}</td><td>${sc}</td><td style="text-align:right"><button class="rmx" data-i="${i}">删掉</button></td></tr>`;
+  }).join(''):'<tr><td colspan="5" class="empty">还没有规则，每条都来问你～</td></tr>';
+  $$('#rules .rmx').forEach(b=>b.onclick=()=>rmRule(+b.dataset.i));
+}
+
+async function decide(id,v,noteEl){
+  try{
+    await jpost('/api/devices/decide',{device:cur,id,verdict:v});
+    if(noteEl)noteEl.classList.add('gone');
+    toast(v==='n'?'no':'ok', v==='n'?'已拒绝啦':'好的，放行～');
+    setTimeout(renderConsole,360);
+  }catch(e){err('裁决失败：'+e.message)}
+}
+async function rmRule(i){try{await jpost('/api/devices/rules',{device:cur,op:'rm',index:i});renderConsole()}catch(e){err('删除规则失败：'+e.message)}}
+$('#radd').onclick=async()=>{
+  const kind=$('#rk').value,pattern=$('#rp').value.trim();if(!pattern)return;
+  const scope=kind!=='exec'?'dir':'global';
+  try{await jpost('/api/devices/rules',{device:cur,op:'add',kind,pattern,scope});$('#rp').value='';renderConsole()}catch(e){err('加规则失败：'+e.message)}
+};
+$('#toggle').onclick=async()=>{
+  const next=curMode==='bypass'?'normal':'bypass';
+  if(next==='bypass'&&!confirm('切到「放飞」(BYPASS)？所有命令和文件操作都会自动放行、不再问你哦。'))return;
+  try{await jpost('/api/devices/mode',{device:cur,mode:next});renderConsole()}catch(e){err('切换模式失败：'+e.message)}
+};
+
+/* ---- tokens ---- */
+async function loadTokens(){
+  try{const d=await jget('/api/tokens');const ts=d.tokens||[];
+    $('#tokens').innerHTML=ts.length?ts.map(t=>{const rev=!!t.revoked_at;
+      return `<tr style="${rev?'opacity:.45':''}"><td>${t.id}</td><td>${esc(t.label)}</td><td>${fmt(t.created_at)}</td><td>${t.expires_at?fmt(t.expires_at):'永不'}</td><td>${rev?'已吊销':'有效'}</td><td style="text-align:right">${rev?'':`<button class="rmx" data-i="${t.id}">吊销</button>`}</td></tr>`;
+    }).join(''):'<tr><td colspan="6" class="empty">还没有令牌，签发一个吧～</td></tr>';
+    $$('#tokens .rmx').forEach(b=>b.onclick=()=>revTok(b.dataset.i));
+  }catch(e){err('令牌加载失败：'+e.message)}
+}
+async function revTok(id){try{await jpost('/api/tokens/revoke',{id:Number(id)});loadTokens()}catch(e){err('吊销失败：'+e.message)}}
+$('#tissue').onclick=async()=>{
+  try{const r=await jpost('/api/tokens',{label:$('#tlabel').value.trim(),days:parseInt($('#tdays').value||'0',10)||0});
+    const j=await r.json();$('#tval').textContent=j.token;$('#slip').classList.add('show');
+    $('#tlabel').value='';$('#tdays').value='';loadTokens();
+  }catch(e){err('签发失败：'+e.message)}
+};
+$('#tcopy').onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText($('#tval').textContent);$('#tcopy').textContent='收好啦～';setTimeout(()=>$('#tcopy').textContent='复制收好',1400)};
+
+/* ---- acl ---- */
+async function loadACL(){
+  try{const d=await jget('/api/acl');const xs=d.acl||[];
+    $('#acl').innerHTML=xs.length?xs.map(a=>`<tr><td>${a.id}</td><td>${esc(a.device)}</td><td>${esc(a.grantee)}</td><td>${esc(a.perms)}</td><td style="text-align:right"><button class="rmx" data-i="${a.id}">吊销</button></td></tr>`).join(''):'<tr><td colspan="5" class="empty">还没有共享授权～</td></tr>';
+    $$('#acl .rmx').forEach(b=>b.onclick=()=>revACL(b.dataset.i));
+  }catch(e){err('授权列表加载失败：'+e.message)}
+}
+async function revACL(id){try{await jpost('/api/acl/revoke',{id:Number(id)});loadACL()}catch(e){err('吊销失败：'+e.message)}}
+$('#aadd').onclick=async()=>{
+  const device=$('#adev').value.trim(),grantee=$('#agrantee').value.trim(),perms=$('#aperms').value.trim();
+  if(!device||!grantee){err('设备名和被授权命名空间都要填哦～');return}
+  try{await jpost('/api/acl',{device,grantee,perms});$('#adev').value=$('#agrantee').value=$('#aperms').value='';loadACL()}catch(e){err('授权失败：'+e.message)}
+};
+
+/* ---- audit ---- */
+async function loadAudit(){
+  try{const d=await jget('/api/audit');const xs=d.audit||[];
+    $('#audit').innerHTML=xs.length?xs.map(a=>`<tr><td>${fmt(a.ts)}</td><td>${esc(a.device)}</td><td>${esc(a.event)}</td></tr>`).join(''):'<tr><td colspan="3" class="empty">还没有活动～</td></tr>';
+  }catch(e){err('审计加载失败：'+e.message)}
+}
+
+/* ---- me + boot ---- */
+async function loadMe(){try{const m=await jget('/api/me');$('#ns').textContent=m.namespace||'—';$('#fp').textContent=m.identity||'';}catch(e){$('#fp').textContent='未登录';err('未登录或会话失效：'+e.message)}}
+loadMe();loadOverview();
 </script>
 </body>
 </html>
