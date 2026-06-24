@@ -456,6 +456,27 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 		a.console.SetMode(policy.Mode(msg.ConsoleMode))
 		return protocol.Message{Kind: protocol.KindModeSet}
 
+	case protocol.KindLogs:
+		if a.log == nil {
+			return protocol.Message{Kind: protocol.KindLogs, Data: json.RawMessage("[]")}
+		}
+		f := eventlog.Filter{Type: msg.LogType, Grep: msg.Grep, Limit: int(msg.Limit)}
+		if msg.Since != "" {
+			if ts, err := time.Parse(time.RFC3339, msg.Since); err == nil {
+				f.Since = ts
+			}
+		}
+		events, err := a.log.Read(f)
+		if err != nil {
+			errJSON, _ := json.Marshal(err.Error())
+			return protocol.Message{Kind: protocol.KindError, Data: json.RawMessage(errJSON)}
+		}
+		if events == nil {
+			events = []eventlog.Event{}
+		}
+		data, _ := json.Marshal(events)
+		return protocol.Message{Kind: protocol.KindLogs, Data: json.RawMessage(data)}
+
 	default:
 		return protocol.Message{Kind: protocol.KindError, Data: json.RawMessage(`"unknown RPC kind"`)}
 	}

@@ -114,6 +114,20 @@ func (d *deviceConn) setMode(mode string) error {
 	return err
 }
 
+// logs requests the device's event-log lines over the console session. The
+// returned RawMessage is a JSON array of eventlog.Event, forwarded verbatim to
+// the portal SPA.
+func (d *deviceConn) logs(logType, grep, since string, limit int) (json.RawMessage, error) {
+	m, err := d.rpc(protocol.Message{Kind: protocol.KindLogs, LogType: logType, Grep: grep, Since: since, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	if len(m.Data) == 0 {
+		return json.RawMessage("[]"), nil
+	}
+	return m.Data, nil
+}
+
 func (d *deviceConn) notifs() <-chan console.State { return d.notifCh }
 
 // alive reports whether the connection is still usable (its read loop has not

@@ -87,6 +87,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices/decide", s.handleDeviceDecide)
 	mux.HandleFunc("/api/devices/rules", s.handleDeviceRules)
 	mux.HandleFunc("/api/devices/mode", s.handleDeviceMode)
+	mux.HandleFunc("/api/devices/logs", s.handleDeviceLogs)
 	mux.HandleFunc("/api/devices/events", s.handleDeviceEvents)
 	return mux
 }
@@ -423,6 +424,32 @@ func (s *Server) handleDeviceMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleDeviceLogs pulls the device's JSONL activity log (exec/file events with
+// decision and exit code) over the console session and forwards it as
+// {"logs":[...]} for the SPA's activity timeline.
+func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request) {
+	device := r.URL.Query().Get("device")
+	ns, ok := s.requireDevice(w, r, device)
+	if !ok {
+		return
+	}
+	d, err := s.deviceConnFor(r.Context(), ns, device)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	raw, err := d.logs(r.URL.Query().Get("type"), r.URL.Query().Get("grep"), r.URL.Query().Get("since"), 200)
+	if err != nil {
+		s.dropConn(ns, device)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"logs":`))
+	w.Write(raw)
+	w.Write([]byte(`}`))
 }
 
 func (s *Server) handleDeviceEvents(w http.ResponseWriter, r *http.Request) {

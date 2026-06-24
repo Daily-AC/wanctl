@@ -213,3 +213,47 @@ func TestPumpApprovalNotifsStopsOnCancel(t *testing.T) {
 		t.Fatal("pump did not exit on context cancel (goroutine leak)")
 	}
 }
+
+// TestConsoleRPCLogs proves the console session serves the device event log so
+// the portal's activity timeline can show what ran, whether it was allowed, and
+// the exit code.
+func TestConsoleRPCLogs(t *testing.T) {
+	a := newTestAgent(t)
+	logger, err := eventlog.Open("events.jsonl")
+	if err != nil {
+		t.Fatalf("eventlog.Open: %v", err)
+	}
+	a.log = logger
+	exit := 0
+	if err := logger.Append(eventlog.Event{Type: "exec", Detail: "echo hi", Decision: "approved", Exit: &exit}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	resp := a.handleConsoleRPC(protocol.Message{Kind: protocol.KindLogs})
+	if resp.Kind != protocol.KindLogs {
+		t.Fatalf("want kind %q, got %q", protocol.KindLogs, resp.Kind)
+	}
+	var events []eventlog.Event
+	if err := json.Unmarshal(resp.Data, &events); err != nil {
+		t.Fatalf("Data not []Event: %v (%s)", err, resp.Data)
+	}
+	if len(events) != 1 || events[0].Detail != "echo hi" || events[0].Decision != "approved" {
+		t.Fatalf("unexpected events: %+v", events)
+	}
+}
+
+// TestConsoleRPCLogsNilLogger proves a session without a wired logger returns an
+// empty JSON array (never null, never a panic).
+func TestConsoleRPCLogsNilLogger(t *testing.T) {
+	a := newTestAgent(t) // a.log == nil
+	resp := a.handleConsoleRPC(protocol.Message{Kind: protocol.KindLogs})
+	if resp.Kind != protocol.KindLogs {
+		t.Fatalf("kind = %q", resp.Kind)
+	}
+	var events []eventlog.Event
+	if err := json.Unmarshal(resp.Data, &events); err != nil {
+		t.Fatalf("Data not []Event: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("want empty, got %d", len(events))
+	}
+}
