@@ -64,6 +64,7 @@ func cmdUpdate(ctx context.Context) error {
 	tmp = "" // consumed by Rename
 
 	fmt.Printf("✓ 已替换 %s\n", self)
+	pruneStaleCopies(self)
 	if wasRunning {
 		fmt.Println("正在重启后台 agent …")
 		if err := cmdStart(); err != nil {
@@ -71,6 +72,44 @@ func cmdUpdate(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// pruneStaleCopies walks $PATH and deletes any *other* wanctl binary it finds,
+// so a bare `wanctl` in the user's shell always resolves to the freshly-updated
+// copy. Failures are reported as hints (most commonly permission denied — the
+// other copy is in /usr/local/bin and we're running from ~/.local/bin or vice
+// versa). We never `sudo` automatically; we just tell the user.
+func pruneStaleCopies(self string) {
+	binName := "wanctl"
+	if runtime.GOOS == "windows" {
+		binName = "wanctl.exe"
+	}
+	selfReal, _ := filepath.EvalSymlinks(self)
+	if selfReal == "" {
+		selfReal = self
+	}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, binName)
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		candReal, _ := filepath.EvalSymlinks(candidate)
+		if candReal == "" {
+			candReal = candidate
+		}
+		if candReal == selfReal {
+			continue
+		}
+		if err := os.Remove(candidate); err == nil {
+			fmt.Printf("清理旧版: %s\n", candidate)
+		} else {
+			fmt.Fprintf(os.Stderr, "提示: 还有一个 wanctl 在 %s 删不掉 (%v)。\n  手动跑: sudo rm %s\n  否则 bare `wanctl` 可能跑到旧版。\n", candidate, err, candidate)
+		}
+	}
 }
 
 // downloadToTemp streams url to a *.tmp file in dir (so the eventual Rename to

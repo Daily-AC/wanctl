@@ -60,7 +60,8 @@ const installScript = `#!/bin/sh
 # wanctl agent installer.  Usage:
 #   curl -fsSL %[1]s/install.sh | WANCTL_TOKEN=<token> sh
 # Optional env: WANCTL_NAME (default hostname), WANCTL_MODE (normal|bypass),
-#   WANCTL_BIN (install path), WANCTL_INSTALL_ONLY=1 (don't run).
+#   WANCTL_BIN (install path; default: existing 'wanctl' in PATH, else
+#   /usr/local/bin/wanctl), WANCTL_INSTALL_ONLY=1 (don't run).
 set -eu
 RELAY="%[1]s"
 PORTAL_PK="%[2]s"
@@ -75,7 +76,15 @@ echo "downloading ${BIN} from ${RELAY}/dl ..."
 curl -fsSL "${RELAY}/dl/${BIN}" -o "$TMP"
 chmod +x "$TMP"
 
-DEST="${WANCTL_BIN:-/usr/local/bin/wanctl}"
+# Decide install destination. Reinstalls should land at the existing binary's
+# path so 'wanctl' (bare) keeps pointing at the upgraded version. First-time
+# installs default to /usr/local/bin/wanctl, falling back to ~/.local/bin if
+# we can't get sudo for it.
+EXISTING=$(command -v wanctl 2>/dev/null || true)
+DEST="${WANCTL_BIN:-${EXISTING:-/usr/local/bin/wanctl}}"
+DEST_DIR=$(dirname "$DEST")
+mkdir -p "$DEST_DIR" 2>/dev/null || (command -v sudo >/dev/null 2>&1 && sudo mkdir -p "$DEST_DIR") || true
+
 if install -m755 "$TMP" "$DEST" 2>/dev/null; then :;
 elif command -v sudo >/dev/null 2>&1 && sudo install -m755 "$TMP" "$DEST" 2>/dev/null; then :;
 else
@@ -84,7 +93,44 @@ else
   DEST="$HOME/.local/bin/wanctl"
 fi
 rm -f "$TMP"
+DEST_DIR=$(dirname "$DEST")
+DEST_DIR_ABS=$(cd "$DEST_DIR" && pwd -P)
+DEST="$DEST_DIR_ABS/$(basename "$DEST")"
 echo "installed: $DEST"
+
+# Clean up duplicate wanctl binaries elsewhere in PATH so bare 'wanctl' always
+# resolves to the freshly-installed copy. Old installs left over from an earlier
+# fallback (~/.local/bin vs /usr/local/bin) are exactly the trap this prevents.
+oldifs=$IFS
+IFS=':'
+for P in $PATH; do
+  IFS=$oldifs
+  [ -z "$P" ] && { IFS=':'; continue; }
+  CAND="$P/wanctl"
+  [ -e "$CAND" ] || { IFS=':'; continue; }
+  PABS=$(cd "$P" 2>/dev/null && pwd -P) || { IFS=':'; continue; }
+  if [ "$PABS/wanctl" = "$DEST" ]; then IFS=':'; continue; fi
+  if rm -f "$CAND" 2>/dev/null; then
+    echo "清理旧版: $CAND"
+  elif command -v sudo >/dev/null 2>&1 && sudo rm -f "$CAND" 2>/dev/null; then
+    echo "清理旧版 (sudo): $CAND"
+  else
+    echo "提示: 旧版仍在 $CAND, 请手动 rm 否则 'wanctl' 可能跑到旧的"
+  fi
+  IFS=':'
+done
+IFS=$oldifs
+
+# PATH hint: if $DEST_DIR isn't in PATH, the user's shell won't find 'wanctl'.
+case ":$PATH:" in
+  *":$DEST_DIR:"*) ;;
+  *)
+    echo ""
+    echo "提示: $DEST_DIR 不在你的 PATH 里。把这行加进 shell 配置 (~/.zshrc 或 ~/.bashrc):"
+    echo "    export PATH=\"$DEST_DIR:\$PATH\""
+    echo "然后 'source ~/.zshrc' 或重开终端，'wanctl' 才能直接被找到。"
+    ;;
+esac
 
 [ -n "$PORTAL_PK" ] && export WANCTL_PORTAL_PK="$PORTAL_PK"
 
@@ -105,10 +151,10 @@ fi
 
 # Human path: no token needed. Just run 'wanctl' to log in via the browser.
 echo ""
-echo "✓ 已安装: $DEST"
+echo "已安装: $DEST"
 echo "下一步: 运行下面这条完成飞书授权并把本机变成可远程控制的设备 ——"
 echo ""
-echo "    $DEST"
+echo "    wanctl"
 echo ""
-echo "(授权后服务转入后台; 停止用 '$DEST stop')"
+echo "(授权后服务转入后台; 停止用 'wanctl stop')"
 `
