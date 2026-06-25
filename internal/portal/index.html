@@ -220,6 +220,16 @@
   .doc code{background:#f3ede2;border-radius:6px;padding:1px 6px;font-family:ui-monospace,monospace;font-size:12.5px;color:#9a5a26}
   .dlist{margin:8px 0 0;padding-left:18px;color:#5f5950;font-size:14px;line-height:1.95}
 
+  /* pair-confirm modal: shown when an unknown controller asks to be trusted via the AI-surfaced URL */
+  .modal.pair{max-width:460px}
+  .pair-meta{margin:14px 0 4px;border:1px solid var(--line,#f3e4d3);border-radius:14px;background:var(--cream,#fff6ea);padding:6px 14px}
+  .pair-row{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px dashed var(--line-2,#ecd9c4);font-size:13.5px}
+  .pair-row:last-child{border-bottom:none}
+  .pair-row label{flex:0 0 60px;color:var(--ink-2,#a08977);font-size:12.5px;font-weight:600}
+  .pair-row span,.pair-row code{flex:1;min-width:0;color:var(--ink,#6b5446);word-break:break-all}
+  .pair-row code{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px;color:var(--caramel,#c98f5d);background:#fff;border-radius:8px;padding:5px 10px}
+  .modal.pair .m-msg{font-size:13px}
+
   /* docs (DB-backed, DeepSeek-style sidebar) */
   .docpage{display:grid;grid-template-columns:240px 1fr;gap:22px;margin-top:18px;align-items:start}
   .docnav{background:var(--card,#fffdf9);border:1px solid var(--line,#f3e4d3);border-radius:18px;padding:14px;position:sticky;top:14px}
@@ -547,6 +557,24 @@
   </div>
 </div>
 
+<div class="modal-ov" id="pairModal">
+  <div class="modal pair">
+    <div class="m-ico cute"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 1 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-4Z" stroke-linejoin="round"/><path d="m9 12 2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="m-title">控制端想连进来</div>
+    <div class="m-msg" id="prMsg">下面这位控制端第一次想控制你的设备，确认是你自己（或你信任的 AI）吗？</div>
+    <div class="pair-meta">
+      <div class="pair-row"><label>设备</label><span id="prDevice"></span></div>
+      <div class="pair-row"><label>控制端</label><span id="prName"></span></div>
+      <div class="pair-row"><label>它说</label><span id="prLabel"></span></div>
+      <div class="pair-row"><label>指纹</label><code id="prFP"></code></div>
+    </div>
+    <div class="m-btns">
+      <button class="btn soft" id="prDeny">拒绝</button>
+      <button class="btn" id="prTrust">信任并继续</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
 function esc(s){return(''+(s??'')).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
@@ -570,11 +598,29 @@ let cur=null, pollGen=0, curMode='normal';
 function showView(v){$$('.view').forEach(x=>x.classList.toggle('show',x.dataset.view===v));}
 $$('.doc pre[data-copy]').forEach(p=>p.onclick=()=>{if(navigator.clipboard)navigator.clipboard.writeText(p.textContent.trim());toast('ok','已复制到剪贴板');});
 $$('[data-goto]').forEach(b=>b.onclick=()=>{const t=document.querySelector('nav button[data-sec="'+b.dataset.goto+'"]');if(t)t.click();});
-$$('nav button').forEach(b=>b.onclick=()=>{
-  $$('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');closeDevice();
-  const s=b.dataset.sec;showView(s);
-  if(s==='devices')loadOverview();if(s==='tokens')loadTokens();if(s==='acl')loadACL();if(s==='audit')loadAudit();if(s==='docs')loadDocs();
-});
+$$('nav button').forEach(b=>b.onclick=()=>goTo(b.dataset.sec));
+
+// applyView switches the currently-visible section (and triggers its loader)
+// without touching the URL — used both by user clicks (via goTo) and by the
+// hash router (route) on history navigation.
+function applyView(s){
+  $$('nav button').forEach(x=>x.classList.toggle('on',x.dataset.sec===s));
+  closeDevice();
+  showView(s);
+  if(s==='devices')loadOverview();
+  else if(s==='tokens')loadTokens();
+  else if(s==='acl')loadACL();
+  else if(s==='audit')loadAudit();
+  else if(s==='docs')loadDocs();
+}
+
+// goTo is the user-gesture entry point: switch view AND push a hash so back /
+// forward / refresh / shareable links all work.
+function goTo(s){
+  const h='#'+s;
+  if(location.hash!==h)history.pushState(null,'',h);
+  applyView(s);
+}
 
 /* ---- overview (devices + stats) ---- */
 async function loadOverview(){
@@ -603,6 +649,8 @@ async function loadOverview(){
 /* ---- device drill ---- */
 function openDevice(name){
   cur=name;$('#dName').textContent=name;showView('device');selTab('approve');
+  const h='#device/'+encodeURIComponent(name);
+  if(location.hash!==h)history.pushState(null,'',h);
   $('#pending').innerHTML='<div class="empty">连接设备中…</div>';
   renderConsole();
   pollConsole(name);
@@ -625,7 +673,7 @@ async function pollConsole(name){
   }
 }
 function closeDevice(){pollGen++;cur=null}
-$('#back').onclick=()=>{closeDevice();$$('nav button').forEach(x=>x.classList.toggle('on',x.dataset.sec==='devices'));showView('devices');loadOverview();};
+$('#back').onclick=()=>goTo('devices');
 function selTab(t){$$('#tabs .t').forEach(x=>x.classList.toggle('on',x.dataset.tab===t));
   $$('[data-pane]').forEach(p=>p.classList.toggle('show',p.dataset.pane===t));
   if(t==='log')loadDeviceLogs();}
@@ -733,19 +781,21 @@ async function pairDecide(fp,v,noteEl){
   }catch(e){err('配对失败：'+e.message)}
 }
 async function rmRule(i){try{await jpost('/api/devices/rules',{device:cur,op:'rm',index:i});renderConsole()}catch(e){err('删除规则失败：'+e.message)}}
-async function untrust(fp){
-  if(!confirm('撤销对这个控制端的信任？它将无法再控制本设备（除非重新配对）。'))return;
-  try{await jpost('/api/devices/untrust',{device:cur,fp});toast('no','已撤销信任');setTimeout(renderConsole,360);}
-  catch(e){err('撤销失败：'+e.message)}
+function untrust(fp){
+  askConfirm('撤销信任','撤销对这个控制端的信任？它将无法再控制本设备（除非重新配对）。','撤销',async()=>{
+    try{await jpost('/api/devices/untrust',{device:cur,fp});toast('no','已撤销信任');setTimeout(renderConsole,360);}
+    catch(e){err('撤销失败：'+e.message)}
+  });
 }
-$('#rmDevice').onclick=async()=>{
+$('#rmDevice').onclick=()=>{
   if(!cur)return;
-  if(!confirm('确定把设备「'+cur+'」从你的空间解除？解除后列表里就没它了（设备上重新运行 wanctl 可再次纳管）。'))return;
-  try{
-    await jpost('/api/devices/remove',{device:cur});
-    toast('ok','已解除设备');
-    closeDevice();$$('nav button').forEach(x=>x.classList.toggle('on',x.dataset.sec==='devices'));showView('devices');loadOverview();
-  }catch(e){err('解除失败：'+e.message)}
+  askConfirm('解除设备','确定把设备「'+cur+'」从你的空间解除？解除后列表里就没它了（设备上重新运行 wanctl 可再次纳管）。','解除',async()=>{
+    try{
+      await jpost('/api/devices/remove',{device:cur});
+      toast('ok','已解除设备');
+      goTo('devices');
+    }catch(e){err('解除失败：'+e.message)}
+  });
 };
 $('#rAdd').onclick=async()=>{
   if(!cur)return;
@@ -952,25 +1002,37 @@ function docArtNew(){
   };
 }
 
-function docGroupNew(){
-  const slug=prompt('新分组 slug（仅小写字母 / 数字 / -）');
-  if(!slug)return;
-  const title=prompt('分组标题','新分组')||'新分组';
-  jpost('/api/docs/groups',{slug:slug.trim(),title:title.trim(),position:100}).then(()=>{toast('ok','已新建');loadDocs()}).catch(e=>err(e.message));
+async function docGroupNew(){
+  const v=await openForm({title:'新建分组',okText:'新建',fields:[
+    {key:'slug',label:'Slug',placeholder:'仅小写字母 / 数字 / -'},
+    {key:'title',label:'标题',placeholder:'例如：运维 / 高级'},
+    {key:'position',label:'排序（数字越小越靠前）',type:'number',placeholder:'100'}]});
+  if(!v||!v.slug)return;
+  try{
+    await jpost('/api/docs/groups',{slug:v.slug,title:v.title||v.slug,position:parseInt(v.position||'100',10)||100});
+    toast('ok','已新建');loadDocs();
+  }catch(e){err(e.message)}
 }
 
-function docGroupEdit(slug){
+async function docGroupEdit(slug){
   const g=(docTree?.groups||[]).find(x=>x.slug===slug);if(!g)return;
-  const action=prompt('改名直接输入新标题；输入 #del 删除整个分组（仅限空分组）',g.title);
-  if(action===null||action===g.title)return;
-  if(action==='#del'){
-    askConfirm('删除分组','确定删除「'+g.title+'」？只能删空分组（先把文章删掉或移走）。','删除',async()=>{
+  const v=await openForm({title:'编辑分组「'+g.title+'」',okText:'保存',fields:[
+    {key:'title',label:'新标题',placeholder:g.title},
+    {key:'position',label:'排序（数字越小越靠前）',type:'number',placeholder:String(g.position||0)}]});
+  if(!v)return;
+  const title=(v.title||'').trim();
+  if(!title){
+    askConfirm('删除分组','留空标题视为删除指令。确定删除「'+g.title+'」？只能删空分组（先把文章删掉或移走）。','删除',async()=>{
       try{await jpost('/api/docs/groups/delete',{slug});toast('ok','已删除');loadDocs()}
       catch(e){err(e.message)}
     });
     return;
   }
-  jpost('/api/docs/groups',{slug,title:action.trim(),position:g.position||0}).then(()=>{toast('ok','已改名');loadDocs()}).catch(e=>err(e.message));
+  try{
+    const pos=v.position!==''?parseInt(v.position,10):g.position;
+    await jpost('/api/docs/groups',{slug,title,position:isNaN(pos)?g.position||0:pos});
+    toast('ok','已改名');loadDocs();
+  }catch(e){err(e.message)}
 }
 
 function bindMdCopy(){
@@ -1021,19 +1083,65 @@ function askConfirm(title,msg,okLabel,onOk){
 $('#docNewArt').onclick=docArtNew;
 $('#docNewGrp').onclick=docGroupNew;
 
+/* ---- pair confirmation (URL-flow from the AI's reject message) ---- */
+function parsePairHash(h){
+  const m=/^#pair\?(.+)$/.exec(h||'');
+  if(!m)return null;
+  const p=new URLSearchParams(m[1]);
+  return {device:p.get('device')||'',fp:p.get('fp')||'',name:p.get('name')||'',label:p.get('label')||''};
+}
+function showPairModal(p){
+  $('#prDevice').textContent=p.device||'—';
+  $('#prName').textContent=p.name||'—';
+  $('#prLabel').textContent=p.label||'（控制端没有自报家门）';
+  $('#prFP').textContent=p.fp||'—';
+  $('#pairModal').classList.add('show');
+  $('#prDeny').onclick=()=>pairConfirm(p,'n');
+  $('#prTrust').onclick=()=>pairConfirm(p,'y');
+}
+function hidePairModal(){
+  $('#pairModal').classList.remove('show');
+  // strip the #pair hash so refresh / share won't re-open the modal
+  if(location.hash.startsWith('#pair'))history.replaceState(null,'','#devices');
+}
+async function pairConfirm(p,verdict){
+  $('#prDeny').disabled=$('#prTrust').disabled=true;
+  try{
+    await jpost('/api/devices/pair',{device:p.device,fp:p.fp,verdict});
+    hidePairModal();
+    toast('ok',verdict==='y'?'✓ 已信任，回去让 AI 再跑一次命令':'已拒绝该控制端');
+    setTimeout(()=>{try{window.close()}catch(_){}},1400);
+  }catch(e){
+    $('#prDeny').disabled=$('#prTrust').disabled=false;
+    err('操作失败：'+e.message);
+  }
+}
+
+/* ---- hash router (single source of truth for what view shows) ---- */
+function route(){
+  const h=location.hash;
+  if(h.startsWith('#pair?')){
+    // pair modal: background is the devices view (so closing reveals devices).
+    applyView('devices');
+    const p=parsePairHash(h);
+    if(p&&p.device&&p.fp)showPairModal(p);
+    return;
+  }
+  if(h.startsWith('#device/')){
+    applyView('devices');
+    openDevice(decodeURIComponent(h.substr('#device/'.length)));
+    return;
+  }
+  if(h.startsWith('#docs'))return applyView('docs');
+  const m={'#tokens':'tokens','#acl':'acl','#audit':'audit','#devices':'devices'};
+  applyView(m[h]||'devices');
+}
+window.addEventListener('hashchange',route);
+
 /* ---- me + boot ---- */
 async function loadMe(){try{const m=await jget('/api/me');$('#ns').textContent=m.namespace||'—';$('#fp').textContent=m.identity||'';docMe=m}catch(e){$('#fp').textContent='未登录';err('未登录或会话失效：'+e.message)}}
-
-/* If page was opened with #docs/<slug>, jump to docs tab first. */
-function bootSection(){
-  if(location.hash.startsWith('#docs')){
-    const btn=document.querySelector('nav button[data-sec="docs"]');
-    if(btn){btn.click();return true}
-  }
-  return false;
-}
 loadMe();
-if(!bootSection())loadOverview();
+route();
 </script>
 </body>
 </html>

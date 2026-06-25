@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"wanctl/internal/config"
 	"wanctl/internal/console"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/httpconn"
@@ -213,7 +214,11 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
 	// console sessions BEFORE serving — the controller/portal blocks on this OK,
 	// and a console session must be gated by the same trust check as an exec one.
 	if !a.authorize(fp, hello.Name, hello.Label) {
-		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "not authorized by the device"})
+		protocol.WriteMessage(conn, protocol.Message{
+			Kind:       protocol.KindReject,
+			Reason:     "device has not paired this controller — ask the user to approve",
+			PairingURL: a.pairingURL(fp, hello.Name, hello.Label),
+		})
 		return
 	}
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindOK, Name: a.opts.Name})
@@ -244,6 +249,22 @@ func (a *Agent) authorize(fp, name, label string) bool {
 		return true
 	}
 	return false
+}
+
+// pairingURL builds the portal URL a user clicks to trust this controller. The
+// AI surfaces it verbatim in its reply ("ask the user to click this link"); the
+// SPA's #pair route reads device/fp/label and shows a confirmation card.
+func (a *Agent) pairingURL(fp, name, label string) string {
+	q := url.Values{}
+	q.Set("device", a.opts.Name)
+	q.Set("fp", fp)
+	if name != "" {
+		q.Set("name", name)
+	}
+	if label != "" {
+		q.Set("label", label)
+	}
+	return config.DefaultPortal + "/#pair?" + q.Encode()
 }
 
 // trustedControllers lists currently trusted controllers for the console revoke UI.

@@ -55,6 +55,35 @@ func TestAskPairDeniesWithoutFrontend(t *testing.T) {
 	}
 }
 
+// URL-flow: AskPair without a subscriber returns false fast but LEAVES the
+// pending entry so the user can click the link the AI surfaced and approve
+// retroactively. The next AskPair (controller retry) then returns true.
+func TestAskPairPersistsForRetroactiveApproval(t *testing.T) {
+	s := newSvc(t)
+	s.timeout = time.Second
+
+	// No subscriber: should fail fast …
+	if s.AskPair("SHA256:late", "thunder-2", "Claude X") {
+		t.Fatal("expected false with no front-end")
+	}
+	// … but the entry persists for the URL-click flow.
+	if len(s.State().PendingPairings) != 1 {
+		t.Fatalf("pair entry not persisted: %+v", s.State().PendingPairings)
+	}
+	// Retroactive approval (the SPA POSTing /api/devices/pair).
+	if !s.DecidePair("SHA256:late", true) {
+		t.Fatal("DecidePair on persisted entry should succeed")
+	}
+	// Same controller retries → now trusted.
+	if !s.AskPair("SHA256:late", "thunder-2", "Claude X") {
+		t.Fatal("AskPair after retroactive approval should return true")
+	}
+	// And no longer shown in the UI.
+	if len(s.State().PendingPairings) != 0 {
+		t.Fatalf("approved pairing should not show as pending: %+v", s.State().PendingPairings)
+	}
+}
+
 func TestDecidePairDenyReturnsFalse(t *testing.T) {
 	s := newSvc(t)
 	s.timeout = time.Second

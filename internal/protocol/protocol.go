@@ -80,6 +80,13 @@ type Message struct {
 	// error / reject
 	Reason string `json:"reason,omitempty"`
 
+	// reject: when a controller's first connection lands on an unknown
+	// fingerprint and the device couldn't get a live human decision, the device
+	// fills PairingURL so the controller can surface it to its operator. Opening
+	// the URL lands on the portal's pair-confirmation page (after SSO if needed)
+	// and a single click trusts the controller; the next dial then goes through.
+	PairingURL string `json:"pairing_url,omitempty"`
+
 	// file_put / file_get / file_meta
 	Path string `json:"path,omitempty"`
 	Size int64  `json:"size,omitempty"`

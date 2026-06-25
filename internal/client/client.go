@@ -187,13 +187,27 @@ func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target, hello
 	}
 	if reply.Kind == protocol.KindReject {
 		dr.Conn.Close()
-		return nil, fmt.Errorf("device rejected this controller: %s\n  -> approve it on the device (console pairing prompt)", reply.Reason)
+		return nil, rejectError(reply)
 	}
 	if reply.Kind != protocol.KindOK {
 		dr.Conn.Close()
 		return nil, fmt.Errorf("unexpected device reply: %s", reply.Kind)
 	}
 	return dr.Conn, nil
+}
+
+// rejectError renders a device-side reject. When PairingURL is present, the
+// reject was specifically "this controller isn't trusted yet" and the message
+// foregrounds the URL the user should click — the AI (or human) operator sees
+// this verbatim in stderr and just hands it to the owner.
+func rejectError(m protocol.Message) error {
+	if m.PairingURL != "" {
+		return fmt.Errorf(
+			"device 未信任此控制端。请把下面这条链接发给设备主人，让 ta 在浏览器里点一次「信任」，然后重试本命令：\n\n  %s\n\n(链接 5 分钟内有效；reason: %s)",
+			m.PairingURL, m.Reason,
+		)
+	}
+	return fmt.Errorf("device rejected this controller: %s", m.Reason)
 }
 
 // OpenConsole dials target and opens a control-plane (console) session,
@@ -232,7 +246,7 @@ func (c *Client) Logs(ctx context.Context, target, logType, grep, since string, 
 			case protocol.KindError:
 				return fmt.Errorf("remote error: %s", m.Reason)
 			case protocol.KindReject:
-				return fmt.Errorf("%s", m.Reason)
+				return rejectError(m)
 			}
 		}
 	}
@@ -270,7 +284,7 @@ func (c *Client) Exec(ctx context.Context, target, command string, oneShot bool,
 			case protocol.KindError:
 				return -1, fmt.Errorf("remote error: %s", m.Reason)
 			case protocol.KindReject:
-				return -1, fmt.Errorf("%s", m.Reason)
+				return -1, rejectError(m)
 			}
 		}
 	}

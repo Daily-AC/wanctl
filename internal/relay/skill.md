@@ -72,9 +72,14 @@ wanctl id                                 # this controller's fingerprint
   your `exec` may **hang up to ~60s** while the human approves/denies. That's
   expected; a timeout returns a denial. With no front-end attending (headless, no
   portal session, no TTY) a rule-miss is denied immediately.
-- **Pairing**: the very first connection from a new controller fingerprint must
-  be approved once on the device (TOFU). Until then you get a reject telling you
-  to approve it on the device.
+- **Pairing**: the very first connection from a new controller fingerprint
+  needs the device owner to trust it (TOFU). When this happens, `wanctl` exits
+  non-zero with a message containing a **clickable URL** like
+  `https://wanctl.***REMOVED***.***REMOVED***.com/#pair?device=...&fp=...&label=...`.
+  **Do NOT paraphrase, shorten, or describe the URL** — copy it verbatim into
+  your reply and ask the user to click it. The portal opens a confirmation card;
+  one click trusts you and the next dial goes through. Then retry the original
+  command. The URL is valid for 5 minutes.
 
 ## Tracing / auditing what happened
 

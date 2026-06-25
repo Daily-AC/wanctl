@@ -69,8 +69,14 @@ type pending struct {
 
 type pendingPair struct {
 	view    PendingPairing
-	decided chan bool
+	decided chan struct{} // closed once a verdict is recorded
+	trust   bool          // valid after decided is closed
+	expires time.Time     // TTL for retroactive approval (URL flow)
 }
+
+// pairTTL bounds how long an undecided pairing request lives in memory waiting
+// for a user to click the URL the AI surfaced.
+const pairTTL = 5 * time.Minute
 
 // Service is the queue-backed console + approver.
 type Service struct {
@@ -102,61 +108,115 @@ func New(engine *policy.Engine, log *eventlog.Logger, info Info) *Service {
 	}
 }
 
-// AskPair enqueues a pairing request for an unknown controller and blocks until a
-// front-end approves/denies or the timeout elapses (deny). Like Ask, it denies
-// immediately when no front-end is subscribed. A second request for the same
-// fingerprint rides the existing pending entry.
+// AskPair registers (or refreshes) a pending pair entry for an unknown
+// controller and asks any subscribed front-end (the portal web console) to
+// decide. Behavior matrix:
+//
+//   - already decided (e.g. user clicked the URL minutes ago)   → return p.trust
+//   - subs > 0 and undecided  → block up to s.timeout for a live decision;
+//     on timeout return false but LEAVE the entry intact (pairTTL) so the
+//     user can still click the URL later.
+//   - subs == 0 and undecided → return false immediately (fast-fail the dial)
+//     but LEAVE the entry intact so the user can approve retroactively.
+//
+// This decouples controller-dial timing from portal-tab timing: the AI gets a
+// reject + URL right away, the user clicks it whenever, the next dial finds the
+// fp already trusted and goes through.
 func (s *Service) AskPair(fp, name, label string) bool {
 	s.mu.Lock()
-	if len(s.subs) == 0 {
-		s.mu.Unlock()
-		return false
-	}
-	if existing := s.pairs[fp]; existing != nil {
-		ch := existing.decided
-		s.mu.Unlock()
+	s.pruneExpiredPairsLocked()
+	p := s.pairs[fp]
+	if p != nil {
+		// Already decided? Return its verdict immediately.
 		select {
-		case d := <-ch:
-			return d
-		case <-time.After(s.timeout):
-			return false
+		case <-p.decided:
+			trust := p.trust
+			s.mu.Unlock()
+			return trust
+		default:
 		}
+		// Same fp dialing again — refresh metadata + TTL, reuse the entry.
+		if name != "" {
+			p.view.Name = name
+		}
+		if label != "" {
+			p.view.Label = label
+		}
+		p.expires = time.Now().Add(pairTTL)
+	} else {
+		p = &pendingPair{
+			view:    PendingPairing{FP: fp, Name: name, Label: label, Created: time.Now()},
+			decided: make(chan struct{}),
+			expires: time.Now().Add(pairTTL),
+		}
+		s.pairs[fp] = p
 	}
-	p := &pendingPair{
-		view:    PendingPairing{FP: fp, Name: name, Label: label, Created: time.Now()},
-		decided: make(chan bool, 1),
-	}
-	s.pairs[fp] = p
+	hasFrontend := len(s.subs) > 0
+	decided := p.decided
 	s.mu.Unlock()
 	s.notify()
-	defer func() {
-		s.mu.Lock()
-		delete(s.pairs, fp)
-		s.mu.Unlock()
-		s.notify()
-	}()
+
+	if !hasFrontend {
+		// Headless or no portal tab attending; let the controller fail fast and
+		// surface a URL to the user. The entry persists (pairTTL) for offline
+		// approval.
+		return false
+	}
 	select {
-	case d := <-p.decided:
-		return d
+	case <-decided:
+		s.mu.Lock()
+		trust := p.trust
+		s.mu.Unlock()
+		return trust
 	case <-time.After(s.timeout):
+		// Front-end was attending but didn't decide in time. Entry persists for
+		// retroactive approval; this dial reports a reject + URL.
 		return false
 	}
 }
 
 // DecidePair delivers a trust verdict for a pending pairing. Returns false if
-// the fingerprint is unknown.
+// the fingerprint is unknown or already decided. On approval the entry is kept
+// (so the next AskPair from the same fp returns true immediately and the agent
+// can AddLabeled to known_clients). On denial the entry is dropped so a future
+// retry produces a fresh URL the user can act on differently.
 func (s *Service) DecidePair(fp string, trust bool) bool {
 	s.mu.Lock()
 	p := s.pairs[fp]
-	s.mu.Unlock()
 	if p == nil {
+		s.mu.Unlock()
 		return false
 	}
 	select {
-	case p.decided <- trust:
+	case <-p.decided:
+		s.mu.Unlock()
+		return false // already decided
 	default:
 	}
+	p.trust = trust
+	close(p.decided)
+	if !trust {
+		delete(s.pairs, fp)
+	}
+	s.mu.Unlock()
+	s.notify()
 	return true
+}
+
+// pruneExpiredPairsLocked drops undecided pair entries past their TTL. Caller
+// holds s.mu. Decided entries are left for the next dial to consume.
+func (s *Service) pruneExpiredPairsLocked() {
+	now := time.Now()
+	for fp, p := range s.pairs {
+		select {
+		case <-p.decided:
+			// keep; the next AskPair drains it
+		default:
+			if now.After(p.expires) {
+				delete(s.pairs, fp)
+			}
+		}
+	}
 }
 
 // Ask implements policy.Approver: enqueue and block until a front-end decides
@@ -210,7 +270,13 @@ func (s *Service) State() State {
 	}
 	pairs := make([]PendingPairing, 0, len(s.pairs))
 	for _, p := range s.pairs {
-		pairs = append(pairs, p.view)
+		// Hide already-decided entries from the front-end (they linger only so
+		// the next AskPair can drain the verdict).
+		select {
+		case <-p.decided:
+		default:
+			pairs = append(pairs, p.view)
+		}
 	}
 	trustedFn := s.trustedFn
 	s.mu.Unlock()
