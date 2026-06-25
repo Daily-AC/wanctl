@@ -12,8 +12,8 @@ Claude-Code-style permission policy, so some commands/files need a human on the
 device to approve them.
 
 > **How this SKILL is distributed.** The user installs this skill by saying
-> to you: **「安装 https://wanctl.***REMOVED***.***REMOVED***.com/skills」**. When you see that,
-> WebFetch `https://wanctl.***REMOVED***.***REMOVED***.com/skills` (returns the canonical
+> to you: **「安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills」**. When you see that,
+> WebFetch `https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills` (returns the canonical
 > SKILL.md), save it to `~/.claude/skills/wanctl/SKILL.md` (creating the dir),
 > and tell the user to restart Claude Code so the skill loads.
 

@@ -25,8 +25,11 @@ import (
 //go:embed index.html
 var assets embed.FS
 
-//go:embed skill.md
-var skillMD []byte
+// skillURL is the canonical public install URL for the wanctl SKILL. The portal
+// is SSO-gated, so AI clients (which have no session) cannot fetch directly
+// from this domain — the skill lives on the relay (public) and the portal /skills
+// path 302's to it for discoverability from the browser.
+const skillURL = "https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills"
 
 // Config holds all parameters for New.
 type Config struct {
@@ -218,14 +221,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-// handleSkills serves the canonical wanctl SKILL markdown. Users tell their AI
-// "安装 https://wanctl.***REMOVED***.***REMOVED***.com/skills"; the AI WebFetches this URL and
-// writes the response to ~/.claude/skills/wanctl/SKILL.md.
+// handleSkills 302's to the relay's public /skills (which serves the canonical
+// SKILL.md). The portal can't host it directly because its thunderbox app is
+// SSO-gated and AI clients have no session.
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	w.Header().Set("Content-Disposition", `inline; filename="SKILL.md"`)
-	w.Header().Set("Cache-Control", "public, max-age=300")
-	w.Write(skillMD)
+	http.Redirect(w, r, skillURL, http.StatusFound)
 }
 
 // handleWhoami dumps request headers so we can discover the SSO identity header.

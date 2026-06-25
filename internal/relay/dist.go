@@ -1,10 +1,17 @@
 package relay
 
 import (
+	_ "embed"
 	"fmt"
 	"net/http"
 	"os"
 )
+
+// skillMD is the canonical wanctl SKILL.md, served at GET /skills. The relay is
+// public (unlike the SSO-gated portal), so AI clients can WebFetch it directly.
+//
+//go:embed skill.md
+var skillMD []byte
 
 // registerDist makes the relay serve a one-line installer and prebuilt agent
 // binaries, so a new device can be enrolled with:
@@ -21,6 +28,17 @@ func (r *Relay) registerDist(mux *http.ServeMux) {
 		mux.Handle("/dl/", http.StripPrefix("/dl/", http.FileServer(http.Dir(dir))))
 	}
 	mux.HandleFunc("/install.sh", r.handleInstall)
+	mux.HandleFunc("/skills", r.handleSkills)
+}
+
+// handleSkills serves the canonical wanctl SKILL markdown. Users tell their AI
+// "安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills"; the AI WebFetches this URL
+// and writes the response to ~/.claude/skills/wanctl/SKILL.md.
+func (r *Relay) handleSkills(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", `inline; filename="SKILL.md"`)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Write(skillMD)
 }
 
 func (r *Relay) handleInstall(w http.ResponseWriter, req *http.Request) {

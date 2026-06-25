@@ -73,9 +73,9 @@ nohup wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com 
 > **For AI agents:** how to *drive* a device (run commands, transfer files, read
 > logs, and interpret approval/denial) is in
 > [`internal/portal/skill.md`](internal/portal/skill.md) — read it first.
-> The portal serves the canonical copy at https://wanctl.***REMOVED***.***REMOVED***.com/skills ,
+> The portal serves the canonical copy at https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills ,
 > so users install it by simply saying to their AI:
-> **「安装 https://wanctl.***REMOVED***.***REMOVED***.com/skills」**
+> **「安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills」**
 > (the agent WebFetches that URL and writes it to `~/.claude/skills/wanctl/SKILL.md`).
 
 ## Build from source
@@ -124,10 +124,10 @@ the policy engine.
 `internal/portal/skill.md` is a Claude Code skill that teaches an agent to drive
 the controller CLI: setup env, run/transfer/log commands, and correctly read
 "denied by policy" / "blocked on approval" / TOFU-pairing outcomes. The portal
-serves the canonical copy at <https://wanctl.***REMOVED***.***REMOVED***.com/skills>. Users
+serves the canonical copy at <https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills>. Users
 install it by saying to their AI:
 
-> 安装 https://wanctl.***REMOVED***.***REMOVED***.com/skills
+> 安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills
 
 The agent fetches that URL and writes it to `~/.claude/skills/wanctl/SKILL.md`.
 
