@@ -13,6 +13,7 @@ import (
 type Peer struct {
 	Fingerprint string    `json:"fingerprint"`
 	Name        string    `json:"name"`
+	Label       string    `json:"label,omitempty"` // controller self-description (who/why)
 	Added       time.Time `json:"added"`
 	LastSeen    time.Time `json:"last_seen"`
 }
@@ -81,10 +82,13 @@ func (s *Store) GetByName(name string) (Peer, bool) {
 }
 
 // Add records a new trusted peer and persists the store.
-func (s *Store) Add(fp, name string) error {
+func (s *Store) Add(fp, name string) error { return s.AddLabeled(fp, name, "") }
+
+// AddLabeled records a new trusted peer with a self-described label.
+func (s *Store) AddLabeled(fp, name, label string) error {
 	s.mu.Lock()
 	now := time.Now()
-	s.m[fp] = Peer{Fingerprint: fp, Name: name, Added: now, LastSeen: now}
+	s.m[fp] = Peer{Fingerprint: fp, Name: name, Label: label, Added: now, LastSeen: now}
 	s.mu.Unlock()
 	return s.save()
 }

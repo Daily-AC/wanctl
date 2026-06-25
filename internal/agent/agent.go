@@ -102,6 +102,7 @@ func New(opts Options) (*Agent, error) {
 	a.console = console.New(engine, logger, console.Info{
 		Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL,
 	})
+	a.console.SetTrustedSource(a.trustedControllers)
 	if opts.Mode == policy.ModeBypass {
 		a.appr = policy.AllowApprover{}
 	} else {
@@ -211,7 +212,7 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
 	// Authorize (TOFU / pre-trusted portal key) and reply OK for BOTH exec and
 	// console sessions BEFORE serving — the controller/portal blocks on this OK,
 	// and a console session must be gated by the same trust check as an exec one.
-	if !a.authorize(fp, hello.Name) {
+	if !a.authorize(fp, hello.Name, hello.Label) {
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "not authorized by the device"})
 		return
 	}
@@ -224,25 +225,38 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
 	a.serve(conn, fp, hello.Name)
 }
 
-func (a *Agent) authorize(fp, name string) bool {
+func (a *Agent) authorize(fp, name, label string) bool {
 	if a.known.Has(fp) {
 		a.known.Touch(fp)
 		return true
 	}
 	if a.opts.AutoYes {
-		a.known.Add(fp, name)
+		a.known.AddLabeled(fp, name, label)
 		fmt.Printf("[auto-trust] new controller %q paired: %s\n", name, fp)
 		return true
 	}
 	// Surface the pairing request to a connected front-end (the portal web
 	// console) and block for a human's trust decision. A headless agent with no
 	// portal connected denies (pre-trust with --portal-pk or --yes instead).
-	if a.console.AskPair(fp, name) {
-		a.known.Add(fp, name)
+	if a.console.AskPair(fp, name, label) {
+		a.known.AddLabeled(fp, name, label)
 		fmt.Printf("[paired] controller %q trusted via console: %s\n", name, fp)
 		return true
 	}
 	return false
+}
+
+// trustedControllers lists currently trusted controllers for the console revoke UI.
+func (a *Agent) trustedControllers() []console.TrustedController {
+	out := []console.TrustedController{}
+	for _, p := range a.known.List() {
+		ls := ""
+		if !p.LastSeen.IsZero() {
+			ls = p.LastSeen.Format(time.RFC3339)
+		}
+		out = append(out, console.TrustedController{FP: p.Fingerprint, Name: p.Name, Label: p.Label, LastSeen: ls})
+	}
+	return out
 }
 
 func (a *Agent) serve(conn *tls.Conn, fp, peerName string) {
@@ -353,6 +367,22 @@ func httpBase(relayURL string) string {
 
 // runHTTP drives the proxy-agnostic HTTP transport: long-poll /h/poll for
 // sessions to open, and serve each over an httpconn.
+// deregisterHTTP best-effort tells the relay we're going offline now, so the
+// device flips to offline immediately instead of waiting out the registry TTL.
+// Called on clean shutdown; uses a fresh short-timeout client since the run ctx
+// is already cancelled.
+func (a *Agent) deregisterHTTP(base string) {
+	q := url.Values{"token": {a.opts.Token}, "device": {a.opts.Name}}.Encode()
+	hc := &http.Client{Timeout: 3 * time.Second}
+	req, err := http.NewRequest("POST", base+"/h/deregister?"+q, nil)
+	if err != nil {
+		return
+	}
+	if resp, err := hc.Do(req); err == nil {
+		resp.Body.Close()
+	}
+}
+
 func (a *Agent) runHTTP(ctx context.Context) error {
 	base := httpBase(a.opts.RelayURL)
 	fmt.Printf("wanctl agent %q online via %s (http transport)\n  fingerprint: %s\n", a.opts.Name, base, a.id.Fingerprint)
@@ -361,12 +391,14 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 	pollURL := base + "/h/poll?" + q
 	for {
 		if ctx.Err() != nil {
+			a.deregisterHTTP(base)
 			return nil
 		}
 		req, _ := http.NewRequestWithContext(ctx, "GET", pollURL, nil)
 		resp, err := hc.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
+				a.deregisterHTTP(base)
 				return nil
 			}
 			if strings.Contains(err.Error(), "401") {
@@ -460,6 +492,17 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 		if !ok {
 			errJSON, _ := json.Marshal("no such pending pairing")
 			resp.Data = json.RawMessage(errJSON)
+		}
+		return resp
+
+	case protocol.KindTrustRevoke:
+		resp := protocol.Message{Kind: protocol.KindTrustRevoke}
+		if msg.FP == a.opts.PortalFP {
+			errJSON, _ := json.Marshal("refusing to revoke the portal (it would break web control)")
+			resp.Data = json.RawMessage(errJSON)
+		} else {
+			_ = a.known.Remove(msg.FP)
+			a.console.Notify() // refresh the trusted list in connected front-ends
 		}
 		return resp
 

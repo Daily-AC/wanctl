@@ -33,6 +33,7 @@ func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/tokens/issue", r.adminTokenIssue)
 	mux.HandleFunc("/admin/tokens/revoke", r.adminTokenRevoke)
 	mux.HandleFunc("/admin/devices", r.adminDevices)
+	mux.HandleFunc("/admin/devices/remove", r.adminDeviceRemove)
 	mux.HandleFunc("/admin/acl", r.adminACL)
 	mux.HandleFunc("/admin/acl/revoke", r.adminACLRevoke)
 	mux.HandleFunc("/admin/audit", r.adminAudit)
@@ -107,12 +108,43 @@ func (r *Relay) adminDevices(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	out, err := r.admin.ListDevices(req.URL.Query().Get("namespace"))
+	ns := req.URL.Query().Get("namespace")
+	out, err := r.admin.ListDevices(ns)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Mark true liveness from the in-memory registry (matches dial-ability),
+	// rather than letting the UI guess from the lagging last_seen timestamp.
+	for _, d := range out {
+		name, _ := d["name"].(string)
+		d["online"] = r.deviceLive(ns, name)
+	}
 	writeJSON(w, map[string]any{"devices": out})
+}
+
+// adminDeviceRemove unbinds a device record from a namespace.
+func (r *Relay) adminDeviceRemove(w http.ResponseWriter, req *http.Request) {
+	if !r.adminOK(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var body struct{ Namespace, Device string }
+	json.NewDecoder(req.Body).Decode(&body)
+	if body.Namespace == "" || body.Device == "" {
+		http.Error(w, "namespace and device required", http.StatusBadRequest)
+		return
+	}
+	if err := r.admin.RemoveDevice(body.Namespace, body.Device); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Evict any live registry entry so it disappears immediately.
+	key := body.Namespace + "/" + body.Device
+	r.hmu.Lock()
+	delete(r.hagents, key)
+	r.hmu.Unlock()
+	w.WriteHeader(http.StatusOK)
 }
 
 func (r *Relay) adminACL(w http.ResponseWriter, req *http.Request) {
@@ -178,6 +210,7 @@ type AdminStore interface {
 	ListTokens(namespace string) ([]map[string]any, error)
 	RevokeToken(namespace string, id int) error
 	ListDevices(namespace string) ([]map[string]any, error)
+	RemoveDevice(namespace, device string) error
 	ListACL(namespace string) ([]map[string]any, error)
 	AddACL(namespace, device, grantee, perms string) error
 	RevokeACL(namespace string, id int) error
@@ -294,6 +327,15 @@ func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 		out = append(out, map[string]any{"name": name, "fingerprint": fp, "last_seen": nullTime(seen)})
 	}
 	return out, rows.Err()
+}
+
+// RemoveDevice unbinds a device from a namespace (and any ACL grants for it).
+func (p *PGStore) RemoveDevice(namespace, device string) error {
+	if _, err := p.db.Exec(`DELETE FROM devices WHERE owner_namespace=$1 AND name=$2`, namespace, device); err != nil {
+		return err
+	}
+	_, _ = p.db.Exec(`DELETE FROM acl WHERE owner_namespace=$1 AND device=$2`, namespace, device)
+	return nil
 }
 
 func (p *PGStore) ListACL(namespace string) ([]map[string]any, error) {

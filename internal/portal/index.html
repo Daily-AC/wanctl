@@ -203,6 +203,26 @@
   .btn:hover{transform:translateY(-2px)}.btn:active{transform:translateY(3px);box-shadow:0 2px 0 #ef8b4f}
   .btn.soft{background:var(--card);color:var(--ink-2);border:2px solid var(--line);box-shadow:0 4px 0 rgba(243,228,211,.9)}
   .rmx{font-family:var(--round);font-weight:600;color:var(--ink-3);cursor:pointer;background:none;border:none;font-size:12.5px}
+  .rmx[data-fp]{color:#c2543b}
+  .rmdev{margin-left:14px;font-family:var(--round);font-weight:700;font-size:12.5px;cursor:pointer;color:#c2543b;background:#fff;border:1px solid #e7d3cb;border-radius:16px;padding:6px 14px}
+  .rmdev:hover{background:#fbeee9}
+  .doc{margin-top:22px;display:flex;flex-direction:column;gap:18px}
+  .dcard{display:flex;gap:18px;background:#fff;border:1px solid var(--soft,#efe7d6);border-radius:18px;padding:22px 24px;box-shadow:0 4px 18px rgba(0,0,0,.04)}
+  .dcard.hot{border-color:#ffcf9b;background:linear-gradient(180deg,#fffaf2,#fff)}
+  .dnum{font-size:26px;font-weight:800;color:var(--brand,#e08d3c);flex:0 0 auto;width:34px;text-align:center}
+  .dbody{flex:1;min-width:0}
+  .dbody h2{font-size:16px;margin:2px 0 10px}
+  .dbody p{margin:8px 0;line-height:1.7;color:#5f5950;font-size:14px}
+  .dbody .hint{color:#8a857c;font-size:13px}
+  .dbody .step{margin-top:12px}
+  .doc pre{background:#2c2a26;color:#f3ede2;border-radius:12px;padding:14px 16px;margin:10px 0;font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.7;overflow-x:auto;cursor:pointer;position:relative;white-space:pre}
+  .doc pre:hover::after{content:'点击复制';position:absolute;top:8px;right:12px;font-size:11px;color:#b7ad9c}
+  .doc code{background:#f3ede2;border-radius:6px;padding:1px 6px;font-family:ui-monospace,monospace;font-size:12.5px;color:#9a5a26}
+  .dlist{margin:8px 0 0;padding-left:18px;color:#5f5950;font-size:14px;line-height:1.95}
+  .guidebar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:linear-gradient(180deg,#fffaf2,#fff);border:1px dashed #ffcf9b;border-radius:16px;padding:14px 18px;margin:4px 0 18px}
+  .guidebar .gtxt{flex:1;min-width:240px;color:#6f685d;font-size:13.5px;line-height:1.6}
+  .guidebar code{background:#f3ede2;border-radius:6px;padding:1px 6px;font-family:ui-monospace,monospace;font-size:11.5px;color:#9a5a26}
+  .glink{font-family:var(--round);font-weight:700;font-size:13px;cursor:pointer;color:#9a5a26;background:#ffe1b0;border:none;border-radius:14px;padding:7px 14px;white-space:nowrap}
   .rmx:hover{color:var(--straw-d)}
 
   .slip{margin-top:18px;border:2px dashed var(--berry);background:linear-gradient(180deg,#fff4f7,#ffe9ef);
@@ -304,6 +324,7 @@
     <button data-sec="tokens"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="M11 12 21 2M17 6l2 2"/></svg>访问令牌</button>
     <button data-sec="acl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11l2 2 4-4"/></svg>共享授权</button>
     <button data-sec="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Relay 审计</button>
+    <button data-sec="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M14 3v5h5M8 13h8M8 17h6" stroke-linecap="round"/></svg>上手文档</button>
   </nav>
 
   <div class="errbar" id="err"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 9v4M12 17h.01M10.3 4 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0Z"/></svg><span id="errmsg"></span></div>
@@ -313,6 +334,10 @@
     <section class="view show" data-view="devices">
       <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none"><path d="M6 16a4 4 0 0 1 .5-8 5 5 0 0 1 9.7-1A4 4 0 0 1 18 16Z" fill="#ffe1b0" stroke="#ef8b4f" stroke-width="1.6"/></svg>我的小设备们</h1>
       <p class="sub">经飞书 SSO 登录后纳管的设备。绿脸在线、灰脸离线，点一张卡片进去远程审批它待办的高危操作～</p>
+      <div class="guidebar" id="guidebar">
+        <span class="gtxt">🌱 新来的？在一台机器上跑 <code>curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh</code> 再 <code>wanctl</code> 登录，它就出现在这里啦。</span>
+        <button class="glink" data-goto="docs">看上手文档 →</button>
+      </div>
       <div class="grid" id="grid"><div class="empty">正在召唤设备们…</div></div>
       <div class="stats">
         <div class="stat s1"><div class="n" id="stDev">·</div><div class="l">在册设备</div></div>
@@ -329,10 +354,12 @@
         <div class="face on" id="dFace"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="12" rx="3"/><path d="M8 21h8"/></svg></div>
         <div class="nm" id="dName">—</div>
         <div class="modechip"><span class="lab">执行模式</span><span class="mtag normal" id="dMtag">乖乖 / NORMAL</span></div>
+        <button class="rmdev" id="rmDevice" title="把这台设备从你的空间里解除">解除设备</button>
       </div>
 
       <div class="tabs" id="tabs">
         <div class="t on" data-tab="approve">待审批<span class="b" id="pBadge">0</span></div>
+        <div class="t" data-tab="trust">已信任<span class="b" id="tBadge">0</span></div>
         <div class="t" data-tab="rules">规则</div>
         <div class="t" data-tab="mode">模式</div>
         <div class="t" data-tab="log">活动日志</div>
@@ -340,6 +367,14 @@
 
       <div class="pane show" data-pane="approve">
         <div id="pending"><div class="empty">连接设备中…</div></div>
+      </div>
+
+      <div class="pane" data-pane="trust">
+        <div class="rulebar"><span class="rulehint">已信任的控制端 —— 谁能远程控制这台设备。可随时撤销。</span></div>
+        <div class="tablecard"><table>
+          <thead><tr><th>身份 / 用途</th><th>名称</th><th>指纹</th><th>最近</th><th></th></tr></thead>
+          <tbody id="trusted"></tbody>
+        </table></div>
       </div>
 
       <div class="pane" data-pane="rules">
@@ -401,6 +436,67 @@
         <thead><tr><th>id</th><th>设备</th><th>被授权命名空间</th><th>权限</th><th></th></tr></thead>
         <tbody id="acl"></tbody>
       </table></div>
+    </section>
+
+    <!-- docs -->
+    <section class="view" data-view="docs">
+      <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><path d="M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M14 3v5h5M8 13h8M8 17h6" stroke-linecap="round"/></svg>上手文档</h1>
+      <p class="sub">三步把任何一台机器变成"可被你（或你的 AI）远程指挥"的小设备。命令点一下即复制～</p>
+      <div class="doc">
+
+        <div class="dcard">
+          <div class="dnum">①</div>
+          <div class="dbody">
+            <h2>把一台设备变成「可远程控制」</h2>
+            <p>在<b>要被控制的那台机器</b>上跑下面两行。第一行装好工具，第二行用飞书登录把它绑到你的空间：</p>
+            <pre data-copy>curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh
+wanctl</pre>
+            <p class="hint">浏览器会弹飞书登录并显示一个一次性 code，贴回终端回车即可。之后服务转入后台，<code>wanctl stop</code> 停、<code>wanctl status</code> 看状态。装的时候<b>不需要任何 token</b>。</p>
+          </div>
+        </div>
+
+        <div class="dcard">
+          <div class="dnum">②</div>
+          <div class="dbody">
+            <h2>从你的电脑控制别的设备</h2>
+            <p>同样先 <code>wanctl</code> 登录一次（拿到身份）。然后零配置直接用：</p>
+            <pre data-copy>wanctl peers                                  # 看有哪些设备在线
+wanctl exec --target 设备名 "uname -a"        # 在它上面跑命令
+wanctl push --target 设备名 ./本地 /远程       # 传文件上去
+wanctl pull --target 设备名 /远程 ./本地       # 拉文件下来</pre>
+            <p class="hint">relay 地址、传输方式都内置了默认值，<b>不用配任何环境变量</b>。第一次控制某台新设备，会在那台设备的网页「待审批 / 已信任」里等它点头。</p>
+          </div>
+        </div>
+
+        <div class="dcard hot">
+          <div class="dnum">③</div>
+          <div class="dbody">
+            <h2>让你的 AI 来控制设备</h2>
+            <p>让 AI（如 Claude Code）当"控制端"，你在网页审批。两步：</p>
+            <p class="step"><b>a.</b> 在「访问令牌」页签发一个 token 给 AI；让 AI 设两个环境变量——token 用来连接，<code>WANCTL_LABEL</code> 让它<b>自报家门</b>（否则配对时你只看到一串指纹，不知道是谁）：</p>
+            <pre data-copy>export WANCTL_TOKEN=你签发的token
+export WANCTL_LABEL="Claude · 帮我巡检 home-pc"</pre>
+            <p class="step"><b>b.</b> 跟 AI 说一句：<b>「安装 wanctl skill」</b>。装好后它就能用 <code>wanctl exec/push/pull</code> 控制你授权的设备。</p>
+            <p class="hint">AI 第一次连某台设备 → 设备网页「待审批」会冒出<b>配对请求</b>，上面写着你填的 label（"Claude · 帮我巡检…"），你点「信任它」即可。之后它发的每条命令仍会在「待审批」等你点头（除非你在「模式」里切放飞，或在「规则」里预放行）。</p>
+          </div>
+        </div>
+
+        <div class="dcard">
+          <div class="dnum">♥</div>
+          <div class="dbody">
+            <h2>审批、信任与管理</h2>
+            <ul class="dlist">
+              <li><b>待审批</b>：控制端发来的高危操作，逐条「允许一次 / 记住 / 拒绝」。</li>
+              <li><b>已信任</b>：谁能控制这台设备，一目了然，可随时<b>撤销信任</b>。</li>
+              <li><b>模式</b>：乖乖（没命中规则就问你）/ 放飞（全自动放行，仅限可信设备）。</li>
+              <li><b>规则</b>：把常用安全命令预放行，省得每次点。</li>
+              <li><b>解除设备</b>：设备详情页右上角，把它从你的空间移除。</li>
+              <li><b>共享授权</b>：把某台设备的权限分享给命名空间外的同事。</li>
+            </ul>
+          </div>
+        </div>
+
+      </div>
     </section>
 
     <!-- audit -->
@@ -466,6 +562,8 @@ const faceOff='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 /* ---- nav ---- */
 let cur=null, pollGen=0, curMode='normal';
 function showView(v){$$('.view').forEach(x=>x.classList.toggle('show',x.dataset.view===v));}
+$$('.doc pre[data-copy]').forEach(p=>p.onclick=()=>{if(navigator.clipboard)navigator.clipboard.writeText(p.textContent.trim());toast('ok','已复制到剪贴板');});
+$$('[data-goto]').forEach(b=>b.onclick=()=>{const t=document.querySelector('nav button[data-sec="'+b.dataset.goto+'"]');if(t)t.click();});
 $$('nav button').forEach(b=>b.onclick=()=>{
   $$('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');closeDevice();
   const s=b.dataset.sec;showView(s);
@@ -476,9 +574,9 @@ $$('nav button').forEach(b=>b.onclick=()=>{
 async function loadOverview(){
   try{
     const d=await jget('/api/devices');const xs=d.devices||[];
-    const on=xs.filter(x=>isOnline(x.last_seen)).length;
+    const on=xs.filter(x=>x.online).length;
     $('#grid').innerHTML=xs.length?xs.map((x,i)=>{
-      const o=isOnline(x.last_seen);
+      const o=x.online;
       return `<div class="devcard" data-dev="${esc(x.name)}">
         <div class="top">
           <div class="face ${o?'on':'off'}">${o?faceOn:faceOff}</div>
@@ -554,8 +652,10 @@ function applyState(st){
       <div class="ribbon"><span class="warnico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 9v4M12 17h.01M10.3 4 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0Z"/></svg></span>
         <span class="txt">有新控制端想连进来！</span><span class="req">配对请求 · pairing</span></div>
       <div class="body">
-        <div class="stmt">控制端 <b>${esc(pr.name||'未命名')}</b> 第一次连接本机，信任它之后才能控制～</div>
-        <div class="facts"><div class="fact"><div class="k">指纹 fingerprint</div><div class="v">${esc(pr.fp||'')}</div></div></div>
+        <div class="stmt">控制端 <b>${esc(pr.label||pr.name||'未命名')}</b> 第一次连接本机，信任它之后才能控制～</div>
+        <div class="facts">
+          ${pr.label?`<div class="fact"><div class="k">机器名 name</div><div class="v">${esc(pr.name||'')}</div></div>`:''}
+          <div class="fact"><div class="k">指纹 fingerprint</div><div class="v">${esc(pr.fp||'')}</div></div></div>
         <div class="decide">
           <button class="candy allow" data-pv="y"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"/></svg>信任它</button>
           <button class="candy deny" data-pv="n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M18 6 6 18M6 6l12 12"/></svg>拒绝</button>
@@ -598,6 +698,16 @@ function applyState(st){
     return `<tr><td>${i}</td><td>${esc(r.kind)}</td><td>${esc(r.pattern)}</td><td>${sc}</td><td style="text-align:right"><button class="rmx" data-i="${i}">删掉</button></td></tr>`;
   }).join(''):'<tr><td colspan="5" class="empty">还没有规则，每条都来问你～</td></tr>';
   $$('#rules .rmx').forEach(b=>b.onclick=()=>rmRule(+b.dataset.i));
+  // trusted controllers
+  const trusted=st.trusted||[];
+  const tb=$('#tBadge');if(tb){tb.textContent=trusted.length;tb.classList.toggle('show',trusted.length>0);}
+  $('#trusted').innerHTML=trusted.length?trusted.map(t=>{
+    const isPortal=t.name==='portal';
+    const who=esc(t.label||t.name||'—');
+    const rev=isPortal?'<span style="color:var(--ink-3)">网页控制台</span>':`<button class="rmx" data-fp="${esc(t.fp)}">撤销信任</button>`;
+    return `<tr><td><b>${who}</b></td><td>${esc(t.name||'')}</td><td style="font-family:ui-monospace,monospace;font-size:12px">${esc((t.fp||'').slice(0,28))}</td><td>${t.last_seen?ago(t.last_seen):'—'}</td><td style="text-align:right">${rev}</td></tr>`;
+  }).join(''):'<tr><td colspan="5" class="empty">还没有信任任何控制端～</td></tr>';
+  $$('#trusted .rmx').forEach(b=>b.onclick=()=>untrust(b.dataset.fp));
 }
 
 async function decide(id,v,noteEl){
@@ -617,6 +727,20 @@ async function pairDecide(fp,v,noteEl){
   }catch(e){err('配对失败：'+e.message)}
 }
 async function rmRule(i){try{await jpost('/api/devices/rules',{device:cur,op:'rm',index:i});renderConsole()}catch(e){err('删除规则失败：'+e.message)}}
+async function untrust(fp){
+  if(!confirm('撤销对这个控制端的信任？它将无法再控制本设备（除非重新配对）。'))return;
+  try{await jpost('/api/devices/untrust',{device:cur,fp});toast('no','已撤销信任');setTimeout(renderConsole,360);}
+  catch(e){err('撤销失败：'+e.message)}
+}
+$('#rmDevice').onclick=async()=>{
+  if(!cur)return;
+  if(!confirm('确定把设备「'+cur+'」从你的空间解除？解除后列表里就没它了（设备上重新运行 wanctl 可再次纳管）。'))return;
+  try{
+    await jpost('/api/devices/remove',{device:cur});
+    toast('ok','已解除设备');
+    closeDevice();$$('nav button').forEach(x=>x.classList.toggle('on',x.dataset.sec==='devices'));showView('devices');loadOverview();
+  }catch(e){err('解除失败：'+e.message)}
+};
 $('#rAdd').onclick=async()=>{
   if(!cur)return;
   const v=await openForm({title:'给 '+cur+' 加条规则',okText:'立规',fields:[

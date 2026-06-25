@@ -158,6 +158,42 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, map[string]string{"session": sid})
 }
 
+// handleHDeregister lets an agent announce it is going offline now, so the relay
+// drops it from the live registry immediately (no TTL wait).
+func (r *Relay) handleHDeregister(w http.ResponseWriter, req *http.Request) {
+	ns, ok := r.auth(req)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	device := req.URL.Query().Get("device")
+	key := ns + "/" + device
+	r.hmu.Lock()
+	delete(r.hagents, key)
+	r.hmu.Unlock()
+	if r.audit != nil {
+		r.audit.Audit(ns, device, "deregister")
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// deviceLive reports whether a device currently holds a live control channel —
+// an HTTP long-poll within the TTL, or a connected WebSocket. This is the
+// dial-able truth, unlike the DB's lagging last_seen.
+func (r *Relay) deviceLive(ns, device string) bool {
+	key := ns + "/" + device
+	r.hmu.Lock()
+	if a := r.hagents[key]; a != nil && time.Since(a.lastSeen) <= httpAgentTTL {
+		r.hmu.Unlock()
+		return true
+	}
+	r.hmu.Unlock()
+	r.mu.Lock()
+	_, wsLive := r.agents[key]
+	r.mu.Unlock()
+	return wsLive
+}
+
 func (r *Relay) handleHPeers(w http.ResponseWriter, req *http.Request) {
 	ns, ok := r.auth(req)
 	if !ok {

@@ -28,7 +28,12 @@ type Client struct {
 	relayURL  string
 	token     string
 	transport string // "ws" (default) or "http"
+	label     string // self-description sent at pairing (WANCTL_LABEL)
 }
+
+// SetLabel overrides the controller's self-description (who/why), shown to the
+// device owner at pairing time and in audit.
+func (c *Client) SetLabel(l string) { c.label = l }
 
 // New loads identity + config from env (WANCTL_RELAY, WANCTL_TOKEN).
 func New() (*Client, error) {
@@ -46,7 +51,9 @@ func New() (*Client, error) {
 		return nil, fmt.Errorf("no token: set WANCTL_TOKEN or run `wanctl up` to log in")
 	}
 	tr := config.EnvOr("WANCTL_TRANSPORT", config.DefaultTransport)
-	return NewWith(id, known, relayURL, token, tr), nil
+	c := NewWith(id, known, relayURL, token, tr)
+	c.label = os.Getenv("WANCTL_LABEL")
+	return c, nil
 }
 
 // NewWith builds a client from explicit config (used by the portal, which has
@@ -169,7 +176,7 @@ func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target, hello
 		fmt.Fprintf(os.Stderr, "wanctl: pinned new device %q identity %s\n", target, transport.ShortFingerprint(dr.PeerFP))
 	}
 	host, _ := os.Hostname()
-	if err := protocol.WriteMessage(dr.Conn, protocol.Message{Kind: helloKind, Role: "client", Name: host, Version: "1"}); err != nil {
+	if err := protocol.WriteMessage(dr.Conn, protocol.Message{Kind: helloKind, Role: "client", Name: host, Label: c.label, Version: "1"}); err != nil {
 		dr.Conn.Close()
 		return nil, err
 	}

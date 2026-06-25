@@ -39,16 +39,27 @@ type Pending struct {
 type PendingPairing struct {
 	FP      string    `json:"fp"`
 	Name    string    `json:"name"`
+	Label   string    `json:"label"` // controller's self-description (who/why)
 	Created time.Time `json:"created"`
+}
+
+// TrustedController is one already-trusted controller, shown so the owner can
+// revoke it.
+type TrustedController struct {
+	FP       string `json:"fp"`
+	Name     string `json:"name"`
+	Label    string `json:"label"`
+	LastSeen string `json:"last_seen"`
 }
 
 // State is a full snapshot for a console front-end.
 type State struct {
-	Info            Info             `json:"info"`
-	Mode            policy.Mode      `json:"mode"`
-	Rules           []policy.Rule    `json:"rules"`
-	Pending         []Pending        `json:"pending"`
-	PendingPairings []PendingPairing `json:"pending_pairings"`
+	Info            Info                `json:"info"`
+	Mode            policy.Mode         `json:"mode"`
+	Rules           []policy.Rule       `json:"rules"`
+	Pending         []Pending           `json:"pending"`
+	PendingPairings []PendingPairing    `json:"pending_pairings"`
+	Trusted         []TrustedController `json:"trusted"`
 }
 
 type pending struct {
@@ -68,10 +79,19 @@ type Service struct {
 	info    Info
 	timeout time.Duration
 
-	mu    sync.Mutex
-	pend  map[string]*pending
-	pairs map[string]*pendingPair // keyed by controller fingerprint
-	subs  map[chan struct{}]struct{}
+	mu        sync.Mutex
+	pend      map[string]*pending
+	pairs     map[string]*pendingPair // keyed by controller fingerprint
+	subs      map[chan struct{}]struct{}
+	trustedFn func() []TrustedController // supplies the trusted-controller list (set by the agent)
+}
+
+// SetTrustedSource installs a callback returning the currently trusted
+// controllers, so State can include them for the revoke UI.
+func (s *Service) SetTrustedSource(fn func() []TrustedController) {
+	s.mu.Lock()
+	s.trustedFn = fn
+	s.mu.Unlock()
 }
 
 // New builds a console service bound to a policy engine and (optional) event log.
@@ -86,7 +106,7 @@ func New(engine *policy.Engine, log *eventlog.Logger, info Info) *Service {
 // front-end approves/denies or the timeout elapses (deny). Like Ask, it denies
 // immediately when no front-end is subscribed. A second request for the same
 // fingerprint rides the existing pending entry.
-func (s *Service) AskPair(fp, name string) bool {
+func (s *Service) AskPair(fp, name, label string) bool {
 	s.mu.Lock()
 	if len(s.subs) == 0 {
 		s.mu.Unlock()
@@ -103,7 +123,7 @@ func (s *Service) AskPair(fp, name string) bool {
 		}
 	}
 	p := &pendingPair{
-		view:    PendingPairing{FP: fp, Name: name, Created: time.Now()},
+		view:    PendingPairing{FP: fp, Name: name, Label: label, Created: time.Now()},
 		decided: make(chan bool, 1),
 	}
 	s.pairs[fp] = p
@@ -192,8 +212,13 @@ func (s *Service) State() State {
 	for _, p := range s.pairs {
 		pairs = append(pairs, p.view)
 	}
+	trustedFn := s.trustedFn
 	s.mu.Unlock()
-	return State{Info: s.info, Mode: s.engine.Mode(), Rules: s.engine.List(), Pending: pend, PendingPairings: pairs}
+	var trusted []TrustedController
+	if trustedFn != nil {
+		trusted = trustedFn()
+	}
+	return State{Info: s.info, Mode: s.engine.Mode(), Rules: s.engine.List(), Pending: pend, PendingPairings: pairs, Trusted: trusted}
 }
 
 // Decide delivers a verdict to a pending request. Returns false if unknown.
@@ -253,6 +278,10 @@ func (s *Service) Subscribe() (<-chan struct{}, func()) {
 		s.mu.Unlock()
 	}
 }
+
+// Notify pushes a state-changed signal to subscribers (used after the agent
+// mutates trust outside the console, e.g. revoking a controller).
+func (s *Service) Notify() { s.notify() }
 
 func (s *Service) notify() {
 	s.mu.Lock()

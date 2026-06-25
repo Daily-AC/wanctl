@@ -87,6 +87,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices/console", s.handleDeviceConsole)
 	mux.HandleFunc("/api/devices/decide", s.handleDeviceDecide)
 	mux.HandleFunc("/api/devices/pair", s.handleDevicePair)
+	mux.HandleFunc("/api/devices/untrust", s.handleDeviceUntrust)
+	mux.HandleFunc("/api/devices/remove", s.handleDeviceRemove)
 	mux.HandleFunc("/api/devices/rules", s.handleDeviceRules)
 	mux.HandleFunc("/api/devices/mode", s.handleDeviceMode)
 	mux.HandleFunc("/api/devices/logs", s.handleDeviceLogs)
@@ -453,6 +455,49 @@ func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := d.pairDecide(body.FP, body.Verdict); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleDeviceUntrust drops a trusted controller from the device.
+func (s *Server) handleDeviceUntrust(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Device, FP string }
+	json.NewDecoder(r.Body).Decode(&body)
+	ns, ok := s.requireDevice(w, r, body.Device)
+	if !ok {
+		return
+	}
+	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err := d.untrust(body.FP); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleDeviceRemove unbinds a device from the namespace (relay-side record).
+func (s *Server) handleDeviceRemove(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Device string }
+	json.NewDecoder(r.Body).Decode(&body)
+	ns, ok := s.requireDevice(w, r, body.Device)
+	if !ok {
+		return
+	}
+	s.dropConn(ns, body.Device) // close any cached console session to it
+	resp, err := s.adminReq("POST", "/admin/devices/remove", nil, map[string]string{"namespace": ns, "device": body.Device})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		http.Error(w, "remove failed: "+string(b), http.StatusBadGateway)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

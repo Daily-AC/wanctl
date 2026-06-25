@@ -95,6 +95,7 @@ func (r *Relay) Handler() http.Handler {
 	mux.HandleFunc("/h/up", r.handleHUp)
 	mux.HandleFunc("/h/down", r.handleHDown)
 	mux.HandleFunc("/h/close", r.handleHClose)
+	mux.HandleFunc("/h/deregister", r.handleHDeregister)
 	mux.HandleFunc("/enroll/exchange", r.handleEnrollExchange)
 	r.registerAdmin(mux)
 	r.registerDist(mux)

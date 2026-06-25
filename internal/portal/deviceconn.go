@@ -121,6 +121,12 @@ func (d *deviceConn) pairDecide(fp, verdict string) error {
 	return err
 }
 
+// untrust drops a trusted controller from the device by fingerprint.
+func (d *deviceConn) untrust(fp string) error {
+	_, err := d.rpc(protocol.Message{Kind: protocol.KindTrustRevoke, FP: fp})
+	return err
+}
+
 func (d *deviceConn) addRule(kind, pattern, dir, scope string) error {
 	_, err := d.rpc(protocol.Message{Kind: protocol.KindRuleAdd, RuleKind: kind, Pattern: pattern, Dir: dir, Scope: scope})
 	return err
