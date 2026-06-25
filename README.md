@@ -71,9 +71,12 @@ nohup wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com 
 ```
 
 > **For AI agents:** how to *drive* a device (run commands, transfer files, read
-> logs, and interpret approval/denial) is in **[`skill/SKILL.md`](skill/SKILL.md)** —
-> read it first. It's also installable as a Claude Code skill (copy `skill/` to
-> `~/.claude/skills/wanctl/`).
+> logs, and interpret approval/denial) is in
+> [`internal/portal/skill.md`](internal/portal/skill.md) — read it first.
+> The portal serves the canonical copy at https://wanctl.***REMOVED***.***REMOVED***.com/skills ,
+> so users install it by simply saying to their AI:
+> **「安装 https://wanctl.***REMOVED***.***REMOVED***.com/skills」**
+> (the agent WebFetches that URL and writes it to `~/.claude/skills/wanctl/SKILL.md`).
 
 ## Build from source
 
@@ -118,9 +121,28 @@ the policy engine.
 
 ## Driving it from an agent (the skill)
 
-`skill/SKILL.md` is a Claude Code skill that teaches an agent to drive the
-controller CLI: setup env, run/transfer/log commands, and correctly read
-"denied by policy" / "blocked on approval" / TOFU-pairing outcomes. Install by
-copying `skill/` to `~/.claude/skills/wanctl/`.
+`internal/portal/skill.md` is a Claude Code skill that teaches an agent to drive
+the controller CLI: setup env, run/transfer/log commands, and correctly read
+"denied by policy" / "blocked on approval" / TOFU-pairing outcomes. The portal
+serves the canonical copy at <https://wanctl.***REMOVED***.***REMOVED***.com/skills>. Users
+install it by saying to their AI:
+
+> 安装 https://wanctl.***REMOVED***.***REMOVED***.com/skills
+
+The agent fetches that URL and writes it to `~/.claude/skills/wanctl/SKILL.md`.
+
+## Documentation
+
+`https://wanctl.***REMOVED***.***REMOVED***.com` 的「使用文档」是一个由 Postgres 支撑的小博客
+（不再硬编码在 SPA 里）。任何登录用户可在浏览器里编辑；CLI 通过命名空间 token
+读写：
+
+```bash
+wanctl docs ls                                # 列文章
+wanctl docs get enroll-device                 # 看正文
+wanctl docs new --slug intro --title 'Intro' --group quickstart --editor
+wanctl docs edit enroll-device --editor       # 改一篇
+wanctl docs group new --slug ops --title '运维'
+```
 
 See `docs/superpowers/specs/2026-06-23-wanctl-design.md` for the full design.

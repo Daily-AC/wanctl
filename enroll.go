@@ -73,6 +73,32 @@ func exchangeCode(ctx context.Context, relay, code string) (token, namespace str
 	return out.Token, out.Namespace, nil
 }
 
+// cmdLogin is the controller-side OAuth entrypoint: opens the portal, exchanges
+// the pasted code for a namespace token, and stores it locally — without
+// starting the device daemon. Used by AI controllers and humans who only need
+// to drive other devices from this machine. Bare `wanctl` (no args) is still
+// the device path (enroll → save → daemon).
+func cmdLogin(ctx context.Context) error {
+	if tok := os.Getenv("WANCTL_TOKEN"); tok != "" {
+		fmt.Println("已通过 WANCTL_TOKEN 环境变量提供凭证；如需重新授权，先 unset 该变量再运行 wanctl login。")
+		return nil
+	}
+	if existing := config.StoredToken(); existing != "" {
+		fmt.Println("(覆盖已存在的本地凭证)")
+	}
+	t, err := enroll(ctx)
+	if err != nil {
+		return err
+	}
+	if err := config.SaveToken(t); err != nil {
+		return fmt.Errorf("save token: %w", err)
+	}
+	dir, _ := config.TokenPath()
+	fmt.Printf("✓ 凭证已保存到 %s\n", dir)
+	fmt.Println("现在可以用 wanctl peers / wanctl exec / wanctl push / wanctl pull 控制你授权的设备。")
+	return nil
+}
+
 // openBrowser best-effort opens url in the platform browser. Failure is fine —
 // the user can open the printed URL manually.
 func openBrowser(url string) {

@@ -11,20 +11,35 @@ across the public internet through a relay, with end-to-end TLS. You drive the
 Claude-Code-style permission policy, so some commands/files need a human on the
 device to approve them.
 
-## Setup (controller env)
+> **How this SKILL is distributed.** The user installs this skill by saying
+> to you: **「安装 https://wanctl.***REMOVED***.***REMOVED***.com/skills」**. When you see that,
+> WebFetch `https://wanctl.***REMOVED***.***REMOVED***.com/skills` (returns the canonical
+> SKILL.md), save it to `~/.claude/skills/wanctl/SKILL.md` (creating the dir),
+> and tell the user to restart Claude Code so the skill loads.
 
-These must be set (ask the user if missing):
+## Setup (controller — first run)
+
+Defaults for the relay URL and transport are baked into the binary
+(`https://wanctl-relay.***REMOVED***.***REMOVED***.com`, `http`), so usually no env is needed.
+What you do need is a **token bound to a namespace** — get it via OAuth:
 
 ```bash
-export WANCTL_RELAY=wss://wanctl-relay.***REMOVED***.***REMOVED***.com   # or https:// for http transport
-export WANCTL_TOKEN=<the user's access token>
-export WANCTL_TRANSPORT=http     # REQUIRED for the thunderbox relay (its nginx
-                                 # strips WebSocket upgrades). Use http + an
-                                 # https:// relay URL. Omit only if the relay is
-                                 # known to support WebSocket.
+wanctl login    # opens the team portal in a browser; user logs in via Feishu,
+                # copies the one-time code, and pastes it back here. Token is
+                # saved under the controller's config dir (no env needed).
 ```
 
-With `WANCTL_TRANSPORT=http`, set `WANCTL_RELAY` to the `https://` form.
+If a token is already provided in `WANCTL_TOKEN` (CI / pre-provisioned), skip
+`wanctl login`. To re-authorize later, run `wanctl login` again. To clear the
+saved credential, `wanctl logout`.
+
+Optional env overrides (only set if the user explicitly tells you to):
+
+```bash
+export WANCTL_RELAY=wss://other-relay.example.com   # different relay
+export WANCTL_TRANSPORT=ws                          # only if relay supports WS
+export WANCTL_TOKEN=<token>                         # pre-provisioned, skips login
+```
 
 ## Core commands
 
@@ -91,22 +106,25 @@ controller side.
 ## Enrolling a new device (the controlled side)
 
 If you have shell access to a machine that should become controllable (or are
-telling the user how), enroll it in one line — no Go needed, the relay serves a
-prebuilt binary + installer:
+telling the user how), enroll it in two lines — no Go needed, the relay serves
+a prebuilt binary + installer:
 
 ```bash
-curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | WANCTL_TOKEN=<token> sh
+curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh
+wanctl                          # then run this on that machine — opens the
+                                # browser for Feishu login, takes a code, and
+                                # starts the agent in the background.
 ```
 
-Detects OS/arch, installs `wanctl`, runs the agent (foreground). To persist as a
-background service: add `WANCTL_INSTALL_ONLY=1` to just install, then
-`nohup wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token <token> --transport http --name "$(hostname)" &`.
-Optional env: `WANCTL_NAME`, `WANCTL_MODE=bypass` (auto-allow; trusted devices
-only). Tokens come from the portal
-`https://wanctl.***REMOVED***.***REMOVED***.com` (Feishu login → issue token, shown once).
+For non-interactive setups (CI / pre-issued token), set `WANCTL_TOKEN=<tok>` on
+the curl line: `curl ... | WANCTL_TOKEN=tok sh`. Optional env: `WANCTL_NAME`,
+`WANCTL_MODE=bypass` (auto-allow; trusted devices only). On that machine,
+`wanctl stop` to stop, `wanctl status` to inspect.
 
 ## Notes
 
 - One Go binary plays controller, agent, and relay. As a controller you only use
   the controller commands above.
+- The user can also edit the team's documentation via `wanctl docs ...` (see
+  `wanctl docs --help`) and browse it at https://wanctl.***REMOVED***.***REMOVED***.com .
 - Source / design: `~/projects/wanctl` (mainline branch `main`).

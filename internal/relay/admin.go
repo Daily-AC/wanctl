@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -38,6 +39,67 @@ func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/acl/revoke", r.adminACLRevoke)
 	mux.HandleFunc("/admin/audit", r.adminAudit)
 	mux.HandleFunc("/admin/enroll/mint", r.handleEnrollMint)
+	mux.HandleFunc("/admin/docs/groups", r.adminDocsGroup)
+	mux.HandleFunc("/admin/docs/groups/delete", r.adminDocsGroupDelete)
+	mux.HandleFunc("/admin/docs/articles", r.adminDocsArticle)
+	mux.HandleFunc("/admin/docs/articles/delete", r.adminDocsArticleDelete)
+}
+
+// adminDocsGroup is the admin-secret-gated mirror of POST /docs/groups. The
+// author namespace comes from the caller-supplied "author" JSON field (the
+// portal injects the SSO-resolved namespace there).
+func (r *Relay) adminDocsGroup(w http.ResponseWriter, req *http.Request) {
+	if !r.adminOK(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	author := adminAuthorFromBody(req)
+	r.docsUpsertGroup(w, req, author)
+}
+
+func (r *Relay) adminDocsGroupDelete(w http.ResponseWriter, req *http.Request) {
+	if !r.adminOK(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	r.docsDeleteGroup(w, req)
+}
+
+func (r *Relay) adminDocsArticle(w http.ResponseWriter, req *http.Request) {
+	if !r.adminOK(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	author := adminAuthorFromBody(req)
+	r.docsUpsertArticle(w, req, author)
+}
+
+func (r *Relay) adminDocsArticleDelete(w http.ResponseWriter, req *http.Request) {
+	if !r.adminOK(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	r.docsDeleteArticle(w, req)
+}
+
+// adminAuthorFromBody peeks at the "author" JSON field without consuming the
+// body (it re-wraps it for the downstream handler). Empty if absent or
+// unparseable — the downstream handler will still succeed; author just stays
+// blank in the audit row.
+func adminAuthorFromBody(req *http.Request) string {
+	if req.Body == nil {
+		return ""
+	}
+	var probe map[string]any
+	buf := new(strings.Builder)
+	_, _ = io.Copy(buf, req.Body)
+	raw := buf.String()
+	req.Body = io.NopCloser(strings.NewReader(raw))
+	json.Unmarshal([]byte(raw), &probe)
+	if a, _ := probe["author"].(string); a != "" {
+		return a
+	}
+	return ""
 }
 
 func (r *Relay) adminResolveUser(w http.ResponseWriter, req *http.Request) {

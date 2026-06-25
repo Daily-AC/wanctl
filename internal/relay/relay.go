@@ -53,6 +53,7 @@ type Relay struct {
 	acl         ACLChecker
 	audit       Auditor
 	admin       AdminStore
+	docs        DocsStore
 	adminSecret string
 	portalNS    string
 
@@ -97,6 +98,7 @@ func (r *Relay) Handler() http.Handler {
 	mux.HandleFunc("/h/close", r.handleHClose)
 	mux.HandleFunc("/h/deregister", r.handleHDeregister)
 	mux.HandleFunc("/enroll/exchange", r.handleEnrollExchange)
+	r.registerDocs(mux)
 	r.registerAdmin(mux)
 	r.registerDist(mux)
 	return mux

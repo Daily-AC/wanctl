@@ -31,9 +31,18 @@ const usage = `wanctl — control a device across the internet over an encrypted
 
 USAGE
   wanctl                                      log in (Feishu) if needed, then run the agent in the background
+  wanctl login                                log in (Feishu) and save the token — no daemon (use this on AI / controller boxes)
   wanctl stop                                 stop the background agent
   wanctl status                               show whether the agent is running
   wanctl logout                               stop the agent and forget the saved login
+  wanctl docs ls [--group SLUG]               list documentation articles
+  wanctl docs get <slug>                      print one article's body
+  wanctl docs new --slug S --title T --group G [--file F | --editor | < stdin]
+  wanctl docs edit <slug> [--file F | --editor | < stdin]
+  wanctl docs rm <slug>
+  wanctl docs groups                          list documentation groups
+  wanctl docs group new --slug S --title T [--position N]
+  wanctl docs group rm <slug>
   wanctl exec  [--target NS/DEV] [--oneshot] <command...>
   wanctl push  [--target NS/DEV] <local> <remote>
   wanctl pull  [--target NS/DEV] <remote> <local>
@@ -95,8 +104,12 @@ func main() {
 		err = cmdRules(os.Args[2:])
 	case "logs":
 		err = cmdLogs(ctx, os.Args[2:])
-	case "up", "login":
+	case "up":
 		err = cmdUp(ctx)
+	case "login":
+		err = cmdLogin(ctx)
+	case "docs":
+		err = cmdDocs(ctx, os.Args[2:])
 	case "start":
 		err = cmdStart()
 	case "stop":
@@ -140,6 +153,7 @@ func cmdRelay(args []string) error {
 		r.SetACL(pg)
 		r.SetAuditor(pg)
 		r.SetAdmin(pg)
+		r.SetDocs(pg)
 		if sec := os.Getenv("WANCTL_ADMIN_SECRET"); sec != "" {
 			r.SetAdminSecret(sec)
 			fmt.Println("wanctl relay: admin API enabled (portal access)")

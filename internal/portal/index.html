@@ -219,6 +219,55 @@
   .doc pre:hover::after{content:'点击复制';position:absolute;top:8px;right:12px;font-size:11px;color:#b7ad9c}
   .doc code{background:#f3ede2;border-radius:6px;padding:1px 6px;font-family:ui-monospace,monospace;font-size:12.5px;color:#9a5a26}
   .dlist{margin:8px 0 0;padding-left:18px;color:#5f5950;font-size:14px;line-height:1.95}
+
+  /* docs (DB-backed, DeepSeek-style sidebar) */
+  .docpage{display:grid;grid-template-columns:240px 1fr;gap:22px;margin-top:18px;align-items:start}
+  .docnav{background:var(--card,#fffdf9);border:1px solid var(--line,#f3e4d3);border-radius:18px;padding:14px;position:sticky;top:14px}
+  .dnavtop{display:flex;gap:6px;margin-bottom:10px}
+  .dnavtop .addbtn{flex:1;font-size:12px;padding:6px 8px;display:inline-flex;align-items:center;justify-content:center;gap:4px;background:var(--cream-2,#ffeede);border:1px solid var(--line-2,#ecd9c4);color:var(--peach-d,#ff9e66);border-radius:10px;cursor:pointer;font-weight:600}
+  .dnavtop .addbtn:hover{background:#fff;border-color:var(--peach,#ffb487);color:var(--peach-d,#ff9e66)}
+  .dnavtop .addbtn svg{width:13px;height:13px}
+  .dtree .dg{margin-bottom:8px}
+  .dtree .dgh{font-weight:700;color:var(--ink,#6b5446);font-size:13px;padding:6px 8px 6px 8px;display:flex;justify-content:space-between;align-items:center}
+  .dtree .dgh .editlink{font-size:11px;color:var(--ink-3,#c9b6a6);cursor:pointer;opacity:.6;font-weight:500}
+  .dtree .dgh .editlink:hover{opacity:1;color:var(--berry-d,#ff5f86)}
+  .dtree ul{list-style:none;margin:0;padding:0}
+  .dtree li{font-size:13px;padding:7px 10px;border-radius:10px;cursor:pointer;color:#7a6e60;line-height:1.4}
+  .dtree li.on{background:var(--cream-2,#ffeede);color:var(--peach-d,#ff9e66);font-weight:600}
+  .dtree li:hover:not(.on){background:var(--cream,#fff6ea)}
+  .dtree .emptyli{opacity:.45;cursor:default;font-style:italic}
+  .docart{background:var(--card,#fffdf9);border:1px solid var(--line,#f3e4d3);border-radius:18px;padding:32px 42px;min-height:480px}
+  .docart > .empty{padding:60px 0;text-align:center;color:var(--ink-3,#c9b6a6)}
+  .docart .doctitle{font-size:24px;margin:0 0 4px;color:var(--ink,#6b5446);font-weight:700}
+  .docart .docmeta{font-size:12px;color:var(--ink-2,#a08977);margin-bottom:22px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .docart .docmeta .acts{margin-left:auto;display:flex;gap:8px}
+  .docart .docmeta .acts button{font:inherit;font-size:12px;padding:5px 12px;background:#fff;border:1px solid var(--line,#f3e4d3);border-radius:10px;color:#7a6e60;cursor:pointer}
+  .docart .docmeta .acts button:hover{border-color:var(--peach,#ffb487);color:var(--peach-d,#ff9e66)}
+  .docart .docmeta .acts .del:hover{border-color:var(--berry-d,#ff5f86);color:var(--berry-d,#ff5f86)}
+  .mdbody{color:#5f5950;font-size:14.5px;line-height:1.78}
+  .mdbody h1,.mdbody h2,.mdbody h3,.mdbody h4{color:var(--ink,#6b5446);margin:24px 0 10px;line-height:1.4}
+  .mdbody h1{font-size:20px}.mdbody h2{font-size:17px}.mdbody h3{font-size:15px}.mdbody h4{font-size:14px}
+  .mdbody p{margin:10px 0}
+  .mdbody ul,.mdbody ol{margin:8px 0;padding-left:22px}
+  .mdbody li{margin:5px 0}
+  .mdbody blockquote{border-left:3px solid var(--peach,#ffb487);background:var(--cream,#fff6ea);padding:8px 14px;margin:14px 0;color:#7a6e60;border-radius:0 8px 8px 0;font-size:13.5px}
+  .mdbody hr{border:none;border-top:1px dashed var(--line-2,#ecd9c4);margin:18px 0}
+  .mdbody a{color:var(--peach-d,#ff9e66);text-decoration:none;border-bottom:1px dashed currentColor}
+  .mdbody a:hover{color:var(--berry-d,#ff5f86)}
+  .mdbody code{background:var(--cream-2,#ffeede);border-radius:6px;padding:1px 6px;font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--caramel,#c98f5d)}
+  .mdbody pre{background:#2c2a26;color:#f3ede2;border-radius:12px;padding:14px 16px;margin:14px 0;font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:13px;line-height:1.7;overflow-x:auto;cursor:pointer;position:relative;white-space:pre}
+  .mdbody pre code{background:none;color:inherit;padding:0;font-size:inherit}
+  .mdbody pre:hover::after{content:'点击复制';position:absolute;top:8px;right:12px;font-size:11px;color:#b7ad9c;background:rgba(0,0,0,.35);padding:2px 6px;border-radius:6px}
+  .docedit{display:flex;flex-direction:column;gap:10px}
+  .docedit .row{display:flex;gap:10px;align-items:center}
+  .docedit .row label{font-size:12px;color:var(--ink-2,#a08977);min-width:48px}
+  .docedit input,.docedit select{font:inherit;padding:8px 12px;border:1px solid var(--line-2,#ecd9c4);border-radius:10px;background:#fff;color:var(--ink,#6b5446)}
+  .docedit textarea{font:13px 'JetBrains Mono',ui-monospace,Menlo,monospace;padding:14px;border:1px solid var(--line-2,#ecd9c4);border-radius:12px;background:#fffdf9;color:var(--ink,#6b5446);min-height:420px;resize:vertical;line-height:1.65}
+  .docedit .btns{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
+  .docedit .btns button{font:inherit;padding:8px 18px;border-radius:10px;cursor:pointer;border:1px solid var(--line-2,#ecd9c4);background:#fff;color:var(--ink,#6b5446)}
+  .docedit .btns .save{background:var(--peach,#ffb487);border-color:var(--peach,#ffb487);color:#fff;font-weight:600}
+  .docedit .btns .save:hover{background:var(--peach-d,#ff9e66)}
+  @media (max-width:780px){.docpage{grid-template-columns:1fr}.docnav{position:static}}
   .guidebar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:linear-gradient(180deg,#fffaf2,#fff);border:1px dashed #ffcf9b;border-radius:16px;padding:14px 18px;margin:4px 0 18px}
   .guidebar .gtxt{flex:1;min-width:240px;color:#6f685d;font-size:13.5px;line-height:1.6}
   .guidebar code{background:#f3ede2;border-radius:6px;padding:1px 6px;font-family:ui-monospace,monospace;font-size:11.5px;color:#9a5a26}
@@ -324,7 +373,7 @@
     <button data-sec="tokens"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="M11 12 21 2M17 6l2 2"/></svg>访问令牌</button>
     <button data-sec="acl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11l2 2 4-4"/></svg>共享授权</button>
     <button data-sec="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Relay 审计</button>
-    <button data-sec="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M14 3v5h5M8 13h8M8 17h6" stroke-linecap="round"/></svg>上手文档</button>
+    <button data-sec="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M14 3v5h5M8 13h8M8 17h6" stroke-linecap="round"/></svg>使用文档</button>
   </nav>
 
   <div class="errbar" id="err"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 9v4M12 17h.01M10.3 4 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0Z"/></svg><span id="errmsg"></span></div>
@@ -336,7 +385,7 @@
       <p class="sub">经飞书 SSO 登录后纳管的设备。绿脸在线、灰脸离线，点一张卡片进去远程审批它待办的高危操作～</p>
       <div class="guidebar" id="guidebar">
         <span class="gtxt">🌱 新来的？在一台机器上跑 <code>curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh</code> 再 <code>wanctl</code> 登录，它就出现在这里啦。</span>
-        <button class="glink" data-goto="docs">看上手文档 →</button>
+        <button class="glink" data-goto="docs">看使用文档 →</button>
       </div>
       <div class="grid" id="grid"><div class="empty">正在召唤设备们…</div></div>
       <div class="stats">
@@ -440,62 +489,19 @@
 
     <!-- docs -->
     <section class="view" data-view="docs">
-      <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><path d="M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M14 3v5h5M8 13h8M8 17h6" stroke-linecap="round"/></svg>上手文档</h1>
-      <p class="sub">三步把任何一台机器变成"可被你（或你的 AI）远程指挥"的小设备。命令点一下即复制～</p>
-      <div class="doc">
-
-        <div class="dcard">
-          <div class="dnum">①</div>
-          <div class="dbody">
-            <h2>把一台设备变成「可远程控制」</h2>
-            <p>在<b>要被控制的那台机器</b>上跑下面两行。第一行装好工具，第二行用飞书登录把它绑到你的空间：</p>
-            <pre data-copy>curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh
-wanctl</pre>
-            <p class="hint">浏览器会弹飞书登录并显示一个一次性 code，贴回终端回车即可。之后服务转入后台，<code>wanctl stop</code> 停、<code>wanctl status</code> 看状态。装的时候<b>不需要任何 token</b>。</p>
+      <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><path d="M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M14 3v5h5M8 13h8M8 17h6" stroke-linecap="round"/></svg>使用文档</h1>
+      <p class="sub">从 DB 加载，登录用户可在浏览器里直接编辑。代码块点一下即复制～</p>
+      <div class="docpage">
+        <aside class="docnav">
+          <div class="dnavtop" id="docNavTop" style="display:none">
+            <button class="addbtn" id="docNewArt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>文章</button>
+            <button class="addbtn" id="docNewGrp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>分组</button>
           </div>
-        </div>
-
-        <div class="dcard">
-          <div class="dnum">②</div>
-          <div class="dbody">
-            <h2>从你的电脑控制别的设备</h2>
-            <p>同样先 <code>wanctl</code> 登录一次（拿到身份）。然后零配置直接用：</p>
-            <pre data-copy>wanctl peers                                  # 看有哪些设备在线
-wanctl exec --target 设备名 "uname -a"        # 在它上面跑命令
-wanctl push --target 设备名 ./本地 /远程       # 传文件上去
-wanctl pull --target 设备名 /远程 ./本地       # 拉文件下来</pre>
-            <p class="hint">relay 地址、传输方式都内置了默认值，<b>不用配任何环境变量</b>。第一次控制某台新设备，会在那台设备的网页「待审批 / 已信任」里等它点头。</p>
-          </div>
-        </div>
-
-        <div class="dcard hot">
-          <div class="dnum">③</div>
-          <div class="dbody">
-            <h2>让你的 AI 来控制设备</h2>
-            <p>让 AI（如 Claude Code）当"控制端"，你在网页审批。两步：</p>
-            <p class="step"><b>a.</b> 在「访问令牌」页签发一个 token 给 AI；让 AI 设两个环境变量——token 用来连接，<code>WANCTL_LABEL</code> 让它<b>自报家门</b>（否则配对时你只看到一串指纹，不知道是谁）：</p>
-            <pre data-copy>export WANCTL_TOKEN=你签发的token
-export WANCTL_LABEL="Claude · 帮我巡检 home-pc"</pre>
-            <p class="step"><b>b.</b> 跟 AI 说一句：<b>「安装 wanctl skill」</b>。装好后它就能用 <code>wanctl exec/push/pull</code> 控制你授权的设备。</p>
-            <p class="hint">AI 第一次连某台设备 → 设备网页「待审批」会冒出<b>配对请求</b>，上面写着你填的 label（"Claude · 帮我巡检…"），你点「信任它」即可。之后它发的每条命令仍会在「待审批」等你点头（除非你在「模式」里切放飞，或在「规则」里预放行）。</p>
-          </div>
-        </div>
-
-        <div class="dcard">
-          <div class="dnum">♥</div>
-          <div class="dbody">
-            <h2>审批、信任与管理</h2>
-            <ul class="dlist">
-              <li><b>待审批</b>：控制端发来的高危操作，逐条「允许一次 / 记住 / 拒绝」。</li>
-              <li><b>已信任</b>：谁能控制这台设备，一目了然，可随时<b>撤销信任</b>。</li>
-              <li><b>模式</b>：乖乖（没命中规则就问你）/ 放飞（全自动放行，仅限可信设备）。</li>
-              <li><b>规则</b>：把常用安全命令预放行，省得每次点。</li>
-              <li><b>解除设备</b>：设备详情页右上角，把它从你的空间移除。</li>
-              <li><b>共享授权</b>：把某台设备的权限分享给命名空间外的同事。</li>
-            </ul>
-          </div>
-        </div>
-
+          <div id="docTree" class="dtree"><div class="empty">加载中…</div></div>
+        </aside>
+        <article class="docart" id="docArt">
+          <div class="empty">在左边选一篇文章</div>
+        </article>
       </div>
     </section>
 
@@ -567,7 +573,7 @@ $$('[data-goto]').forEach(b=>b.onclick=()=>{const t=document.querySelector('nav 
 $$('nav button').forEach(b=>b.onclick=()=>{
   $$('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');closeDevice();
   const s=b.dataset.sec;showView(s);
-  if(s==='devices')loadOverview();if(s==='tokens')loadTokens();if(s==='acl')loadACL();if(s==='audit')loadAudit();
+  if(s==='devices')loadOverview();if(s==='tokens')loadTokens();if(s==='acl')loadACL();if(s==='audit')loadAudit();if(s==='docs')loadDocs();
 });
 
 /* ---- overview (devices + stats) ---- */
@@ -847,9 +853,187 @@ async function loadAudit(){
   }catch(e){err('审计加载失败：'+e.message)}
 }
 
+/* ---- docs (DB-backed) ---- */
+let docTree=null, curDocSlug=null, docMe=null;
+
+async function loadDocs(){
+  try{
+    docTree=await jget('/api/docs/tree');
+    try{docMe=await jget('/api/me')}catch{docMe=null}
+    renderDocNav();
+    const h=(location.hash||'').match(/^#docs\/(.+)$/);
+    const want=(h&&h[1])||curDocSlug||firstArticleSlug();
+    if(want)openDocArticle(want);
+    else $('#docArt').innerHTML='<div class="empty">还没有文章。点左边「+ 文章」新建第一篇。</div>';
+  }catch(e){err('加载文档失败：'+e.message)}
+}
+
+function firstArticleSlug(){
+  for(const g of (docTree?.groups||[]))for(const a of (g.articles||[]))return a.slug;
+  return null;
+}
+
+function renderDocNav(){
+  const can=!!docMe?.namespace;
+  $('#docNavTop').style.display=can?'':'none';
+  const html=(docTree?.groups||[]).map(g=>`
+    <div class="dg">
+      <div class="dgh"><span>${esc(g.title)}</span>${can?`<span class="editlink" data-grp-edit="${esc(g.slug)}">改名</span>`:''}</div>
+      <ul>${(g.articles||[]).map(a=>`<li data-slug="${esc(a.slug)}"${a.slug===curDocSlug?' class="on"':''}>${esc(a.title)}</li>`).join('')||'<li class="emptyli">（空）</li>'}</ul>
+    </div>`).join('')||'<div class="empty">没有分组</div>';
+  $('#docTree').innerHTML=html;
+  $$('#docTree li[data-slug]').forEach(li=>li.onclick=()=>openDocArticle(li.dataset.slug));
+  $$('#docTree .editlink').forEach(s=>s.onclick=()=>docGroupEdit(s.dataset.grpEdit));
+}
+
+async function openDocArticle(slug){
+  curDocSlug=slug;
+  history.replaceState(null,'','#docs/'+encodeURIComponent(slug));
+  $$('#docTree li').forEach(li=>li.classList.toggle('on',li.dataset.slug===slug));
+  try{
+    const a=await jget('/api/docs/article/'+encodeURIComponent(slug));
+    const can=!!docMe?.namespace;
+    $('#docArt').innerHTML=
+      '<div class="doctitle">'+esc(a.title)+'</div>'+
+      '<div class="docmeta">'+
+        '<span>'+esc(a.group_slug||'（未分组）')+'</span>'+
+        '<span>· 更新于 '+esc(fmt(a.updated_at))+'</span>'+
+        (a.author_namespace?'<span>· by '+esc(a.author_namespace)+'</span>':'')+
+        (can?'<div class="acts"><button data-act="edit">编辑</button><button class="del" data-act="del">删除</button></div>':'')+
+      '</div>'+
+      '<div class="mdbody">'+mdRender(a.body||'')+'</div>';
+    $$('#docArt [data-act="edit"]').forEach(b=>b.onclick=()=>docArtEdit(a));
+    $$('#docArt [data-act="del"]').forEach(b=>b.onclick=()=>askConfirm('删除文章','确认删除「'+a.title+'」？此操作不可撤销。','删除',async()=>{
+      await jpost('/api/docs/articles/delete',{slug:a.slug});
+      curDocSlug=null; toast('ok','已删除'); loadDocs();
+    }));
+    bindMdCopy();
+  }catch(e){$('#docArt').innerHTML='<div class="empty">加载失败：'+esc(e.message)+'</div>'}
+}
+
+function docArtEdit(a){
+  const opts=(docTree?.groups||[]).map(g=>`<option value="${esc(g.slug)}"${g.slug===a.group_slug?' selected':''}>${esc(g.title)}</option>`).join('');
+  $('#docArt').innerHTML=`<div class="docedit">
+    <div class="row"><label>标题</label><input id="ei_title" style="flex:1"></div>
+    <div class="row"><label>分组</label><select id="ei_group" style="flex:1">${opts}</select><label>位序</label><input id="ei_pos" type="number" style="width:90px"></div>
+    <textarea id="ei_body" spellcheck="false"></textarea>
+    <div class="btns"><button id="ei_cancel">取消</button><button class="save" id="ei_save">保存</button></div>
+  </div>`;
+  $('#ei_title').value=a.title||'';
+  $('#ei_pos').value=a.position||0;
+  $('#ei_body').value=a.body||'';
+  $('#ei_cancel').onclick=()=>openDocArticle(a.slug);
+  $('#ei_save').onclick=async()=>{
+    try{
+      await jpost('/api/docs/articles',{slug:a.slug,title:$('#ei_title').value.trim()||a.slug,group_slug:$('#ei_group').value,position:+$('#ei_pos').value||0,body:$('#ei_body').value});
+      toast('ok','已保存'); docTree=await jget('/api/docs/tree'); renderDocNav(); openDocArticle(a.slug);
+    }catch(e){err('保存失败：'+e.message)}
+  };
+}
+
+function docArtNew(){
+  if(!(docTree?.groups||[]).length)return err('先建一个分组');
+  const opts=(docTree.groups||[]).map(g=>`<option value="${esc(g.slug)}">${esc(g.title)}</option>`).join('');
+  $('#docArt').innerHTML=`<div class="docedit">
+    <div class="row"><label>Slug</label><input id="ei_slug" placeholder="my-article" style="flex:1"></div>
+    <div class="row"><label>标题</label><input id="ei_title" placeholder="文章标题" style="flex:1"></div>
+    <div class="row"><label>分组</label><select id="ei_group" style="flex:1">${opts}</select><label>位序</label><input id="ei_pos" type="number" value="10" style="width:90px"></div>
+    <textarea id="ei_body" spellcheck="false" placeholder="# 标题\n\n用 markdown 写正文……"></textarea>
+    <div class="btns"><button id="ei_cancel">取消</button><button class="save" id="ei_save">创建</button></div>
+  </div>`;
+  $('#ei_cancel').onclick=()=>{if(curDocSlug)openDocArticle(curDocSlug);else $('#docArt').innerHTML='<div class="empty">在左边选一篇文章</div>'};
+  $('#ei_save').onclick=async()=>{
+    const slug=$('#ei_slug').value.trim();
+    if(!slug)return err('slug 不能为空');
+    try{
+      await jpost('/api/docs/articles',{slug,title:$('#ei_title').value.trim()||slug,group_slug:$('#ei_group').value,position:+$('#ei_pos').value||0,body:$('#ei_body').value});
+      toast('ok','已创建'); curDocSlug=slug; loadDocs();
+    }catch(e){err('创建失败：'+e.message)}
+  };
+}
+
+function docGroupNew(){
+  const slug=prompt('新分组 slug（仅小写字母 / 数字 / -）');
+  if(!slug)return;
+  const title=prompt('分组标题','新分组')||'新分组';
+  jpost('/api/docs/groups',{slug:slug.trim(),title:title.trim(),position:100}).then(()=>{toast('ok','已新建');loadDocs()}).catch(e=>err(e.message));
+}
+
+function docGroupEdit(slug){
+  const g=(docTree?.groups||[]).find(x=>x.slug===slug);if(!g)return;
+  const action=prompt('改名直接输入新标题；输入 #del 删除整个分组（仅限空分组）',g.title);
+  if(action===null||action===g.title)return;
+  if(action==='#del'){
+    askConfirm('删除分组','确定删除「'+g.title+'」？只能删空分组（先把文章删掉或移走）。','删除',async()=>{
+      try{await jpost('/api/docs/groups/delete',{slug});toast('ok','已删除');loadDocs()}
+      catch(e){err(e.message)}
+    });
+    return;
+  }
+  jpost('/api/docs/groups',{slug,title:action.trim(),position:g.position||0}).then(()=>{toast('ok','已改名');loadDocs()}).catch(e=>err(e.message));
+}
+
+function bindMdCopy(){
+  $$('.mdbody pre').forEach(p=>p.onclick=()=>{if(navigator.clipboard)navigator.clipboard.writeText(p.textContent);toast('ok','已复制到剪贴板')});
+}
+
+/* tiny markdown renderer (paragraphs, headers h1–h4, fenced/inline code,
+   bold/italic, links, ul/ol, blockquote, hr). Inputs are sanitised via eH. */
+function mdRender(src){
+  const lines=(src||'').replace(/\r\n/g,'\n').split('\n');
+  const eH=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const inl=s=>{
+    s=eH(s);
+    s=s.replace(/`([^`]+?)`/g,'<code>$1</code>');
+    s=s.replace(/\*\*([^*]+?)\*\*/g,'<strong>$1</strong>');
+    s=s.replace(/\*([^*]+?)\*/g,'<em>$1</em>');
+    s=s.replace(/\[([^\]]+?)\]\(([^)]+?)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+    return s;
+  };
+  let out='',i=0;
+  while(i<lines.length){
+    const l=lines[i];
+    if(l.startsWith('```')){let code='';i++;while(i<lines.length&&!lines[i].startsWith('```'))code+=lines[i++]+'\n';i++;out+='<pre>'+eH(code.replace(/\n$/,''))+'</pre>';continue}
+    if(/^---+\s*$/.test(l)){out+='<hr>';i++;continue}
+    const h=/^(#{1,4})\s+(.*)$/.exec(l);
+    if(h){const n=h[1].length;out+='<h'+n+'>'+inl(h[2])+'</h'+n+'>';i++;continue}
+    if(l.startsWith('> ')){let q='';while(i<lines.length&&lines[i].startsWith('> '))q+=lines[i++].slice(2)+'\n';out+='<blockquote>'+inl(q.trim()).replace(/\n/g,'<br>')+'</blockquote>';continue}
+    if(/^[-*]\s+/.test(l)){let lis='';while(i<lines.length&&/^[-*]\s+/.test(lines[i]))lis+='<li>'+inl(lines[i++].replace(/^[-*]\s+/,''))+'</li>';out+='<ul>'+lis+'</ul>';continue}
+    if(/^\d+\.\s+/.test(l)){let lis='';while(i<lines.length&&/^\d+\.\s+/.test(lines[i]))lis+='<li>'+inl(lines[i++].replace(/^\d+\.\s+/,''))+'</li>';out+='<ol>'+lis+'</ol>';continue}
+    if(l.trim()===''){i++;continue}
+    let p=l;i++;
+    while(i<lines.length&&lines[i].trim()!==''&&!/^(```|#{1,4}\s|>\s|[-*]\s|\d+\.\s|---+\s*$)/.test(lines[i]))p+='\n'+lines[i++];
+    out+='<p>'+inl(p).replace(/\n/g,'<br>')+'</p>';
+  }
+  return out;
+}
+
+/* askConfirm: reuse the existing modal */
+function askConfirm(title,msg,okLabel,onOk){
+  $('#mTitle').textContent=title;
+  $('#mMsg').textContent=msg;
+  $('#mOk').textContent=okLabel||'确定';
+  $('#modal').classList.add('show');
+  $('#mCancel').onclick=()=>$('#modal').classList.remove('show');
+  $('#mOk').onclick=async()=>{$('#modal').classList.remove('show');try{await onOk()}catch(e){err(e.message)}};
+}
+
+$('#docNewArt').onclick=docArtNew;
+$('#docNewGrp').onclick=docGroupNew;
+
 /* ---- me + boot ---- */
-async function loadMe(){try{const m=await jget('/api/me');$('#ns').textContent=m.namespace||'—';$('#fp').textContent=m.identity||'';}catch(e){$('#fp').textContent='未登录';err('未登录或会话失效：'+e.message)}}
-loadMe();loadOverview();
+async function loadMe(){try{const m=await jget('/api/me');$('#ns').textContent=m.namespace||'—';$('#fp').textContent=m.identity||'';docMe=m}catch(e){$('#fp').textContent='未登录';err('未登录或会话失效：'+e.message)}}
+
+/* If page was opened with #docs/<slug>, jump to docs tab first. */
+function bootSection(){
+  if(location.hash.startsWith('#docs')){
+    const btn=document.querySelector('nav button[data-sec="docs"]');
+    if(btn){btn.click();return true}
+  }
+  return false;
+}
+loadMe();
+if(!bootSection())loadOverview();
 </script>
 </body>
 </html>

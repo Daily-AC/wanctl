@@ -25,6 +25,9 @@ import (
 //go:embed index.html
 var assets embed.FS
 
+//go:embed skill.md
+var skillMD []byte
+
 // Config holds all parameters for New.
 type Config struct {
 	RelayAdminURL string // https://relay  (admin /admin/* proxy target)
@@ -77,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/whoami", s.handleWhoami)
 	mux.HandleFunc("/enroll", s.handleEnroll)
+	mux.HandleFunc("/skills", s.handleSkills)
 	mux.HandleFunc("/api/me", s.handleMe)
 	mux.HandleFunc("/api/tokens", s.handleTokens)
 	mux.HandleFunc("/api/tokens/revoke", s.handleTokenRevoke)
@@ -93,7 +97,115 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices/mode", s.handleDeviceMode)
 	mux.HandleFunc("/api/devices/logs", s.handleDeviceLogs)
 	mux.HandleFunc("/api/devices/events", s.handleDeviceEvents)
+	mux.HandleFunc("/api/docs/tree", s.handleDocsTree)
+	mux.HandleFunc("/api/docs/article/", s.handleDocsArticleGet)
+	mux.HandleFunc("/api/docs/articles", s.handleDocsArticleWrite)
+	mux.HandleFunc("/api/docs/articles/delete", s.handleDocsArticleDelete)
+	mux.HandleFunc("/api/docs/groups", s.handleDocsGroupWrite)
+	mux.HandleFunc("/api/docs/groups/delete", s.handleDocsGroupDelete)
 	return mux
+}
+
+// --- docs ---
+//
+// Tree and per-article reads hit the relay's public endpoints (no auth, no
+// admin secret). Writes require a logged-in SSO user — the portal resolves the
+// SSO header to a namespace, then forwards to the relay's admin-gated mirror
+// with that namespace stamped as the article author.
+
+func (s *Server) handleDocsTree(w http.ResponseWriter, r *http.Request) {
+	s.proxyRelayPublic(w, "/docs/tree.json")
+}
+
+func (s *Server) handleDocsArticleGet(w http.ResponseWriter, r *http.Request) {
+	slug := strings.TrimPrefix(r.URL.Path, "/api/docs/article/")
+	if slug == "" {
+		http.NotFound(w, r)
+		return
+	}
+	s.proxyRelayPublic(w, "/docs/"+slug+".json")
+}
+
+func (s *Server) handleDocsArticleWrite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	ns, ok := s.requireNS(w, r)
+	if !ok {
+		return
+	}
+	s.docsForwardAdmin(w, r, "/admin/docs/articles", ns)
+}
+
+func (s *Server) handleDocsArticleDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := s.requireNS(w, r); !ok {
+		return
+	}
+	s.docsForwardAdmin(w, r, "/admin/docs/articles/delete", "")
+}
+
+func (s *Server) handleDocsGroupWrite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	ns, ok := s.requireNS(w, r)
+	if !ok {
+		return
+	}
+	s.docsForwardAdmin(w, r, "/admin/docs/groups", ns)
+}
+
+func (s *Server) handleDocsGroupDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := s.requireNS(w, r); !ok {
+		return
+	}
+	s.docsForwardAdmin(w, r, "/admin/docs/groups/delete", "")
+}
+
+// docsForwardAdmin merges the SSO-resolved namespace into the JSON body as
+// "author" and forwards to the relay admin endpoint with the shared secret.
+func (s *Server) docsForwardAdmin(w http.ResponseWriter, r *http.Request, path, author string) {
+	body := map[string]any{}
+	if r.Body != nil {
+		json.NewDecoder(r.Body).Decode(&body)
+	}
+	if author != "" {
+		body["author"] = author
+	}
+	resp, err := s.adminReq("POST", path, nil, body)
+	if err != nil {
+		http.Error(w, "relay unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	copyResp(w, resp)
+}
+
+// proxyRelayPublic forwards a GET to a relay public endpoint (no auth header).
+// Used for docs reads, which are public.
+func (s *Server) proxyRelayPublic(w http.ResponseWriter, path string) {
+	if s.relayURL == "" {
+		http.Error(w, "portal not wired", http.StatusServiceUnavailable)
+		return
+	}
+	req, _ := http.NewRequest("GET", s.relayURL+path, nil)
+	resp, err := s.hc.Do(req)
+	if err != nil {
+		http.Error(w, "relay unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	copyResp(w, resp)
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +216,16 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	b, _ := assets.ReadFile("index.html")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(b)
+}
+
+// handleSkills serves the canonical wanctl SKILL markdown. Users tell their AI
+// "安装 https://wanctl.***REMOVED***.***REMOVED***.com/skills"; the AI WebFetches this URL and
+// writes the response to ~/.claude/skills/wanctl/SKILL.md.
+func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", `inline; filename="SKILL.md"`)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Write(skillMD)
 }
 
 // handleWhoami dumps request headers so we can discover the SSO identity header.
