@@ -130,6 +130,9 @@ the curl line: `curl ... | WANCTL_TOKEN=tok sh`. Optional env: `WANCTL_NAME`,
 
 - One Go binary plays controller, agent, and relay. As a controller you only use
   the controller commands above.
+- To upgrade `wanctl` itself (controller or device side): run `wanctl update`.
+  It fetches the latest binary from the relay and atomically replaces the
+  current one; if a background daemon is running it is restarted automatically.
 - The user can also edit the team's documentation via `wanctl docs ...` (see
   `wanctl docs --help`) and browse it at https://wanctl.***REMOVED***.***REMOVED***.com .
 - Source / design: `~/projects/wanctl` (mainline branch `main`).

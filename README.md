@@ -78,6 +78,13 @@ nohup wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com 
 > **「安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills」**
 > (the agent WebFetches that URL and writes it to `~/.claude/skills/wanctl/SKILL.md`).
 
+## Self-update
+
+```bash
+wanctl update                                  # fetch latest binary from the relay
+                                               # and atomically swap it in; restarts daemon
+```
+
 ## Build from source
 
 ```bash

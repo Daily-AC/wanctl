@@ -35,6 +35,7 @@ USAGE
   wanctl stop                                 stop the background agent
   wanctl status                               show whether the agent is running
   wanctl logout                               stop the agent and forget the saved login
+  wanctl update                               download the latest binary from the relay and swap it in
   wanctl docs ls [--group SLUG]               list documentation articles
   wanctl docs get <slug>                      print one article's body
   wanctl docs new --slug S --title T --group G [--file F | --editor | < stdin]
@@ -118,6 +119,8 @@ func main() {
 		err = cmdStatus()
 	case "logout":
 		err = cmdLogout()
+	case "update":
+		err = cmdUpdate(ctx)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return
