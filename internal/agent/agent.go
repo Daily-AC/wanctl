@@ -234,16 +234,14 @@ func (a *Agent) authorize(fp, name string) bool {
 		fmt.Printf("[auto-trust] new controller %q paired: %s\n", name, fp)
 		return true
 	}
-	fmt.Printf("\n──────────────────────────────────────────────\n")
-	fmt.Printf("  Pairing request from a new controller\n    name: %s\n    fingerprint: %s\n", name, fp)
-	fmt.Printf("  Allow it to control this device? [y/N]: ")
-	line, _ := a.stdin.ReadString('\n')
-	if ans := strings.ToLower(strings.TrimSpace(line)); ans == "y" || ans == "yes" {
+	// Surface the pairing request to a connected front-end (the portal web
+	// console) and block for a human's trust decision. A headless agent with no
+	// portal connected denies (pre-trust with --portal-pk or --yes instead).
+	if a.console.AskPair(fp, name) {
 		a.known.Add(fp, name)
-		fmt.Printf("  ✓ paired.\n")
+		fmt.Printf("[paired] controller %q trusted via console: %s\n", name, fp)
 		return true
 	}
-	fmt.Printf("  ✗ denied.\n")
 	return false
 }
 
@@ -455,6 +453,15 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 	case protocol.KindModeSet:
 		a.console.SetMode(policy.Mode(msg.ConsoleMode))
 		return protocol.Message{Kind: protocol.KindModeSet}
+
+	case protocol.KindPairDecide:
+		ok := a.console.DecidePair(msg.FP, msg.Verdict == "y")
+		resp := protocol.Message{Kind: protocol.KindPairDecide}
+		if !ok {
+			errJSON, _ := json.Marshal("no such pending pairing")
+			resp.Data = json.RawMessage(errJSON)
+		}
+		return resp
 
 	case protocol.KindLogs:
 		if a.log == nil {

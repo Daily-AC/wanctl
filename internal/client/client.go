@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 
+	"wanctl/internal/config"
 	"wanctl/internal/httpconn"
 	"wanctl/internal/protocol"
 	"wanctl/internal/transport"
@@ -39,12 +40,12 @@ func New() (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	relayURL := os.Getenv("WANCTL_RELAY")
-	token := os.Getenv("WANCTL_TOKEN")
-	if relayURL == "" || token == "" {
-		return nil, fmt.Errorf("set WANCTL_RELAY and WANCTL_TOKEN")
+	relayURL := config.EnvOr("WANCTL_RELAY", config.DefaultRelay)
+	token := config.EnvOr("WANCTL_TOKEN", config.StoredToken())
+	if token == "" {
+		return nil, fmt.Errorf("no token: set WANCTL_TOKEN or run `wanctl up` to log in")
 	}
-	tr := os.Getenv("WANCTL_TRANSPORT")
+	tr := config.EnvOr("WANCTL_TRANSPORT", config.DefaultTransport)
 	return NewWith(id, known, relayURL, token, tr), nil
 }
 

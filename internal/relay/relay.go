@@ -63,16 +63,20 @@ type Relay struct {
 	hmu     sync.Mutex
 	hagents map[string]*httpAgent   // key "ns/device" (HTTP transport)
 	hsess   map[string]*httpSession // key session id (HTTP transport)
+
+	enrollMu    sync.Mutex
+	enrollCodes map[string]*enrollCode // one-time device-enrollment codes
 }
 
 // New constructs a Relay backed by the given TokenStore.
 func New(ts TokenStore) *Relay {
 	return &Relay{
-		ts:      ts,
-		agents:  map[string]*agentConn{},
-		pending: map[string]*pendingSession{},
-		hagents: map[string]*httpAgent{},
-		hsess:   map[string]*httpSession{},
+		ts:          ts,
+		agents:      map[string]*agentConn{},
+		pending:     map[string]*pendingSession{},
+		hagents:     map[string]*httpAgent{},
+		hsess:       map[string]*httpSession{},
+		enrollCodes: map[string]*enrollCode{},
 	}
 }
 
@@ -91,6 +95,7 @@ func (r *Relay) Handler() http.Handler {
 	mux.HandleFunc("/h/up", r.handleHUp)
 	mux.HandleFunc("/h/down", r.handleHDown)
 	mux.HandleFunc("/h/close", r.handleHClose)
+	mux.HandleFunc("/enroll/exchange", r.handleEnrollExchange)
 	r.registerAdmin(mux)
 	r.registerDist(mux)
 	return mux

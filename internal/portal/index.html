@@ -545,10 +545,24 @@ function applyState(st){
   $('#toggle').classList.toggle('bypass',by);$('#warnbox').classList.toggle('show',by);
   // face: device is reachable since console answered → treat as online
   $('#dFace').className='face on';$('#dFace').innerHTML=faceOn;
-  // pending
+  // pending pairings (new controllers asking to be trusted) + approvals
   const pend=st.pending||[];
-  const badge=$('#pBadge');badge.textContent=pend.length;badge.classList.toggle('show',pend.length>0);
-  $('#pending').innerHTML=pend.length?pend.map(p=>{
+  const pairs=st.pending_pairings||[];
+  const total=pend.length+pairs.length;
+  const badge=$('#pBadge');badge.textContent=total;badge.classList.toggle('show',total>0);
+  const pairHTML=pairs.map(pr=>`<div class="note pair" data-fp="${esc(pr.fp)}">
+      <div class="ribbon"><span class="warnico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 9v4M12 17h.01M10.3 4 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0Z"/></svg></span>
+        <span class="txt">有新控制端想连进来！</span><span class="req">配对请求 · pairing</span></div>
+      <div class="body">
+        <div class="stmt">控制端 <b>${esc(pr.name||'未命名')}</b> 第一次连接本机，信任它之后才能控制～</div>
+        <div class="facts"><div class="fact"><div class="k">指纹 fingerprint</div><div class="v">${esc(pr.fp||'')}</div></div></div>
+        <div class="decide">
+          <button class="candy allow" data-pv="y"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"/></svg>信任它</button>
+          <button class="candy deny" data-pv="n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M18 6 6 18M6 6l12 12"/></svg>拒绝</button>
+        </div>
+      </div>
+    </div>`).join('');
+  const pendHTML=pend.length?pend.map(p=>{
     const isExec=p.kind==='exec';
     const detail=isExec?hlCmd(p.cmd):esc(p.path);
     const impact=isExec?'执行命令 · 谨慎放行':(p.kind==='write'?'写入 / 删除文件 · 删了就没啦':'读取文件内容');
@@ -570,10 +584,12 @@ function applyState(st){
           <button class="candy deny" data-v="n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M18 6 6 18M6 6l12 12"/></svg>不行，拒绝</button>
         </div>
       </div>
-    </div>`;}).join(''):
-    `<div class="blank"><div class="em"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="10" r="1.2" fill="currentColor"/><circle cx="15" cy="10" r="1.2" fill="currentColor"/><path d="M9 14c1.4 1.6 4.6 1.6 6 0" stroke-linecap="round"/></svg></div><div class="w">现在没有待审批～</div><div class="t2">乖乖的，有新的高危请求会自动冒出来。</div></div>`;
+    </div>`;}).join(''):'';
+  const blankHTML=`<div class="blank"><div class="em"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="10" r="1.2" fill="currentColor"/><circle cx="15" cy="10" r="1.2" fill="currentColor"/><path d="M9 14c1.4 1.6 4.6 1.6 6 0" stroke-linecap="round"/></svg></div><div class="w">现在没有待审批～</div><div class="t2">乖乖的，有新的高危请求会自动冒出来。</div></div>`;
+  $('#pending').innerHTML = total ? (pairHTML+pendHTML) : blankHTML;
   $$('#pending .note').forEach(n=>{
-    n.querySelectorAll('.candy').forEach(b=>b.onclick=()=>decide(n.dataset.pid,b.dataset.v,n));
+    if(n.classList.contains('pair'))n.querySelectorAll('.candy').forEach(b=>b.onclick=()=>pairDecide(n.dataset.fp,b.dataset.pv,n));
+    else n.querySelectorAll('.candy').forEach(b=>b.onclick=()=>decide(n.dataset.pid,b.dataset.v,n));
   });
   // rules
   const rules=st.rules||[];
@@ -591,6 +607,14 @@ async function decide(id,v,noteEl){
     toast(v==='n'?'no':'ok', v==='n'?'已拒绝啦':'好的，放行～');
     setTimeout(renderConsole,360);
   }catch(e){err('裁决失败：'+e.message)}
+}
+async function pairDecide(fp,v,noteEl){
+  try{
+    await jpost('/api/devices/pair',{device:cur,fp,verdict:v});
+    if(noteEl)noteEl.classList.add('gone');
+    toast(v==='n'?'no':'ok', v==='n'?'已拒绝该控制端':'已信任，它现在可以控制本机～');
+    setTimeout(renderConsole,360);
+  }catch(e){err('配对失败：'+e.message)}
 }
 async function rmRule(i){try{await jpost('/api/devices/rules',{device:cur,op:'rm',index:i});renderConsole()}catch(e){err('删除规则失败：'+e.message)}}
 $('#rAdd').onclick=async()=>{

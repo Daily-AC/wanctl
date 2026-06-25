@@ -54,6 +54,7 @@ const (
 	KindRuleRm        = "rule_rm"        // portal -> device, remove rule by Index
 	KindModeSet       = "mode_set"       // portal -> device, set normal/bypass
 	KindApprovalNotif = "approval_notif" // device -> portal, UNSOLICITED: pending set changed
+	KindPairDecide    = "pair_decide"    // portal -> device, trust/deny a pending controller pairing
 )
 
 // Message is the JSON body of a FrameJSON frame. Fields are reused across kinds;
@@ -98,6 +99,7 @@ type Message struct {
 	Dir         string          `json:"dir,omitempty"`          // rule_add: exec dir scope
 	Scope       string          `json:"scope,omitempty"`        // rule_add: dir/global
 	Index       int             `json:"index,omitempty"`        // rule_rm
+	FP          string          `json:"fp,omitempty"`           // pair_decide: controller fingerprint
 	Data        json.RawMessage `json:"data,omitempty"`         // console_state / approval_notif payload
 }
 

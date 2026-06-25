@@ -76,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/whoami", s.handleWhoami)
+	mux.HandleFunc("/enroll", s.handleEnroll)
 	mux.HandleFunc("/api/me", s.handleMe)
 	mux.HandleFunc("/api/tokens", s.handleTokens)
 	mux.HandleFunc("/api/tokens/revoke", s.handleTokenRevoke)
@@ -85,6 +86,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/audit", s.handleAudit)
 	mux.HandleFunc("/api/devices/console", s.handleDeviceConsole)
 	mux.HandleFunc("/api/devices/decide", s.handleDeviceDecide)
+	mux.HandleFunc("/api/devices/pair", s.handleDevicePair)
 	mux.HandleFunc("/api/devices/rules", s.handleDeviceRules)
 	mux.HandleFunc("/api/devices/mode", s.handleDeviceMode)
 	mux.HandleFunc("/api/devices/logs", s.handleDeviceLogs)
@@ -138,6 +140,63 @@ func (s *Server) adminReq(method, path string, query url.Values, body any) (*htt
 }
 
 // requireNS authenticates the caller and resolves their namespace via the relay.
+// handleEnroll serves the device-enrollment page. The visitor is already
+// authenticated by Feishu SSO, so we resolve their namespace, ask the relay to
+// mint a one-time code bound to a fresh token, and show it for them to paste
+// into `wanctl`.
+func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
+	ns, ok := s.requireNS(w, r)
+	if !ok {
+		return
+	}
+	resp, err := s.adminReq("POST", "/admin/enroll/mint", nil, map[string]string{"namespace": ns})
+	if err != nil {
+		http.Error(w, "relay unreachable: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		http.Error(w, "mint failed: "+string(b), http.StatusBadGateway)
+		return
+	}
+	var out struct {
+		Code      string `json:"code"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	json.NewDecoder(resp.Body).Decode(&out)
+	mins := out.ExpiresIn / 60
+	if mins < 1 {
+		mins = 1
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, enrollPage, ns, out.Code, mins)
+}
+
+// enrollPage: %[1]s namespace, %[2]s one-time code, %[3]d minutes-to-expiry.
+const enrollPage = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>wanctl 设备授权</title><style>
+:root{--cream:#FBF6EC;--ink:#2c2a26;--brand:#E08D3C;--soft:#efe7d6}
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,system-ui,"PingFang SC",sans-serif;
+background:var(--cream);color:var(--ink);display:flex;min-height:100vh;align-items:center;justify-content:center}
+.card{background:#fff;border:1px solid var(--soft);border-radius:18px;padding:40px 44px;max-width:440px;
+box-shadow:0 8px 30px rgba(0,0,0,.06);text-align:center}
+h1{font-size:20px;margin:0 0 6px}.sub{color:#8a857c;font-size:14px;margin-bottom:26px}
+.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:38px;letter-spacing:4px;font-weight:700;
+color:var(--brand);background:var(--cream);border:2px dashed var(--brand);border-radius:14px;padding:18px 10px;cursor:pointer;user-select:all}
+.copy{margin-top:14px;font-size:13px;color:#8a857c}.ns{font-weight:600}
+.steps{text-align:left;margin:26px 0 0;padding:18px;background:var(--cream);border-radius:12px;font-size:13px;line-height:1.7;color:#6b665d}
+.tip{margin-top:18px;font-size:12px;color:#aaa39a}b{color:var(--ink)}
+</style></head><body><div class="card">
+<h1>🛡️ 设备授权</h1>
+<div class="sub">空间 <span class="ns">%[1]s</span> · 把下面的 code 贴回终端</div>
+<div class="code" onclick="navigator.clipboard&&navigator.clipboard.writeText(this.textContent.trim());document.querySelector('.copy').textContent='✓ 已复制'">%[2]s</div>
+<div class="copy">点一下复制 · %[3]d 分钟内有效 · 仅可用一次</div>
+<div class="steps">回到终端,在 <b>输入授权 code:</b> 后粘贴上面的 code,回车即可。<br>设备会自动绑定到空间 <b>%[1]s</b> 并转入后台运行。</div>
+<div class="tip">这台机器就成了一个可被远程控制的设备。停止用 <b>wanctl stop</b>。</div>
+</div></body></html>`
+
 func (s *Server) requireNS(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if s.relayURL == "" || s.adminSecret == "" {
 		http.Error(w, "portal not wired yet (set RELAY_ADMIN_URL and WANCTL_ADMIN_SECRET)", http.StatusServiceUnavailable)
@@ -373,6 +432,26 @@ func (s *Server) handleDeviceDecide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.decide(body.ID, body.Verdict, "portal:"+s.identity(r)); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleDevicePair trusts or denies a pending controller pairing on the device.
+func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Device, FP, Verdict string }
+	json.NewDecoder(r.Body).Decode(&body)
+	ns, ok := s.requireDevice(w, r, body.Device)
+	if !ok {
+		return
+	}
+	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err := d.pairDecide(body.FP, body.Verdict); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}

@@ -19,6 +19,7 @@ import (
 
 	"wanctl/internal/agent"
 	"wanctl/internal/client"
+	"wanctl/internal/config"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/policy"
 	"wanctl/internal/portal"
@@ -29,27 +30,45 @@ import (
 const usage = `wanctl — control a device across the internet over an encrypted, relayed channel
 
 USAGE
-  wanctl relay  [--addr :8080]                run the relay (thunderbox); DATABASE_URL or WANCTL_TOKENS
-  wanctl portal [--addr :8080]                run the team portal (thunderbox, internal SSO)
-  wanctl agent [--name N] [--relay URL] [--token T] [--yes] [--shell S] [--portal-pk FP]
+  wanctl                                      log in (Feishu) if needed, then run the agent in the background
+  wanctl stop                                 stop the background agent
+  wanctl status                               show whether the agent is running
+  wanctl logout                               stop the agent and forget the saved login
   wanctl exec  [--target NS/DEV] [--oneshot] <command...>
   wanctl push  [--target NS/DEV] <local> <remote>
   wanctl pull  [--target NS/DEV] <remote> <local>
   wanctl peers
   wanctl id
   wanctl trust [clients|servers]
+  wanctl agent [--name N] [--relay URL] [--token T] [--yes] [--shell S] [--portal-pk FP]
+  wanctl relay  [--addr :8080]                run the relay (thunderbox); DATABASE_URL or WANCTL_TOKENS
+  wanctl portal [--addr :8080]                run the team portal (thunderbox, internal SSO)
 
-ENV (controller): WANCTL_RELAY=wss://wanctl-relay.***REMOVED***.***REMOVED***.com  WANCTL_TOKEN=...
+Defaults: relay=` + defaultRelay + `  transport=` + defaultTransport + ` (override with WANCTL_RELAY/WANCTL_TRANSPORT)
+ENV (controller): WANCTL_TOKEN=... (or run 'wanctl' to log in)  WANCTL_RELAY=...
 ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"  WANCTL_ADMIN_SECRET=...  WANCTL_PORTAL_NS=...
 ENV (portal):     RELAY_ADMIN_URL=...  WANCTL_ADMIN_SECRET=...  PORTAL_USER_HEADER=...
               WANCTL_RELAY=...  WANCTL_PORTAL_TOKEN=...  WANCTL_TRANSPORT=http
 ENV (agent):      WANCTL_PORTAL_PK=SHA256:...
 `
 
+// Compile-time defaults live in internal/config so the controller package shares
+// them. Aliased here for terse use in flag definitions.
+const (
+	defaultRelay     = config.DefaultRelay
+	defaultTransport = config.DefaultTransport
+	defaultPortal    = config.DefaultPortal
+)
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Print(usage)
-		os.Exit(2)
+		// Bare `wanctl`: onboard if needed, then ensure the agent runs in the
+		// background — the claude-code-style "just works" entrypoint.
+		if err := cmdUp(context.Background()); err != nil {
+			fmt.Fprintln(os.Stderr, "wanctl: "+err.Error())
+			os.Exit(1)
+		}
+		return
 	}
 	ctx := context.Background()
 	var err error
@@ -76,6 +95,16 @@ func main() {
 		err = cmdRules(os.Args[2:])
 	case "logs":
 		err = cmdLogs(ctx, os.Args[2:])
+	case "up", "login":
+		err = cmdUp(ctx)
+	case "start":
+		err = cmdStart()
+	case "stop":
+		err = cmdStop()
+	case "status":
+		err = cmdStatus()
+	case "logout":
+		err = cmdLogout()
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return
@@ -162,13 +191,13 @@ func cmdPortal(args []string) error {
 func cmdAgent(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("agent", flag.ExitOnError)
 	name := fs.String("name", "", "device name (default hostname)")
-	relayURL := fs.String("relay", os.Getenv("WANCTL_RELAY"), "relay ws(s) URL")
-	token := fs.String("token", os.Getenv("WANCTL_TOKEN"), "access/registration token")
+	relayURL := fs.String("relay", envOr("WANCTL_RELAY", defaultRelay), "relay ws(s) URL")
+	token := fs.String("token", envOr("WANCTL_TOKEN", config.StoredToken()), "access/registration token")
 	shell := fs.String("shell", "", "shell (default powershell on Windows, /bin/sh elsewhere)")
 	yes := fs.Bool("yes", false, "auto-trust new controllers (unattended)")
-	tr := fs.String("transport", envOr("WANCTL_TRANSPORT", "ws"), "transport: ws or http (http is proxy-agnostic)")
+	tr := fs.String("transport", envOr("WANCTL_TRANSPORT", defaultTransport), "transport: ws or http (http is proxy-agnostic)")
 	mode := fs.String("mode", "normal", "policy mode: normal (prompt on miss) or bypass (auto-allow, DANGEROUS)")
-	portalPK := fs.String("portal-pk", os.Getenv("WANCTL_PORTAL_PK"), "pre-trust this portal fingerprint (enrolled at install time)")
+	portalPK := fs.String("portal-pk", envOr("WANCTL_PORTAL_PK", config.DefaultPortalFP), "pre-trust this portal fingerprint (enrolled at install time)")
 	fs.Parse(args)
 	if *relayURL == "" || *token == "" {
 		return fmt.Errorf("provide --relay and --token (or WANCTL_RELAY/WANCTL_TOKEN)")

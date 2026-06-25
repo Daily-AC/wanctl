@@ -46,7 +46,6 @@ const installScript = `#!/bin/sh
 set -eu
 RELAY="%[1]s"
 PORTAL_PK="%[2]s"
-if [ -z "${WANCTL_TOKEN:-}" ]; then echo "error: set WANCTL_TOKEN (get one from the portal)"; exit 1; fi
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -69,15 +68,29 @@ fi
 rm -f "$TMP"
 echo "installed: $DEST"
 
+[ -n "$PORTAL_PK" ] && export WANCTL_PORTAL_PK="$PORTAL_PK"
+
 if [ "${WANCTL_INSTALL_ONLY:-}" = "1" ]; then
-  echo "run: WANCTL_TOKEN=... $DEST agent --relay $RELAY --transport http --name $(hostname)"
+  echo "done. run '$DEST' to authorize this device (Feishu login)."
   exit 0
 fi
 
-NAME="${WANCTL_NAME:-$(hostname)}"
-[ -n "$PORTAL_PK" ] && export WANCTL_PORTAL_PK="$PORTAL_PK"
-set -- agent --relay "$RELAY" --token "$WANCTL_TOKEN" --transport http --name "$NAME"
-[ -n "${WANCTL_MODE:-}" ] && set -- "$@" --mode "$WANCTL_MODE"
-echo "starting agent as '$NAME' (Ctrl-C to stop; wrap in systemd/nohup to persist)"
-exec "$DEST" "$@"
+# Automation path (e.g. an AI controller's own device): a token in the env means
+# enroll non-interactively and run the agent now, like before.
+if [ -n "${WANCTL_TOKEN:-}" ]; then
+  NAME="${WANCTL_NAME:-$(hostname)}"
+  set -- agent --relay "$RELAY" --token "$WANCTL_TOKEN" --transport http --name "$NAME"
+  [ -n "${WANCTL_MODE:-}" ] && set -- "$@" --mode "$WANCTL_MODE"
+  echo "starting agent as '$NAME' (Ctrl-C to stop; wrap in systemd/nohup to persist)"
+  exec "$DEST" "$@"
+fi
+
+# Human path: no token needed. Just run 'wanctl' to log in via the browser.
+echo ""
+echo "✓ 已安装: $DEST"
+echo "下一步: 运行下面这条完成飞书授权并把本机变成可远程控制的设备 ——"
+echo ""
+echo "    $DEST"
+echo ""
+echo "(授权后服务转入后台; 停止用 '$DEST stop')"
 `

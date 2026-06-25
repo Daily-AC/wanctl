@@ -31,6 +31,7 @@ func TestExecDeniedReturnsError(t *testing.T) {
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	t.Setenv("WANCTL_RELAY", base)
 	t.Setenv("WANCTL_TOKEN", "tok")
+	t.Setenv("WANCTL_TRANSPORT", "ws") // this test wires a ws relay; New() now defaults to http
 	c, err := New()
 	if err != nil {
 		t.Fatal(err)

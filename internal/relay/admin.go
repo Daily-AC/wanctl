@@ -36,6 +36,7 @@ func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/acl", r.adminACL)
 	mux.HandleFunc("/admin/acl/revoke", r.adminACLRevoke)
 	mux.HandleFunc("/admin/audit", r.adminAudit)
+	mux.HandleFunc("/admin/enroll/mint", r.handleEnrollMint)
 }
 
 func (r *Relay) adminResolveUser(w http.ResponseWriter, req *http.Request) {

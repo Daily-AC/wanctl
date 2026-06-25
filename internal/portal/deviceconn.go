@@ -115,6 +115,12 @@ func (d *deviceConn) decide(id, verdict, approver string) error {
 	return err
 }
 
+// pairDecide trusts (verdict "y") or denies a pending controller pairing.
+func (d *deviceConn) pairDecide(fp, verdict string) error {
+	_, err := d.rpc(protocol.Message{Kind: protocol.KindPairDecide, FP: fp, Verdict: verdict})
+	return err
+}
+
 func (d *deviceConn) addRule(kind, pattern, dir, scope string) error {
 	_, err := d.rpc(protocol.Message{Kind: protocol.KindRuleAdd, RuleKind: kind, Pattern: pattern, Dir: dir, Scope: scope})
 	return err

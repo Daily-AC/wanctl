@@ -33,17 +33,32 @@ type Pending struct {
 	Created time.Time `json:"created"`
 }
 
+// PendingPairing is an unknown controller awaiting a trust decision (TOFU),
+// surfaced to the portal so a human approves it on the web instead of at the
+// device terminal.
+type PendingPairing struct {
+	FP      string    `json:"fp"`
+	Name    string    `json:"name"`
+	Created time.Time `json:"created"`
+}
+
 // State is a full snapshot for a console front-end.
 type State struct {
-	Info    Info          `json:"info"`
-	Mode    policy.Mode   `json:"mode"`
-	Rules   []policy.Rule `json:"rules"`
-	Pending []Pending     `json:"pending"`
+	Info            Info             `json:"info"`
+	Mode            policy.Mode      `json:"mode"`
+	Rules           []policy.Rule    `json:"rules"`
+	Pending         []Pending        `json:"pending"`
+	PendingPairings []PendingPairing `json:"pending_pairings"`
 }
 
 type pending struct {
 	view    Pending
 	decided chan policy.Decision
+}
+
+type pendingPair struct {
+	view    PendingPairing
+	decided chan bool
 }
 
 // Service is the queue-backed console + approver.
@@ -53,17 +68,75 @@ type Service struct {
 	info    Info
 	timeout time.Duration
 
-	mu   sync.Mutex
-	pend map[string]*pending
-	subs map[chan struct{}]struct{}
+	mu    sync.Mutex
+	pend  map[string]*pending
+	pairs map[string]*pendingPair // keyed by controller fingerprint
+	subs  map[chan struct{}]struct{}
 }
 
 // New builds a console service bound to a policy engine and (optional) event log.
 func New(engine *policy.Engine, log *eventlog.Logger, info Info) *Service {
 	return &Service{
 		engine: engine, log: log, info: info, timeout: 60 * time.Second,
-		pend: map[string]*pending{}, subs: map[chan struct{}]struct{}{},
+		pend: map[string]*pending{}, pairs: map[string]*pendingPair{}, subs: map[chan struct{}]struct{}{},
 	}
+}
+
+// AskPair enqueues a pairing request for an unknown controller and blocks until a
+// front-end approves/denies or the timeout elapses (deny). Like Ask, it denies
+// immediately when no front-end is subscribed. A second request for the same
+// fingerprint rides the existing pending entry.
+func (s *Service) AskPair(fp, name string) bool {
+	s.mu.Lock()
+	if len(s.subs) == 0 {
+		s.mu.Unlock()
+		return false
+	}
+	if existing := s.pairs[fp]; existing != nil {
+		ch := existing.decided
+		s.mu.Unlock()
+		select {
+		case d := <-ch:
+			return d
+		case <-time.After(s.timeout):
+			return false
+		}
+	}
+	p := &pendingPair{
+		view:    PendingPairing{FP: fp, Name: name, Created: time.Now()},
+		decided: make(chan bool, 1),
+	}
+	s.pairs[fp] = p
+	s.mu.Unlock()
+	s.notify()
+	defer func() {
+		s.mu.Lock()
+		delete(s.pairs, fp)
+		s.mu.Unlock()
+		s.notify()
+	}()
+	select {
+	case d := <-p.decided:
+		return d
+	case <-time.After(s.timeout):
+		return false
+	}
+}
+
+// DecidePair delivers a trust verdict for a pending pairing. Returns false if
+// the fingerprint is unknown.
+func (s *Service) DecidePair(fp string, trust bool) bool {
+	s.mu.Lock()
+	p := s.pairs[fp]
+	s.mu.Unlock()
+	if p == nil {
+		return false
+	}
+	select {
+	case p.decided <- trust:
+	default:
+	}
+	return true
 }
 
 // Ask implements policy.Approver: enqueue and block until a front-end decides
@@ -115,8 +188,12 @@ func (s *Service) State() State {
 	for _, p := range s.pend {
 		pend = append(pend, p.view)
 	}
+	pairs := make([]PendingPairing, 0, len(s.pairs))
+	for _, p := range s.pairs {
+		pairs = append(pairs, p.view)
+	}
 	s.mu.Unlock()
-	return State{Info: s.info, Mode: s.engine.Mode(), Rules: s.engine.List(), Pending: pend}
+	return State{Info: s.info, Mode: s.engine.Mode(), Rules: s.engine.List(), Pending: pend, PendingPairings: pairs}
 }
 
 // Decide delivers a verdict to a pending request. Returns false if unknown.
