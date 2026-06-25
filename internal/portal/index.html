@@ -501,21 +501,23 @@ function openDevice(name){
   cur=name;$('#dName').textContent=name;showView('device');selTab('approve');
   $('#pending').innerHTML='<div class="empty">连接设备中…</div>';
   renderConsole();
-  pollEvents(name);
+  pollConsole(name);
 }
-/* Long-poll for live approval-state pushes. SSE is buffered by the thunderbox
-   edge, so /api/devices/events returns one finite response (200 with state, or
-   204 on idle timeout) and we re-poll. A generation guard stops the loop when
+/* Keep the console live by re-pulling /console every few seconds. We poll the
+   snapshot (reliable) rather than rely on the async approval push, which does
+   not survive the relay's HTTP long-poll hop dependably. New pending requests
+   thus appear within the poll interval. A generation guard stops the loop when
    the user switches or leaves the device. */
-async function pollEvents(name){
+async function pollConsole(name){
   const gen=++pollGen;
   while(cur===name&&gen===pollGen){
+    await new Promise(s=>setTimeout(s,3000));
+    if(cur!==name||gen!==pollGen)return;
     try{
-      const r=await fetch('/api/devices/events?device='+encodeURIComponent(name));
-      if(gen!==pollGen)return;
-      if(r.status===200){applyState(await r.json());}
-      else if(r.status!==204){await new Promise(s=>setTimeout(s,2000));}
-    }catch(_){if(gen!==pollGen)return;await new Promise(s=>setTimeout(s,2000));}
+      const st=await jget('/api/devices/console?device='+encodeURIComponent(name));
+      if(cur!==name||gen!==pollGen)return;
+      applyState(st);
+    }catch(_){/* transient (e.g. conn re-dialing after agent restart); retry next tick */}
   }
 }
 function closeDevice(){pollGen++;cur=null}
