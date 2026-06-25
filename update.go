@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -22,14 +24,28 @@ import (
 // even though the binary is currently executing (the kernel keeps the old inode
 // alive for the running process). On Windows the running .exe can't be renamed,
 // so we rename it to <name>.old first, then write the new file in place.
-func cmdUpdate(ctx context.Context) error {
+//
+// When the binary lives in a root-owned dir (e.g. /usr/local/bin), we split the
+// work in two: the user process stops the daemon, re-execs `sudo wanctl update
+// --no-restart` (which only does download + swap as root), then the user
+// process starts the daemon again — so the daemon process keeps running as the
+// original user, not as root.
+func cmdUpdate(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	noRestart := fs.Bool("no-restart", false, "internal: skip daemon stop/start (used by the sudo-elevated phase)")
+	fs.Parse(args)
+
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate self: %w", err)
 	}
-	self, err = filepath.EvalSymlinks(self)
-	if err != nil {
-		return fmt.Errorf("resolve symlinks: %w", err)
+	if real, err := filepath.EvalSymlinks(self); err == nil {
+		self = real
+	}
+	dir := filepath.Dir(self)
+
+	if !canWriteDir(dir) {
+		return splitUpdateViaSudo(ctx, self)
 	}
 
 	binName := fmt.Sprintf("wanctl-%s-%s", runtime.GOOS, runtime.GOARCH)
@@ -40,7 +56,7 @@ func cmdUpdate(ctx context.Context) error {
 	url := relay + "/dl/" + binName
 
 	fmt.Printf("下载 %s …\n", url)
-	tmp, err := downloadToTemp(ctx, url, filepath.Dir(self))
+	tmp, err := downloadToTemp(ctx, url, dir)
 	if err != nil {
 		return err
 	}
@@ -48,6 +64,57 @@ func cmdUpdate(ctx context.Context) error {
 
 	if err := os.Chmod(tmp, 0o755); err != nil {
 		return fmt.Errorf("chmod new binary: %w", err)
+	}
+
+	wasRunning := !*noRestart && processAlive(config.ReadPID())
+	if wasRunning {
+		fmt.Println("正在停止后台 agent …")
+		if err := cmdStop(); err != nil {
+			return fmt.Errorf("stop daemon: %w", err)
+		}
+	}
+
+	if err := replaceBinary(tmp, self); err != nil {
+		return fmt.Errorf("replace binary at %s: %w", self, err)
+	}
+	tmp = "" // consumed by Rename
+
+	fmt.Printf("✓ 已替换 %s\n", self)
+	pruneStaleCopies(self)
+	if wasRunning {
+		fmt.Println("正在重启后台 agent …")
+		if err := cmdStart(); err != nil {
+			return fmt.Errorf("restart daemon: %w", err)
+		}
+	}
+	return nil
+}
+
+// canWriteDir reports whether the current process can create files in dir
+// (the most reliable permission check on POSIX: try it).
+func canWriteDir(dir string) bool {
+	f, err := os.CreateTemp(dir, ".wanctl-probe-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	f.Close()
+	os.Remove(name)
+	return true
+}
+
+// splitUpdateViaSudo handles the root-owned-dir case: stop daemon as user,
+// re-exec `sudo wanctl update --no-restart` (root just swaps the binary),
+// then restart the daemon as the original user. This keeps the long-running
+// daemon owned by the user — running it as root would change file ownership of
+// the config dir / pid file / logs.
+func splitUpdateViaSudo(ctx context.Context, self string) error {
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("升级 %s 需要管理员权限。请用「以管理员身份运行」打开终端再跑 wanctl update", self)
+	}
+	sudo, err := exec.LookPath("sudo")
+	if err != nil {
+		return fmt.Errorf("升级 %s 需要 root 权限,但本机找不到 sudo。请用 root 身份直接跑: wanctl update", self)
 	}
 
 	wasRunning := processAlive(config.ReadPID())
@@ -58,13 +125,15 @@ func cmdUpdate(ctx context.Context) error {
 		}
 	}
 
-	if err := replaceBinary(tmp, self); err != nil {
-		return fmt.Errorf("replace binary at %s: %w (提示: 用 sudo wanctl update 或把二进制放到自己有写权限的目录)", self, err)
+	fmt.Printf("wanctl: %s 需要 sudo 才能替换,请在下方提示输入密码 …\n", filepath.Dir(self))
+	cmd := exec.CommandContext(ctx, sudo, self, "update", "--no-restart")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("sudo wanctl update: %w", err)
 	}
-	tmp = "" // consumed by Rename
 
-	fmt.Printf("✓ 已替换 %s\n", self)
-	pruneStaleCopies(self)
 	if wasRunning {
 		fmt.Println("正在重启后台 agent …")
 		if err := cmdStart(); err != nil {

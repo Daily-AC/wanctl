@@ -120,7 +120,7 @@ func main() {
 	case "logout":
 		err = cmdLogout()
 	case "update":
-		err = cmdUpdate(ctx)
+		err = cmdUpdate(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return
