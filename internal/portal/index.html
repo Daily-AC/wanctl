@@ -268,6 +268,11 @@
   .mdbody pre{background:#2c2a26;color:#f3ede2;border-radius:12px;padding:14px 16px;margin:14px 0;font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:13px;line-height:1.7;overflow-x:auto;cursor:pointer;position:relative;white-space:pre}
   .mdbody pre code{background:none;color:inherit;padding:0;font-size:inherit}
   .mdbody pre:hover::after{content:'点击复制';position:absolute;top:8px;right:12px;font-size:11px;color:#b7ad9c;background:rgba(0,0,0,.35);padding:2px 6px;border-radius:6px}
+  .mdbody table{width:100%;border-collapse:separate;border-spacing:0;margin:14px 0;font-size:13.5px;background:#fff;border:1px solid var(--line,#f3e4d3);border-radius:12px;overflow:hidden}
+  .mdbody thead th{background:var(--cream-2,#ffeede);color:var(--ink,#6b5446);text-align:left;font-weight:600;padding:10px 14px;border-bottom:1px solid var(--line,#f3e4d3)}
+  .mdbody tbody td{padding:9px 14px;border-bottom:1px dashed var(--line-2,#ecd9c4);color:#5f5950;vertical-align:top}
+  .mdbody tbody tr:last-child td{border-bottom:none}
+  .mdbody tbody tr:hover td{background:var(--cream,#fff6ea)}
   .docedit{display:flex;flex-direction:column;gap:10px}
   .docedit .row{display:flex;gap:10px;align-items:center}
   .docedit .row label{font-size:12px;color:var(--ink-2,#a08977);min-width:48px}
@@ -1062,9 +1067,20 @@ function mdRender(src){
     if(l.startsWith('> ')){let q='';while(i<lines.length&&lines[i].startsWith('> '))q+=lines[i++].slice(2)+'\n';out+='<blockquote>'+inl(q.trim()).replace(/\n/g,'<br>')+'</blockquote>';continue}
     if(/^[-*]\s+/.test(l)){let lis='';while(i<lines.length&&/^[-*]\s+/.test(lines[i]))lis+='<li>'+inl(lines[i++].replace(/^[-*]\s+/,''))+'</li>';out+='<ul>'+lis+'</ul>';continue}
     if(/^\d+\.\s+/.test(l)){let lis='';while(i<lines.length&&/^\d+\.\s+/.test(lines[i]))lis+='<li>'+inl(lines[i++].replace(/^\d+\.\s+/,''))+'</li>';out+='<ol>'+lis+'</ol>';continue}
+    // pipe table: header row | separator (---) | data rows
+    if(l.trim().startsWith('|') && i+1<lines.length && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(lines[i+1])){
+      const split=r=>r.replace(/^\s*\||\|\s*$/g,'').split('|').map(c=>c.trim());
+      const hdr=split(l); i+=2;
+      let rows='';
+      while(i<lines.length && lines[i].trim().startsWith('|')){
+        rows+='<tr>'+split(lines[i++]).map(c=>'<td>'+inl(c)+'</td>').join('')+'</tr>';
+      }
+      out+='<table><thead><tr>'+hdr.map(h=>'<th>'+inl(h)+'</th>').join('')+'</tr></thead><tbody>'+rows+'</tbody></table>';
+      continue;
+    }
     if(l.trim()===''){i++;continue}
     let p=l;i++;
-    while(i<lines.length&&lines[i].trim()!==''&&!/^(```|#{1,4}\s|>\s|[-*]\s|\d+\.\s|---+\s*$)/.test(lines[i]))p+='\n'+lines[i++];
+    while(i<lines.length&&lines[i].trim()!==''&&!/^(```|#{1,4}\s|>\s|[-*]\s|\d+\.\s|---+\s*$|\|)/.test(lines[i]))p+='\n'+lines[i++];
     out+='<p>'+inl(p).replace(/\n/g,'<br>')+'</p>';
   }
   return out;
