@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -21,6 +22,11 @@ import (
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
 )
+
+// ErrNoToken is returned by New when no token can be found in env or stored
+// credentials. Callers (MCP server etc.) detect this via errors.Is to redirect
+// the user to a login flow rather than printing a raw error.
+var ErrNoToken = errors.New("no token: run wanctl_login (MCP) or `wanctl login` (CLI), or set WANCTL_TOKEN")
 
 // RejectError is returned when a device rejects a controller's connection,
 // typically because the controller fingerprint hasn't been paired yet. Callers
@@ -69,7 +75,7 @@ func New() (*Client, error) {
 	relayURL := config.EnvOr("WANCTL_RELAY", config.DefaultRelay)
 	token := config.EnvOr("WANCTL_TOKEN", config.StoredToken())
 	if token == "" {
-		return nil, fmt.Errorf("no token: set WANCTL_TOKEN or run `wanctl up` to log in")
+		return nil, ErrNoToken
 	}
 	tr := config.EnvOr("WANCTL_TRANSPORT", config.DefaultTransport)
 	c := NewWith(id, known, relayURL, token, tr)

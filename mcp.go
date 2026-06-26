@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"wanctl/internal/client"
@@ -40,6 +41,19 @@ func cmdMCP(ctx context.Context) error {
 }
 
 func registerMCPTools(s *server.MCPServer) {
+	s.AddTool(mcp.NewTool("wanctl_login",
+		mcp.WithDescription("Authenticate THIS MCP session to a wanctl namespace via the team portal. Two-step OAuth flow: (1) call with NO argument first → returns a portal URL + a one-time code prompt the user needs to complete in their browser. (2) call again with the `code` the user pastes back → exchanges it for a namespace token and stores it ONLY in this MCP session's config dir. This is per-MCP-process — multiple AI users on a shared agent box each log in independently, never sharing credentials."),
+		mcp.WithString("code", mcp.Description("The one-time code the user copied from the portal /enroll page. Omit on the first call.")),
+	), mcpLogin)
+
+	s.AddTool(mcp.NewTool("wanctl_status",
+		mcp.WithDescription("Report whether this MCP session is logged in, and where its credentials live. Call this if a tool says 'login required' and you're not sure if a login already completed."),
+	), mcpStatus)
+
+	s.AddTool(mcp.NewTool("wanctl_logout",
+		mcp.WithDescription("Clear this MCP session's stored credentials. Subsequent data tools (peers/exec/push/pull/logs) will require a fresh wanctl_login."),
+	), mcpLogout)
+
 	s.AddTool(mcp.NewTool("wanctl_peers",
 		mcp.WithDescription("List devices currently reachable by the active controller token. Returns one device name per line, plus a hint about which is online if known. Use this FIRST when the user asks 'what devices are available' or before guessing a target name."),
 	), mcpPeers)
@@ -135,12 +149,102 @@ func pairingResult(rej *client.RejectError) *mcp.CallToolResult {
 	))
 }
 
-// --- tool handlers ---
+// loginRequired tells the AI to drive the user through wanctl_login first.
+// Used by data tools when client.New() returns ErrNoToken.
+func loginRequired() *mcp.CallToolResult {
+	return mcp.NewToolResultError(
+		"LOGIN REQUIRED. This MCP session has no wanctl credentials yet. Call wanctl_login() (no args) — it returns a URL and instructions you should show the user. The user opens the URL, signs in via Feishu, copies the one-time code; then call wanctl_login(code=\"…\") with what they paste back. Once logged in, retry your previous tool call.",
+	)
+}
+
+// loadClientOrLoginHint wraps client.New: on ErrNoToken returns a structured
+// MCP result pointing the AI at wanctl_login; on any other error returns a
+// plain error result.
+func loadClientOrLoginHint() (*client.Client, *mcp.CallToolResult) {
+	c, err := client.New()
+	if err == nil {
+		return c, nil
+	}
+	if errors.Is(err, client.ErrNoToken) {
+		return nil, loginRequired()
+	}
+	return nil, mcp.NewToolResultError(err.Error())
+}
+
+// --- auth tool handlers ---
+
+func mcpLogin(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	code := reqStr(req, "code", "")
+	portal := config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)
+	if code == "" {
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"OK — drive the user through Feishu SSO to mint a session token. Show them these instructions VERBATIM:\n\n"+
+				"  1. Open: %s/enroll\n"+
+				"  2. Sign in via Feishu (likely already logged in for the team portal).\n"+
+				"  3. Copy the big one-time code shown on that page (e.g. ABCD-1234).\n"+
+				"  4. Paste it back to me.\n\n"+
+				"When they paste the code, call wanctl_login again with code=\"…\" to complete the login. "+
+				"The token gets stored ONLY in THIS MCP session's config dir; no other AI user shares it.",
+			portal,
+		)), nil
+	}
+	relay := strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
+	token, ns, err := exchangeCode(ctx, relay, code)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("授权失败: %s\n请让用户回到 %s/enroll 拿一个新 code（旧的可能用过或过期了），然后再调一次 wanctl_login(code=\"…\")。", err, portal)), nil
+	}
+	if err := config.SaveToken(token); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("token 存盘失败: %s", err)), nil
+	}
+	dir, _ := config.TokenPath()
+	return mcp.NewToolResultText(fmt.Sprintf(
+		"✓ 已绑定到 namespace \"%s\". 凭证存于 %s. 现在可以调 wanctl_peers / wanctl_exec / wanctl_push / wanctl_pull / wanctl_logs 了。",
+		ns, dir,
+	)), nil
+}
+
+func mcpStatus(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	tokPath, _ := config.TokenPath()
+	envTok := os.Getenv("WANCTL_TOKEN")
+	stored := config.StoredToken()
+	id, _ := transport.LoadOrCreateIdentity()
+	relay := config.EnvOr("WANCTL_RELAY", config.DefaultRelay)
+	portal := config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)
+
+	var status string
+	switch {
+	case envTok != "":
+		status = "logged in (credential from WANCTL_TOKEN env)"
+	case stored != "":
+		status = "logged in (credential from " + tokPath + ")"
+	default:
+		status = "NOT logged in — call wanctl_login() to start"
+	}
+	out := "status: " + status + "\n"
+	if id != nil {
+		out += "controller fingerprint: " + id.Fingerprint + "\n"
+	}
+	out += "relay:                 " + relay + "\n"
+	out += "portal:                " + portal + "\n"
+	if dir, err := transport.ConfigDir(); err == nil {
+		out += "config dir:            " + dir + "  (override with WANCTL_CONFIG_DIR for per-AI-user isolation)\n"
+	}
+	return mcp.NewToolResultText(out), nil
+}
+
+func mcpLogout(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := config.ClearToken(); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return mcp.NewToolResultText("✓ 已清除本会话的本地 token. 想再操作请先 wanctl_login()."), nil
+}
+
+// --- data tool handlers ---
 
 func mcpPeers(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	c, err := client.New()
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+	c, hint := loadClientOrLoginHint()
+	if hint != nil {
+		return hint, nil
 	}
 	devs, err := c.Peers(ctx)
 	if err != nil {
@@ -162,9 +266,9 @@ func mcpExec(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult,
 	if command == "" {
 		return mcp.NewToolResultError("command is required"), nil
 	}
-	c, err := client.New()
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+	c, hint := loadClientOrLoginHint()
+	if hint != nil {
+		return hint, nil
 	}
 	var stdout, stderr bytes.Buffer
 	code, err := c.ExecTo(ctx, target, command, reqBool(req, "oneshot"), reqStr(req, "cwd", ""), &stdout, &stderr)
@@ -200,9 +304,9 @@ func mcpPush(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult,
 	if local == "" || remote == "" {
 		return mcp.NewToolResultError("local and remote are required"), nil
 	}
-	c, err := client.New()
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+	c, hint := loadClientOrLoginHint()
+	if hint != nil {
+		return hint, nil
 	}
 	if err := c.Push(ctx, target, local, remote); err != nil {
 		if rej := asPairing(err); rej != nil {
@@ -220,9 +324,9 @@ func mcpPull(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult,
 	if local == "" || remote == "" {
 		return mcp.NewToolResultError("remote and local are required"), nil
 	}
-	c, err := client.New()
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+	c, hint := loadClientOrLoginHint()
+	if hint != nil {
+		return hint, nil
 	}
 	if err := c.Pull(ctx, target, remote, local); err != nil {
 		if rej := asPairing(err); rej != nil {
@@ -238,9 +342,9 @@ func mcpLogs(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult,
 	if target == "" {
 		return mcp.NewToolResultError("target is required"), nil
 	}
-	c, err := client.New()
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+	c, hint := loadClientOrLoginHint()
+	if hint != nil {
+		return hint, nil
 	}
 	var buf bytes.Buffer
 	if err := c.LogsTo(ctx, target, reqStr(req, "type", ""), reqStr(req, "grep", ""), reqStr(req, "since", ""), reqInt(req, "limit"), &buf); err != nil {
