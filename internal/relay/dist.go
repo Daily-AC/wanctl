@@ -13,6 +13,13 @@ import (
 //go:embed skill.md
 var skillMD []byte
 
+// skillMCPMD is the MCP-variant SKILL teaching the AI host to drive wanctl
+// through typed MCP tools (`wanctl_exec`, …) instead of Bash. Served at
+// GET /skills/mcp.
+//
+//go:embed skill-mcp.md
+var skillMCPMD []byte
+
 // registerDist makes the relay serve a one-line installer and prebuilt agent
 // binaries, so a new device can be enrolled with:
 //
@@ -29,6 +36,7 @@ func (r *Relay) registerDist(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("/install.sh", r.handleInstall)
 	mux.HandleFunc("/skills", r.handleSkills)
+	mux.HandleFunc("/skills/mcp", r.handleSkillsMCP)
 }
 
 // handleSkills serves the canonical wanctl SKILL markdown. Users tell their AI
@@ -39,6 +47,16 @@ func (r *Relay) handleSkills(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Disposition", `inline; filename="SKILL.md"`)
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	w.Write(skillMD)
+}
+
+// handleSkillsMCP serves the MCP-variant SKILL — same idea, but teaches the AI
+// to drive wanctl as typed MCP tools rather than through Bash. Users install
+// it by saying「安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills/mcp」.
+func (r *Relay) handleSkillsMCP(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", `inline; filename="SKILL.md"`)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Write(skillMCPMD)
 }
 
 func (r *Relay) handleInstall(w http.ResponseWriter, req *http.Request) {

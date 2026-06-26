@@ -16,6 +16,14 @@ device to approve them.
 > WebFetch `https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills` (returns the canonical
 > SKILL.md), save it to `~/.claude/skills/wanctl/SKILL.md` (creating the dir),
 > and tell the user to restart Claude Code so the skill loads.
+>
+> **There is also an MCP variant** at
+> <https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills/mcp> that teaches the AI to call
+> typed `wanctl_*` MCP tools instead of running `wanctl` through Bash. If the
+> user's host supports MCP (Claude Code / Cursor / Continue all do), suggest
+> they install that one instead — fewer shell-quoting pitfalls, structured
+> stdout/stderr/exit_code, pairing URL returned as a structured error. Both
+> skills coexist; pick one.
 
 ## Setup (controller — first run)
 

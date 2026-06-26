@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -20,6 +21,26 @@ import (
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
 )
+
+// RejectError is returned when a device rejects a controller's connection,
+// typically because the controller fingerprint hasn't been paired yet. Callers
+// (CLI / MCP / portal) inspect PairingURL to surface a one-click trust link.
+type RejectError struct {
+	Reason     string // device-supplied reason
+	PairingURL string // empty unless this rejection is fixable by trusting
+}
+
+// Error renders the same text the CLI prints to stderr. Both fields surface so
+// a human (or AI) sees both why and where to fix it.
+func (e *RejectError) Error() string {
+	if e.PairingURL != "" {
+		return fmt.Sprintf(
+			"device 未信任此控制端。请把下面这条链接发给设备主人，让 ta 在浏览器里点一次「信任」，然后重试本命令：\n\n  %s\n\n(链接 5 分钟内有效；reason: %s)",
+			e.PairingURL, e.Reason,
+		)
+	}
+	return fmt.Sprintf("device rejected this controller: %s", e.Reason)
+}
 
 // Client is the controller node.
 type Client struct {
@@ -196,18 +217,11 @@ func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target, hello
 	return dr.Conn, nil
 }
 
-// rejectError renders a device-side reject. When PairingURL is present, the
-// reject was specifically "this controller isn't trusted yet" and the message
-// foregrounds the URL the user should click — the AI (or human) operator sees
-// this verbatim in stderr and just hands it to the owner.
+// rejectError wraps a device-side reject message as a typed *RejectError so
+// callers (MCP, portal, tests) can extract PairingURL programmatically with
+// errors.As, while the CLI still prints the same friendly text via Error().
 func rejectError(m protocol.Message) error {
-	if m.PairingURL != "" {
-		return fmt.Errorf(
-			"device 未信任此控制端。请把下面这条链接发给设备主人，让 ta 在浏览器里点一次「信任」，然后重试本命令：\n\n  %s\n\n(链接 5 分钟内有效；reason: %s)",
-			m.PairingURL, m.Reason,
-		)
-	}
-	return fmt.Errorf("device rejected this controller: %s", m.Reason)
+	return &RejectError{Reason: m.Reason, PairingURL: m.PairingURL}
 }
 
 // OpenConsole dials target and opens a control-plane (console) session,
@@ -217,9 +231,15 @@ func (c *Client) OpenConsole(ctx context.Context, target string) (*tls.Conn, err
 	return c.connectKind(ctx, target, protocol.KindConsoleHello)
 }
 
-// Logs pulls matching event-log lines from the target device and streams them to
-// stdout (JSON lines). Filters: type, grep, since (RFC3339), limit (0 = all).
+// Logs streams matching event-log JSON lines to stdout. Filters: type, grep,
+// since (RFC3339), limit (0 = all).
 func (c *Client) Logs(ctx context.Context, target, logType, grep, since string, limit int) error {
+	return c.LogsTo(ctx, target, logType, grep, since, limit, os.Stdout)
+}
+
+// LogsTo is the same as Logs but writes the event lines to out instead of
+// os.Stdout — used by the MCP server to capture them.
+func (c *Client) LogsTo(ctx context.Context, target, logType, grep, since string, limit int, out io.Writer) error {
 	conn, err := c.connect(ctx, target)
 	if err != nil {
 		return err
@@ -237,7 +257,7 @@ func (c *Client) Logs(ctx context.Context, target, logType, grep, since string, 
 		}
 		switch ft {
 		case protocol.FrameStdout:
-			os.Stdout.Write(payload)
+			out.Write(payload)
 		case protocol.FrameJSON:
 			m, _ := protocol.DecodeMessage(payload)
 			switch m.Kind {
@@ -252,9 +272,16 @@ func (c *Client) Logs(ctx context.Context, target, logType, grep, since string, 
 	}
 }
 
-// Exec runs a command on target, streaming output, returning the remote code.
-// cwd (optional) sets the working directory and is the policy scope on the device.
+// Exec runs a command on target, streaming output to os.Stdout/Stderr and
+// returning the remote exit code. cwd (optional) sets the working directory
+// (and is the policy scope) on the device. Convenience wrapper around ExecTo.
 func (c *Client) Exec(ctx context.Context, target, command string, oneShot bool, cwd string) (int, error) {
+	return c.ExecTo(ctx, target, command, oneShot, cwd, os.Stdout, os.Stderr)
+}
+
+// ExecTo is the same as Exec but lets callers (the MCP server) supply their own
+// writers to capture stdout/stderr into buffers.
+func (c *Client) ExecTo(ctx context.Context, target, command string, oneShot bool, cwd string, stdout, stderr io.Writer) (int, error) {
 	conn, err := c.connect(ctx, target)
 	if err != nil {
 		return -1, err
@@ -270,9 +297,9 @@ func (c *Client) Exec(ctx context.Context, target, command string, oneShot bool,
 		}
 		switch ft {
 		case protocol.FrameStdout:
-			os.Stdout.Write(payload)
+			stdout.Write(payload)
 		case protocol.FrameStderr:
-			os.Stderr.Write(payload)
+			stderr.Write(payload)
 		case protocol.FrameJSON:
 			m, perr := protocol.DecodeMessage(payload)
 			if perr != nil {
