@@ -16,8 +16,10 @@ FROM alpine:3.20
 COPY --from=build /out/wanctl /usr/local/bin/wanctl
 COPY --from=build /dist /dist
 EXPOSE 8080
-# Role is chosen at runtime: WANCTL_ROLE=relay (default) or portal. Same image
-# serves both thunderbox apps (relay = public + DB; portal = internal SSO).
+# Role is chosen at runtime: WANCTL_ROLE=relay (default) | portal | mcp.
+# Same image serves all three thunderbox apps (relay = public + DB; portal =
+# internal SSO; mcp = public HTTP/SSE MCP server). For "mcp" we invoke the
+# subcommand with --http so it serves Streamable HTTP transport on :8080.
 ENV WANCTL_ROLE=relay
 ENV WANCTL_DIST_DIR=/dist
-CMD ["sh", "-c", "wanctl ${WANCTL_ROLE} --addr :8080"]
+CMD ["sh", "-c", "if [ \"$WANCTL_ROLE\" = \"mcp\" ]; then exec wanctl mcp --http :8080; else exec wanctl ${WANCTL_ROLE} --addr :8080; fi"]

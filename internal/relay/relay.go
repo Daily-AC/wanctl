@@ -54,6 +54,7 @@ type Relay struct {
 	audit       Auditor
 	admin       AdminStore
 	docs        DocsStore
+	mcpHandler  http.Handler // optional: HTTP/Streamable MCP at /mcp
 	adminSecret string
 	portalNS    string
 
@@ -101,8 +102,20 @@ func (r *Relay) Handler() http.Handler {
 	r.registerDocs(mux)
 	r.registerAdmin(mux)
 	r.registerDist(mux)
+	if r.mcpHandler != nil {
+		// AI hosts register https://<relay>/mcp as their MCP server URL — no
+		// CLI install needed on the AI side. mcp-go's Streamable HTTP transport
+		// answers POST/GET on the same path. The trailing-slash variant is
+		// registered too in case clients send /mcp/.
+		mux.Handle("/mcp", r.mcpHandler)
+		mux.Handle("/mcp/", r.mcpHandler)
+	}
 	return mux
 }
+
+// SetMCPHandler installs the HTTP/Streamable MCP handler the relay will expose
+// at GET/POST /mcp. Pass nil (or never call) to disable the endpoint.
+func (r *Relay) SetMCPHandler(h http.Handler) { r.mcpHandler = h }
 
 // SetAdmin installs the admin store backing the /admin/* endpoints.
 func (r *Relay) SetAdmin(a AdminStore) { r.admin = a }

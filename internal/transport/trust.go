@@ -27,6 +27,14 @@ type Store struct {
 	m    map[string]Peer
 }
 
+// NewMemStore returns a trust store that lives in memory only — never persists
+// to disk. Used by the remote MCP server, where each user's known-servers set
+// is per-session and we don't want sessions on the same process clobbering each
+// other's known_servers.json.
+func NewMemStore() *Store {
+	return &Store{m: map[string]Peer{}}
+}
+
 // OpenStore loads (or initializes) the named store file inside the config dir.
 func OpenStore(name string) (*Store, error) {
 	dir, err := ConfigDir()
@@ -124,6 +132,9 @@ func (s *Store) Remove(fp string) error {
 }
 
 func (s *Store) save() error {
+	if s.path == "" {
+		return nil // memory-only store (see NewMemStore)
+	}
 	s.mu.Lock()
 	peers := make([]Peer, 0, len(s.m))
 	for _, p := range s.m {

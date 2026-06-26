@@ -135,6 +135,51 @@ func createIdentity(certPath, keyPath string) (*Identity, error) {
 	return &Identity{Cert: cert, Leaf: leaf, Fingerprint: Fingerprint(der)}, nil
 }
 
+// IdentityFromSeed builds a node identity from a deterministic 32-byte Ed25519
+// seed instead of generating a fresh one. Used by the remote MCP server to
+// derive a stable controller identity per namespace via HKDF(server_secret,
+// namespace) — no private key ever touches the database, the fingerprint is
+// stable across reconnects, and the user pairs once per device rather than
+// per session. The certificate's NotBefore/NotAfter are fixed so the resulting
+// DER (and thus the fingerprint) is fully deterministic for the same seed.
+func IdentityFromSeed(seed []byte, commonName string) (*Identity, error) {
+	if len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("seed must be %d bytes, got %d", ed25519.SeedSize, len(seed))
+	}
+	priv := ed25519.NewKeyFromSeed(seed)
+	pub := priv.Public().(ed25519.PublicKey)
+
+	serial := new(big.Int).SetBytes(seed[:16])
+	if serial.Sign() == 0 {
+		serial.SetInt64(1)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: commonName},
+		NotBefore:    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		return nil, err
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, err
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	leaf, _ := x509.ParseCertificate(der)
+	cert.Leaf = leaf
+	return &Identity{Cert: cert, Leaf: leaf, Fingerprint: Fingerprint(der)}, nil
+}
+
 // ShortFingerprint returns a human-comparable abbreviation for prompts.
 func ShortFingerprint(fp string) string {
 	if len(fp) <= 25 {

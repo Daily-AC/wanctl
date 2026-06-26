@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"wanctl/internal/client"
 	"wanctl/internal/config"
 	"wanctl/internal/eventlog"
+	mcppkg "wanctl/internal/mcp"
 	"wanctl/internal/policy"
 	"wanctl/internal/portal"
 	"wanctl/internal/relay"
@@ -36,7 +38,8 @@ USAGE
   wanctl status                               show whether the agent is running
   wanctl logout                               stop the agent and forget the saved login
   wanctl update                               download the latest binary from the relay and swap it in
-  wanctl mcp                                  run a stdio MCP server so an AI host (Claude Code / Cursor / …) can drive wanctl as typed tools
+  wanctl mcp                                  run a stdio MCP server (per-process, single-user) for an AI host's child process
+  wanctl mcp --http :ADDR                     run a public HTTP/Streamable MCP server (multi-user; needs WANCTL_MCP_SEED env)
   wanctl docs ls [--group SLUG]               list documentation articles
   wanctl docs get <slug>                      print one article's body
   wanctl docs new --slug S --title T --group G [--file F | --editor | < stdin]
@@ -123,7 +126,7 @@ func main() {
 	case "update":
 		err = cmdUpdate(ctx, os.Args[2:])
 	case "mcp":
-		err = cmdMCP(ctx)
+		err = cmdMCP(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return
@@ -175,6 +178,18 @@ func cmdRelay(args []string) error {
 	}
 	if pns := os.Getenv("WANCTL_PORTAL_NS"); pns != "" {
 		r.SetPortalNS(pns)
+	}
+	if seedHex := os.Getenv("WANCTL_MCP_SEED"); seedHex != "" {
+		seed, err := hex.DecodeString(seedHex)
+		if err != nil {
+			return fmt.Errorf("WANCTL_MCP_SEED must be hex-encoded: %w", err)
+		}
+		h, err := mcppkg.Handler(seed, "/mcp")
+		if err != nil {
+			return fmt.Errorf("mcp handler: %w", err)
+		}
+		r.SetMCPHandler(h)
+		fmt.Println("wanctl relay: MCP server enabled at /mcp (Streamable HTTP)")
 	}
 	fmt.Printf("wanctl relay listening on %s\n", *addr)
 	return http.ListenAndServe(*addr, r.Handler())

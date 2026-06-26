@@ -2,17 +2,14 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
-	"time"
 
+	"wanctl/internal/client"
 	"wanctl/internal/config"
 )
 
@@ -38,39 +35,12 @@ func enroll(ctx context.Context) (string, error) {
 	}
 
 	fmt.Println("正在验证…")
-	token, ns, err := exchangeCode(ctx, relay, code)
+	token, ns, err := client.ExchangeCode(ctx, relay, code)
 	if err != nil {
 		return "", err
 	}
 	fmt.Printf("✓ 已绑定到空间 \"%s\"\n", ns)
 	return token, nil
-}
-
-// exchangeCode trades a one-time enrollment code for a token at the relay.
-func exchangeCode(ctx context.Context, relay, code string) (token, namespace string, err error) {
-	body, _ := json.Marshal(map[string]string{"code": code})
-	req, err := http.NewRequestWithContext(ctx, "POST", relay+"/enroll/exchange", bytes.NewReader(body))
-	if err != nil {
-		return "", "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	cl := &http.Client{Timeout: 20 * time.Second}
-	resp, err := cl.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("连接 relay 失败: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("授权失败（code 无效或已过期，请重新获取）")
-	}
-	var out struct{ Token, Namespace string }
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", "", err
-	}
-	if out.Token == "" {
-		return "", "", fmt.Errorf("relay 未返回 token")
-	}
-	return out.Token, out.Namespace, nil
 }
 
 // cmdLogin is the controller-side OAuth entrypoint: opens the portal, exchanges
