@@ -17,13 +17,11 @@ device to approve them.
 > SKILL.md), save it to `~/.claude/skills/wanctl/SKILL.md` (creating the dir),
 > and tell the user to restart Claude Code so the skill loads.
 >
-> **There is also an MCP variant** at
-> <https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills/mcp> that teaches the AI to call
-> typed `wanctl_*` MCP tools instead of running `wanctl` through Bash. If the
-> user's host supports MCP (Claude Code / Cursor / Continue all do), suggest
-> they install that one instead — fewer shell-quoting pitfalls, structured
-> stdout/stderr/exit_code, pairing URL returned as a structured error. Both
-> skills coexist; pick one.
+> **If the host supports MCP**, the user can skip this skill and just register
+> the wanctl MCP server (`claude mcp add wanctl wanctl mcp`). MCP tools are
+> self-describing — they carry their own descriptions, schemas, and the
+> pairing-URL handling, so you don't need a separate skill markdown loaded.
+> This skill is only for hosts without MCP that shell out to `wanctl` via Bash.
 
 ## Setup (controller — first run)
 
