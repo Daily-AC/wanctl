@@ -103,12 +103,12 @@ func (r *Relay) Handler() http.Handler {
 	r.registerAdmin(mux)
 	r.registerDist(mux)
 	if r.mcpHandler != nil {
-		// AI hosts register https://<relay>/mcp as their MCP server URL — no
-		// CLI install needed on the AI side. mcp-go's Streamable HTTP transport
-		// answers POST/GET on the same path. The trailing-slash variant is
-		// registered too in case clients send /mcp/.
-		mux.Handle("/mcp", r.mcpHandler)
-		mux.Handle("/mcp/", r.mcpHandler)
+		// AI hosts register https://<relay>/wanctl-mcp as their MCP server URL.
+		// (We can't use /mcp directly: thunderbox's edge nginx reserves any
+		// path starting with /mcp for its own gateway, returning 401 Bearer
+		// Token required before our backend sees the request.)
+		mux.Handle("/wanctl-mcp", r.mcpHandler)
+		mux.Handle("/wanctl-mcp/", r.mcpHandler)
 	}
 	return mux
 }

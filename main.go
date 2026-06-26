@@ -184,12 +184,12 @@ func cmdRelay(args []string) error {
 		if err != nil {
 			return fmt.Errorf("WANCTL_MCP_SEED must be hex-encoded: %w", err)
 		}
-		h, err := mcppkg.Handler(seed, "/mcp")
+		h, err := mcppkg.Handler(seed, "/wanctl-mcp")
 		if err != nil {
 			return fmt.Errorf("mcp handler: %w", err)
 		}
 		r.SetMCPHandler(h)
-		fmt.Println("wanctl relay: MCP server enabled at /mcp (Streamable HTTP)")
+		fmt.Println("wanctl relay: MCP server enabled at /wanctl-mcp (Streamable HTTP)")
 	}
 	fmt.Printf("wanctl relay listening on %s\n", *addr)
 	return http.ListenAndServe(*addr, r.Handler())
