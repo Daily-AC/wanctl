@@ -53,6 +53,7 @@ USAGE
   wanctl pull  [--target NS/DEV] <remote> <local>
   wanctl peers
   wanctl id
+  wanctl pair  <device>                       check device trust state; if not yet paired print the URL the device owner clicks to approve
   wanctl trust [clients|servers]
   wanctl agent [--name N] [--relay URL] [--token T] [--yes] [--shell S] [--portal-pk FP]
   wanctl relay  [--addr :8080]                run the relay (thunderbox); DATABASE_URL or WANCTL_TOKENS
@@ -103,6 +104,8 @@ func main() {
 		err = cmdPeers(ctx)
 	case "id":
 		err = cmdID()
+	case "pair":
+		err = cmdPair(ctx, os.Args[2:])
 	case "trust":
 		err = cmdTrust(os.Args[2:])
 	case "rules":
@@ -297,6 +300,32 @@ func cmdPull(ctx context.Context, args []string) error {
 		return err
 	}
 	return c.Pull(ctx, *target, fs.Arg(0), fs.Arg(1))
+}
+
+func cmdPair(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("pair", flag.ExitOnError)
+	target := fs.String("target", "", "device (NS/DEV or DEV); positional <device> also accepted")
+	fs.Parse(args)
+	if *target == "" && fs.NArg() > 0 {
+		*target = fs.Arg(0)
+	}
+	if *target == "" {
+		return fmt.Errorf("usage: wanctl pair <device>")
+	}
+	c, err := client.New()
+	if err != nil {
+		return err
+	}
+	trusted, pairingURL, err := c.Pair(ctx, *target)
+	if err != nil {
+		return err
+	}
+	if trusted {
+		fmt.Printf("✓ %s 已经信任本机, 无需操作. 直接 `wanctl exec --target %s ...` 即可.\n", *target, *target)
+		return nil
+	}
+	fmt.Printf("待审批 — 把下面这条链接交给 %s 的所有者, 他在浏览器打开并点「信任并继续」即可:\n\n  %s\n\n之后再跑 `wanctl exec/push/pull` 就能通了 (链接 5 分钟内有效).\n", *target, pairingURL)
+	return nil
 }
 
 func cmdPeers(ctx context.Context) error {

@@ -293,6 +293,11 @@ func registerMCPTools(s *server.MCPServer) {
 		mcpapi.WithDescription("List devices currently reachable by the active controller token. Returns one device name per line. Use this FIRST when the user asks 'what devices are available' or before guessing a target name."),
 	), mcpPeers)
 
+	s.AddTool(mcpapi.NewTool("wanctl_pair",
+		mcpapi.WithDescription("Check whether the target device already trusts this MCP session's controller identity, and if not, return the device-side pairing URL up front (without having to fail an exec first). Use this when the user says 'pair my device' / '让 X 信任你' / before the first command against a brand-new device — it gives the user the approval link cleanly instead of as an exec error. Returns '✓ already trusted' OR 'PAIRING REQUIRED' with a URL to relay VERBATIM to the user. The URL is identical to the one wanctl_exec emits on first connect — both paths converge on the same one-click approval flow; the user can hit either."),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE for shared devices.")),
+	), mcpPair)
+
 	s.AddTool(mcpapi.NewTool("wanctl_exec",
 		mcpapi.WithDescription("Run a shell command on a remote wanctl-enrolled device over the encrypted relay. Returns the device's stdout, stderr, and exit code. If the device hasn't paired this controller yet, the result is isError=true with a 'PAIRING REQUIRED' message that carries a URL — surface that URL VERBATIM to the user; do not paraphrase."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE for shared devices. If exactly one device is online for this token, you may pass empty string.")),
@@ -412,7 +417,7 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 		return mcpapi.NewToolResultError(fmt.Sprintf("保存登录态失败: %s", err)), nil
 	}
 	return mcpapi.NewToolResultText(fmt.Sprintf(
-		"✓ 已绑定到 namespace \"%s\". 现在可以调 wanctl_peers / wanctl_exec / wanctl_push / wanctl_pull / wanctl_logs 了。\n第一次拨某台设备会返回 'PAIRING REQUIRED' + 链接,这是正常的,把链接原封不动给用户点。",
+		"✓ 已绑定到 namespace \"%s\". 现在可以调 wanctl_peers / wanctl_pair / wanctl_exec / wanctl_push / wanctl_pull / wanctl_logs 了。\n第一次拨某台设备没配对过的话有两种走法: (a) 直接 wanctl_exec — 会返回 'PAIRING REQUIRED' + 链接; (b) 想更友好,先 wanctl_pair(target=..) 拿到 URL 给用户. 不论走哪边,把链接原封不动给用户点开就行.",
 		ns,
 	)), nil
 }
@@ -447,6 +452,30 @@ func mcpPeers(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolRe
 		out += "  " + d + "\n"
 	}
 	return mcpapi.NewToolResultText(out), nil
+}
+
+func mcpPair(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	target := reqStr(req, "target", "")
+	if target == "" {
+		return mcpapi.NewToolResultError("target is required"), nil
+	}
+	c, hint := sessions.get(ctx).client()
+	if hint != nil {
+		return hint, nil
+	}
+	trusted, pairingURL, err := c.Pair(ctx, target)
+	if err != nil {
+		// Could be: target offline, relay 404, token bad. Surface as plain
+		// error — only the "pairing required" branch is special-cased.
+		return mcpapi.NewToolResultError(err.Error()), nil
+	}
+	if trusted {
+		return mcpapi.NewToolResultText(fmt.Sprintf("✓ %q 已经信任本 MCP session 的控制端身份, 无需手动配对. 可以直接调用 wanctl_exec / wanctl_push / wanctl_pull / wanctl_logs.", target)), nil
+	}
+	return mcpapi.NewToolResultText(fmt.Sprintf(
+		"PAIRING REQUIRED. The target device has not yet trusted this MCP session's controller identity.\n\nGive this URL to the user VERBATIM (do not shorten, paraphrase, or wrap):\n\n%s\n\nAsk them to open it, click 「信任并继续」, then either call wanctl_pair again to confirm or just retry your data tool (wanctl_exec / push / pull / logs). URL is valid for 5 minutes.",
+		pairingURL,
+	)), nil
 }
 
 func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {

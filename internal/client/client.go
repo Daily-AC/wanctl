@@ -237,6 +237,29 @@ func (c *Client) OpenConsole(ctx context.Context, target string) (*tls.Conn, err
 	return c.connectKind(ctx, target, protocol.KindConsoleHello)
 }
 
+// Pair performs a control-plane handshake against target with no follow-on data
+// operation, purely to surface whether this controller is already trusted by
+// the device. On success (trusted=true) the connection is closed immediately.
+// When the device rejects the controller because it has not paired this
+// fingerprint yet, Pair swallows the *RejectError and returns the device-side
+// pairing URL via pairingURL with err=nil — callers (CLI / MCP / portal) can
+// show that URL to the user without parsing an error.
+//
+// Any other dial / handshake failure (target offline, token bad, relay error,
+// reject with no PairingURL) propagates as err.
+func (c *Client) Pair(ctx context.Context, target string) (trusted bool, pairingURL string, err error) {
+	conn, err := c.connect(ctx, target)
+	if err != nil {
+		var rej *RejectError
+		if errors.As(err, &rej) && rej.PairingURL != "" {
+			return false, rej.PairingURL, nil
+		}
+		return false, "", err
+	}
+	conn.Close()
+	return true, "", nil
+}
+
 // Logs streams matching event-log JSON lines to stdout. Filters: type, grep,
 // since (RFC3339), limit (0 = all).
 func (c *Client) Logs(ctx context.Context, target, logType, grep, since string, limit int) error {

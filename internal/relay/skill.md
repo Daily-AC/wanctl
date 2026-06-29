@@ -51,6 +51,7 @@ export WANCTL_TOKEN=<token>                         # pre-provisioned, skips log
 
 ```bash
 wanctl peers                              # list devices you can reach
+wanctl pair NAME                          # check trust state up front; prints the approval URL if not yet paired
 wanctl exec --target NAME "<command>"     # run a command (streams stdout, real exit code)
 wanctl exec --target NAME --cwd /path "<command>"   # run in /path (also the policy scope)
 wanctl exec --target NAME --oneshot "<command>"     # fresh shell, no session state
@@ -79,8 +80,15 @@ wanctl id                                 # this controller's fingerprint
   expected; a timeout returns a denial. With no front-end attending (headless, no
   portal session, no TTY) a rule-miss is denied immediately.
 - **Pairing**: the very first connection from a new controller fingerprint
-  needs the device owner to trust it (TOFU). When this happens, `wanctl` exits
-  non-zero with a message containing a **clickable URL** like
+  needs the device owner to trust it (TOFU). Two ways to hit this:
+  - *Proactive* (preferred when the user explicitly says "pair me with X" or
+    you're about to drive a brand-new device): run `wanctl pair NAME` first —
+    on a fresh device it exits 0 and prints the approval URL; if already
+    trusted, it exits 0 with `✓` and nothing to do.
+  - *Reactive*: any `wanctl exec/push/pull` against an unpaired device exits
+    non-zero with the same URL embedded in the error message.
+
+  Either way, `wanctl` surfaces a **clickable URL** like
   `https://wanctl.***REMOVED***.***REMOVED***.com/#pair?device=...&fp=...&label=...`.
   **Do NOT paraphrase, shorten, or describe the URL** — copy it verbatim into
   your reply and ask the user to click it. The portal opens a confirmation card;
