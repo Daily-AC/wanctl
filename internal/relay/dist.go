@@ -20,7 +20,8 @@ var skillMD []byte
 // registerDist makes the relay serve a one-line installer and prebuilt agent
 // binaries, so a new device can be enrolled with:
 //
-//	curl -fsSL https://<relay>/install.sh | WANCTL_TOKEN=<token> sh
+//	curl -fsSL https://<relay>/install.sh | WANCTL_TOKEN=<token> sh         # unix
+//	irm https://<relay>/install.ps1 | iex                                   # windows
 //
 // Binaries live in WANCTL_DIST_DIR (default /dist), populated by the Docker build.
 func (r *Relay) registerDist(mux *http.ServeMux) {
@@ -32,6 +33,7 @@ func (r *Relay) registerDist(mux *http.ServeMux) {
 		mux.Handle("/dl/", http.StripPrefix("/dl/", http.FileServer(http.Dir(dir))))
 	}
 	mux.HandleFunc("/install.sh", r.handleInstall)
+	mux.HandleFunc("/install.ps1", r.handleInstallPS1)
 	mux.HandleFunc("/skills", r.handleSkills)
 }
 
@@ -54,6 +56,21 @@ func (r *Relay) handleInstall(w http.ResponseWriter, req *http.Request) {
 	portalFP := os.Getenv("WANCTL_PORTAL_FP")
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	fmt.Fprintf(w, installScript, base, portalFP)
+}
+
+// handleInstallPS1 is the Windows counterpart to handleInstall. Windows has no
+// bash by default; users (or their AI) pipe the script through PowerShell:
+//
+//	irm https://<relay>/install.ps1 | iex
+func (r *Relay) handleInstallPS1(w http.ResponseWriter, req *http.Request) {
+	scheme := "https"
+	if xf := req.Header.Get("X-Forwarded-Proto"); xf != "" {
+		scheme = xf
+	}
+	base := scheme + "://" + req.Host
+	portalFP := os.Getenv("WANCTL_PORTAL_FP")
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprintf(w, installScriptPS1, base, portalFP)
 }
 
 // installScript is a POSIX sh installer. %[1]s is the relay base URL,
@@ -161,4 +178,115 @@ echo ""
 echo "    wanctl"
 echo ""
 echo "(授权后服务转入后台; 停止用 'wanctl stop')"
+`
+
+// installScriptPS1 is the Windows / PowerShell counterpart to installScript.
+// %[1]s is the relay base URL, %[2]s the portal public-key fingerprint (may be
+// empty). Same env-var contract as the sh installer: WANCTL_TOKEN (automation),
+// WANCTL_NAME, WANCTL_MODE, WANCTL_BIN (install path override),
+// WANCTL_INSTALL_ONLY=1 (download only, don't start the agent).
+//
+// When piped to 'iex', the script runs in-memory and is not subject to the
+// file-based ExecutionPolicy, so it works on stock Win10/11 PowerShell.
+const installScriptPS1 = `# wanctl agent installer (Windows / PowerShell).  Usage:
+#   irm %[1]s/install.ps1 | iex
+# Optional env: $env:WANCTL_TOKEN, $env:WANCTL_NAME, $env:WANCTL_MODE,
+#   $env:WANCTL_BIN (install path; default: existing wanctl.exe in PATH, else
+#   %%LOCALAPPDATA%%\wanctl\wanctl.exe), $env:WANCTL_INSTALL_ONLY=1 (don't run).
+$ErrorActionPreference = 'Stop'
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
+$Relay    = '%[1]s'
+$PortalPK = '%[2]s'
+
+# Only amd64 binaries are published; Windows-on-ARM runs them via the kernel's
+# x86_64 emulation layer just fine, so we don't need a separate arm64 build.
+$bin = "wanctl-windows-amd64.exe"
+
+$tmp = Join-Path $env:TEMP ("wanctl-" + [guid]::NewGuid().Guid + ".exe")
+Write-Host "downloading $bin from $Relay/dl ..."
+Invoke-WebRequest -UseBasicParsing -Uri "$Relay/dl/$bin" -OutFile $tmp
+
+# Decide install destination. Reinstalls land at the existing binary's path so
+# 'wanctl' (bare) keeps pointing at the upgraded version. First-time installs
+# default to %%LOCALAPPDATA%%\wanctl\wanctl.exe — no admin needed.
+$existing = (Get-Command wanctl.exe -ErrorAction SilentlyContinue).Source
+if ($env:WANCTL_BIN)      { $dest = $env:WANCTL_BIN }
+elseif ($existing)        { $dest = $existing }
+else                      { $dest = Join-Path $env:LOCALAPPDATA 'wanctl\wanctl.exe' }
+$destDir = Split-Path -Parent $dest
+if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Force -Path $destDir | Out-Null }
+
+# A running .exe can't be overwritten on Windows. Rename the old one aside
+# first; the kernel keeps the open handle valid against the renamed path.
+if (Test-Path $dest) {
+  $old = "$dest.old"
+  if (Test-Path $old) { try { Remove-Item -Force $old } catch {} }
+  try { Rename-Item -Force -Path $dest -NewName ([IO.Path]::GetFileName($old)) } catch {}
+}
+Move-Item -Force -Path $tmp -Destination $dest
+$dest = (Resolve-Path $dest).Path
+$destDirAbs = (Resolve-Path (Split-Path -Parent $dest)).Path
+Write-Host "installed: $dest"
+
+# Clean up duplicate wanctl.exe elsewhere in PATH so bare 'wanctl' always
+# resolves to the freshly-installed copy.
+foreach ($p in ($env:PATH -split ';')) {
+  if (-not $p) { continue }
+  $cand = Join-Path $p 'wanctl.exe'
+  if (-not (Test-Path $cand)) { continue }
+  try { $candAbs = (Resolve-Path $cand).Path } catch { continue }
+  if ($candAbs -ieq $dest) { continue }
+  try { Remove-Item -Force $cand; Write-Host "清理旧版: $candAbs" }
+  catch { Write-Host "提示: 旧版仍在 $candAbs, 请手动删除否则 'wanctl' 可能跑到旧的" }
+}
+
+# Make sure $destDir is in the user's persistent PATH (new shells) AND the
+# current session's PATH (this shell). On Windows the User PATH is the right
+# scope — no admin needed.
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$userParts = @()
+if ($userPath) { $userParts = @($userPath -split ';' | Where-Object { $_ }) }
+$onUserPath = $false
+foreach ($p in $userParts) {
+  try { if ((Resolve-Path $p -ErrorAction Stop).Path -ieq $destDirAbs) { $onUserPath = $true; break } } catch {}
+}
+if (-not $onUserPath) {
+  [Environment]::SetEnvironmentVariable('Path', (($userParts + $destDirAbs) -join ';'), 'User')
+  Write-Host ""
+  Write-Host "已把 $destDirAbs 加进当前用户 PATH (新开 PowerShell/cmd 才生效)。"
+}
+$onSessionPath = $false
+foreach ($p in ($env:PATH -split ';')) {
+  if (-not $p) { continue }
+  try { if ((Resolve-Path $p -ErrorAction Stop).Path -ieq $destDirAbs) { $onSessionPath = $true; break } } catch {}
+}
+if (-not $onSessionPath) { $env:PATH = "$destDirAbs;$env:PATH" }
+
+if ($PortalPK) { $env:WANCTL_PORTAL_PK = $PortalPK }
+
+if ($env:WANCTL_INSTALL_ONLY -eq '1') {
+  Write-Host "done. run '$dest' to authorize this device (Feishu login)."
+  return
+}
+
+# Automation path (e.g. an AI controller's own device): a token in the env means
+# enroll non-interactively and run the agent now, like the sh installer.
+if ($env:WANCTL_TOKEN) {
+  $name = if ($env:WANCTL_NAME) { $env:WANCTL_NAME } else { $env:COMPUTERNAME }
+  $agentArgs = @('agent','--relay',$Relay,'--token',$env:WANCTL_TOKEN,'--transport','http','--name',$name)
+  if ($env:WANCTL_MODE) { $agentArgs += @('--mode', $env:WANCTL_MODE) }
+  Write-Host "starting agent as '$name' (Ctrl-C to stop; use a service wrapper to persist)"
+  & $dest @agentArgs
+  return
+}
+
+# Human path: no token needed. Just run 'wanctl' to log in via the browser.
+Write-Host ""
+Write-Host "已安装: $dest"
+Write-Host "下一步: 运行下面这条完成飞书授权并把本机变成可远程控制的设备 ——"
+Write-Host ""
+Write-Host "    wanctl"
+Write-Host ""
+Write-Host "(授权后服务转入后台; 停止用 'wanctl stop')"
 `

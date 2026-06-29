@@ -50,24 +50,39 @@ wanctl logs                      # run on the device itself: read the local log
 ```
 Content stays on the device (E2E — the relay never sees it).
 
-## Enroll a device in one line (curl | sh)
+## Enroll a device in one line
 
-On the machine you want to control (the agent), no Go needed — the relay serves a
-prebuilt binary and an installer. Get a token from the portal, then:
+On the machine you want to control (the agent), no Go needed — the relay serves
+prebuilt binaries and a one-line installer for both shells. Get a token from the
+portal, then:
 
 ```bash
+# macOS / Linux
 curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | WANCTL_TOKEN=<token> sh
 ```
 
-It detects OS/arch, installs `wanctl`, and runs the agent (foreground; wrap in
-`systemd`/`nohup &` to persist). Optional env: `WANCTL_NAME` (default hostname),
-`WANCTL_MODE=bypass`, `WANCTL_INSTALL_ONLY=1` (install, don't run). Run as a
-background service:
+```powershell
+# Windows (PowerShell — no bash needed)
+$env:WANCTL_TOKEN='<token>'; irm https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.ps1 | iex
+```
+
+Both installers detect OS/arch, install `wanctl`, and start the agent in the
+foreground (wrap in `systemd`/`nohup &` on unix, or a service wrapper like
+`nssm` on Windows, to persist). Optional env (same names on both):
+`WANCTL_NAME` (default hostname), `WANCTL_MODE=bypass`, `WANCTL_INSTALL_ONLY=1`
+(install, don't run), `WANCTL_BIN` (override install path). Install-only +
+launch separately:
 
 ```bash
 curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | WANCTL_INSTALL_ONLY=1 sh
 nohup wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token <token> \
       --transport http --name "$(hostname)" >/tmp/wanctl-agent.log 2>&1 &
+```
+
+```powershell
+$env:WANCTL_INSTALL_ONLY='1'; irm https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.ps1 | iex
+wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token <token> `
+             --transport http --name $env:COMPUTERNAME
 ```
 
 > **For AI agents:** how to *drive* a device (run commands, transfer files, read

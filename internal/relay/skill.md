@@ -118,19 +118,28 @@ controller side.
 
 If you have shell access to a machine that should become controllable (or are
 telling the user how), enroll it in two lines — no Go needed, the relay serves
-a prebuilt binary + installer:
+a prebuilt binary + installer. Pick the one for that machine's shell:
 
 ```bash
+# macOS / Linux (any POSIX shell)
 curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh
 wanctl                          # then run this on that machine — opens the
                                 # browser for Feishu login, takes a code, and
                                 # starts the agent in the background.
 ```
 
-For non-interactive setups (CI / pre-issued token), set `WANCTL_TOKEN=<tok>` on
-the curl line: `curl ... | WANCTL_TOKEN=tok sh`. Optional env: `WANCTL_NAME`,
-`WANCTL_MODE=bypass` (auto-allow; trusted devices only). On that machine,
-`wanctl stop` to stop, `wanctl status` to inspect.
+```powershell
+# Windows — PowerShell only, no bash / curl needed
+irm https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.ps1 | iex
+wanctl                          # same flow: browser → Feishu → agent runs.
+```
+
+For non-interactive setups (CI / pre-issued token), set `WANCTL_TOKEN=<tok>`
+before the one-liner: `curl ... | WANCTL_TOKEN=tok sh` or
+`$env:WANCTL_TOKEN='tok'; irm ... | iex`. Optional env (same on both):
+`WANCTL_NAME`, `WANCTL_MODE=bypass` (auto-allow; trusted devices only),
+`WANCTL_INSTALL_ONLY=1`. On that machine, `wanctl stop` to stop,
+`wanctl status` to inspect.
 
 ## Notes
 
