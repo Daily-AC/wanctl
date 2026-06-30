@@ -38,9 +38,12 @@ USAGE
   wanctl stop                                 stop the background agent
   wanctl status                               show whether the agent is running + credential state
   wanctl logout                               stop the agent and forget the saved login
-  wanctl agent [flags]                        run the agent in the FOREGROUND (what 'wanctl'/'start' spawn; use this for a service/Task unit)
-  Persistence: the background agent survives this terminal closing but NOT a reboot.
-  For reboot-survival, run 'wanctl agent' from a systemd unit / Windows Scheduled Task (the installer can set this up).
+  wanctl service install                      install an OS-native always-on service (systemd/launchd/Scheduled Task)
+  wanctl service uninstall                     remove that service
+  wanctl service status                        show whether the service is installed + active
+  wanctl agent [flags]                         run the agent in the FOREGROUND (what 'wanctl'/'start'/the service spawn)
+  Persistence: 'wanctl start' survives THIS terminal but may die on logout/reboot.
+  For a real always-on agent (survives terminal close, logout, and reboot), use 'wanctl service install'.
 
  CONTROLLER (run where you / the AI drive from)
   wanctl login                                log in (Feishu) and save the token — no daemon (use this on AI / controller boxes)
@@ -135,6 +138,8 @@ func main() {
 		err = cmdLogout()
 	case "update":
 		err = cmdUpdate(ctx, os.Args[2:])
+	case "service":
+		err = cmdService(ctx, os.Args[2:])
 	case "mcp":
 		err = cmdMCP(ctx, os.Args[2:])
 	case "-h", "--help", "help":

@@ -19,10 +19,20 @@ func processAlive(pid int) bool {
 	return err == nil
 }
 
-// detachSysProcAttr: the default attributes are sufficient to launch a detached
-// child on Windows for our purposes.
+// detachSysProcAttr truly detaches the child on Windows: DETACHED_PROCESS drops
+// the parent console (so closing the launching terminal/SSH session doesn't take
+// the agent down) and CREATE_NEW_PROCESS_GROUP isolates it from Ctrl-C. Without
+// these the child shares the console and dies with it. For survival across
+// logout/reboot use `wanctl service install` (a Scheduled Task).
 func detachSysProcAttr() *syscall.SysProcAttr {
-	return &syscall.SysProcAttr{}
+	const (
+		detachedProcess       = 0x00000008
+		createNewProcessGroup = 0x00000200
+	)
+	return &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: detachedProcess | createNewProcessGroup,
+	}
 }
 
 // terminatePID kills the background agent.
