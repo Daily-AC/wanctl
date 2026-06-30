@@ -279,8 +279,9 @@ func (r *remoteSession) info() string {
 
 func registerMCPTools(s *server.MCPServer) {
 	s.AddTool(mcpapi.NewTool("wanctl_login",
-		mcpapi.WithDescription("Authenticate THIS MCP session to a wanctl namespace via the team portal. Two-step OAuth flow: (1) call with NO argument first → returns a portal URL + a one-time code prompt the user needs to complete in their browser. (2) call again with the `code` the user pastes back → exchanges it for a namespace token bound ONLY to this MCP session (in HTTP mode) or this machine's wanctl config (in stdio mode). Multiple AI users sharing the same MCP server each log in independently — credentials are never shared across sessions."),
+		mcpapi.WithDescription("Authenticate THIS MCP session to a wanctl namespace via the team portal. Two-step OAuth flow: (1) call with NO argument first → returns a portal URL + a one-time code prompt the user needs to complete in their browser. (2) call again with the `code` the user pastes back → exchanges it for a namespace token bound ONLY to this MCP session (in HTTP mode) or this machine's wanctl config (in stdio mode). Multiple AI users sharing the same MCP server each log in independently — credentials are never shared across sessions.\n\nFAST RE-BIND: a successful login also returns a `rebind` credential. HTTP-MCP sessions are in-memory, so a relay restart or a dropped/re-initialized connection can surface 'LOGIN REQUIRED' mid-task even though the user is still authorized. When that happens, call wanctl_login(rebind=\"…\") with the credential you saved — it restores access INSTANTLY with no Feishu round-trip. Only fall back to the OAuth flow if you have no saved rebind credential."),
 		mcpapi.WithString("code", mcpapi.Description("The one-time code the user copied from the portal /enroll page. Omit on the first call.")),
+		mcpapi.WithString("rebind", mcpapi.Description("A rebind credential returned by an earlier successful login in this conversation. Pass it to restore a lost session instantly without re-doing OAuth. Mutually exclusive with code.")),
 	), mcpLogin)
 
 	s.AddTool(mcpapi.NewTool("wanctl_status",
@@ -412,16 +413,50 @@ func pairingResult(rej *client.RejectError) *mcpapi.CallToolResult {
 
 func loginRequired() *mcpapi.CallToolResult {
 	return mcpapi.NewToolResultError(
-		"LOGIN REQUIRED. This MCP session has no wanctl credentials yet. Call wanctl_login() (no args) — it returns a URL and instructions you should show the user. The user opens the URL, signs in via Feishu, copies the one-time code; then call wanctl_login(code=\"…\") with what they paste back. Once logged in, retry your previous tool call.",
+		"LOGIN REQUIRED. This MCP session has no wanctl credentials right now.\n"+
+			"FIRST: if earlier in THIS conversation a wanctl_login succeeded and returned a `rebind` credential, the user is almost certainly still authorized — the in-memory session was just lost (relay restart / reconnect). Call wanctl_login(rebind=\"…\") with that saved credential to restore access INSTANTLY; do NOT bother the user. "+
+			"ONLY if you have no saved rebind credential: call wanctl_login() (no args) — it returns a URL + instructions to show the user, who signs in via Feishu and pastes back a one-time code for wanctl_login(code=\"…\"). Then retry your previous tool call.",
 	)
 }
 
 // --- auth tools ---
 
+// encodeRebind packs (namespace, token) into one opaque credential the AI can
+// store and replay to restore a lost session. The token never expires server-
+// side, so this is all that's needed to rebind — no re-OAuth. It is namespace-
+// scoped and still requires device TOFU pairing to control anything, so echoing
+// it into the AI's own conversation is an acceptable exposure.
+func encodeRebind(namespace, token string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(namespace + "\x00" + token))
+}
+
+func decodeRebind(s string) (namespace, token string, err error) {
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(s))
+	if err != nil {
+		return "", "", err
+	}
+	i := bytes.IndexByte(raw, 0)
+	if i < 0 {
+		return "", "", fmt.Errorf("malformed rebind credential")
+	}
+	return string(raw[:i]), string(raw[i+1:]), nil
+}
+
 func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
 	s := sessions.get(ctx)
 	code := reqStr(req, "code", "")
+	rebind := reqStr(req, "rebind", "")
 	portal := config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)
+	if rebind != "" {
+		ns, token, err := decodeRebind(rebind)
+		if err != nil {
+			return mcpapi.NewToolResultError("rebind credential is malformed; fall back to wanctl_login() (no args) to re-authenticate via the portal."), nil
+		}
+		if err := s.saveLogin(token, ns); err != nil {
+			return mcpapi.NewToolResultError(fmt.Sprintf("保存登录态失败: %s", err)), nil
+		}
+		return mcpapi.NewToolResultText(fmt.Sprintf("✓ 已用 rebind 凭证瞬时恢复到 namespace %q（无需重新授权）。可以继续之前的工具调用了。", ns)), nil
+	}
 	if code == "" {
 		return mcpapi.NewToolResultText(fmt.Sprintf(
 			"OK — drive the user through Feishu SSO to mint a session token. Show them these instructions VERBATIM:\n\n"+
@@ -440,10 +475,19 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 	if err := s.saveLogin(token, ns); err != nil {
 		return mcpapi.NewToolResultError(fmt.Sprintf("保存登录态失败: %s", err)), nil
 	}
-	return mcpapi.NewToolResultText(fmt.Sprintf(
+	msg := fmt.Sprintf(
 		"✓ 已绑定到 namespace \"%s\". 现在可以调 wanctl_peers / wanctl_pair / wanctl_exec / wanctl_push / wanctl_pull / wanctl_logs 了。\n第一次拨某台设备没配对过的话有两种走法: (a) 直接 wanctl_exec — 会返回 'PAIRING REQUIRED' + 链接; (b) 想更友好,先 wanctl_pair(target=..) 拿到 URL 给用户. 不论走哪边,把链接原封不动给用户点开就行.",
 		ns,
-	)), nil
+	)
+	// HTTP-MCP credentials are in-memory and keyed by Mcp-Session-Id, so a relay
+	// restart or a re-initialized connection can throw 'LOGIN REQUIRED' mid-task.
+	// Hand the AI a rebind credential so it can self-heal without re-OAuth (#1).
+	if _, ok := s.(*remoteSession); ok {
+		msg += fmt.Sprintf(
+			"\n\n⚠️ 给 AI 自己记(不必展示给用户): 保存下面这串 rebind 凭证。之后任何工具若返回 'LOGIN REQUIRED'(relay 重启/连接重置会触发,但用户其实仍有授权), 不要再打扰用户走飞书 —— 直接调 wanctl_login(rebind=\"…\") 即可瞬时恢复:\n\n  %s",
+			encodeRebind(ns, token))
+	}
+	return mcpapi.NewToolResultText(msg), nil
 }
 
 func mcpStatus(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
