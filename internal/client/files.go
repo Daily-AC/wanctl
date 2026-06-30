@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -22,7 +23,27 @@ func (c *Client) Push(ctx context.Context, target, local, remotePath string) err
 	if err != nil {
 		return err
 	}
+	if err := c.pushReader(ctx, target, remotePath, f, info.Size(), uint32(info.Mode().Perm())); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "pushed %s -> %s (%d bytes)\n", local, remotePath, info.Size())
+	return nil
+}
 
+// PushBytes uploads in-memory content to remotePath on the target device — the
+// transport for HTTP/remote MCP mode, where the AI host has no file on the MCP
+// server to point Push at (issue #6). mode 0 falls back to 0644.
+func (c *Client) PushBytes(ctx context.Context, target, remotePath string, data []byte, mode uint32) error {
+	if mode == 0 {
+		mode = 0o644
+	}
+	return c.pushReader(ctx, target, remotePath, bytes.NewReader(data), int64(len(data)), mode)
+}
+
+// pushReader streams size bytes from r to remotePath on target, honoring the
+// device's file-put policy gate. Shared by Push (local file) and PushBytes
+// (in-memory blob).
+func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io.Reader, size int64, mode uint32) error {
 	conn, err := c.connect(ctx, target)
 	if err != nil {
 		return err
@@ -32,8 +53,8 @@ func (c *Client) Push(ctx context.Context, target, local, remotePath string) err
 	if err := protocol.WriteMessage(conn, protocol.Message{
 		Kind: protocol.KindFilePut,
 		Path: remotePath,
-		Size: info.Size(),
-		Mode: uint32(info.Mode().Perm()),
+		Size: size,
+		Mode: mode,
 	}); err != nil {
 		return err
 	}
@@ -50,7 +71,7 @@ func (c *Client) Push(ctx context.Context, target, local, remotePath string) err
 
 	buf := make([]byte, fileChunk)
 	for {
-		n, rerr := f.Read(buf)
+		n, rerr := r.Read(buf)
 		if n > 0 {
 			if err := protocol.WriteFrame(conn, protocol.FrameData, buf[:n]); err != nil {
 				return err
@@ -73,7 +94,6 @@ func (c *Client) Push(ctx context.Context, target, local, remotePath string) err
 	if done.Kind == protocol.KindError {
 		return fmt.Errorf("remote write failed: %s", done.Reason)
 	}
-	fmt.Fprintf(os.Stderr, "pushed %s -> %s (%d bytes)\n", local, remotePath, info.Size())
 	return nil
 }
 

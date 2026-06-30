@@ -13,11 +13,13 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -313,6 +315,14 @@ func registerMCPTools(s *server.MCPServer) {
 		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to write to.")),
 	), mcpPush)
 
+	s.AddTool(mcpapi.NewTool("wanctl_push_blob",
+		mcpapi.WithDescription("Upload INLINE base64 content to a remote path on the target device — the file-push tool that works in HTTP (remote) MCP mode, where the AI host has no file on the MCP server for wanctl_push to read. Encode the bytes you want written as base64 and pass them in 'content_b64'. Same pairing/policy rules as wanctl_exec. Size cap: 8 MiB of raw (decoded) bytes; for larger payloads, split or have the device fetch the file itself."),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
+		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to write to (overwrites if it exists).")),
+		mcpapi.WithString("content_b64", mcpapi.Required(), mcpapi.Description("Standard-base64-encoded file content (the RAW bytes to write, not text).")),
+		mcpapi.WithString("mode", mcpapi.Description("Optional octal file mode, e.g. \"0755\" for an executable. Default 0644.")),
+	), mcpPushBlob)
+
 	s.AddTool(mcpapi.NewTool("wanctl_pull",
 		mcpapi.WithDescription("Download a remote file from the target device to a local path. Same pairing/policy rules as wanctl_exec. NOTE: in HTTP (remote) MCP mode 'local' is on the MCP SERVER; for AI-host-side files use stdio mode."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
@@ -535,6 +545,47 @@ func mcpPush(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return mcpapi.NewToolResultError(err.Error()), nil
 	}
 	return mcpapi.NewToolResultText(fmt.Sprintf("uploaded %s -> %s:%s", local, target, remote)), nil
+}
+
+// maxBlobBytes caps the decoded size of a wanctl_push_blob upload. Inline base64
+// rides the same request path as every other tool call, so keep it modest.
+const maxBlobBytes = 8 << 20 // 8 MiB
+
+func mcpPushBlob(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	target := reqStr(req, "target", "")
+	remote := reqStr(req, "remote", "")
+	b64 := reqStr(req, "content_b64", "")
+	if remote == "" || b64 == "" {
+		return mcpapi.NewToolResultError("remote and content_b64 are required"), nil
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
+	if err != nil {
+		return mcpapi.NewToolResultError("content_b64 is not valid standard base64: " + err.Error()), nil
+	}
+	if len(data) > maxBlobBytes {
+		return mcpapi.NewToolResultError(fmt.Sprintf(
+			"decoded content is %d bytes, over the %d-byte (8 MiB) inline cap; split it or have the device fetch the file itself",
+			len(data), maxBlobBytes)), nil
+	}
+	var mode uint32
+	if ms := strings.TrimSpace(reqStr(req, "mode", "")); ms != "" {
+		m, perr := strconv.ParseUint(strings.TrimPrefix(ms, "0o"), 8, 32)
+		if perr != nil {
+			return mcpapi.NewToolResultError("mode must be octal like \"0644\": " + perr.Error()), nil
+		}
+		mode = uint32(m)
+	}
+	c, hint := sessions.get(ctx).client()
+	if hint != nil {
+		return hint, nil
+	}
+	if err := c.PushBytes(ctx, target, remote, data, mode); err != nil {
+		if rej := asPairing(err); rej != nil {
+			return pairingResult(rej), nil
+		}
+		return mcpapi.NewToolResultError(err.Error()), nil
+	}
+	return mcpapi.NewToolResultText(fmt.Sprintf("wrote %d bytes -> %s:%s", len(data), target, remote)), nil
 }
 
 func mcpPull(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
