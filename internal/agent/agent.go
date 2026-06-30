@@ -409,6 +409,10 @@ func (a *Agent) doLogs(conn *tls.Conn, m protocol.Message) {
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExit, Code: 0})
 }
 
+// Mode reports the agent's effective policy mode (which may be a mode persisted
+// from a previous run, not just the one passed at construction).
+func (a *Agent) Mode() policy.Mode { return a.engine.Mode() }
+
 // withCwd prefixes a directory change so the command runs in cwd. Uses ';' so it
 // works in both POSIX sh and PowerShell.
 func withCwd(cwd, cmd string) string {

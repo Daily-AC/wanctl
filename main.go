@@ -241,19 +241,26 @@ func cmdAgent(ctx context.Context, args []string) error {
 	shell := fs.String("shell", "", "shell (default powershell on Windows, /bin/sh elsewhere)")
 	yes := fs.Bool("yes", false, "auto-trust new controllers (unattended)")
 	tr := fs.String("transport", envOr("WANCTL_TRANSPORT", defaultTransport), "transport: ws or http (http is proxy-agnostic)")
-	mode := fs.String("mode", "normal", "policy mode: normal (prompt on miss) or bypass (auto-allow, DANGEROUS)")
+	mode := fs.String("mode", "", "policy mode: normal (prompt on miss) or bypass (auto-allow, DANGEROUS). Empty = keep the last persisted mode (default normal).")
 	portalPK := fs.String("portal-pk", envOr("WANCTL_PORTAL_PK", config.DefaultPortalFP), "pre-trust this portal fingerprint (enrolled at install time)")
 	fs.Parse(args)
 	if *relayURL == "" || *token == "" {
 		return fmt.Errorf("provide --relay and --token (or WANCTL_RELAY/WANCTL_TOKEN)")
 	}
-	if *mode == "bypass" {
-		fmt.Fprintln(os.Stderr, "wanctl: BYPASS mode — every command and file op is auto-allowed. Use only on trusted, isolated devices.")
-	}
 	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFP: *portalPK})
 	if err != nil {
 		return err
 	}
+	// Warn on the EFFECTIVE mode (which may be a persisted bypass, not just an
+	// explicit --mode bypass flag).
+	if ag.Mode() == policy.ModeBypass {
+		fmt.Fprintln(os.Stderr, "wanctl: BYPASS mode — every command and file op is auto-allowed. Use only on trusted, isolated devices.")
+	}
+	// Self-register the pid so `wanctl status`/`stop` see this agent no matter how
+	// it was launched (bare `wanctl`, a keeper task, a systemd/launchd service),
+	// not just the child that `wanctl start` spawns.
+	_ = config.WritePID(os.Getpid())
+	defer config.RemovePID()
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return ag.Run(ctx)

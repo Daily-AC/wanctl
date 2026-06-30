@@ -67,22 +67,39 @@ type Decision struct {
 
 // Engine holds the rule set and mode for a device.
 type Engine struct {
-	mu    sync.Mutex
-	rules []Rule
-	mode  Mode
-	path  string
+	mu       sync.Mutex
+	rules    []Rule
+	mode     Mode
+	path     string
+	modePath string
 }
 
-// Open loads (or initializes) the named rule file in the config dir.
+// Open loads (or initializes) the named rule file in the config dir. The mode
+// argument is the requested mode: a non-empty value (an explicit --mode flag)
+// wins and is remembered; an empty value falls back to the persisted mode from a
+// previous run, then to ModeNormal. This is why a `bypass` set at runtime (or via
+// an explicit flag) survives an agent restart instead of silently reverting.
 func Open(name string, mode Mode) (*Engine, error) {
 	dir, err := transport.ConfigDir()
 	if err != nil {
 		return nil, err
 	}
+	e := &Engine{path: filepath.Join(dir, name), modePath: filepath.Join(dir, "mode")}
+
+	explicit := mode != ""
+	if !explicit {
+		mode = e.loadMode() // "" if no/invalid persisted file
+	}
 	if mode == "" {
 		mode = ModeNormal
 	}
-	e := &Engine{path: filepath.Join(dir, name), mode: mode}
+	e.mode = mode
+	if explicit {
+		// An explicit --mode is a deliberate choice; record it so the next
+		// flag-less restart (e.g. a keeper/service launch) keeps it.
+		_ = e.saveMode()
+	}
+
 	data, err := os.ReadFile(e.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -96,6 +113,28 @@ func Open(name string, mode Mode) (*Engine, error) {
 	return e, nil
 }
 
+// loadMode reads the persisted mode, returning "" if absent or invalid.
+func (e *Engine) loadMode() Mode {
+	b, err := os.ReadFile(e.modePath)
+	if err != nil {
+		return ""
+	}
+	switch m := Mode(strings.TrimSpace(string(b))); m {
+	case ModeNormal, ModeBypass:
+		return m
+	default:
+		return ""
+	}
+}
+
+// saveMode persists the current mode so it survives a restart.
+func (e *Engine) saveMode() error {
+	if e.modePath == "" {
+		return nil
+	}
+	return os.WriteFile(e.modePath, []byte(string(e.Mode())+"\n"), 0o600)
+}
+
 // Mode reports the current mode.
 func (e *Engine) Mode() Mode {
 	e.mu.Lock()
@@ -103,11 +142,13 @@ func (e *Engine) Mode() Mode {
 	return e.mode
 }
 
-// SetMode changes the mode.
+// SetMode changes the mode and persists it, so a runtime switch to bypass (e.g.
+// from the portal toggle) outlives an agent restart.
 func (e *Engine) SetMode(m Mode) {
 	e.mu.Lock()
 	e.mode = m
 	e.mu.Unlock()
+	_ = e.saveMode()
 }
 
 // Allowed reports whether a request is already permitted by some rule.
