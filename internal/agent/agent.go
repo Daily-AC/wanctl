@@ -56,6 +56,7 @@ type Agent struct {
 
 	sessMu   sync.Mutex
 	sessions map[string]*server.ShellSession
+	jobs     *jobStore
 	stdin    *bufio.Reader
 }
 
@@ -95,7 +96,7 @@ func New(opts Options) (*Agent, error) {
 	}
 	a := &Agent{
 		id: id, known: known, opts: opts, engine: engine, log: logger,
-		sessions: map[string]*server.ShellSession{}, stdin: bufio.NewReader(os.Stdin),
+		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(), stdin: bufio.NewReader(os.Stdin),
 	}
 	if opts.PortalFP != "" && !known.Has(opts.PortalFP) {
 		_ = known.Add(opts.PortalFP, "portal")
@@ -289,6 +290,10 @@ func (a *Agent) serve(conn *tls.Conn, fp, peerName string) {
 		switch m.Kind {
 		case protocol.KindExec:
 			a.doExec(conn, fp, peerName, m)
+		case protocol.KindExecAsync:
+			a.doExecAsync(conn, fp, peerName, m)
+		case protocol.KindExecPoll:
+			a.doExecPoll(conn, m)
 		case protocol.KindLogs:
 			a.doLogs(conn, m)
 		case protocol.KindFilePut:
@@ -342,6 +347,45 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 	}
 	a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code})
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExit, Code: code})
+}
+
+// doExecAsync starts a command as a background job and returns its id at once,
+// without waiting for it to finish. The job keeps running on the device after
+// this connection closes; the controller fetches output and exit code later via
+// doExecPoll. This decouples long commands from any per-request timeout (#2) and
+// makes a once-orphaned process queryable (#16). Async jobs always run in a
+// fresh shell (no shared persistent-session state).
+func (a *Agent) doExecAsync(conn *tls.Conn, fp, peerName string, m protocol.Message) {
+	ok, decision := a.gate(policy.Request{Kind: policy.KindExec, Cmd: m.Command, Cwd: m.Cwd, Peer: fp})
+	if !ok {
+		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: "[async] " + m.Command, Cwd: m.Cwd, Decision: decision})
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "command denied by device policy: " + m.Command})
+		return
+	}
+	id, err := a.jobs.start(a.opts.Shell, withCwd(m.Cwd, m.Command))
+	if err != nil {
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
+		return
+	}
+	a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: "[async " + id + "] " + m.Command, Cwd: m.Cwd, Decision: decision})
+	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindOK, JobID: id})
+}
+
+// doExecPoll streams a background job's output past m.Offset, then reports the
+// new total length and whether it is still running. The job id (a random secret
+// returned at start) is the capability, so no extra policy gate is applied — the
+// command itself was gated when it started.
+func (a *Agent) doExecPoll(conn *tls.Conn, m protocol.Message) {
+	j := a.jobs.get(m.JobID)
+	if j == nil {
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "unknown or expired job: " + m.JobID})
+		return
+	}
+	newOut, total, done, code := j.snapshot(m.Offset)
+	if len(newOut) > 0 {
+		protocol.WriteFrame(conn, protocol.FrameStdout, newOut)
+	}
+	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExit, Offset: total, Running: !done, Code: code})
 }
 
 // doLogs streams matching local events back to the controller as JSON lines.

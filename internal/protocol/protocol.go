@@ -34,9 +34,11 @@ const MaxFrame = 16 << 20
 
 // Message kinds for FrameJSON control frames.
 const (
-	KindHello    = "hello"     // client -> server, opening greeting
-	KindExec     = "exec"      // client -> server, run a command
-	KindExit     = "exit"      // server -> client, command finished
+	KindHello     = "hello"      // client -> server, opening greeting
+	KindExec      = "exec"       // client -> server, run a command
+	KindExecAsync = "exec_async" // client -> server, start a background job, return its id
+	KindExecPoll  = "exec_poll"  // client -> server, fetch a background job's new output + status
+	KindExit      = "exit"       // server -> client, command finished
 	KindError    = "error"     // either direction, fatal request error
 	KindReject   = "reject"    // server -> client, pairing/authz denied
 	KindOK       = "ok"        // generic acknowledgement
@@ -76,6 +78,11 @@ type Message struct {
 
 	// exit
 	Code int `json:"code,omitempty"`
+
+	// exec_async / exec_poll (background jobs)
+	JobID   string `json:"job_id,omitempty"`  // server->client on start; client->server on poll
+	Offset  int64  `json:"offset,omitempty"`  // poll: bytes already consumed (req) / new total length (resp)
+	Running bool   `json:"running,omitempty"` // poll resp: true = job still running (Code not yet meaningful)
 
 	// error / reject
 	Reason string `json:"reason,omitempty"`

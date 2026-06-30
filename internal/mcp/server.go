@@ -308,6 +308,20 @@ func registerMCPTools(s *server.MCPServer) {
 		mcpapi.WithBoolean("oneshot", mcpapi.Description("Run in a fresh shell with no persistent session state. Default false — successive exec calls share cwd/env like a real terminal.")),
 	), mcpExec)
 
+	s.AddTool(mcpapi.NewTool("wanctl_exec_async",
+		mcpapi.WithDescription("Start a shell command as a BACKGROUND job on the device and return a job_id IMMEDIATELY, without waiting for it to finish. Use this for anything that may run longer than a single tool call comfortably tolerates — package installs, builds, large downloads, `wsl --shutdown` then a long build, etc. The command keeps running on the device even after this call returns; fetch its output and exit code later with wanctl_exec_poll(job_id). Always runs in a FRESH shell (no shared cwd/env with wanctl_exec's persistent session). Same pairing/policy rules as wanctl_exec. Output + exit code are retained for 1h after the job ends."),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
+		mcpapi.WithString("command", mcpapi.Required(), mcpapi.Description("Shell command to run in the device's default shell (sh on Unix, powershell on Windows).")),
+		mcpapi.WithString("cwd", mcpapi.Description("Working directory on the device for this command (also the policy scope).")),
+	), mcpExecAsync)
+
+	s.AddTool(mcpapi.NewTool("wanctl_exec_poll",
+		mcpapi.WithDescription("Fetch a background job's new output and status (started via wanctl_exec_async). Call repeatedly until state is 'done'. Pass the 'next_offset' from the previous poll as 'offset' to receive only NEW output each time; omit or 0 to get everything from the start. The response carries a status header (state: running|done, exit code when done, next_offset) followed by the output."),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE — the same device the job was started on.")),
+		mcpapi.WithString("job_id", mcpapi.Required(), mcpapi.Description("The job id returned by wanctl_exec_async.")),
+		mcpapi.WithNumber("offset", mcpapi.Description("Bytes of output already seen; return only output past this point. Use the previous poll's next_offset. Default 0 = from the start.")),
+	), mcpExecPoll)
+
 	s.AddTool(mcpapi.NewTool("wanctl_push",
 		mcpapi.WithDescription("Upload a local file to a remote path on the target device. Same pairing/policy rules as wanctl_exec. NOTE: in HTTP (remote) MCP mode, 'local' is a path on the MCP SERVER, not on the AI host — this tool is intended for stdio mode where the AI host has direct filesystem access."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
@@ -523,6 +537,59 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	}
 	if stdout.Len() == 0 && stderr.Len() == 0 {
 		out += "(no output)\n"
+	}
+	return mcpapi.NewToolResultText(out), nil
+}
+
+func mcpExecAsync(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	target := reqStr(req, "target", "")
+	command := reqStr(req, "command", "")
+	if command == "" {
+		return mcpapi.NewToolResultError("command is required"), nil
+	}
+	c, hint := sessions.get(ctx).client()
+	if hint != nil {
+		return hint, nil
+	}
+	id, err := c.ExecAsync(ctx, target, command, reqStr(req, "cwd", ""))
+	if err != nil {
+		if rej := asPairing(err); rej != nil {
+			return pairingResult(rej), nil
+		}
+		return mcpapi.NewToolResultError(err.Error()), nil
+	}
+	return mcpapi.NewToolResultText(fmt.Sprintf(
+		"started background job %s on %q.\nPoll it with wanctl_exec_poll(target=%q, job_id=%q) until state is 'done'. Output + exit code are kept for 1h after it finishes.",
+		id, target, target, id)), nil
+}
+
+func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	target := reqStr(req, "target", "")
+	jobID := reqStr(req, "job_id", "")
+	if jobID == "" {
+		return mcpapi.NewToolResultError("job_id is required"), nil
+	}
+	c, hint := sessions.get(ctx).client()
+	if hint != nil {
+		return hint, nil
+	}
+	var buf bytes.Buffer
+	newOffset, running, code, err := c.ExecPollTo(ctx, target, jobID, int64(reqInt(req, "offset")), &buf)
+	if err != nil {
+		if rej := asPairing(err); rej != nil {
+			return pairingResult(rej), nil
+		}
+		return mcpapi.NewToolResultError(err.Error()), nil
+	}
+	head := fmt.Sprintf("state: running\nnext_offset: %d\n", newOffset)
+	if !running {
+		head = fmt.Sprintf("state: done\nexit: %d\nnext_offset: %d\n", code, newOffset)
+	}
+	out := head
+	if buf.Len() > 0 {
+		out += "\n--- new output ---\n" + clampStream(buf.Bytes())
+	} else {
+		out += "\n(no new output since offset)\n"
 	}
 	return mcpapi.NewToolResultText(out), nil
 }
