@@ -498,14 +498,16 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	}
 	out := fmt.Sprintf("exit: %d\n", code)
 	if stdout.Len() > 0 {
-		out += "\n--- stdout ---\n" + stdout.String()
-		if !endsNewline(stdout.Bytes()) {
+		s := clampStream(stdout.Bytes())
+		out += "\n--- stdout ---\n" + s
+		if !strings.HasSuffix(s, "\n") {
 			out += "\n"
 		}
 	}
 	if stderr.Len() > 0 {
-		out += "\n--- stderr ---\n" + stderr.String()
-		if !endsNewline(stderr.Bytes()) {
+		s := clampStream(stderr.Bytes())
+		out += "\n--- stderr ---\n" + s
+		if !strings.HasSuffix(s, "\n") {
 			out += "\n"
 		}
 	}
@@ -659,7 +661,30 @@ func mcpRules(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolRe
 	return mcpapi.NewToolResultText(out), nil
 }
 
-func endsNewline(b []byte) bool { return len(b) > 0 && b[len(b)-1] == '\n' }
+// maxExecStream bounds how many bytes of one output stream (stdout/stderr) we
+// return through the MCP layer. thunderbox's edge can silently truncate very
+// large responses (see the /dl truncation pitfall), which is issue #13: the
+// caller gets a cut-off result with no marker. We cap well below that and make
+// any truncation EXPLICIT, keeping the head plus a larger tail (the tail usually
+// holds the result/error the caller is after).
+const maxExecStream = 48 * 1024
+
+func clampStream(b []byte) string {
+	if len(b) <= maxExecStream {
+		return string(b)
+	}
+	const headN = 8 * 1024
+	tailN := maxExecStream - headN
+	dropped := len(b) - headN - tailN
+	var sb strings.Builder
+	sb.Write(b[:headN])
+	sb.WriteString(fmt.Sprintf(
+		"\n\n[... wanctl truncated %d bytes (%d total); showing first %d + last %d. "+
+			"Re-run with a tighter filter, e.g. `... | Select-Object -Last 200` or `... | tail -n 200` ...]\n\n",
+		dropped, len(b), headN, tailN))
+	sb.Write(b[len(b)-tailN:])
+	return sb.String()
+}
 
 // Compile-time anchor for indirectly-used packages.
 var _ = http.StatusOK
