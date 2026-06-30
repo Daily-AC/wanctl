@@ -27,6 +27,24 @@ func DefaultShell() string {
 	return "/bin/sh"
 }
 
+// winUTF8Prologue forces a PowerShell session to emit UTF-8 so native-tool
+// output isn't mangled. Without it, native Windows programs emit UTF-16LE and
+// PowerShell decodes them with the OEM code page, leaving the zero high-byte of
+// every character as a separator — the infamous "T h e   W i n d o w s" output.
+//
+//   - [Console]::OutputEncoding governs how PowerShell decodes a child process's
+//     stdout; setting it to UTF-8 fixes code-page-respecting tools (netsh, etc.).
+//   - $OutputEncoding governs the bytes PowerShell sends when piping INTO a
+//     native command.
+//   - WSL_UTF8=1 is the only thing that fixes wsl.exe, which ignores the console
+//     code page and always emits UTF-16LE otherwise (`wsl --status/--version`).
+//
+// Wrapped in try/catch because the encoding setters can throw when stdout is a
+// redirected pipe rather than a console; if they do, WSL_UTF8 still applies and
+// covers the most-cited case. All statements are assignments → no stdout, so it
+// is safe to prepend to a command or run as a session prologue.
+const winUTF8Prologue = `try{$e=New-Object System.Text.UTF8Encoding $false;[Console]::OutputEncoding=$e;$OutputEncoding=$e}catch{};$env:WSL_UTF8='1';`
+
 // ShellSession is a long-lived interpreter process whose working directory and
 // environment persist across commands. Each command is delimited by a unique
 // sentinel that the shell echoes after the command, carrying its exit code, so
@@ -76,6 +94,17 @@ func NewShellSession(shell string) (*ShellSession, error) {
 	s.cmd = cmd
 	s.stdin = stdin
 	s.out = bufio.NewReader(pr)
+
+	// On Windows, force UTF-8 output once for the life of the session so native
+	// tools (notably wsl.exe) aren't returned with a space between every char.
+	// The prologue is pure assignments → no stdout → it can't desync the marker
+	// protocol of the first Exec call.
+	if runtime.GOOS == "windows" {
+		if _, err := io.WriteString(s.stdin, winUTF8Prologue+"\n"); err != nil {
+			s.Close()
+			return nil, err
+		}
+	}
 	return s, nil
 }
 
@@ -162,7 +191,7 @@ func RunOneShot(shell, command string, out io.Writer) (int, error) {
 	}
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command(shell, "-NoProfile", "-NoLogo", "-NonInteractive", "-Command", command)
+		cmd = exec.Command(shell, "-NoProfile", "-NoLogo", "-NonInteractive", "-Command", winUTF8Prologue+command)
 	} else {
 		cmd = exec.Command(shell, "-c", command)
 	}

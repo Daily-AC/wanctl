@@ -32,11 +32,18 @@ import (
 const usage = `wanctl — control a device across the internet over an encrypted, relayed channel
 
 USAGE
-  wanctl                                      log in (Feishu) if needed, then run the agent in the background
-  wanctl login                                log in (Feishu) and save the token — no daemon (use this on AI / controller boxes)
+ DEVICE LIFECYCLE (run on the box you want to control)
+  wanctl                                      log in (Feishu) if needed, then run the agent detached in the background
+  wanctl start                                (re)start the background agent without re-login; records its pid
   wanctl stop                                 stop the background agent
-  wanctl status                               show whether the agent is running
+  wanctl status                               show whether the agent is running + credential state
   wanctl logout                               stop the agent and forget the saved login
+  wanctl agent [flags]                        run the agent in the FOREGROUND (what 'wanctl'/'start' spawn; use this for a service/Task unit)
+  Persistence: the background agent survives this terminal closing but NOT a reboot.
+  For reboot-survival, run 'wanctl agent' from a systemd unit / Windows Scheduled Task (the installer can set this up).
+
+ CONTROLLER (run where you / the AI drive from)
+  wanctl login                                log in (Feishu) and save the token — no daemon (use this on AI / controller boxes)
   wanctl update                               download the latest binary from the relay and swap it in
   wanctl mcp                                  run a stdio MCP server (per-process, single-user) for an AI host's child process
   wanctl mcp --http :ADDR                     run a public HTTP/Streamable MCP server (multi-user; needs WANCTL_MCP_SEED env)
