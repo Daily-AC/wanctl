@@ -286,6 +286,15 @@ func cmdAgent(ctx context.Context, args []string) error {
 	if ag.Mode() == policy.ModeBypass {
 		fmt.Fprintln(os.Stderr, "wanctl: BYPASS mode — every command and file op is auto-allowed. Use only on trusted, isolated devices.")
 	}
+	lock, err := config.AcquireAgentLock()
+	if err != nil {
+		if config.IsAgentLockHeld(err) {
+			fmt.Fprintf(os.Stderr, "wanctl: another agent is already running for this config dir (pid %d); exiting\n", config.ReadPID())
+			return nil
+		}
+		return err
+	}
+	defer lock.Close()
 	// Self-register the pid so `wanctl status`/`stop` see this agent no matter how
 	// it was launched (bare `wanctl`, a keeper task, a systemd/launchd service),
 	// not just the child that `wanctl start` spawns.

@@ -22,9 +22,11 @@ type Peer struct {
 // uses it as its client allow-list (known_clients.json); the client uses it to
 // pin server identities (known_servers.json).
 type Store struct {
-	path string
-	mu   sync.Mutex
-	m    map[string]Peer
+	path    string
+	mu      sync.Mutex
+	m       map[string]Peer
+	modTime time.Time
+	size    int64
 }
 
 // NewMemStore returns a trust store that lives in memory only — never persists
@@ -42,21 +44,37 @@ func OpenStore(name string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{path: filepath.Join(dir, name), m: map[string]Peer{}}
+	if err := s.load(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) load() error {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return s, nil
+			s.modTime = time.Time{}
+			s.size = 0
+			s.m = map[string]Peer{}
+			return nil
 		}
-		return nil, err
+		return err
 	}
 	var peers []Peer
 	if err := json.Unmarshal(data, &peers); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", name, err)
+		return fmt.Errorf("parse %s: %w", filepath.Base(s.path), err)
 	}
+	m := make(map[string]Peer, len(peers))
 	for _, p := range peers {
-		s.m[p.Fingerprint] = p
+		m[p.Fingerprint] = p
 	}
-	return s, nil
+	s.m = m
+	if st, err := os.Stat(s.path); err == nil {
+		s.modTime = st.ModTime()
+		s.size = st.Size()
+	}
+	return nil
 }
 
 // Get returns the remembered peer for a fingerprint, if any.
@@ -64,6 +82,9 @@ func (s *Store) Get(fp string) (Peer, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, ok := s.m[fp]
+	if !ok && s.reloadChangedLocked() {
+		p, ok = s.m[fp]
+	}
 	return p, ok
 }
 
@@ -71,6 +92,20 @@ func (s *Store) Get(fp string) (Peer, bool) {
 func (s *Store) Has(fp string) bool {
 	_, ok := s.Get(fp)
 	return ok
+}
+
+func (s *Store) reloadChangedLocked() bool {
+	if s.path == "" {
+		return false
+	}
+	st, err := os.Stat(s.path)
+	if err != nil {
+		return false
+	}
+	if st.ModTime().Equal(s.modTime) && st.Size() == s.size {
+		return false
+	}
+	return s.load() == nil
 }
 
 // GetByName returns the remembered peer with the given name, if any. Used by the
@@ -149,5 +184,14 @@ func (s *Store) save() error {
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		return err
+	}
+	if st, err := os.Stat(s.path); err == nil {
+		s.mu.Lock()
+		s.modTime = st.ModTime()
+		s.size = st.Size()
+		s.mu.Unlock()
+	}
+	return nil
 }

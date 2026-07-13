@@ -14,6 +14,9 @@ type httpAgent struct {
 	ns, device string
 	open       chan string
 	lastSeen   time.Time
+	inst       string
+	retired    map[string]struct{}
+	changed    chan struct{}
 }
 
 // sideQueue is one direction of a session's byte flow. The relay never inspects
@@ -100,13 +103,31 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	key := ns + "/" + device
+	inst := req.URL.Query().Get("inst")
 	r.hmu.Lock()
 	a := r.hagents[key]
 	if a == nil {
-		a = &httpAgent{ns: ns, device: device, open: make(chan string, 8)}
+		a = &httpAgent{ns: ns, device: device, open: make(chan string, 8), changed: make(chan struct{})}
 		r.hagents[key] = a
 	}
+	if inst != "" {
+		if _, old := a.retired[inst]; old {
+			r.hmu.Unlock()
+			http.Error(w, "another agent instance registered this device name", http.StatusConflict)
+			return
+		}
+		if a.inst != "" && a.inst != inst {
+			if a.retired == nil {
+				a.retired = map[string]struct{}{}
+			}
+			a.retired[a.inst] = struct{}{}
+			close(a.changed)
+			a.changed = make(chan struct{})
+		}
+		a.inst = inst
+	}
 	a.lastSeen = time.Now()
+	changed := a.changed
 	r.hmu.Unlock()
 	if r.admin != nil {
 		r.admin.UpsertDevice(ns, device, req.URL.Query().Get("fp"))
@@ -114,11 +135,43 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 
 	select {
 	case sid := <-a.open:
+		if inst != "" && r.httpAgentObsolete(key, inst) {
+			r.requeueHTTPJob(key, sid)
+			http.Error(w, "another agent instance registered this device name", http.StatusConflict)
+			return
+		}
 		writeJSON(w, map[string]string{"session": sid})
+	case <-changed:
+		if inst != "" && r.httpAgentObsolete(key, inst) {
+			http.Error(w, "another agent instance registered this device name", http.StatusConflict)
+		}
 	case <-time.After(25 * time.Second):
 		writeJSON(w, map[string]string{})
 	case <-req.Context().Done():
 	}
+}
+
+func (r *Relay) httpAgentObsolete(key, inst string) bool {
+	r.hmu.Lock()
+	defer r.hmu.Unlock()
+	a := r.hagents[key]
+	if a == nil || inst == "" {
+		return false
+	}
+	if _, old := a.retired[inst]; old {
+		return true
+	}
+	return a.inst != "" && a.inst != inst
+}
+
+func (r *Relay) requeueHTTPJob(key, sid string) {
+	r.hmu.Lock()
+	a := r.hagents[key]
+	r.hmu.Unlock()
+	if a == nil {
+		return
+	}
+	a.open <- sid
 }
 
 func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
@@ -168,7 +221,15 @@ func (r *Relay) handleHDeregister(w http.ResponseWriter, req *http.Request) {
 	}
 	device := req.URL.Query().Get("device")
 	key := ns + "/" + device
+	inst := req.URL.Query().Get("inst")
 	r.hmu.Lock()
+	if inst != "" {
+		if a := r.hagents[key]; a != nil && a.inst != "" && a.inst != inst {
+			r.hmu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
 	delete(r.hagents, key)
 	r.hmu.Unlock()
 	if r.audit != nil {

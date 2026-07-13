@@ -7,7 +7,9 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -52,6 +54,7 @@ type Agent struct {
 	engine  *policy.Engine
 	console *console.Service
 	log     *eventlog.Logger
+	inst    string
 	apprMu  sync.Mutex
 	appr    policy.Approver
 
@@ -92,6 +95,10 @@ func New(opts Options) (*Agent, error) {
 		}
 		opts.Name = h
 	}
+	inst, err := newInstanceID()
+	if err != nil {
+		return nil, err
+	}
 	engine, err := policy.Open("rules.json", opts.Mode)
 	if err != nil {
 		return nil, err
@@ -102,6 +109,7 @@ func New(opts Options) (*Agent, error) {
 	}
 	a := &Agent{
 		id: id, known: known, opts: opts, engine: engine, log: logger,
+		inst:     inst,
 		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(), stdin: bufio.NewReader(os.Stdin),
 	}
 	if opts.PortalFP != "" && !known.Has(opts.PortalFP) {
@@ -124,6 +132,14 @@ func New(opts Options) (*Agent, error) {
 		a.appr = a.console
 	}
 	return a, nil
+}
+
+func newInstanceID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate agent instance id: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 // setApprover overrides the approver (used by tests).
@@ -465,7 +481,11 @@ func httpBase(relayURL string) string {
 // Called on clean shutdown; uses a fresh short-timeout client since the run ctx
 // is already cancelled.
 func (a *Agent) deregisterHTTP(base string) {
-	q := url.Values{"token": {a.opts.Token}, "device": {a.opts.Name}}.Encode()
+	qv := url.Values{"token": {a.opts.Token}, "device": {a.opts.Name}}
+	if a.inst != "" {
+		qv.Set("inst", a.inst)
+	}
+	q := qv.Encode()
 	hc := &http.Client{Timeout: 3 * time.Second}
 	req, err := http.NewRequest("POST", base+"/h/deregister?"+q, nil)
 	if err != nil {
@@ -480,7 +500,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 	base := httpBase(a.opts.RelayURL)
 	fmt.Printf("wanctl agent %q online via %s (http transport)\n  fingerprint: %s\n", a.opts.Name, base, a.id.Fingerprint)
 	hc := &http.Client{Timeout: 35 * time.Second}
-	q := url.Values{"token": {a.opts.Token}, "device": {a.opts.Name}, "fp": {a.id.Fingerprint}}.Encode()
+	q := url.Values{"token": {a.opts.Token}, "device": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}}.Encode()
 	pollURL := base + "/h/poll?" + q
 	for {
 		if ctx.Err() != nil {
@@ -503,6 +523,10 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 		if resp.StatusCode == http.StatusUnauthorized {
 			resp.Body.Close()
 			return fmt.Errorf("relay rejected token (401)")
+		}
+		if resp.StatusCode == http.StatusConflict {
+			resp.Body.Close()
+			return fmt.Errorf("another wanctl agent instance registered this device name; this instance is standing down")
 		}
 		var msg struct{ Session string }
 		json.NewDecoder(resp.Body).Decode(&msg)
