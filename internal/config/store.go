@@ -56,6 +56,72 @@ func ClearToken() error {
 	return nil
 }
 
+// NetModePath is where the controller-side network mode is persisted.
+func NetModePath() (string, error) { return fileIn("netmode") }
+
+// StoredNetMode returns the persisted controller network mode: "wan" (default),
+// "lan" (force intranet relay) or "auto" (probe the intranet relay, fall back
+// to wan). Unknown/missing values read as "wan".
+func StoredNetMode() string {
+	p, err := NetModePath()
+	if err != nil {
+		return "wan"
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return "wan"
+	}
+	switch m := strings.TrimSpace(string(b)); m {
+	case "lan", "auto", "wan":
+		return m
+	}
+	return "wan"
+}
+
+// SaveNetMode persists the controller network mode.
+func SaveNetMode(mode string) error {
+	p, err := NetModePath()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(strings.TrimSpace(mode)+"\n"), 0o600)
+}
+
+// LanRelay resolves the intranet relay URL: WANCTL_LAN_RELAY overrides the
+// compile-time default.
+func LanRelay() string { return EnvOr("WANCTL_LAN_RELAY", DefaultLanRelay) }
+
+// lanPath is the device-side switch for the LAN relay uplink.
+func lanPath() (string, error) { return fileIn("lan") }
+
+// LanUplinkEnabled reports the persisted device-side LAN-uplink switch.
+// Defaults to true: dialing the intranet relay from outside just fails quietly
+// and retries with backoff, and E2E trust does not depend on relay identity.
+func LanUplinkEnabled() bool {
+	p, err := lanPath()
+	if err != nil {
+		return true
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return true
+	}
+	return strings.TrimSpace(string(b)) != "off"
+}
+
+// SaveLanUplink persists the device-side LAN-uplink switch.
+func SaveLanUplink(on bool) error {
+	p, err := lanPath()
+	if err != nil {
+		return err
+	}
+	v := "on"
+	if !on {
+		v = "off"
+	}
+	return os.WriteFile(p, []byte(v+"\n"), 0o600)
+}
+
 // PIDPath / LogPath locate the background agent's pid and log files.
 func PIDPath() (string, error) { return fileIn("agent.pid") }
 func LogPath() (string, error) { return fileIn("agent.log") }

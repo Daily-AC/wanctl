@@ -128,6 +128,8 @@
   .mtag.normal{background:#e0f6ec;color:var(--mint-d)}
   .mtag.bypass{background:linear-gradient(180deg,#ff9a9a,#ff7d7d);color:#fff;box-shadow:0 6px 14px -5px rgba(250,106,106,.8);animation:shake 1.8s ease-in-out infinite}
   @keyframes shake{0%,100%{transform:rotate(-2deg)}50%{transform:rotate(2deg)}}
+  .mtag.lan{background:#e0edff;color:#3d6fd4;display:none}
+  .mtag.lan.show{display:inline-block}
 
   .tabs{display:flex;gap:8px;margin:24px 0 22px;flex-wrap:wrap}
   .tabs .t{font-family:var(--round);font-weight:600;font-size:13.5px;color:var(--ink-2);cursor:pointer;
@@ -309,6 +311,12 @@
   .toggle .k{position:absolute;top:2px;left:2px;width:28px;height:28px;border-radius:50%;background:#fff;
     box-shadow:0 3px 6px rgba(180,120,80,.4);transition:left .3s cubic-bezier(.34,1.6,.5,1)}
   .toggle.bypass{background:#ffd9d9;border-color:#ffb3b3}.toggle.bypass .k{left:40px}
+  .toggle.lanoff{background:#efefef}.toggle.lanoff .k{left:2px}
+  .toggle.lanon{background:#d9e7ff;border-color:#b9d2ff}.toggle.lanon .k{left:40px}
+  .landot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:2px}
+  .landot.on{background:#57b987;box-shadow:0 0 0 4px rgba(87,185,135,.18)}
+  .landot.wait{background:#f0b23f;box-shadow:0 0 0 4px rgba(240,178,63,.18)}
+  .landot.off{background:#c9c9c9}
   .warn{margin-top:18px;background:#fff0f0;border:2px dashed #ffb3b3;border-radius:18px;padding:13px 17px;
     font-size:12.5px;color:var(--straw-d);display:none}
   .warn.show{display:block}.warn b{font-family:var(--round);font-weight:700}
@@ -417,7 +425,7 @@
       <div class="dhead">
         <div class="face on" id="dFace"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="12" rx="3"/><path d="M8 21h8"/></svg></div>
         <div class="nm" id="dName">—</div>
-        <div class="modechip"><span class="lab">执行模式</span><span class="mtag normal" id="dMtag">乖乖 / NORMAL</span></div>
+        <div class="modechip"><span class="mtag lan" id="dLanTag">内网直连中 · LAN</span><span class="lab">执行模式</span><span class="mtag normal" id="dMtag">乖乖 / NORMAL</span></div>
         <button class="rmdev" id="rmDevice" title="把这台设备从你的空间里解除">解除设备</button>
       </div>
 
@@ -457,6 +465,14 @@
             <div class="toggle" id="toggle"><span class="k"></span></div>
           </div>
           <div class="warn" id="warnbox"><b>放飞模式（BYPASS）：</b>所有命令和文件操作都自动放行、不再问你啦！只给可信、隔离的设备用哦，这段时间会一直记进审计。</div>
+        </div>
+        <div class="modecard" id="lancard" style="margin-top:16px;display:none">
+          <div class="now">
+            <span class="landot off" id="lanDot"></span>
+            <span class="txt" id="lanTxt"><b>内网直连</b></span>
+            <div class="toggle lanoff" id="lanToggle"><span class="k"></span></div>
+          </div>
+          <div class="warn" style="display:block;background:#eef4ff;border-color:#d3e2ff;color:#4a6fae" id="lanHint">设备在雷石内网时，会多挂一条到内网中继的直连通道：实时流式输出、低延迟。受控端与被控端都在内网时，控制端跑 <b>wanctl net lan</b>（或 auto）即可走快车道。加密与审批和公网通道完全一致。</div>
         </div>
       </div>
 
@@ -700,6 +716,19 @@ function applyState(st){
   $('#mTag').className='mtag '+(by?'bypass':'normal');$('#mTag').textContent=tagTxt;
   $('#mTxt').innerHTML=by?'<b>放飞模式</b>：所有操作都自动放行，不再问你':'<b>乖乖模式</b>：没命中规则就来问你，逐条点头';
   $('#toggle').classList.toggle('bypass',by);$('#warnbox').classList.toggle('show',by);
+  // LAN fast-path uplink
+  const lan=st.lan;curLanOn=!!(lan&&lan.enabled);
+  $('#lancard').style.display=lan?'block':'none';
+  $('#dLanTag').classList.toggle('show',!!(lan&&lan.connected));
+  if(lan){
+    const dotCls=lan.connected?'on':(lan.enabled?'wait':'off');
+    $('#lanDot').className='landot '+dotCls;
+    $('#lanToggle').className='toggle '+(lan.enabled?'lanon':'lanoff');
+    $('#lanTxt').innerHTML=lan.connected
+      ?'<b>内网直连</b>：已连上内网中继 <b>'+esc(lan.relay)+'</b>'
+      :(lan.enabled?'<b>内网直连</b>：已开启，正在尝试连接 '+esc(lan.relay)+'（不在内网时连不上是正常的）'
+                   :'<b>内网直连</b>：已关闭，仅走公网中继');
+  }
   // face: device is reachable since console answered → treat as online
   $('#dFace').className='face on';$('#dFace').innerHTML=faceOn;
   // pending pairings (new controllers asking to be trusted) + approvals
@@ -819,6 +848,11 @@ function askCute(o){return new Promise(res=>{
   ov.onclick=e=>{if(e.target===ov)done(false);};
   document.onkeydown=e=>{if(e.key==='Escape')done(false);};
 });}
+let curLanOn=false;
+$('#lanToggle').onclick=async()=>{
+  const next=!curLanOn;
+  try{await jpost('/api/devices/lan',{device:cur,on:next});renderConsole()}catch(e){err('切换内网直连失败：'+e.message)}
+};
 $('#toggle').onclick=async()=>{
   const next=curMode==='bypass'?'normal':'bypass';
   if(next==='bypass'){

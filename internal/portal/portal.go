@@ -98,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices/remove", s.handleDeviceRemove)
 	mux.HandleFunc("/api/devices/rules", s.handleDeviceRules)
 	mux.HandleFunc("/api/devices/mode", s.handleDeviceMode)
+	mux.HandleFunc("/api/devices/lan", s.handleDeviceLan)
 	mux.HandleFunc("/api/devices/logs", s.handleDeviceLogs)
 	mux.HandleFunc("/api/devices/events", s.handleDeviceEvents)
 	mux.HandleFunc("/api/docs/tree", s.handleDocsTree)
@@ -648,6 +649,30 @@ func (s *Server) handleDeviceRules(w http.ResponseWriter, r *http.Request) {
 	}
 	if err2 != nil {
 		http.Error(w, err2.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleDeviceLan toggles the device's intranet fast-path uplink from the web
+// console (POST {device, on}).
+func (s *Server) handleDeviceLan(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Device string
+		On     bool
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	ns, ok := s.requireDevice(w, r, body.Device)
+	if !ok {
+		return
+	}
+	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err := d.setLan(body.On); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

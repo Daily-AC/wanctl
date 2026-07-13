@@ -15,13 +15,24 @@ import (
 // binary messages. The returned *http.Response exposes handshake response
 // headers/status (useful for surfacing relay auth errors).
 func Dial(ctx context.Context, url string, header http.Header) (net.Conn, *http.Response, error) {
-	c, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header})
+	return DialWith(ctx, url, header, nil)
+}
+
+// DialWith is Dial with an explicit *http.Client for the handshake request.
+// Pass NoProxyClient when dialing an intranet relay: corporate machines often
+// export HTTP_PROXY with an empty no_proxy, which would send private-range
+// dials to the proxy (and fail).
+func DialWith(ctx context.Context, url string, header http.Header, hc *http.Client) (net.Conn, *http.Response, error) {
+	c, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header, HTTPClient: hc})
 	if err != nil {
 		return nil, resp, err
 	}
 	c.SetReadLimit(-1) // do not cap message size; we frame in the protocol layer
 	return websocket.NetConn(context.Background(), c, websocket.MessageBinary), resp, nil
 }
+
+// NoProxyClient ignores HTTP(S)_PROXY env vars. Use for intranet relay dials.
+var NoProxyClient = &http.Client{Transport: &http.Transport{Proxy: nil}}
 
 // FromAccepted wraps a server-side accepted websocket into a net.Conn.
 func FromAccepted(ctx context.Context, c *websocket.Conn) net.Conn {

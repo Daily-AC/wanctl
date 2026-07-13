@@ -58,6 +58,7 @@ const (
 	KindApprovalNotif = "approval_notif" // device -> portal, UNSOLICITED: pending set changed
 	KindPairDecide    = "pair_decide"    // portal -> device, trust/deny a pending controller pairing
 	KindTrustRevoke   = "trust_revoke"   // portal -> device, drop a trusted controller by fingerprint
+	KindLanSet        = "lan_set"        // portal -> device, enable/disable the LAN relay uplink (Verdict "on"/"off")
 )
 
 // Message is the JSON body of a FrameJSON frame. Fields are reused across kinds;

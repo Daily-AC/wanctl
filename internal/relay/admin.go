@@ -21,7 +21,12 @@ import (
 func (r *Relay) SetAdminSecret(secret string) { r.adminSecret = secret }
 
 func (r *Relay) adminOK(req *http.Request) bool {
-	if r.adminSecret == "" || r.admin == nil {
+	return r.admin != nil && r.secretOK(req)
+}
+
+// secretOK checks only the shared admin secret (no Postgres backend needed).
+func (r *Relay) secretOK(req *http.Request) bool {
+	if r.adminSecret == "" {
 		return false
 	}
 	got := req.Header.Get("X-Admin-Secret")
@@ -30,6 +35,7 @@ func (r *Relay) adminOK(req *http.Request) bool {
 
 func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/resolve-user", r.adminResolveUser)
+	mux.HandleFunc("/admin/tokens/resolve", r.adminTokenResolve)
 	mux.HandleFunc("/admin/tokens", r.adminTokens)
 	mux.HandleFunc("/admin/tokens/issue", r.adminTokenIssue)
 	mux.HandleFunc("/admin/tokens/revoke", r.adminTokenRevoke)
@@ -100,6 +106,31 @@ func adminAuthorFromBody(req *http.Request) string {
 		return a
 	}
 	return ""
+}
+
+// adminTokenResolve resolves a raw token to its namespace. It exists for
+// satellite relays (the intranet fast-path relay) whose UpstreamTokenStore
+// delegates token auth here, so portal-issued tokens work on every relay
+// without sharing the DB. Gated by the same shared secret as the rest of
+// /admin/*, but does not require the Postgres admin backend — it only needs
+// the token store.
+func (r *Relay) adminTokenResolve(w http.ResponseWriter, req *http.Request) {
+	if !r.secretOK(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var body struct{ Token string }
+	json.NewDecoder(req.Body).Decode(&body)
+	if body.Token == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
+		return
+	}
+	ns, ok := r.ts.Resolve(body.Token)
+	if !ok {
+		http.Error(w, "unknown token", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]string{"namespace": ns})
 }
 
 func (r *Relay) adminResolveUser(w http.ResponseWriter, req *http.Request) {

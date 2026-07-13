@@ -137,6 +137,26 @@ func (d *deviceConn) removeRule(i int) error {
 	return err
 }
 
+// setLan flips the device's LAN-uplink switch. The agent replies with an
+// error string in Data when the device has no LAN relay configured.
+func (d *deviceConn) setLan(on bool) error {
+	v := "off"
+	if on {
+		v = "on"
+	}
+	m, err := d.rpc(protocol.Message{Kind: protocol.KindLanSet, Verdict: v})
+	if err != nil {
+		return err
+	}
+	if len(m.Data) > 0 {
+		var msg string
+		if json.Unmarshal(m.Data, &msg) == nil && msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+	}
+	return nil
+}
+
 func (d *deviceConn) setMode(mode string) error {
 	_, err := d.rpc(protocol.Message{Kind: protocol.KindModeSet, ConsoleMode: mode})
 	return err

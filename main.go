@@ -62,6 +62,8 @@ USAGE
   wanctl push  [--target NS/DEV] <local> <remote>
   wanctl pull  [--target NS/DEV] <remote> <local>
   wanctl peers
+  wanctl net [wan|lan|auto|status]           switch which relay the controller uses: public (wan), intranet
+                                              fast-path (lan, real-time WS), or probe-and-pick (auto)
   wanctl id
   wanctl pair  <device>                       check device trust state; if not yet paired print the URL the device owner clicks to approve
   wanctl trust [clients|servers]
@@ -122,6 +124,8 @@ func main() {
 		err = cmdRules(os.Args[2:])
 	case "logs":
 		err = cmdLogs(ctx, os.Args[2:])
+	case "net":
+		err = cmdNet(os.Args[2:])
 	case "up":
 		err = cmdUp(ctx)
 	case "login":
@@ -178,18 +182,38 @@ func cmdRelay(args []string) error {
 		r.SetAuditor(pg)
 		r.SetAdmin(pg)
 		r.SetDocs(pg)
-		if sec := os.Getenv("WANCTL_ADMIN_SECRET"); sec != "" {
-			r.SetAdminSecret(sec)
-			fmt.Println("wanctl relay: admin API enabled (portal access)")
-		}
 		fmt.Println("wanctl relay: token store = postgres (hashed tokens + ACL + audit)")
 	} else {
 		spec := os.Getenv("WANCTL_TOKENS")
-		if spec == "" {
-			return fmt.Errorf("set DATABASE_URL (postgres) or WANCTL_TOKENS=\"token:namespace,...\"")
+		upstream := os.Getenv("WANCTL_UPSTREAM_RELAY")
+		var stores relay.ChainTokenStore
+		if spec != "" {
+			stores = append(stores, relay.EnvTokenStore(spec))
 		}
-		r = relay.New(relay.EnvTokenStore(spec))
-		fmt.Println("wanctl relay: token store = env (WANCTL_TOKENS)")
+		if upstream != "" {
+			sec := os.Getenv("WANCTL_ADMIN_SECRET")
+			if sec == "" {
+				return fmt.Errorf("WANCTL_UPSTREAM_RELAY needs WANCTL_ADMIN_SECRET (shared with the upstream relay)")
+			}
+			stores = append(stores, relay.NewUpstreamTokenStore(strings.TrimRight(upstream, "/"), sec))
+		}
+		if len(stores) == 0 {
+			return fmt.Errorf("set DATABASE_URL (postgres), WANCTL_TOKENS=\"token:namespace,...\", or WANCTL_UPSTREAM_RELAY")
+		}
+		r = relay.New(stores)
+		if upstream != "" {
+			fmt.Printf("wanctl relay: token store = env + upstream (%s)\n", upstream)
+		} else {
+			fmt.Println("wanctl relay: token store = env (WANCTL_TOKENS)")
+		}
+	}
+	// The admin secret gates /admin/* (portal access + satellite-relay token
+	// resolution). Set it regardless of the token-store backend: a satellite
+	// relay may itself be asked to resolve for another one, and the resolve
+	// endpoint only needs the token store.
+	if sec := os.Getenv("WANCTL_ADMIN_SECRET"); sec != "" {
+		r.SetAdminSecret(sec)
+		fmt.Println("wanctl relay: admin API enabled (secret-gated)")
 	}
 	if pns := os.Getenv("WANCTL_PORTAL_NS"); pns != "" {
 		r.SetPortalNS(pns)
@@ -248,11 +272,12 @@ func cmdAgent(ctx context.Context, args []string) error {
 	tr := fs.String("transport", envOr("WANCTL_TRANSPORT", defaultTransport), "transport: ws or http (http is proxy-agnostic)")
 	mode := fs.String("mode", "", "policy mode: normal (prompt on miss) or bypass (auto-allow, DANGEROUS). Empty = keep the last persisted mode (default normal).")
 	portalPK := fs.String("portal-pk", envOr("WANCTL_PORTAL_PK", config.DefaultPortalFP), "pre-trust this portal fingerprint (enrolled at install time)")
+	lanRelay := fs.String("lan-relay", config.LanRelay(), "intranet fast-path relay (ws://...); empty disables the second uplink")
 	fs.Parse(args)
 	if *relayURL == "" || *token == "" {
 		return fmt.Errorf("provide --relay and --token (or WANCTL_RELAY/WANCTL_TOKEN)")
 	}
-	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFP: *portalPK})
+	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFP: *portalPK, LanRelay: *lanRelay})
 	if err != nil {
 		return err
 	}
@@ -364,6 +389,44 @@ func cmdPeers(ctx context.Context) error {
 		fmt.Println(d)
 	}
 	return nil
+}
+
+func cmdNet(args []string) error {
+	sub := "status"
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch sub {
+	case "wan", "lan", "auto":
+		if err := config.SaveNetMode(sub); err != nil {
+			return err
+		}
+		fmt.Printf("network mode: %s\n", sub)
+		if sub != "wan" {
+			if client.LanReachable(800 * time.Millisecond) {
+				fmt.Printf("intranet relay %s: reachable ✓\n", config.LanRelay())
+			} else {
+				fmt.Printf("intranet relay %s: NOT reachable — lan exec will fail%s\n",
+					config.LanRelay(), map[bool]string{true: " (auto will fall back to wan)", false: ""}[sub == "auto"])
+			}
+		}
+		return nil
+	case "status":
+		mode := config.StoredNetMode()
+		fmt.Printf("network mode:   %s\n", mode)
+		fmt.Printf("public relay:   %s\n", config.EnvOr("WANCTL_RELAY", config.DefaultRelay))
+		reach := "not reachable"
+		if client.LanReachable(800 * time.Millisecond) {
+			reach = "reachable ✓"
+		}
+		fmt.Printf("intranet relay: %s (%s)\n", config.LanRelay(), reach)
+		if os.Getenv("WANCTL_RELAY") != "" {
+			fmt.Println("note: WANCTL_RELAY is set and overrides the network mode")
+		}
+		return nil
+	default:
+		return fmt.Errorf("usage: wanctl net [wan|lan|auto|status]")
+	}
 }
 
 func cmdID() error {
