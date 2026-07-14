@@ -227,3 +227,68 @@ func TestHandleDeviceRemoveAllowsOwnedDevice(t *testing.T) {
 		t.Fatalf("remove forwarded wrong target: namespace=%q device=%q", removedNamespace, removedDevice)
 	}
 }
+
+func TestConsoleWriteEndpointsRejectSharedDevice(t *testing.T) {
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "bob"})
+		case "/admin/devices":
+			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{
+				{"name": "zyl", "owner": "***REMOVED***", "shared": true, "perms": "exec"},
+			}})
+		default:
+			w.WriteHeader(404)
+		}
+	})
+
+	endpoints := []struct {
+		name string
+		h    http.HandlerFunc
+		body string
+	}{
+		{"decide", s.handleDeviceDecide, `{"device":"zyl","id":"req1","verdict":"y"}`},
+		{"pair", s.handleDevicePair, `{"device":"zyl","fp":"fp1","verdict":"y"}`},
+		{"untrust", s.handleDeviceUntrust, `{"device":"zyl","fp":"fp1"}`},
+		{"rules", s.handleDeviceRules, `{"device":"zyl","op":"add","kind":"exec","pattern":"echo *"}`},
+		{"mode", s.handleDeviceMode, `{"device":"zyl","mode":"bypass"}`},
+		{"lan", s.handleDeviceLan, `{"device":"zyl","on":true}`},
+	}
+	for _, e := range endpoints {
+		req := httptest.NewRequest("POST", "/api/devices/"+e.name, strings.NewReader(e.body))
+		req.Header.Set("X-User", "bob@corp")
+		w := httptest.NewRecorder()
+		e.h(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("%s: shared device must be read-only, want 403, got %d body %s", e.name, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestConsoleWriteEndpointsPassOwnerGate(t *testing.T) {
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "alice"})
+		case "/admin/devices":
+			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{
+				{"name": "legion", "owner": "alice", "shared": false},
+			}})
+		default:
+			w.WriteHeader(404)
+		}
+	})
+
+	// Owner passes the read-only gate; with no console dialer wired the handler
+	// then fails downstream with 502 — the point is it is NOT the 403 gate.
+	req := httptest.NewRequest("POST", "/api/devices/mode", strings.NewReader(`{"device":"legion","mode":"bypass"}`))
+	req.Header.Set("X-User", "alice@corp")
+	w := httptest.NewRecorder()
+	s.handleDeviceMode(w, req)
+	if w.Code == http.StatusForbidden {
+		t.Fatalf("owner must not be blocked by the read-only gate, got 403 body %s", w.Body.String())
+	}
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 (console not wired) after passing the gate, got %d body %s", w.Code, w.Body.String())
+	}
+}

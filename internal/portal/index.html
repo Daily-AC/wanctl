@@ -214,6 +214,14 @@
   .rmx[data-fp]{color:#c2543b}
   .rmdev{margin-left:14px;font-family:var(--round);font-weight:700;font-size:12.5px;cursor:pointer;color:#c2543b;background:#fff;border:1px solid #e7d3cb;border-radius:16px;padding:6px 14px}
   .rmdev:hover{background:#fbeee9}
+  /* 共享设备只读态：写操作控件整体隐藏，只留观察 */
+  .rotag{display:none;margin-left:12px;padding:6px 13px;border-radius:999px;background:#f5ecdc;border:1px solid #e8dcc2;color:#8a6d3b;font-size:12.5px;font-weight:700;align-items:center;gap:6px}
+  .rotag svg{width:13px;height:13px}
+  .robanner{display:none;margin-top:14px;padding:12px 18px;border-radius:14px;background:#fdf6e8;border:1px solid #eddfc2;color:#8a6d3b;font-size:13px;line-height:1.65}
+  .rowait{margin-top:22px;padding:11px 16px;border-radius:12px;background:#fdf6e8;border:1px dashed #e0cf9f;color:#8a6d3b;font-size:13px;font-weight:600}
+  .view.rdonly .rotag{display:inline-flex}
+  .view.rdonly .robanner{display:block}
+  .view.rdonly .decide,.view.rdonly #rAdd,.view.rdonly #rmDevice,.view.rdonly .rmx,.view.rdonly #toggle,.view.rdonly #lanToggle{display:none!important}
   .doc{margin-top:22px;display:flex;flex-direction:column;gap:18px}
   .dcard{display:flex;gap:18px;background:#fff;border:1px solid var(--soft,#efe7d6);border-radius:18px;padding:22px 24px;box-shadow:0 4px 18px rgba(0,0,0,.04)}
   .dcard.hot{border-color:#ffcf9b;background:linear-gradient(180deg,#fffaf2,#fff)}
@@ -431,9 +439,11 @@
       <div class="dhead">
         <div class="face on" id="dFace"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="12" rx="3"/><path d="M8 21h8"/></svg></div>
         <div class="nm" id="dName">—</div>
+        <span class="rotag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>共享 · 只读</span>
         <div class="modechip"><span class="mtag lan" id="dLanTag">内网直连中 · LAN</span><span class="lab">执行模式</span><span class="mtag normal" id="dMtag">乖乖 / NORMAL</span></div>
         <button class="rmdev" id="rmDevice" title="把这台设备从你的空间里解除">解除设备</button>
       </div>
+      <div class="robanner">这台设备由 <b id="roOwner">设备主人</b> 共享给你，这里只能查看。审批、规则、模式、内网直连等所有权限调整都要找设备主人操作。</div>
 
       <div class="tabs" id="tabs">
         <div class="t on" data-tab="approve">待审批<span class="b" id="pBadge">0</span></div>
@@ -621,7 +631,8 @@ const faceOn='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
 const faceOff='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 10h.01M16 10h.01M9 15c1-.8 5-.8 6 0" stroke-linecap="round"/></svg>';
 
 /* ---- nav ---- */
-let cur=null, pollGen=0, curMode='normal', currentNS='';
+let cur=null, pollGen=0, curMode='normal', currentNS='', curShared=false;
+const devMeta={}; // name -> {shared, owner}；自有设备优先（与后端 requireDevice 的裁决一致）
 function showView(v){$$('.view').forEach(x=>x.classList.toggle('show',x.dataset.view===v));}
 $$('.doc pre[data-copy]').forEach(p=>p.onclick=()=>{if(navigator.clipboard)navigator.clipboard.writeText(p.textContent.trim());toast('ok','已复制到剪贴板');});
 $$('[data-goto]').forEach(b=>b.onclick=()=>{const t=document.querySelector('nav button[data-sec="'+b.dataset.goto+'"]');if(t)t.click();});
@@ -658,6 +669,7 @@ async function loadOverview(){
       const o=x.online;
       const displayName=x.ambiguous?(x.name+' · '+(x.owner||'')):x.name;
       const shared=x.shared===true;
+      if(!(x.name in devMeta)||!shared)devMeta[x.name]={shared,owner:x.owner||''};
       const shareHTML=shared?`<div class="shareline"><span class="sharetag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11l2 2 4-4"/></svg>共享 · from ${esc(x.owner||'—')}</span>${x.perms?`<span class="permtag">可 ${esc(x.perms)}</span>`:''}</div>`:'';
       return `<div class="devcard" data-dev="${esc(x.name)}">
         <div class="top">
@@ -681,9 +693,27 @@ function openDevice(name){
   cur=name;$('#dName').textContent=name;showView('device');selTab('approve');
   const h='#device/'+encodeURIComponent(name);
   if(location.hash!==h)history.pushState(null,'',h);
+  applyShared(name);
   $('#pending').innerHTML='<div class="empty">连接设备中…</div>';
   renderConsole();
   pollConsole(name);
+}
+/* 共享设备在门户里严格只读（后端同样强制），这里切换只读视觉态。
+   深链直达时 devMeta 还没填，补拉一次设备列表再定。 */
+function applyShared(name){
+  const m=devMeta[name];
+  if(m!==undefined){setRdonly(m.shared,m.owner);return}
+  setRdonly(false,'');
+  jget('/api/devices').then(d=>{
+    (d.devices||[]).forEach(x=>{const sh=x.shared===true;if(!(x.name in devMeta)||!sh)devMeta[x.name]={shared:sh,owner:x.owner||''};});
+    const mm=devMeta[name];
+    if(cur===name&&mm)setRdonly(mm.shared,mm.owner);
+  }).catch(()=>{});
+}
+function setRdonly(on,owner){
+  curShared=!!on;
+  document.querySelector('section.view[data-view="device"]').classList.toggle('rdonly',curShared);
+  $('#roOwner').textContent=owner||'设备主人';
 }
 /* Keep the console live by re-pulling /console every few seconds. We poll the
    snapshot (reliable) rather than rely on the async approval push, which does
@@ -784,6 +814,7 @@ function applyState(st){
     </div>`;}).join(''):'';
   const blankHTML=`<div class="blank"><div class="em"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="10" r="1.2" fill="currentColor"/><circle cx="15" cy="10" r="1.2" fill="currentColor"/><path d="M9 14c1.4 1.6 4.6 1.6 6 0" stroke-linecap="round"/></svg></div><div class="w">现在没有待审批～</div><div class="t2">乖乖的，有新的高危请求会自动冒出来。</div></div>`;
   $('#pending').innerHTML = total ? (pairHTML+pendHTML) : blankHTML;
+  if(curShared)$$('#pending .note .decide').forEach(d=>d.outerHTML='<div class="rowait">等待设备主人审批 —— 你是共享访问，只能查看</div>');
   $$('#pending .note').forEach(n=>{
     if(n.classList.contains('pair'))n.querySelectorAll('.candy').forEach(b=>b.onclick=()=>pairDecide(n.dataset.fp,b.dataset.pv,n));
     else n.querySelectorAll('.candy').forEach(b=>b.onclick=()=>decide(n.dataset.pid,b.dataset.v,n));
@@ -807,7 +838,9 @@ function applyState(st){
   $$('#trusted .rmx').forEach(b=>b.onclick=()=>untrust(b.dataset.fp));
 }
 
+function roGuard(){if(curShared){err('共享设备只读：审批与设置请联系设备主人');return true}return false}
 async function decide(id,v,noteEl){
+  if(roGuard())return;
   try{
     await jpost('/api/devices/decide',{device:cur,id,verdict:v});
     if(noteEl)noteEl.classList.add('gone');
@@ -816,6 +849,7 @@ async function decide(id,v,noteEl){
   }catch(e){err('裁决失败：'+e.message)}
 }
 async function pairDecide(fp,v,noteEl){
+  if(roGuard())return;
   try{
     await jpost('/api/devices/pair',{device:cur,fp,verdict:v});
     if(noteEl)noteEl.classList.add('gone');
@@ -823,15 +857,16 @@ async function pairDecide(fp,v,noteEl){
     setTimeout(renderConsole,360);
   }catch(e){err('配对失败：'+e.message)}
 }
-async function rmRule(i){try{await jpost('/api/devices/rules',{device:cur,op:'rm',index:i});renderConsole()}catch(e){err('删除规则失败：'+e.message)}}
+async function rmRule(i){if(roGuard())return;try{await jpost('/api/devices/rules',{device:cur,op:'rm',index:i});renderConsole()}catch(e){err('删除规则失败：'+e.message)}}
 function untrust(fp){
+  if(roGuard())return;
   askConfirm('撤销信任','撤销对这个控制端的信任？它将无法再控制本设备（除非重新配对）。','撤销',async()=>{
     try{await jpost('/api/devices/untrust',{device:cur,fp});toast('no','已撤销信任');setTimeout(renderConsole,360);}
     catch(e){err('撤销失败：'+e.message)}
   });
 }
 $('#rmDevice').onclick=()=>{
-  if(!cur)return;
+  if(!cur||roGuard())return;
   askConfirm('解除设备','确定把设备「'+cur+'」从你的空间解除？解除后列表里就没它了（设备上重新运行 wanctl 可再次纳管）。','解除',async()=>{
     try{
       await jpost('/api/devices/remove',{device:cur});
@@ -841,7 +876,7 @@ $('#rmDevice').onclick=()=>{
   });
 };
 $('#rAdd').onclick=async()=>{
-  if(!cur)return;
+  if(!cur||roGuard())return;
   const v=await openForm({title:'给 '+cur+' 加条规则',okText:'立规',fields:[
     {key:'kind',label:'类型',type:'select',options:['exec','read','write']},
     {key:'pattern',label:'命令或目录',placeholder:'命令(echo *) 或 目录(/data)'}]});
@@ -859,10 +894,12 @@ function askCute(o){return new Promise(res=>{
 });}
 let curLanOn=false;
 $('#lanToggle').onclick=async()=>{
+  if(roGuard())return;
   const next=!curLanOn;
   try{await jpost('/api/devices/lan',{device:cur,on:next});renderConsole()}catch(e){err('切换内网直连失败：'+e.message)}
 };
 $('#toggle').onclick=async()=>{
+  if(roGuard())return;
   const next=curMode==='bypass'?'normal':'bypass';
   if(next==='bypass'){
     const ok=await askCute({title:'切到放飞模式？',msg:'所有命令和文件操作都会自动放行、不再问你哦。只给可信、隔离的设备用～',okText:'确定放飞'});

@@ -516,6 +516,22 @@ func (s *Server) requireDevice(w http.ResponseWriter, r *http.Request, device st
 	return "", false, false
 }
 
+// requireOwnedConsole is requireDevice plus a write gate: ACL-shared devices
+// are strictly read-only in the portal. Approvals, pairing, trust, rules, mode
+// and LAN switches belong to the device owner alone — a grantee's perms (e.g.
+// exec) never extend to driving the device's policy console.
+func (s *Server) requireOwnedConsole(w http.ResponseWriter, r *http.Request, device string) (string, bool) {
+	ns, shared, ok := s.requireDevice(w, r, device)
+	if !ok {
+		return "", false
+	}
+	if shared {
+		http.Error(w, "共享设备只读：审批、规则、模式等设置只能由设备主人操作", http.StatusForbidden)
+		return "", false
+	}
+	return ns, true
+}
+
 // deviceConnFor returns a warm console connection to ns/device, dialing if needed.
 // It uses double-checked locking so that two concurrent callers for the same absent
 // device (e.g. /api/devices/console and /api/devices/events on page load) do not
@@ -586,7 +602,7 @@ func (s *Server) handleDeviceConsole(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeviceDecide(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Device, ID, Verdict string }
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, _, ok := s.requireDevice(w, r, body.Device)
+	ns, ok := s.requireOwnedConsole(w, r, body.Device)
 	if !ok {
 		return
 	}
@@ -606,7 +622,7 @@ func (s *Server) handleDeviceDecide(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Device, FP, Verdict string }
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, _, ok := s.requireDevice(w, r, body.Device)
+	ns, ok := s.requireOwnedConsole(w, r, body.Device)
 	if !ok {
 		return
 	}
@@ -626,7 +642,7 @@ func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeviceUntrust(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Device, FP string }
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, _, ok := s.requireDevice(w, r, body.Device)
+	ns, ok := s.requireOwnedConsole(w, r, body.Device)
 	if !ok {
 		return
 	}
@@ -675,7 +691,7 @@ func (s *Server) handleDeviceRules(w http.ResponseWriter, r *http.Request) {
 		Index                                 int
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, _, ok := s.requireDevice(w, r, body.Device)
+	ns, ok := s.requireOwnedConsole(w, r, body.Device)
 	if !ok {
 		return
 	}
@@ -705,7 +721,7 @@ func (s *Server) handleDeviceLan(w http.ResponseWriter, r *http.Request) {
 		On     bool
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, _, ok := s.requireDevice(w, r, body.Device)
+	ns, ok := s.requireOwnedConsole(w, r, body.Device)
 	if !ok {
 		return
 	}
@@ -724,7 +740,7 @@ func (s *Server) handleDeviceLan(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeviceMode(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Device, Mode string }
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, _, ok := s.requireDevice(w, r, body.Device)
+	ns, ok := s.requireOwnedConsole(w, r, body.Device)
 	if !ok {
 		return
 	}
