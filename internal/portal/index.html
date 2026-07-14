@@ -96,6 +96,12 @@
   .pill .d{width:7px;height:7px;border-radius:50%}
   .pill.on{background:#e0f6ec;color:var(--mint-d)}.pill.on .d{background:var(--mint);box-shadow:0 0 0 3px rgba(116,207,166,.3)}
   .pill.off{background:#f3eae3;color:var(--ink-2)}.pill.off .d{background:var(--ink-3)}
+  .shareline{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:9px}
+  .sharetag{font-family:var(--round);font-weight:700;font-size:11.5px;color:#8a5a20;background:#fff2cf;border:1px solid #ffd995;
+    border-radius:13px;padding:3px 9px;display:inline-flex;align-items:center;gap:5px}
+  .sharetag svg{width:13px;height:13px}
+  .permtag{font-family:var(--round);font-weight:600;font-size:11px;color:#6f7a32;background:#f3f5cf;border-radius:12px;padding:3px 8px}
+  .ownsuffix{font-size:13px;color:var(--ink-2);font-weight:600}
   .devcard .meta{margin-top:16px;display:flex;align-items:center;justify-content:space-between;
     border-top:2px dashed var(--line-2);padding-top:13px}
   .devcard .seen{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
@@ -615,7 +621,7 @@ const faceOn='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
 const faceOff='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 10h.01M16 10h.01M9 15c1-.8 5-.8 6 0" stroke-linecap="round"/></svg>';
 
 /* ---- nav ---- */
-let cur=null, pollGen=0, curMode='normal';
+let cur=null, pollGen=0, curMode='normal', currentNS='';
 function showView(v){$$('.view').forEach(x=>x.classList.toggle('show',x.dataset.view===v));}
 $$('.doc pre[data-copy]').forEach(p=>p.onclick=()=>{if(navigator.clipboard)navigator.clipboard.writeText(p.textContent.trim());toast('ok','已复制到剪贴板');});
 $$('[data-goto]').forEach(b=>b.onclick=()=>{const t=document.querySelector('nav button[data-sec="'+b.dataset.goto+'"]');if(t)t.click();});
@@ -650,10 +656,13 @@ async function loadOverview(){
     const on=xs.filter(x=>x.online).length;
     $('#grid').innerHTML=xs.length?xs.map((x,i)=>{
       const o=x.online;
+      const displayName=x.ambiguous?(x.name+' · '+(x.owner||'')):x.name;
+      const shared=x.shared===true;
+      const shareHTML=shared?`<div class="shareline"><span class="sharetag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11l2 2 4-4"/></svg>共享 · from ${esc(x.owner||'—')}</span>${x.perms?`<span class="permtag">可 ${esc(x.perms)}</span>`:''}</div>`:'';
       return `<div class="devcard" data-dev="${esc(x.name)}">
         <div class="top">
           <div class="face ${o?'on':'off'}">${o?faceOn:faceOff}</div>
-          <div style="flex:1"><div class="nm">${esc(x.name)}</div><div class="fp">${esc((x.fingerprint||'—').slice(0,26))}</div></div>
+          <div style="flex:1"><div class="nm">${esc(displayName)}</div><div class="fp">${esc((x.fingerprint||'—').slice(0,26))}</div>${shareHTML}</div>
           <span class="pill ${o?'on':'off'}"><span class="d"></span>${o?'在线':'离线'}</span>
         </div>
         <div class="meta"><span class="seen">最近 · ${ago(x.last_seen)}</span>
@@ -926,13 +935,26 @@ async function loadACL(){
 }
 async function revACL(id){try{await jpost('/api/acl/revoke',{id:Number(id)});loadACL()}catch(e){err('吊销失败：'+e.message)}}
 $('#aAdd').onclick=async()=>{
+  const devReq=jget('/api/devices');
+  const nsReq=jget('/api/namespaces');
+  const meReq=currentNS?Promise.resolve({namespace:currentNS}):jget('/api/me');
+  const [devRes,nsRes,meRes]=await Promise.allSettled([devReq,nsReq,meReq]);
+  if(devRes.status==='rejected')err('设备下拉加载失败：'+devRes.reason.message);
+  if(nsRes.status==='rejected')err('命名空间下拉加载失败：'+nsRes.reason.message);
+  if(meRes.status==='fulfilled'&&meRes.value.namespace)currentNS=meRes.value.namespace;
+  const ownDevices=devRes.status==='fulfilled'
+    ?(devRes.value.devices||[]).filter(x=>x.shared!==true).map(x=>x.name).filter(Boolean)
+    :[];
+  const namespaces=nsRes.status==='fulfilled'
+    ?(nsRes.value.namespaces||[]).filter(ns=>ns&&ns!==currentNS)
+    :[];
   const v=await openForm({title:'新增共享授权',okText:'授权',fields:[
-    {key:'device',label:'设备名',placeholder:'设备名'},
-    {key:'grantee',label:'被授权命名空间',placeholder:'对方命名空间'},
-    {key:'perms',label:'权限',placeholder:'exec,read,write'}]});
+    {key:'device',label:'设备名',type:'select',options:ownDevices},
+    {key:'grantee',label:'被授权命名空间',type:'select',options:namespaces},
+    {key:'perms',label:'权限',type:'select',options:['exec','read','exec,read','exec,read,write']}]});
   if(!v)return;
   if(!v.device||!v.grantee){err('设备名和被授权命名空间都要填哦～');return}
-  try{await jpost('/api/acl',{device:v.device,grantee:v.grantee,perms:v.perms});loadACL()}catch(e){err('授权失败：'+e.message)}
+  try{await jpost('/api/acl',{device:v.device,grantee:v.grantee,perms:v.perms||'exec'});loadACL()}catch(e){err('授权失败：'+e.message)}
 };
 
 /* ---- audit ---- */
@@ -1189,7 +1211,7 @@ function route(){
 window.addEventListener('hashchange',route);
 
 /* ---- me + boot ---- */
-async function loadMe(){try{const m=await jget('/api/me');$('#ns').textContent=m.namespace||'—';$('#fp').textContent=m.identity||'';docMe=m}catch(e){$('#fp').textContent='未登录';err('未登录或会话失效：'+e.message)}}
+async function loadMe(){try{const m=await jget('/api/me');currentNS=m.namespace||'';$('#ns').textContent=currentNS||'—';$('#fp').textContent=m.identity||'';docMe=m}catch(e){$('#fp').textContent='未登录';err('未登录或会话失效：'+e.message)}}
 loadMe();
 route();
 </script>

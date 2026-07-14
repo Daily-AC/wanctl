@@ -35,6 +35,7 @@ func (r *Relay) secretOK(req *http.Request) bool {
 
 func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/resolve-user", r.adminResolveUser)
+	mux.HandleFunc("/admin/users", r.adminUsers)
 	mux.HandleFunc("/admin/tokens/resolve", r.adminTokenResolve)
 	mux.HandleFunc("/admin/tokens", r.adminTokens)
 	mux.HandleFunc("/admin/tokens/issue", r.adminTokenIssue)
@@ -148,6 +149,19 @@ func (r *Relay) adminResolveUser(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, map[string]string{"namespace": ns})
 }
 
+func (r *Relay) adminUsers(w http.ResponseWriter, req *http.Request) {
+	if !r.adminOK(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	out, err := r.admin.ListUsers()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"namespaces": out})
+}
+
 func (r *Relay) adminTokens(w http.ResponseWriter, req *http.Request) {
 	if !r.adminOK(req) {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -211,7 +225,11 @@ func (r *Relay) adminDevices(w http.ResponseWriter, req *http.Request) {
 	// rather than letting the UI guess from the lagging last_seen timestamp.
 	for _, d := range out {
 		name, _ := d["name"].(string)
-		d["online"] = r.deviceLive(ns, name)
+		owner, _ := d["owner"].(string)
+		if owner == "" {
+			owner = ns
+		}
+		d["online"] = r.deviceLive(owner, name)
 	}
 	writeJSON(w, map[string]any{"devices": out})
 }
@@ -303,6 +321,7 @@ type AdminStore interface {
 	ListTokens(namespace string) ([]map[string]any, error)
 	RevokeToken(namespace string, id int) error
 	ListDevices(namespace string) ([]map[string]any, error)
+	ListUsers() ([]string, error)
 	RemoveDevice(namespace, device string) error
 	ListACL(namespace string) ([]map[string]any, error)
 	AddACL(namespace, device, grantee, perms string) error
@@ -407,17 +426,84 @@ func (p *PGStore) RevokeToken(namespace string, id int) error {
 
 func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 	rows, err := p.db.Query(
-		`SELECT name, COALESCE(fingerprint,''), last_seen FROM devices WHERE owner_namespace = $1 ORDER BY name`, namespace)
+		`SELECT name, fingerprint, last_seen, owner_namespace, shared, perms
+		   FROM (
+		     SELECT d.name,
+		            COALESCE(d.fingerprint,'') AS fingerprint,
+		            d.last_seen,
+		            d.owner_namespace,
+		            false AS shared,
+		            '' AS perms
+		       FROM devices d
+		      WHERE d.owner_namespace = $1
+		     UNION ALL
+		     SELECT d.name,
+		            COALESCE(d.fingerprint,'') AS fingerprint,
+		            d.last_seen,
+		            d.owner_namespace,
+		            true AS shared,
+		            a.perms
+		       FROM acl a
+		       JOIN devices d
+		         ON d.owner_namespace = a.owner_namespace
+		        AND d.name = a.device
+		      WHERE a.grantee_namespace = $1
+		        AND a.revoked_at IS NULL
+		   ) visible
+		  ORDER BY name, shared, owner_namespace`, namespace)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var name, fp string
+		var name, fp, owner, perms string
 		var seen sql.NullTime
-		rows.Scan(&name, &fp, &seen)
-		out = append(out, map[string]any{"name": name, "fingerprint": fp, "last_seen": nullTime(seen)})
+		var shared bool
+		rows.Scan(&name, &fp, &seen, &owner, &shared, &perms)
+		row := map[string]any{
+			"name": name, "fingerprint": fp, "last_seen": nullTime(seen),
+			"owner": owner, "shared": shared,
+		}
+		if shared {
+			row["perms"] = perms
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	markAmbiguousDevices(out)
+	return out, nil
+}
+
+func markAmbiguousDevices(devices []map[string]any) {
+	counts := map[string]int{}
+	for _, d := range devices {
+		name, _ := d["name"].(string)
+		if name != "" {
+			counts[name]++
+		}
+	}
+	for _, d := range devices {
+		name, _ := d["name"].(string)
+		if counts[name] > 1 {
+			d["ambiguous"] = true
+		}
+	}
+}
+
+func (p *PGStore) ListUsers() ([]string, error) {
+	rows, err := p.db.Query(`SELECT DISTINCT namespace FROM users WHERE namespace <> '' ORDER BY namespace`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var ns string
+		rows.Scan(&ns)
+		out = append(out, ns)
 	}
 	return out, rows.Err()
 }
