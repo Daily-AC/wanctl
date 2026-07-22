@@ -58,12 +58,12 @@ portal, then:
 
 ```bash
 # macOS / Linux
-curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | WANCTL_TOKEN=<token> sh
+curl -fsSL https://***REMOVED-IP***/install.sh | WANCTL_TOKEN=<token> sh
 ```
 
 ```powershell
 # Windows (PowerShell — no bash needed)
-$env:WANCTL_TOKEN='<token>'; irm https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.ps1 | iex
+$env:WANCTL_TOKEN='<token>'; irm https://***REMOVED-IP***/install.ps1 | iex
 ```
 
 Both installers detect OS/arch, install `wanctl`, and start the agent in the
@@ -74,23 +74,23 @@ foreground (wrap in `systemd`/`nohup &` on unix, or a service wrapper like
 launch separately:
 
 ```bash
-curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | WANCTL_INSTALL_ONLY=1 sh
-nohup wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token <token> \
-      --transport http --name "$(hostname)" >/tmp/wanctl-agent.log 2>&1 &
+curl -fsSL https://***REMOVED-IP***/install.sh | WANCTL_INSTALL_ONLY=1 sh
+nohup wanctl agent --relay https://***REMOVED-IP*** --token <token> \
+      --transport ws --name "$(hostname)" >/tmp/wanctl-agent.log 2>&1 &
 ```
 
 ```powershell
-$env:WANCTL_INSTALL_ONLY='1'; irm https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.ps1 | iex
-wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token <token> `
-             --transport http --name $env:COMPUTERNAME
+$env:WANCTL_INSTALL_ONLY='1'; irm https://***REMOVED-IP***/install.ps1 | iex
+wanctl agent --relay https://***REMOVED-IP*** --token <token> `
+             --transport ws --name $env:COMPUTERNAME
 ```
 
 > **For AI agents:** how to *drive* a device (run commands, transfer files, read
 > logs, and interpret approval/denial) is in
 > [`internal/portal/skill.md`](internal/portal/skill.md) — read it first.
-> The portal serves the canonical copy at https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills ,
+> The portal serves the canonical copy at https://***REMOVED-IP***/skills ,
 > so users install it by simply saying to their AI:
-> **「安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills」**
+> **「安装 https://***REMOVED-IP***/skills」**
 > (the agent WebFetches that URL and writes it to `~/.claude/skills/wanctl/SKILL.md`).
 
 ## Self-update
@@ -114,14 +114,14 @@ GOOS=windows GOARCH=amd64 go build -o wanctl.exe .    # a Windows device
 WANCTL_TOKENS="tok:teamA" wanctl relay --addr :8080
 
 # Device to be controlled:
-wanctl agent --relay wss://wanctl-relay.***REMOVED***.***REMOVED***.com --token tok --name home-pc
-# Behind a reverse proxy that strips WebSocket upgrades (e.g. thunderbox nginx),
+wanctl agent --relay https://***REMOVED-IP*** --token tok --name home-pc
+# Behind a reverse proxy that strips WebSocket upgrades,
 # use the proxy-agnostic HTTP transport instead:
-wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token tok --name home-pc --transport http
+wanctl agent --relay https://***REMOVED-IP*** --token tok --name home-pc --transport http
 # ...and on the controller: export WANCTL_TRANSPORT=http
 
 # Controller:
-export WANCTL_RELAY=wss://wanctl-relay.***REMOVED***.***REMOVED***.com WANCTL_TOKEN=tok
+export WANCTL_RELAY=https://***REMOVED-IP*** WANCTL_TOKEN=tok
 wanctl peers                         # list reachable devices
 wanctl exec --target home-pc "..."   # run a command (streams output, real exit code)
 wanctl push ./a.zip /remote/a.zip    # upload
@@ -146,10 +146,10 @@ the policy engine.
 `internal/portal/skill.md` is a Claude Code skill that teaches an agent to drive
 the controller CLI: setup env, run/transfer/log commands, and correctly read
 "denied by policy" / "blocked on approval" / TOFU-pairing outcomes. The portal
-serves the canonical copy at <https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills>. Users
+serves the canonical copy at <https://***REMOVED-IP***/skills>. Users
 install it by saying to their AI:
 
-> 安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills
+> 安装 https://***REMOVED-IP***/skills
 
 The agent fetches that URL and writes it to `~/.claude/skills/wanctl/SKILL.md`.
 

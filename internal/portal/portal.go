@@ -29,7 +29,7 @@ var assets embed.FS
 // is SSO-gated, so AI clients (which have no session) cannot fetch directly
 // from this domain — the skill lives on the relay (public) and the portal /skills
 // path 302's to it for discoverability from the browser.
-const skillURL = "https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills"
+const skillURL = "https://***REMOVED-IP***/skills"
 
 // Config holds all parameters for New.
 type Config struct {

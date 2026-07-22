@@ -38,7 +38,7 @@ func (r *Relay) registerDist(mux *http.ServeMux) {
 }
 
 // handleSkills serves the canonical wanctl SKILL markdown. Users tell their AI
-// "安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills"; the AI WebFetches this URL
+// "安装 https://***REMOVED-IP***/skills"; the AI WebFetches this URL
 // and writes the response to ~/.claude/skills/wanctl/SKILL.md.
 func (r *Relay) handleSkills(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
@@ -164,7 +164,7 @@ fi
 # enroll non-interactively and run the agent now, like before.
 if [ -n "${WANCTL_TOKEN:-}" ]; then
   NAME="${WANCTL_NAME:-$(hostname)}"
-  set -- agent --relay "$RELAY" --token "$WANCTL_TOKEN" --transport http --name "$NAME"
+  set -- agent --relay "$RELAY" --token "$WANCTL_TOKEN" --transport ws --name "$NAME"
   [ -n "${WANCTL_MODE:-}" ] && set -- "$@" --mode "$WANCTL_MODE"
   echo "starting agent as '$NAME' (Ctrl-C to stop; wrap in systemd/nohup to persist)"
   exec "$DEST" "$@"
@@ -274,7 +274,7 @@ if ($env:WANCTL_INSTALL_ONLY -eq '1') {
 # enroll non-interactively and run the agent now, like the sh installer.
 if ($env:WANCTL_TOKEN) {
   $name = if ($env:WANCTL_NAME) { $env:WANCTL_NAME } else { $env:COMPUTERNAME }
-  $agentArgs = @('agent','--relay',$Relay,'--token',$env:WANCTL_TOKEN,'--transport','http','--name',$name)
+  $agentArgs = @('agent','--relay',$Relay,'--token',$env:WANCTL_TOKEN,'--transport','ws','--name',$name)
   if ($env:WANCTL_MODE) { $agentArgs += @('--mode', $env:WANCTL_MODE) }
   Write-Host "starting agent as '$name' (Ctrl-C to stop; use a service wrapper to persist)"
   & $dest @agentArgs

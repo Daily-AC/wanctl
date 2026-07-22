@@ -12,8 +12,8 @@ Claude-Code-style permission policy, so some commands/files need a human on the
 device to approve them.
 
 > **How this SKILL is distributed.** The user installs this skill by saying
-> to you: **「安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills」**. When you see that,
-> WebFetch `https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills` (returns the canonical
+> to you: **「安装 https://***REMOVED-IP***/skills」**. When you see that,
+> WebFetch `https://***REMOVED-IP***/skills` (returns the canonical
 > SKILL.md), save it to `~/.claude/skills/wanctl/SKILL.md` (creating the dir),
 > and tell the user to restart Claude Code so the skill loads.
 >
@@ -26,7 +26,7 @@ device to approve them.
 ## Setup (controller — first run)
 
 Defaults for the relay URL and transport are baked into the binary
-(`https://wanctl-relay.***REMOVED***.***REMOVED***.com`, `http`), so usually no env is needed.
+(`https://***REMOVED-IP***`, `ws`), so usually no env is needed.
 What you do need is a **token bound to a namespace** — get it via OAuth:
 
 ```bash
@@ -42,8 +42,8 @@ saved credential, `wanctl logout`.
 Optional env overrides (only set if the user explicitly tells you to):
 
 ```bash
-export WANCTL_RELAY=wss://other-relay.example.com   # different relay
-export WANCTL_TRANSPORT=ws                          # only if relay supports WS
+export WANCTL_RELAY=https://other-relay.example.com # different relay
+export WANCTL_TRANSPORT=http                        # proxy-agnostic fallback
 export WANCTL_TOKEN=<token>                         # pre-provisioned, skips login
 ```
 
@@ -130,7 +130,7 @@ a prebuilt binary + installer. Pick the one for that machine's shell:
 
 ```bash
 # macOS / Linux (any POSIX shell)
-curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh
+curl -fsSL https://***REMOVED-IP***/install.sh | sh
 wanctl                          # then run this on that machine — opens the
                                 # browser for Feishu login, takes a code, and
                                 # starts the agent in the background.
@@ -138,7 +138,7 @@ wanctl                          # then run this on that machine — opens the
 
 ```powershell
 # Windows — PowerShell only, no bash / curl needed
-irm https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.ps1 | iex
+irm https://***REMOVED-IP***/install.ps1 | iex
 wanctl                          # same flow: browser → Feishu → agent runs.
 ```
 

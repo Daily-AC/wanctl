@@ -56,6 +56,7 @@ func TestInstallPS1(t *testing.T) {
 		"wanctl-windows-amd64.exe",
 		"LOCALAPPDATA",
 		"Invoke-WebRequest",
+		"'--transport','ws'",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered script missing %q", want)
@@ -72,6 +73,9 @@ func TestInstallSh(t *testing.T) {
 	s := getInstaller(t, srv, "/install.sh")
 	if !strings.Contains(s, "CAFEBABE") || !strings.Contains(s, srv.URL) {
 		t.Errorf("sh installer missing relay/fingerprint substitution; got:\n%s", s)
+	}
+	if !strings.Contains(s, `--transport ws`) {
+		t.Errorf("sh installer does not default to WebSocket transport")
 	}
 	if strings.Contains(s, "%[1]s") || strings.Contains(s, "%[2]s") {
 		t.Errorf("sh installer has unrendered verbs")
