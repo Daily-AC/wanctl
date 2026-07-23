@@ -12,6 +12,7 @@ import (
 	"wanctl/internal/eventlog"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
+	"wanctl/internal/sessionauth"
 	"wanctl/internal/transport"
 )
 
@@ -41,7 +42,13 @@ func TestTrustedControllerCannotOpenAdminConsole(t *testing.T) {
 	dev, controller := net.Pipe()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	go a.handleSession(ctx, dev)
+	go a.handleSession(ctx, dev, sessionauth.Open{
+		Session:         "test-session",
+		CallerNamespace: "owner",
+		OwnerNamespace:  "owner",
+		Device:          "dev1",
+		Capabilities:    sessionauth.FullCapabilities,
+	})
 
 	dr, err := transport.ClientHandshake(ctx, controller, "dev1", controllerID, transport.NewMemStore())
 	if err != nil {
