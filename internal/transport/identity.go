@@ -3,9 +3,9 @@
 //
 // Every node has a long-lived Ed25519 key pair wrapped in a self-signed
 // certificate. A node's "fingerprint" is the SHA-256 of its certificate, shown
-// in the familiar "SHA256:<base64>" form. Trust is TOFU (trust on first use),
-// exactly like SSH known_hosts: the first time you see a peer you record its
-// fingerprint; afterwards a mismatch is a hard error.
+// in the familiar "SHA256:<base64>" form. Controllers explicitly confirm an
+// unknown server fingerprint before recording it; afterwards a mismatch is a
+// hard error. Devices separately authorize controller fingerprints.
 package transport
 
 import (

@@ -1,13 +1,36 @@
 package portal
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"wanctl/internal/transport"
 )
+
+func TestRegisteredFingerprintUsesRelayAdminRecord(t *testing.T) {
+	fp := transport.Fingerprint([]byte("registered device cert"))
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/admin/devices" || r.URL.Query().Get("namespace") != "alice" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{{
+			"name": "build", "owner": "alice", "fingerprint": fp,
+		}}})
+	})
+	got, err := s.registeredFingerprint(context.Background(), "alice", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != fp {
+		t.Fatalf("fingerprint = %q, want %q", got, fp)
+	}
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 

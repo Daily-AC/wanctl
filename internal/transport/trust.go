@@ -1,10 +1,13 @@
 package transport
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -67,7 +70,7 @@ func (s *Store) load() error {
 	}
 	m := make(map[string]Peer, len(peers))
 	for _, p := range peers {
-		m[p.Fingerprint] = p
+		m[peerKey(p.Fingerprint, p.Name)] = p
 	}
 	s.m = m
 	if st, err := os.Stat(s.path); err == nil {
@@ -81,11 +84,20 @@ func (s *Store) load() error {
 func (s *Store) Get(fp string) (Peer, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.m[fp]
+	p, ok := s.getByFingerprintLocked(fp)
 	if !ok && s.reloadChangedLocked() {
-		p, ok = s.m[fp]
+		p, ok = s.getByFingerprintLocked(fp)
 	}
 	return p, ok
+}
+
+func (s *Store) getByFingerprintLocked(fp string) (Peer, bool) {
+	for _, p := range s.m {
+		if p.Fingerprint == fp {
+			return p, true
+		}
+	}
+	return Peer{}, false
 }
 
 // Has reports whether a fingerprint is trusted.
@@ -131,17 +143,62 @@ func (s *Store) Add(fp, name string) error { return s.AddLabeled(fp, name, "") }
 func (s *Store) AddLabeled(fp, name, label string) error {
 	s.mu.Lock()
 	now := time.Now()
-	s.m[fp] = Peer{Fingerprint: fp, Name: name, Label: label, Added: now, LastSeen: now}
+	s.m[peerKey(fp, name)] = Peer{Fingerprint: fp, Name: name, Label: label, Added: now, LastSeen: now}
 	s.mu.Unlock()
 	return s.save()
 }
 
+// Pin binds a complete logical server name to one fingerprint. Existing pins
+// can only be changed when replace is explicitly true.
+func (s *Store) Pin(name, fp string, replace bool) error {
+	if name == "" {
+		return fmt.Errorf("pin name is required")
+	}
+	if !ValidFingerprint(fp) {
+		return fmt.Errorf("invalid fingerprint %q", fp)
+	}
+	s.mu.Lock()
+	now := time.Now()
+	for key, p := range s.m {
+		if p.Name != name {
+			continue
+		}
+		if p.Fingerprint == fp {
+			p.LastSeen = now
+			s.m[key] = p
+			s.mu.Unlock()
+			return s.save()
+		}
+		if !replace {
+			s.mu.Unlock()
+			return &MismatchError{Name: name, Stored: p.Fingerprint, Offered: fp}
+		}
+		delete(s.m, key)
+	}
+	s.m[peerKey(fp, name)] = Peer{Fingerprint: fp, Name: name, Added: now, LastSeen: now}
+	s.mu.Unlock()
+	return s.save()
+}
+
+func ValidFingerprint(fp string) bool {
+	const prefix = "SHA256:"
+	if !strings.HasPrefix(fp, prefix) {
+		return false
+	}
+	b, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(fp, prefix))
+	return err == nil && len(b) == sha256.Size
+}
+
+func peerKey(fp, name string) string { return fp + "\x00" + name }
+
 // Touch updates LastSeen for an existing peer (best-effort; ignores unknowns).
 func (s *Store) Touch(fp string) {
 	s.mu.Lock()
-	if p, ok := s.m[fp]; ok {
-		p.LastSeen = time.Now()
-		s.m[fp] = p
+	for key, p := range s.m {
+		if p.Fingerprint == fp {
+			p.LastSeen = time.Now()
+			s.m[key] = p
+		}
 	}
 	s.mu.Unlock()
 	_ = s.save()
@@ -161,7 +218,11 @@ func (s *Store) List() []Peer {
 // Remove forgets a fingerprint.
 func (s *Store) Remove(fp string) error {
 	s.mu.Lock()
-	delete(s.m, fp)
+	for key, p := range s.m {
+		if p.Fingerprint == fp {
+			delete(s.m, key)
+		}
+	}
 	s.mu.Unlock()
 	return s.save()
 }

@@ -385,7 +385,7 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpPeers)
 
 	s.AddTool(mcpapi.NewTool("wanctl_pair",
-		mcpapi.WithDescription("Check whether the target device already trusts this MCP session's controller identity, and if not, return the device-side pairing URL up front (without having to fail an exec first). Use this when the user says 'pair my device' / '让 X 信任你' / before the first command against a brand-new device — it gives the user the approval link cleanly instead of as an exec error. Returns '✓ already trusted' OR 'PAIRING REQUIRED' with a URL to relay VERBATIM to the user. The URL is identical to the one wanctl_exec emits on first connect — both paths converge on the same one-click approval flow; the user can hit either."),
+		mcpapi.WithDescription("Check whether the target device already trusts this MCP session's controller identity, and if not, return the device-side pairing URL up front. On first contact this may instead return DEVICE IDENTITY CONFIRMATION REQUIRED; a human must independently verify its exact target and fingerprint, then call wanctl_trust_server before retrying. Once the server identity is pinned, returns '✓ already trusted' OR 'PAIRING REQUIRED' with a URL to relay VERBATIM to the user."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE for shared devices.")),
 	), mcpPair)
 
@@ -447,9 +447,16 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpID)
 
 	s.AddTool(mcpapi.NewTool("wanctl_trust",
-		mcpapi.WithDescription("List the trust store for THIS MCP session. 'servers' (default) = devices this controller has TOFU-pinned. 'clients' = controllers this machine has trusted to drive it (only meaningful in stdio mode if this machine is also running wanctl agent)."),
+		mcpapi.WithDescription("List the trust store for THIS MCP session. 'servers' (default) = explicitly pinned devices. 'clients' = controllers this machine has trusted to drive it (only meaningful in stdio mode if this machine is also running wanctl agent)."),
 		mcpapi.WithString("which", mcpapi.Description("'servers' (default) or 'clients'.")),
 	), mcpTrust)
+
+	s.AddTool(mcpapi.NewTool("wanctl_trust_server",
+		mcpapi.WithDescription("Confirm an unknown device identity for THIS MCP session. Call only after a human independently verifies the exact target and fingerprint returned by DEVICE IDENTITY CONFIRMATION REQUIRED. Certificate changes remain blocked unless replace=true is explicitly requested after re-verification."),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Exact owner/device target from the confirmation error.")),
+		mcpapi.WithString("fingerprint", mcpapi.Required(), mcpapi.Description("Exact SHA256 fingerprint verified with the device owner.")),
+		mcpapi.WithBoolean("replace", mcpapi.Description("Replace an existing pin after independent re-verification. Default false.")),
+	), mcpTrustServer)
 
 	s.AddTool(mcpapi.NewTool("wanctl_rules",
 		mcpapi.WithDescription("List the local policy rules (allow-list) on THIS machine. Only meaningful in stdio mode if this machine is also running wanctl agent; for controller-only and HTTP-mode hosts the list is empty."),
@@ -883,6 +890,23 @@ func mcpTrust(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 		out += fmt.Sprintf("  %-20s %s  (added %s)\n", p.Name, transport.ShortFingerprint(p.Fingerprint), p.Added.Format("2006-01-02"))
 	}
 	return mcpapi.NewToolResultText(out), nil
+}
+
+func mcpTrustServer(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	target := reqStr(req, "target", "")
+	fingerprint := reqStr(req, "fingerprint", "")
+	if target == "" || fingerprint == "" {
+		return mcpapi.NewToolResultError("target and fingerprint are required"), nil
+	}
+	c, hint := sessions.get(ctx).client()
+	if hint != nil {
+		return hint, nil
+	}
+	canonical, err := c.PinServer(ctx, target, fingerprint, reqBool(req, "replace"))
+	if err != nil {
+		return mcpapi.NewToolResultError(err.Error()), nil
+	}
+	return mcpapi.NewToolResultText(fmt.Sprintf("confirmed device identity: %s %s", canonical, fingerprint)), nil
 }
 
 func mcpRules(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {

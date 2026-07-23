@@ -88,6 +88,8 @@ func TestRemoteConsoleApprovalOverRelay(t *testing.T) {
 	if !online {
 		t.Fatal("device never came online")
 	}
+	trustServer(t, portal, "alice/lab")
+	trustServer(t, ctrl, "lab")
 
 	// Open the console session (portal -> device, cross-namespace via portalNS bypass).
 	cc, err := portal.OpenConsole(ctx, "alice/lab")

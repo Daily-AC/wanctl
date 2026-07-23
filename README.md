@@ -149,18 +149,21 @@ wanctl push ./a.zip /remote/a.zip    # upload
 wanctl pull /remote/log.txt ./log    # download
 wanctl id                            # this node's fingerprint
 wanctl trust [clients|servers]       # list trusted peers
+wanctl trust server --target alice/home-pc --fingerprint SHA256:... # confirm a verified device identity
 ```
 
-First connection to a new device prints a TOFU pairing prompt on the device
-(auto-trusted with `--yes` for unattended agents). Token leakage alone does not
-grant control: the device still pins fingerprints and (later milestone) enforces
-the policy engine.
+First contact with a new device stops before application data is sent and prints
+its full `owner/device` target and certificate fingerprint. Verify both out of
+band, then pin them with `wanctl trust server`; a changed certificate remains a
+hard error unless explicitly re-pinned with `--replace`. After that, a new
+controller still needs device-side approval (auto-trusted with `--yes` for
+unattended agents). Token leakage alone therefore does not grant control.
 
 ## Security model
 
 - **Token** (relay admission, machine-to-machine) → hashed/revocable later via the portal.
 - **E2E mutual TLS 1.3** (relay sees only ciphertext) — Ed25519 identity reused from lanctl.
-- **TOFU fingerprint pinning** both directions.
+- **Explicit server fingerprint pinning** on controllers; device-side approval for new controllers.
 
 ## Driving it from an agent (the skill)
 

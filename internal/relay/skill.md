@@ -51,6 +51,7 @@ export WANCTL_TOKEN=<token>                         # pre-provisioned, skips log
 
 ```bash
 wanctl peers                              # list devices you can reach
+wanctl trust server --target NS/NAME --fingerprint SHA256:...  # confirm an independently verified device identity
 wanctl pair NAME                          # check trust state up front; prints the approval URL if not yet paired
 wanctl exec --target NAME "<command>"     # run a command (streams stdout, real exit code)
 wanctl exec --target NAME --cwd /path "<command>"   # run in /path (also the policy scope)
@@ -80,7 +81,14 @@ wanctl id                                 # this controller's fingerprint
   expected; a timeout returns a denial. With no front-end attending (headless, no
   portal session, no TTY) a rule-miss is denied immediately.
 - **Pairing**: the very first connection from a new controller fingerprint
-  needs the device owner to trust it (TOFU). Two ways to hit this:
+  has two separate trust checks. First, the controller refuses an unknown
+  device certificate with `DEVICE IDENTITY CONFIRMATION REQUIRED`, including
+  the exact `NS/DEVICE` target and fingerprint. Do not trust it automatically:
+  ask the user to verify that fingerprint with the device owner, then run the
+  exact `wanctl trust server --target ... --fingerprint ...` command. A changed
+  certificate stays blocked; use `--replace` only after independent
+  re-verification. Once the device identity is pinned, the device owner must
+  trust the controller. Two ways to reach that second check:
   - *Proactive* (preferred when the user explicitly says "pair me with X" or
     you're about to drive a brand-new device): run `wanctl pair NAME` first —
     on a fresh device it exits 0 and prints the approval URL; if already

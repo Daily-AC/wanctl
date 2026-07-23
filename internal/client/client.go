@@ -1,5 +1,5 @@
 // Package client is the controller. It dials the relay's /dial endpoint for a
-// target device, completes the client-side mutual-TLS handshake (TOFU pinning),
+// target device, completes the client-side mutual-TLS handshake (explicit pinning),
 // and runs exec/file requests. Designed to be driven from a terminal or an
 // agent's shell tool: streams output, propagates the remote exit code.
 package client
@@ -30,6 +30,18 @@ import (
 // credentials. Callers (MCP server etc.) detect this via errors.Is to redirect
 // the user to a login flow rather than printing a raw error.
 var ErrNoToken = errors.New("no token: run wanctl_login (MCP) or `wanctl login` (CLI), or set WANCTL_TOKEN")
+
+// TrustRequiredError requires the caller to confirm an unknown device identity
+// out of band before any application data is sent.
+type TrustRequiredError struct {
+	Target      string
+	Fingerprint string
+}
+
+func (e *TrustRequiredError) Error() string {
+	return fmt.Sprintf("DEVICE IDENTITY CONFIRMATION REQUIRED for %q\n  fingerprint: %s\nVerify it with the device owner, then run:\n  wanctl trust server --target %q --fingerprint %q",
+		e.Target, e.Fingerprint, e.Target, e.Fingerprint)
+}
 
 // RejectError is returned when a device rejects a controller's connection,
 // typically because the controller fingerprint hasn't been paired yet. Callers
@@ -147,6 +159,19 @@ func (c *Client) Identity() *transport.Identity { return c.id }
 
 // Peers lists online devices the token can see.
 func (c *Client) Peers(ctx context.Context) ([]string, error) {
+	info, err := c.peerInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return info.Devices, nil
+}
+
+type peerInfo struct {
+	Namespace string   `json:"namespace"`
+	Devices   []string `json:"devices"`
+}
+
+func (c *Client) peerInfo(ctx context.Context) (peerInfo, error) {
 	path := "/peers"
 	if c.transport == "http" {
 		path = "/h/peers"
@@ -156,40 +181,63 @@ func (c *Client) Peers(ctx context.Context) ([]string, error) {
 	admission.SetBearer(req, c.token)
 	resp, err := c.httpc.Do(req)
 	if err != nil {
-		return nil, err
+		return peerInfo{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("peers: relay returned %d", resp.StatusCode)
+		return peerInfo{}, fmt.Errorf("peers: relay returned %d", resp.StatusCode)
 	}
-	var out struct{ Devices []string }
-	json.NewDecoder(resp.Body).Decode(&out)
-	return out.Devices, nil
+	var out peerInfo
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return peerInfo{}, err
+	}
+	if out.Namespace == "" {
+		return peerInfo{}, fmt.Errorf("peers: relay omitted token namespace")
+	}
+	return out, nil
 }
 
-// pinName is the logical name used for TOFU; use the device part of target.
-func pinName(target string) string {
-	if i := strings.LastIndex(target, "/"); i >= 0 {
-		return target[i+1:]
-	}
-	return target
-}
+// pinName is the canonical owner namespace plus device name.
+func pinName(target string) string { return strings.TrimSpace(target) }
 
 func (c *Client) resolve(ctx context.Context, target string) (string, error) {
-	if target != "" {
+	target = strings.TrimSpace(target)
+	if strings.Contains(target, "/") {
+		parts := strings.Split(target, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return "", fmt.Errorf("invalid target %q: expected owner/device", target)
+		}
 		return target, nil
 	}
-	devs, err := c.Peers(ctx)
+	info, err := c.peerInfo(ctx)
 	if err != nil {
 		return "", err
 	}
-	if len(devs) == 1 {
-		return devs[0], nil
+	if target != "" {
+		return info.Namespace + "/" + target, nil
 	}
-	if len(devs) == 0 {
+	if len(info.Devices) == 1 {
+		return info.Namespace + "/" + info.Devices[0], nil
+	}
+	if len(info.Devices) == 0 {
 		return "", fmt.Errorf("no devices online for this token")
 	}
-	return "", fmt.Errorf("multiple devices online; pass --target: %s", strings.Join(devs, ", "))
+	return "", fmt.Errorf("multiple devices online; pass --target: %s", strings.Join(info.Devices, ", "))
+}
+
+// PinServer records an explicitly verified fingerprint for a canonical target.
+func (c *Client) PinServer(ctx context.Context, target, fingerprint string, replace bool) (string, error) {
+	if strings.TrimSpace(target) == "" {
+		return "", fmt.Errorf("target is required")
+	}
+	canonical, err := c.resolve(ctx, target)
+	if err != nil {
+		return "", err
+	}
+	if err := c.known.Pin(canonical, fingerprint, replace); err != nil {
+		return "", err
+	}
+	return canonical, nil
 }
 
 func (c *Client) connect(ctx context.Context, target string) (*tls.Conn, error) {
@@ -256,7 +304,8 @@ func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target, hello
 		return nil, err
 	}
 	if dr.FirstSeen {
-		fmt.Fprintf(os.Stderr, "wanctl: pinned new device %q identity %s\n", target, transport.ShortFingerprint(dr.PeerFP))
+		dr.Conn.Close()
+		return nil, &TrustRequiredError{Target: target, Fingerprint: dr.PeerFP}
 	}
 	host, _ := os.Hostname()
 	if err := protocol.WriteMessage(dr.Conn, protocol.Message{Kind: helloKind, Role: "client", Name: host, Label: c.label, Version: "1"}); err != nil {

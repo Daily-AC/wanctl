@@ -67,6 +67,7 @@ USAGE
   wanctl id
   wanctl pair  <device>                       check device trust state; if not yet paired print the URL the device owner clicks to approve
   wanctl trust [clients|servers]
+  wanctl trust server --target NS/DEV --fingerprint SHA256:... [--replace]
   wanctl agent [--name N] [--relay URL] [--token T] [--yes] [--shell S] [--portal-pk FP]
   wanctl relay  [--addr :8080]                run the relay (thunderbox); DATABASE_URL or WANCTL_TOKENS
   wanctl portal [--addr :8080]                run the team portal (thunderbox, internal SSO)
@@ -569,6 +570,28 @@ func cmdRules(args []string) error {
 }
 
 func cmdTrust(args []string) error {
+	if len(args) > 0 && args[0] == "server" {
+		fs := flag.NewFlagSet("trust server", flag.ContinueOnError)
+		target := fs.String("target", "", "canonical owner/device target")
+		fingerprint := fs.String("fingerprint", "", "verified SHA256 device fingerprint")
+		replace := fs.Bool("replace", false, "replace an existing pin after independent verification")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *target == "" || *fingerprint == "" {
+			return fmt.Errorf("usage: wanctl trust server --target NS/DEV --fingerprint SHA256:... [--replace]")
+		}
+		c, err := client.New()
+		if err != nil {
+			return err
+		}
+		canonical, err := c.PinServer(context.Background(), *target, *fingerprint, *replace)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("pinned device %q identity %s\n", canonical, *fingerprint)
+		return nil
+	}
 	which := "clients"
 	if len(args) > 0 {
 		which = args[0]

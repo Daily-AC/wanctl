@@ -749,6 +749,13 @@ func (s *Server) deviceConnFor(ctx context.Context, ns, device string) (*deviceC
 		delete(s.conns, key)
 	}
 	s.mu.Unlock()
+	fingerprint, err := s.registeredFingerprint(ctx, ns, device)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.dialer.PinServer(ctx, key, fingerprint, false); err != nil {
+		return nil, fmt.Errorf("portal device identity: %w", err)
+	}
 	conn, err := s.dialer.OpenConsole(ctx, key)
 	if err != nil {
 		return nil, err
@@ -763,6 +770,42 @@ func (s *Server) deviceConnFor(ctx context.Context, ns, device string) (*deviceC
 	s.conns[key] = d
 	s.mu.Unlock()
 	return d, nil
+}
+
+// registeredFingerprint obtains the device identity over the authenticated
+// relay admin channel, independent of the encrypted dial connection.
+func (s *Server) registeredFingerprint(ctx context.Context, ns, device string) (string, error) {
+	resp, err := s.adminReq("GET", "/admin/devices", url.Values{"namespace": {ns}}, nil)
+	if err != nil {
+		return "", fmt.Errorf("lookup registered device identity: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("lookup registered device identity: relay returned %d", resp.StatusCode)
+	}
+	var out struct {
+		Devices []struct {
+			Name        string `json:"name"`
+			Owner       string `json:"owner"`
+			Fingerprint string `json:"fingerprint"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("decode registered device identity: %w", err)
+	}
+	for _, d := range out.Devices {
+		owner := d.Owner
+		if owner == "" {
+			owner = ns
+		}
+		if owner == ns && d.Name == device {
+			if !transport.ValidFingerprint(d.Fingerprint) {
+				return "", fmt.Errorf("relay has no valid registered fingerprint for %q", ns+"/"+device)
+			}
+			return d.Fingerprint, nil
+		}
+	}
+	return "", fmt.Errorf("relay has no registered identity for %q", ns+"/"+device)
 }
 
 func (s *Server) dropConn(ns, device string) {

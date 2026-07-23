@@ -8,7 +8,9 @@ import (
 
 // ClientHandshake runs the mutually-authenticated TLS handshake as the client
 // over an already-established net.Conn (e.g. a relayed WebSocket), then applies
-// TOFU pinning against the known_servers store keyed by serverName.
+// explicit pinning against the known_servers store keyed by serverName. Unknown
+// identities are returned as FirstSeen for the caller to confirm; they are not
+// persisted here.
 func ClientHandshake(ctx context.Context, nc net.Conn, serverName string, id *Identity, known *Store) (*DialResult, error) {
 	conn := tls.Client(nc, &tls.Config{
 		Certificates:       []tls.Certificate{id.Cert},
@@ -35,14 +37,12 @@ func ClientHandshake(ctx context.Context, nc net.Conn, serverName string, id *Id
 			known.Touch(fp)
 			return res, nil
 		}
+		res.FirstSeen = true
+		return res, nil
 	}
 	if known.Has(fp) {
 		known.Touch(fp)
 		return res, nil
-	}
-	if err := known.Add(fp, serverName); err != nil {
-		conn.Close()
-		return nil, err
 	}
 	res.FirstSeen = true
 	return res, nil

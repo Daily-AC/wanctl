@@ -46,6 +46,7 @@ func TestHTTPTransportExecAndFileRoundTrip(t *testing.T) {
 	if err != nil || len(devs) != 1 || devs[0] != "home-pc" {
 		t.Fatalf("peers: %v err=%v", devs, err)
 	}
+	trustServer(t, c, "home-pc")
 
 	code, err := c.Exec(context.Background(), "home-pc", "echo http-hi", true, "")
 	if err != nil || code != 0 {
