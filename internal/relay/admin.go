@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -143,6 +145,10 @@ func (r *Relay) adminResolveUser(w http.ResponseWriter, req *http.Request) {
 	json.NewDecoder(req.Body).Decode(&body)
 	ns, err := r.admin.ResolveUser(body.Identity)
 	if err != nil {
+		if errors.Is(err, ErrNamespaceConflict) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -346,6 +352,11 @@ func deriveNS(identity string) string {
 	return strings.Trim(b.String(), "-")
 }
 
+// ErrNamespaceConflict means an SSO identity derives to a namespace already
+// owned by a different immutable identity. Callers should surface this as a
+// conflict, never relink the existing namespace.
+var ErrNamespaceConflict = errors.New("derived namespace is already owned by another SSO identity")
+
 // ResolveUser maps an SSO identity to a namespace, creating/linking the row.
 func (p *PGStore) ResolveUser(identity string) (string, error) {
 	identity = strings.TrimSpace(identity)
@@ -360,14 +371,29 @@ func (p *PGStore) ResolveUser(identity string) (string, error) {
 	if err != sql.ErrNoRows {
 		return "", err
 	}
-	ns = deriveNS(identity)
+	derivedNS := deriveNS(identity)
+	var insertedNS string
 	err = p.db.QueryRow(
 		`INSERT INTO users (feishu_open_id, namespace, name) VALUES ($1,$2,$3)
-		   ON CONFLICT (namespace) DO UPDATE SET feishu_open_id = EXCLUDED.feishu_open_id
+		   ON CONFLICT (namespace) DO NOTHING
 		   RETURNING namespace`,
-		identity, ns, identity,
-	).Scan(&ns)
-	return ns, err
+		identity, derivedNS, identity,
+	).Scan(&insertedNS)
+	if errors.Is(err, sql.ErrNoRows) {
+		// A concurrent request for the same immutable identity is idempotent:
+		// the winner inserted the row after our initial lookup. A different
+		// identity deriving to the same namespace is a hard conflict.
+		var existingNS string
+		lookupErr := p.db.QueryRow(`SELECT namespace FROM users WHERE feishu_open_id = $1`, identity).Scan(&existingNS)
+		if lookupErr == nil {
+			return existingNS, nil
+		}
+		if !errors.Is(lookupErr, sql.ErrNoRows) {
+			return "", fmt.Errorf("recheck SSO identity after namespace conflict: %w", lookupErr)
+		}
+		return "", fmt.Errorf("%w: %q", ErrNamespaceConflict, derivedNS)
+	}
+	return insertedNS, err
 }
 
 // UpsertDevice records (or refreshes last_seen for) an online device.

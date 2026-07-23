@@ -48,6 +48,28 @@ func TestNoIdentity401(t *testing.T) {
 	}
 }
 
+func TestRequireNSPreservesIdentityConflict(t *testing.T) {
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/admin/resolve-user" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		http.Error(w, "derived namespace is already owned by another SSO identity: alice", http.StatusConflict)
+	})
+	req := httptest.NewRequest("GET", "/api/me", nil)
+	req.Header.Set("X-User", "alice@new.example")
+	rr := httptest.NewRecorder()
+
+	s.handleMe(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body = %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "already owned") {
+		t.Fatalf("conflict reason missing from portal response: %q", rr.Body.String())
+	}
+}
+
 func TestWhoamiDumpsHeaders(t *testing.T) {
 	s := New(Config{RelayAdminURL: "", AdminSecret: "", UserHeader: "X-Auth-Request-Email"})
 	rec := httptest.NewRecorder()

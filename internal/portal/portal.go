@@ -340,6 +340,15 @@ func (s *Server) requireNS(w http.ResponseWriter, r *http.Request) (string, bool
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
+		if resp.StatusCode == http.StatusConflict {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			reason := strings.TrimSpace(string(b))
+			if reason == "" {
+				reason = "SSO identity maps to an existing namespace"
+			}
+			http.Error(w, reason, http.StatusConflict)
+			return "", false
+		}
 		http.Error(w, "relay admin error", resp.StatusCode)
 		return "", false
 	}
