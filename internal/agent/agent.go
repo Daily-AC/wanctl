@@ -377,19 +377,18 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "command denied by device policy: " + m.Command})
 		return
 	}
-	command := withCwd(m.Cwd, m.Command)
 	out := server.FrameWriter(conn, protocol.FrameStdout)
 	var code int
 	var err error
 	if m.OneShot {
-		code, err = server.RunOneShot(a.opts.Shell, command, out)
+		code, err = server.RunOneShot(a.opts.Shell, m.Command, m.Cwd, out)
 	} else {
 		sess, serr := a.session(fp)
 		if serr != nil {
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: serr.Error()})
 			return
 		}
-		code, err = sess.Exec(command, out)
+		code, err = sess.ExecInDir(m.Command, m.Cwd, out)
 	}
 	if err != nil {
 		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision})
@@ -413,7 +412,7 @@ func (a *Agent) doExecAsync(conn *tls.Conn, fp, peerName string, m protocol.Mess
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "command denied by device policy: " + m.Command})
 		return
 	}
-	id, err := a.jobs.start(a.opts.Shell, withCwd(m.Cwd, m.Command))
+	id, err := a.jobs.start(a.opts.Shell, m.Command, m.Cwd)
 	if err != nil {
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return
@@ -463,15 +462,6 @@ func (a *Agent) doLogs(conn *tls.Conn, m protocol.Message) {
 // Mode reports the agent's effective policy mode (which may be a mode persisted
 // from a previous run, not just the one passed at construction).
 func (a *Agent) Mode() policy.Mode { return a.engine.Mode() }
-
-// withCwd prefixes a directory change so the command runs in cwd. Uses ';' so it
-// works in both POSIX sh and PowerShell.
-func withCwd(cwd, cmd string) string {
-	if cwd == "" {
-		return cmd
-	}
-	return "cd \"" + cwd + "\"; " + cmd
-}
 
 // httpBase converts the relay URL to an HTTP(S) origin for the HTTP transport.
 func httpBase(relayURL string) string {

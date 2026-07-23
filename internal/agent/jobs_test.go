@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -11,7 +14,7 @@ func TestJobStore_RunsCapturesOutputAndExit(t *testing.T) {
 		t.Skip("uses /bin/sh")
 	}
 	s := newJobStore()
-	id, err := s.start("/bin/sh", "printf 'hello\\n'; exit 7")
+	id, err := s.start("/bin/sh", "printf 'hello\\n'; exit 7", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +55,38 @@ func TestJobStore_RunsCapturesOutputAndExit(t *testing.T) {
 	if over, _, _, _ := j.snapshot(total + 9999); len(over) != 0 {
 		t.Fatalf("over-long offset should clamp to empty, got %q", over)
 	}
+}
+
+func TestJobStore_CwdWithSpecialCharacters(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/sh")
+	}
+	cwd := filepath.Join(t.TempDir(), `dir with spaces";semi`)
+	if err := os.Mkdir(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newJobStore()
+	id, err := s.start("/bin/sh", "pwd", cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := s.get(id)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		out, _, done, code := j.snapshot(0)
+		if done {
+			if code != 0 {
+				t.Fatalf("exit code = %d, output = %q", code, out)
+			}
+			if got := strings.TrimSpace(string(out)); got != cwd {
+				t.Fatalf("pwd = %q, want %q", got, cwd)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("job never finished")
 }
 
 func TestJobStore_GCDropsExpiredFinishedJobs(t *testing.T) {

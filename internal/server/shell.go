@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -129,10 +130,31 @@ func (s *ShellSession) writeCommand(command string) error {
 	return err
 }
 
-// Exec runs command, streaming output to out, and returns the exit code.
+// Exec runs command in the session's current directory, streaming output to
+// out, and returns the exit code.
 func (s *ShellSession) Exec(command string, out io.Writer) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.execLocked(command, out)
+}
+
+// ExecInDir runs command after changing the persistent session to cwd. The cwd
+// value is passed through a data file consumed by a fixed shell protocol; its
+// contents are never inserted into shell source. An empty cwd preserves the
+// session's current working directory.
+func (s *ShellSession) ExecInDir(command, cwd string, out io.Writer) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cwd != "" {
+		code, err := s.changeDirLocked(cwd, out)
+		if err != nil || code != 0 {
+			return code, err
+		}
+	}
+	return s.execLocked(command, out)
+}
+
+func (s *ShellSession) execLocked(command string, out io.Writer) (int, error) {
 	if s.closed {
 		return -1, fmt.Errorf("session closed")
 	}
@@ -162,6 +184,23 @@ func (s *ShellSession) Exec(command string, out io.Writer) (int, error) {
 	}
 }
 
+func (s *ShellSession) changeDirLocked(cwd string, out io.Writer) (int, error) {
+	f, err := os.CreateTemp("", "wanctl-cwd-"+s.token+"-*")
+	if err != nil {
+		return -1, err
+	}
+	path := f.Name()
+	defer os.Remove(path)
+	if _, err := io.WriteString(f, cwd); err != nil {
+		f.Close()
+		return -1, err
+	}
+	if err := f.Close(); err != nil {
+		return -1, err
+	}
+	return s.execLocked(changeDirCommand(runtime.GOOS, path), out)
+}
+
 // Closed reports whether the session has been torn down.
 func (s *ShellSession) Closed() bool {
 	s.mu.Lock()
@@ -183,9 +222,10 @@ func (s *ShellSession) Close() {
 	}
 }
 
-// RunOneShot executes a command in a fresh shell with no persistent state and
-// streams merged output to out.
-func RunOneShot(shell, command string, out io.Writer) (int, error) {
+// RunOneShot executes a command in a fresh shell whose process working
+// directory is cwd, streaming merged output to out. Passing cwd through
+// exec.Cmd.Dir keeps it entirely outside the shell source.
+func RunOneShot(shell, command, cwd string, out io.Writer) (int, error) {
 	if shell == "" {
 		shell = DefaultShell()
 	}
@@ -195,6 +235,7 @@ func RunOneShot(shell, command string, out io.Writer) (int, error) {
 	} else {
 		cmd = exec.Command(shell, "-c", command)
 	}
+	cmd.Dir = cwd
 	cmd.Stdout = out
 	cmd.Stderr = out
 	err := cmd.Run()
@@ -205,6 +246,23 @@ func RunOneShot(shell, command string, out io.Writer) (int, error) {
 		return ee.ExitCode(), nil
 	}
 	return -1, err
+}
+
+// changeDirCommand is fixed protocol source for consuming a cwd data file. The
+// file path is generated locally; the remote cwd value is only ever file data.
+func changeDirCommand(goos, dataPath string) string {
+	if goos == "windows" {
+		return "$wanctlCwd=[IO.File]::ReadAllText(" + quotePowerShellLiteral(dataPath) + ",[Text.Encoding]::UTF8); Set-Location -LiteralPath $wanctlCwd"
+	}
+	return "{ IFS= read -r WANCTL_CWD < " + quotePOSIXLiteral(dataPath) + " || [ -n \"$WANCTL_CWD\" ]; } && cd -- \"$WANCTL_CWD\""
+}
+
+func quotePOSIXLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func quotePowerShellLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 // FrameWriter adapts a writer into framed output of a fixed type, so command

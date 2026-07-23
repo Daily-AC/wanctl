@@ -74,7 +74,7 @@ func (s *jobStore) get(id string) *job {
 // start launches command in a fresh shell and returns the new job's id. The
 // command runs in its own goroutine; the agent process (a long-lived daemon)
 // keeps it alive after the launching connection closes.
-func (s *jobStore) start(shell, command string) (string, error) {
+func (s *jobStore) start(shell, command, cwd string) (string, error) {
 	idb := make([]byte, 12)
 	if _, err := rand.Read(idb); err != nil {
 		return "", err
@@ -87,7 +87,7 @@ func (s *jobStore) start(shell, command string) (string, error) {
 	s.mu.Unlock()
 
 	go func() {
-		code, err := server.RunOneShot(shell, command, jobWriter{j})
+		code, err := server.RunOneShot(shell, command, cwd, jobWriter{j})
 		j.mu.Lock()
 		if err != nil {
 			j.out = append(j.out, []byte("\n[wanctl: job error: "+err.Error()+"]\n")...)
