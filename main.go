@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -22,6 +21,7 @@ import (
 	"wanctl/internal/client"
 	"wanctl/internal/config"
 	"wanctl/internal/eventlog"
+	"wanctl/internal/limits"
 	mcppkg "wanctl/internal/mcp"
 	"wanctl/internal/policy"
 	"wanctl/internal/portal"
@@ -231,7 +231,7 @@ func cmdRelay(args []string) error {
 		fmt.Println("wanctl relay: MCP server enabled at /wanctl-mcp (Streamable HTTP)")
 	}
 	fmt.Printf("wanctl relay listening on %s\n", *addr)
-	return http.ListenAndServe(*addr, r.Handler())
+	return limits.HTTPServer(*addr, r.Handler()).ListenAndServe()
 }
 
 func cmdPortal(args []string) error {
@@ -259,7 +259,7 @@ func cmdPortal(args []string) error {
 	fmt.Printf("wanctl portal on %s\n  identity:      %s\n  identity hdr:  %q\n  relay(admin):  %q\n  relay(dial):   %q\n",
 		*addr, id.Fingerprint, envOr("PORTAL_USER_HEADER", "X-Auth-Request-Email"),
 		os.Getenv("RELAY_ADMIN_URL"), os.Getenv("WANCTL_RELAY"))
-	return http.ListenAndServe(*addr, p.Handler())
+	return limits.HTTPServer(*addr, p.Handler()).ListenAndServe()
 }
 
 func cmdAgent(ctx context.Context, args []string) error {

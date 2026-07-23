@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/limits"
 	"wanctl/internal/sessionauth"
 )
 
@@ -187,5 +189,22 @@ func TestHTTPPollReceivesRelayIssuedCapabilities(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("agent did not receive session authorization")
+	}
+}
+
+func TestHTTPUploadRejectsOversizedBody(t *testing.T) {
+	r := New(EnvTokenStore("tok-alice:alice"))
+	r.hsess["session"] = &httpSession{toClient: newSideQueue(), toAgent: newSideQueue()}
+	req := httptest.NewRequest("POST", "/h/up?token=tok-alice&session=session&role=client",
+		bytes.NewReader(make([]byte, limits.RelayHTTPUploadBytes+1)))
+	resp := httptest.NewRecorder()
+	r.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized upload status = %d, want %d", resp.Code, http.StatusRequestEntityTooLarge)
+	}
+	select {
+	case queued := <-r.hsess["session"].toAgent.ch:
+		t.Fatalf("oversized body was queued: %d bytes", len(queued))
+	default:
 	}
 }

@@ -6,6 +6,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -226,19 +227,28 @@ func (s *ShellSession) Close() {
 // directory is cwd, streaming merged output to out. Passing cwd through
 // exec.Cmd.Dir keeps it entirely outside the shell source.
 func RunOneShot(shell, command, cwd string, out io.Writer) (int, error) {
+	return RunOneShotContext(context.Background(), shell, command, cwd, out)
+}
+
+// RunOneShotContext executes a command in a fresh shell and terminates it when
+// ctx is cancelled or reaches its deadline. cwd is passed through exec.Cmd.Dir.
+func RunOneShotContext(ctx context.Context, shell, command, cwd string, out io.Writer) (int, error) {
 	if shell == "" {
 		shell = DefaultShell()
 	}
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command(shell, "-NoProfile", "-NoLogo", "-NonInteractive", "-Command", winUTF8Prologue+command)
+		cmd = exec.CommandContext(ctx, shell, "-NoProfile", "-NoLogo", "-NonInteractive", "-Command", winUTF8Prologue+command)
 	} else {
-		cmd = exec.Command(shell, "-c", command)
+		cmd = exec.CommandContext(ctx, shell, "-c", command)
 	}
 	cmd.Dir = cwd
 	cmd.Stdout = out
 	cmd.Stderr = out
 	err := cmd.Run()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return -1, ctxErr
+	}
 	if err == nil {
 		return 0, nil
 	}

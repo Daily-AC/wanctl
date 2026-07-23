@@ -26,6 +26,7 @@ import (
 
 	"wanctl/internal/client"
 	"wanctl/internal/config"
+	"wanctl/internal/limits"
 	"wanctl/internal/policy"
 	"wanctl/internal/transport"
 
@@ -82,7 +83,7 @@ func ServeHTTP(addr string, seed []byte) error {
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", h)
 	mux.Handle("/mcp/", h)
-	return (&http.Server{Addr: addr, Handler: mux}).ListenAndServe()
+	return limits.HTTPServer(addr, mux).ListenAndServe()
 }
 
 // --- session abstraction ---
@@ -397,7 +398,7 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpExec)
 
 	s.AddTool(mcpapi.NewTool("wanctl_exec_async",
-		mcpapi.WithDescription("Start a shell command as a BACKGROUND job on the device and return a job_id IMMEDIATELY, without waiting for it to finish. Use this for anything that may run longer than a single tool call comfortably tolerates — package installs, builds, large downloads, `wsl --shutdown` then a long build, etc. The command keeps running on the device even after this call returns; fetch its output and exit code later with wanctl_exec_poll(job_id). Always runs in a FRESH shell (no shared cwd/env with wanctl_exec's persistent session). Same pairing/policy rules as wanctl_exec. Output + exit code are retained for 1h after the job ends."),
+		mcpapi.WithDescription("Start a shell command as a BACKGROUND job on the device and return a job_id IMMEDIATELY, without waiting for it to finish. Use this for anything that may run longer than a single tool call comfortably tolerates — package installs, builds, large downloads, `wsl --shutdown` then a long build, etc. The command keeps running on the device even after this call returns; fetch its output and exit code later with wanctl_exec_poll(job_id). Always runs in a FRESH shell (no shared cwd/env with wanctl_exec's persistent session). Same pairing/policy rules as wanctl_exec. Jobs run for at most 30 minutes, retain at most 8 MiB output each, and finished results remain pollable for up to 1h subject to device-wide retention budgets."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
 		mcpapi.WithString("command", mcpapi.Required(), mcpapi.Description("Shell command to run in the device's default shell (sh on Unix, powershell on Windows).")),
 		mcpapi.WithString("cwd", mcpapi.Description("Working directory on the device for this command (also the policy scope).")),
@@ -690,7 +691,7 @@ func mcpExecAsync(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Call
 		return mcpapi.NewToolResultError(err.Error()), nil
 	}
 	return mcpapi.NewToolResultText(fmt.Sprintf(
-		"started background job %s on %q.\nPoll it with wanctl_exec_poll(target=%q, job_id=%q) until state is 'done'. Output + exit code are kept for 1h after it finishes.",
+		"started background job %s on %q.\nPoll it with wanctl_exec_poll(target=%q, job_id=%q) until state is 'done'. The job runs for at most 30 minutes and retains at most 8 MiB output; finished results remain available for up to 1h subject to device-wide retention budgets.",
 		id, target, target, id)), nil
 }
 

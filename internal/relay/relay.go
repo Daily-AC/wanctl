@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"wanctl/internal/admission"
+	"wanctl/internal/limits"
 	"wanctl/internal/sessionauth"
 	"wanctl/internal/wsconn"
 
@@ -188,6 +189,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		return
 	}
+	limits.ClearHijackedDeadline(req.Context())
 	nc := wsconn.FromAccepted(req.Context(), c)
 	dec := json.NewDecoder(nc)
 	var reg struct {
@@ -261,6 +263,7 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		return
 	}
+	limits.ClearHijackedDeadline(req.Context())
 	clientNC := wsconn.FromAccepted(req.Context(), c)
 	ps.clientSide <- clientNC
 
@@ -289,6 +292,7 @@ func (r *Relay) handleSession(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		return
 	}
+	limits.ClearHijackedDeadline(req.Context())
 	agentNC := wsconn.FromAccepted(req.Context(), c)
 	ps.agentSide <- agentNC
 	select {

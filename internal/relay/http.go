@@ -2,11 +2,13 @@ package relay
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
 	"time"
 
+	"wanctl/internal/limits"
 	"wanctl/internal/sessionauth"
 )
 
@@ -285,8 +287,14 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
 	}
+	req.Body = http.MaxBytesReader(w, req.Body, limits.RelayHTTPUploadBytes)
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "read body", http.StatusBadRequest)
 		return
 	}

@@ -67,6 +67,10 @@ Content stays on the device (E2E — the relay never sees it).
 Remote reads use a separate `logs` policy capability; approve the request once,
 remember it globally, or pre-authorize it with `wanctl rules add --kind logs`.
 
+HTTP tunnel writes and background jobs are bounded: one tunnel request is at
+most 1 MiB; at most four background jobs run concurrently for up to 30 minutes,
+with 8 MiB output retained per job and 64 MiB across completed jobs.
+
 ## Enroll a device in one line
 
 On the machine you want to control (the agent), no Go needed — the relay serves
