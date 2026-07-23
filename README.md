@@ -30,6 +30,8 @@ Every remote command and file op is gated on the device:
 - Manage rules on the device: `wanctl rules list|add|rm`.
 - Exec rules match additional arguments only within one simple command; shell
   operators, substitutions, and redirections require an exact rule.
+- File rules are enforced by root-scoped opens; symlinks cannot escape an
+  allowed directory, and transfers reject non-regular files.
 - `wanctl exec --cwd /path "cmd"` runs in (and scopes the rule to) that directory.
 
 ### Device console (CLI + remote portal)

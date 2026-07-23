@@ -165,6 +165,23 @@ func (e *Engine) Allowed(req Request) bool {
 	return false
 }
 
+// AllowedFileRoot reports the directory rule that authorizes a file request.
+// The caller must bind the actual filesystem open to this root; a boolean
+// policy decision followed by an unrestricted open would permit symlink escape.
+func (e *Engine) AllowedFileRoot(req Request) (string, bool) {
+	if req.Kind != KindRead && req.Kind != KindWrite {
+		return "", false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, r := range e.rules {
+		if ruleMatches(r, req) {
+			return r.Pattern, true
+		}
+	}
+	return "", false
+}
+
 func ruleMatches(r Rule, req Request) bool {
 	switch req.Kind {
 	case KindExec:

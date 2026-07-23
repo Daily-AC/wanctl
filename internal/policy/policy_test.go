@@ -121,6 +121,12 @@ func TestFileReadWrite(t *testing.T) {
 	if e.Allowed(Request{Kind: KindWrite, Path: "/logs/x"}) {
 		t.Fatal("read rule should NOT allow write")
 	}
+	if root, ok := e.AllowedFileRoot(Request{Kind: KindRead, Path: "/data/a.txt"}); !ok || root != "/data" {
+		t.Fatalf("read authorization root = %q, %v; want /data, true", root, ok)
+	}
+	if _, ok := e.AllowedFileRoot(Request{Kind: KindWrite, Path: "/logs/x"}); ok {
+		t.Fatal("disallowed write unexpectedly returned an authorization root")
+	}
 }
 
 func TestRuleForAndPersistence(t *testing.T) {

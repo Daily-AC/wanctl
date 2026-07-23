@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -171,6 +172,31 @@ func (a *Agent) gate(req policy.Request) (bool, string) {
 		return true, "remembered:" + string(d.Scope)
 	}
 	return true, "approved"
+}
+
+// gateFile returns the policy root that must constrain the actual filesystem
+// open. A one-shot approval is restricted to the requested file's parent;
+// global and bypass decisions use an empty root, meaning the filesystem volume.
+func (a *Agent) gateFile(req policy.Request) (bool, string, string) {
+	if a.engine.Mode() == policy.ModeBypass {
+		return true, "bypass", ""
+	}
+	if root, ok := a.engine.AllowedFileRoot(req); ok {
+		return true, "pre-approved", root
+	}
+	a.apprMu.Lock()
+	appr := a.appr
+	a.apprMu.Unlock()
+	d := appr.Ask(req)
+	if !d.Allow {
+		return false, "denied", ""
+	}
+	if d.Remember {
+		rule := policy.RuleFor(req, d.Scope)
+		a.engine.Add(rule)
+		return true, "remembered:" + string(d.Scope), rule.Pattern
+	}
+	return true, "approved", filepath.Dir(req.Path)
 }
 
 // Run connects the control channel and serves sessions until ctx is cancelled.
@@ -348,21 +374,21 @@ func (a *Agent) serve(conn *tls.Conn, fp, peerName string) {
 		case protocol.KindLogs:
 			a.doLogs(conn, m)
 		case protocol.KindFilePut:
-			ok, decision := a.gate(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp})
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp})
 			a.log.Append(eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "PUT " + m.Path, Decision: decision})
 			if !ok {
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "write denied by device policy: " + m.Path})
 				continue
 			}
-			server.HandleFilePut(conn, m)
+			server.HandleFilePut(conn, m, root)
 		case protocol.KindFileGet:
-			ok, decision := a.gate(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp})
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp})
 			a.log.Append(eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "GET " + m.Path, Decision: decision})
 			if !ok {
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "read denied by device policy: " + m.Path})
 				continue
 			}
-			server.HandleFileGet(conn, m)
+			server.HandleFileGet(conn, m, root)
 		default:
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "unknown request: " + m.Kind})
 			return

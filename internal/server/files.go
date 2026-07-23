@@ -2,18 +2,20 @@ package server
 
 import (
 	"crypto/tls"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"wanctl/internal/protocol"
 )
 
 const fileChunk = 64 << 10
 
-// HandleFilePut receives an uploaded file from the controller and writes it to
-// m.Path.
-func HandleFilePut(conn *tls.Conn, m protocol.Message) {
-	f, err := os.OpenFile(m.Path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(m.Mode))
+// HandleFilePut receives an uploaded file and writes it beneath policyRoot.
+func HandleFilePut(conn *tls.Conn, m protocol.Message, policyRoot string) {
+	f, err := openPolicyFile(policyRoot, m.Path, true, os.FileMode(m.Mode).Perm())
 	if err != nil {
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return
@@ -51,9 +53,9 @@ func HandleFilePut(conn *tls.Conn, m protocol.Message) {
 	}
 }
 
-// HandleFileGet streams the file at m.Path down to the controller.
-func HandleFileGet(conn *tls.Conn, m protocol.Message) {
-	f, err := os.Open(m.Path)
+// HandleFileGet streams a regular file beneath policyRoot to the controller.
+func HandleFileGet(conn *tls.Conn, m protocol.Message, policyRoot string) {
+	f, err := openPolicyFile(policyRoot, m.Path, false, 0)
 	if err != nil {
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return
@@ -87,4 +89,83 @@ func HandleFileGet(conn *tls.Conn, m protocol.Message) {
 		}
 	}
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindEOF})
+}
+
+// openPolicyFile binds the policy decision to the open itself. os.Root resolves
+// every path component beneath an open directory handle, so a concurrent
+// symlink replacement cannot redirect the operation outside the allowed root.
+func openPolicyFile(policyRoot, path string, write bool, perm os.FileMode) (*os.File, error) {
+	rootPath, name, err := rootedName(policyRoot, path)
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+
+	if info, err := root.Lstat(name); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("refusing symbolic link %q", path)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("refusing non-regular file %q", path)
+		}
+	} else if !write || !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	flags := secureOpenFlags
+	if write {
+		// Do not truncate until the opened descriptor has been verified. This
+		// keeps a raced device/FIFO/symlink from being modified.
+		flags |= os.O_CREATE | os.O_WRONLY
+	} else {
+		flags |= os.O_RDONLY
+	}
+	f, err := root.OpenFile(name, flags, perm)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("refusing non-regular file %q", path)
+	}
+	if write {
+		if err := f.Truncate(0); err != nil {
+			f.Close()
+			return nil, err
+		}
+	}
+	return f, nil
+}
+
+func rootedName(policyRoot, path string) (string, string, error) {
+	target, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", err
+	}
+	rootPath := policyRoot
+	if rootPath == "" {
+		rootPath = filepath.VolumeName(target) + string(filepath.Separator)
+	} else {
+		rootPath, err = filepath.Abs(rootPath)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	rel, err := filepath.Rel(rootPath, target)
+	if err != nil {
+		return "", "", err
+	}
+	if rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("path %q is outside policy root %q", path, policyRoot)
+	}
+	return rootPath, rel, nil
 }
