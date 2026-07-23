@@ -75,6 +75,7 @@ Defaults: relay=` + defaultRelay + `  transport=` + defaultTransport + ` (overri
 ENV (controller): WANCTL_TOKEN=... (or run 'wanctl' to log in)  WANCTL_RELAY=...
 ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"  WANCTL_ADMIN_SECRET=...  WANCTL_PORTAL_NS=...
 ENV (portal):     RELAY_ADMIN_URL=...  WANCTL_ADMIN_SECRET=...  PORTAL_USER_HEADER=...
+              PORTAL_PUBLIC_ORIGIN=https://portal.example  PORTAL_DEBUG_WHOAMI=1 (diagnostics only)
               WANCTL_RELAY=...  WANCTL_PORTAL_TOKEN=...  WANCTL_TRANSPORT=ws
 ENV (agent):      WANCTL_PORTAL_PK=SHA256:...
 `
@@ -255,6 +256,8 @@ func cmdPortal(args []string) error {
 		Transport:     envOr("WANCTL_TRANSPORT", "http"),
 		Identity:      id,
 		Known:         known,
+		PublicOrigin:  os.Getenv("PORTAL_PUBLIC_ORIGIN"),
+		DebugWhoami:   os.Getenv("PORTAL_DEBUG_WHOAMI") == "1",
 	})
 	fmt.Printf("wanctl portal on %s\n  identity:      %s\n  identity hdr:  %q\n  relay(admin):  %q\n  relay(dial):   %q\n",
 		*addr, id.Fingerprint, envOr("PORTAL_USER_HEADER", "X-Auth-Request-Email"),

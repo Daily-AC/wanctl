@@ -622,7 +622,8 @@ function ago(t){if(!t)return '从未';const d=new Date(t);if(isNaN(d))return esc
 function fmt(t){if(!t)return '—';const d=new Date(t);return isNaN(d)?esc(t):d.toLocaleString()}
 function isOnline(t){if(!t)return false;const d=new Date(t);return !isNaN(d)&&(Date.now()-d.getTime())<120000}
 async function jget(u){const r=await fetch(u);if(!r.ok)throw new Error(await r.text()||r.status);return r.json()}
-async function jpost(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});if(!r.ok)throw new Error(await r.text()||r.status);return r}
+function csrfToken(){const p=document.cookie.split('; ').find(x=>x.startsWith('wanctl_csrf='));return p?decodeURIComponent(p.slice(p.indexOf('=')+1)):''}
+async function jpost(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify(b||{})});if(!r.ok)throw new Error(await r.text()||r.status);return r}
 function toast(kind,msg){const t=$('#toast');t.className='toast '+kind;
   t.innerHTML=(kind==='ok'?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M18 6 6 18M6 6l12 12" stroke-linecap="round"/></svg>')+'<span>'+esc(msg)+'</span>';
   requestAnimationFrame(()=>t.classList.add('show'));clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove('show'),2200)}
@@ -1142,12 +1143,13 @@ function bindMdCopy(){
 function mdRender(src){
   const lines=(src||'').replace(/\r\n/g,'\n').split('\n');
   const eH=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const mdSafeHref=s=>/^https?:\/\/[^\s]+$/i.test(s.trim())?s.trim():'';
   const inl=s=>{
     s=eH(s);
     s=s.replace(/`([^`]+?)`/g,'<code>$1</code>');
     s=s.replace(/\*\*([^*]+?)\*\*/g,'<strong>$1</strong>');
     s=s.replace(/\*([^*]+?)\*/g,'<em>$1</em>');
-    s=s.replace(/\[([^\]]+?)\]\(([^)]+?)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s=s.replace(/\[([^\]]+?)\]\(([^)]+?)\)/g,(_,label,href)=>{const safe=mdSafeHref(href);return safe?'<a href="'+safe+'" target="_blank" rel="noopener noreferrer">'+label+'</a>':label});
     return s;
   };
   let out='',i=0;

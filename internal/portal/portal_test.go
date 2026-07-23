@@ -70,8 +70,8 @@ func TestRequireNSPreservesIdentityConflict(t *testing.T) {
 	}
 }
 
-func TestWhoamiDumpsHeaders(t *testing.T) {
-	s := New(Config{RelayAdminURL: "", AdminSecret: "", UserHeader: "X-Auth-Request-Email"})
+func TestWhoamiDumpsHeadersWhenDebugEnabled(t *testing.T) {
+	s := New(Config{RelayAdminURL: "", AdminSecret: "", UserHeader: "X-Auth-Request-Email", DebugWhoami: true})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/whoami", nil)
 	req.Header.Set("X-Auth-Request-Email", "someone@x.com")

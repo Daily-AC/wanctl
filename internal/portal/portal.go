@@ -8,12 +8,17 @@ package portal
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +36,12 @@ var assets embed.FS
 // path 302's to it for discoverability from the browser.
 const skillURL = "https://***REMOVED-IP***/skills"
 
+const (
+	csrfCookieName     = "wanctl_csrf"
+	csrfHeaderName     = "X-CSRF-Token"
+	maxPortalBodyBytes = 1 << 20
+)
+
 // Config holds all parameters for New.
 type Config struct {
 	RelayAdminURL string // https://relay  (admin /admin/* proxy target)
@@ -41,14 +52,18 @@ type Config struct {
 	Transport     string // "ws" or "http"
 	Identity      *transport.Identity
 	Known         *transport.Store
+	PublicOrigin  string // optional canonical origin when TLS terminates upstream
+	DebugWhoami   bool   // enable the diagnostic endpoint; never enable routinely
 }
 
 // Server is the portal web app.
 type Server struct {
-	relayURL    string
-	adminSecret string
-	userHeader  string
-	hc          *http.Client
+	relayURL     string
+	adminSecret  string
+	userHeader   string
+	hc           *http.Client
+	publicOrigin string
+	debugWhoami  bool
 
 	dialer *client.Client // controller used to open console sessions
 
@@ -57,19 +72,20 @@ type Server struct {
 }
 
 // New configures the portal. With an empty relayURL/secret the server still
-// starts so / and /whoami work (for SSO-header discovery); data endpoints then
-// return 503 until configured.
+// starts so the UI works; data endpoints return 503 until configured.
 func New(cfg Config) *Server {
 	uh := cfg.UserHeader
 	if uh == "" {
 		uh = "X-Auth-Request-Email"
 	}
 	s := &Server{
-		relayURL:    strings.TrimRight(cfg.RelayAdminURL, "/"),
-		adminSecret: cfg.AdminSecret,
-		userHeader:  uh,
-		hc:          &http.Client{Timeout: 15 * time.Second},
-		conns:       map[string]*deviceConn{},
+		relayURL:     strings.TrimRight(cfg.RelayAdminURL, "/"),
+		adminSecret:  cfg.AdminSecret,
+		userHeader:   uh,
+		hc:           &http.Client{Timeout: 15 * time.Second},
+		publicOrigin: strings.TrimRight(cfg.PublicOrigin, "/"),
+		debugWhoami:  cfg.DebugWhoami,
+		conns:        map[string]*deviceConn{},
 	}
 	if cfg.Identity != nil && cfg.RelayDialURL != "" && cfg.PortalToken != "" {
 		s.dialer = client.NewWith(cfg.Identity, cfg.Known, cfg.RelayDialURL, cfg.PortalToken, cfg.Transport)
@@ -108,7 +124,154 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/docs/articles/delete", s.handleDocsArticleDelete)
 	mux.HandleFunc("/api/docs/groups", s.handleDocsGroupWrite)
 	mux.HandleFunc("/api/docs/groups/delete", s.handleDocsGroupDelete)
-	return mux
+	return s.securityMiddleware(mux)
+}
+
+var mutationPaths = map[string]bool{
+	"/api/tokens":               true,
+	"/api/tokens/revoke":        true,
+	"/api/acl":                  true,
+	"/api/acl/revoke":           true,
+	"/api/devices/decide":       true,
+	"/api/devices/pair":         true,
+	"/api/devices/untrust":      true,
+	"/api/devices/remove":       true,
+	"/api/devices/rules":        true,
+	"/api/devices/mode":         true,
+	"/api/devices/lan":          true,
+	"/api/docs/articles":        true,
+	"/api/docs/articles/delete": true,
+	"/api/docs/groups":          true,
+	"/api/docs/groups/delete":   true,
+}
+
+var readWritePaths = map[string]bool{
+	"/api/tokens": true,
+	"/api/acl":    true,
+}
+
+func (s *Server) securityMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w.Header())
+
+		mutation := mutationPaths[r.URL.Path]
+		if !methodAllowed(r.Method, mutation, readWritePaths[r.URL.Path]) {
+			w.Header().Set("Allow", allowedMethods(mutation, readWritePaths[r.URL.Path]))
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if r.Method == http.MethodGet && !validCSRFToken(cookieValue(r, csrfCookieName)) {
+			s.setCSRFCookie(w, r, newCSRFToken())
+		}
+		if mutation && r.Method == http.MethodPost {
+			if !s.sameOrigin(r) || !validDoubleSubmit(r) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			body := http.MaxBytesReader(w, r.Body, maxPortalBodyBytes)
+			b, err := io.ReadAll(body)
+			body.Close()
+			if err != nil {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(b))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func setSecurityHeaders(h http.Header) {
+	h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+	h.Set("Cross-Origin-Opener-Policy", "same-origin")
+	h.Set("Cache-Control", "no-store")
+}
+
+func methodAllowed(method string, mutation, readWrite bool) bool {
+	if mutation {
+		return method == http.MethodPost || (readWrite && method == http.MethodGet)
+	}
+	return method == http.MethodGet
+}
+
+func allowedMethods(mutation, readWrite bool) string {
+	if mutation && readWrite {
+		return "GET, POST"
+	}
+	if mutation {
+		return "POST"
+	}
+	return "GET"
+}
+
+func newCSRFToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("portal: crypto/rand failed: " + err.Error())
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func validCSRFToken(token string) bool {
+	b, err := base64.RawURLEncoding.DecodeString(token)
+	return err == nil && len(b) == 32
+}
+
+func cookieValue(r *http.Request, name string) string {
+	cookie, err := r.Cookie(name)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
+}
+
+func validDoubleSubmit(r *http.Request) bool {
+	cookie := cookieValue(r, csrfCookieName)
+	header := r.Header.Get(csrfHeaderName)
+	return validCSRFToken(cookie) && len(cookie) == len(header) && subtle.ConstantTimeCompare([]byte(cookie), []byte(header)) == 1
+}
+
+func (s *Server) setCSRFCookie(w http.ResponseWriter, r *http.Request, token string) {
+	secure := true
+	if s.publicOrigin == "" && r.TLS == nil && r.URL.Scheme != "https" {
+		host := r.Host
+		if parsed, _, err := net.SplitHostPort(r.Host); err == nil {
+			host = parsed
+		}
+		host = strings.Trim(host, "[]")
+		secure = host != "localhost" && host != "127.0.0.1" && host != "::1"
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: csrfCookieName, Value: token, Path: "/", Secure: secure,
+		HttpOnly: false, SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func (s *Server) sameOrigin(r *http.Request) bool {
+	source := r.Header.Get("Origin")
+	if source == "" {
+		source = r.Header.Get("Referer")
+	}
+	sourceURL, err := url.Parse(source)
+	if err != nil || (sourceURL.Scheme != "http" && sourceURL.Scheme != "https") {
+		return false
+	}
+	if s.publicOrigin != "" {
+		expectedURL, err := url.Parse(s.publicOrigin)
+		return err == nil && expectedURL.Scheme != "" && expectedURL.Host != "" &&
+			strings.EqualFold(sourceURL.Scheme, expectedURL.Scheme) && strings.EqualFold(sourceURL.Host, expectedURL.Host)
+	}
+	if !strings.EqualFold(sourceURL.Host, r.Host) {
+		return false
+	}
+	// A direct TLS connection gives us an authoritative external scheme. Behind
+	// a TLS-terminating proxy, configure PublicOrigin for the same guarantee.
+	return r.TLS == nil || sourceURL.Scheme == "https"
 }
 
 // --- docs ---
@@ -230,13 +393,37 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, skillURL, http.StatusFound)
 }
 
-// handleWhoami dumps request headers so we can discover the SSO identity header.
+// handleWhoami is an explicitly enabled diagnostic for SSO-header discovery.
 func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "configured identity header: %q\nresolved identity: %q\n\nall request headers:\n", s.userHeader, r.Header.Get(s.userHeader))
-	for k, v := range r.Header {
-		fmt.Fprintf(w, "  %s: %s\n", k, strings.Join(v, ", "))
+	if !s.debugWhoami {
+		http.NotFound(w, r)
+		return
 	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	identity := r.Header.Get(s.userHeader)
+	if sensitiveHeader(s.userHeader) {
+		identity = "[REDACTED]"
+	}
+	fmt.Fprintf(w, "configured identity header: %q\nresolved identity: %q\n\nall request headers:\n", s.userHeader, identity)
+	keys := make([]string, 0, len(r.Header))
+	for k := range r.Header {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		value := strings.Join(r.Header.Values(k), ", ")
+		if sensitiveHeader(k) {
+			value = "[REDACTED]"
+		}
+		fmt.Fprintf(w, "  %s: %s\n", k, value)
+	}
+}
+
+func sensitiveHeader(name string) bool {
+	name = strings.ToLower(name)
+	return strings.Contains(name, "authorization") || strings.Contains(name, "cookie") ||
+		strings.Contains(name, "token") || strings.Contains(name, "secret") ||
+		strings.Contains(name, "api-key") || strings.Contains(name, "apikey")
 }
 
 func (s *Server) identity(r *http.Request) string {
