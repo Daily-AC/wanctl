@@ -1143,7 +1143,12 @@ function bindMdCopy(){
 function mdRender(src){
   const lines=(src||'').replace(/\r\n/g,'\n').split('\n');
   const eH=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  const mdSafeHref=s=>/^https?:\/\/[^\s]+$/i.test(s.trim())?s.trim():'';
+  const mdSafeHref=s=>{
+    s=s.trim();
+    if(/^https?:\/\/[^\s]+$/i.test(s))return s;
+    if(!s||/[\s\\]/.test(s)||s.startsWith('//')||/^[a-z][a-z0-9+.-]*:/i.test(s))return '';
+    return s;
+  };
   const inl=s=>{
     s=eH(s);
     s=s.replace(/`([^`]+?)`/g,'<code>$1</code>');

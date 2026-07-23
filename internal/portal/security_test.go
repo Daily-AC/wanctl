@@ -175,7 +175,7 @@ func TestWhoamiDisabledByDefaultAndRedactsDebugHeaders(t *testing.T) {
 	}
 }
 
-func TestMarkdownLinksUseHTTPAllowlist(t *testing.T) {
+func TestMarkdownLinksAllowSafeRelativeOrHTTPURLs(t *testing.T) {
 	b, err := assets.ReadFile("index.html")
 	if err != nil {
 		t.Fatal(err)
@@ -186,5 +186,11 @@ func TestMarkdownLinksUseHTTPAllowlist(t *testing.T) {
 	}
 	if !strings.Contains(src, "mdSafeHref") || !strings.Contains(src, "https?:") {
 		t.Fatal("markdown renderer has no explicit HTTP(S) URL allowlist")
+	}
+	if !strings.Contains(src, "s.startsWith('//')") || !strings.Contains(src, "a-z0-9+.-") {
+		t.Fatal("markdown renderer does not reject scheme-relative and non-HTTP scheme URLs")
+	}
+	if !strings.Contains(src, "return s;") {
+		t.Fatal("markdown renderer does not allow safe relative URLs")
 	}
 }
