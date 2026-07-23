@@ -1,6 +1,7 @@
 stages:
   - test
   - security
+  - release
 
 variables:
   GOTOOLCHAIN: go1.25.12
@@ -9,6 +10,8 @@ test:
   stage: test
   script:
     - go test ./...
+    - go vet ./...
+    - CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...
 
 supply-chain:
   stage: security
@@ -19,3 +22,17 @@ supply-chain:
     expire_in: 30 days
     paths:
       - artifacts/wanctl.sbom.cdx.json
+
+release:
+  stage: release
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  script:
+    - test -n "$WANCTL_RELEASE_SIGNING_KEY" || { echo 'protected WANCTL_RELEASE_SIGNING_KEY is required' >&2; exit 1; }
+    - ./scripts/build-release.sh "$CI_COMMIT_TAG"
+  artifacts:
+    name: "wanctl-$CI_COMMIT_TAG"
+    paths: [release/]
+    expire_in: never
+  environment:
+    name: release

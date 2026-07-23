@@ -1,169 +1,151 @@
 package relay
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	wanrelease "wanctl/internal/release"
 )
 
-func getInstaller(t *testing.T, srv *httptest.Server, path string) string {
+func signedDist(t *testing.T) string {
 	t.Helper()
-	req, err := http.NewRequest("GET", srv.URL+path, nil)
+	dir := t.TempDir()
+	payload := []byte("signed binary")
+	name := wanrelease.ArtifactName("linux", "amd64")
+	if err := os.WriteFile(filepath.Join(dir, name), payload, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := sha256.Sum256(payload)
+	manifest := wanrelease.Manifest{
+		Schema: 1, Version: "v1.0.0", PublishedAt: time.Now().UTC(),
+		Artifacts: []wanrelease.Artifact{{OS: "linux", Arch: "amd64", Name: name, Size: int64(len(payload)), SHA256: hex.EncodeToString(h[:])}},
+	}
+	raw, _ := json.Marshal(manifest)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := srv.Client().Do(req)
+	sig := ed25519.Sign(priv, raw)
+	if err := os.WriteFile(filepath.Join(dir, wanrelease.ManifestName), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, wanrelease.SignatureName), sig, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wanrelease.TrustedPublicKeys = base64.StdEncoding.EncodeToString(pub)
+	t.Cleanup(func() { wanrelease.TrustedPublicKeys = "" })
+	return dir
+}
+
+func TestSignedDistribution(t *testing.T) {
+	dir := signedDist(t)
+	if err := os.WriteFile(filepath.Join(dir, "unsigned"), []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WANCTL_DIST_DIR", dir)
+	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
+	defer srv.Close()
+
+	for _, path := range []string{"/dl/manifest.json", "/dl/manifest.json.sig", "/dl/wanctl-linux-amd64"} {
+		resp, err := srv.Client().Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s: status %d", path, resp.StatusCode)
+		}
+	}
+	resp, err := srv.Client().Get(srv.URL + "/dl/unsigned")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		t.Fatalf("GET %s: status %d", path, resp.StatusCode)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unsigned file status = %d, want 404", resp.StatusCode)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	return string(body)
 }
 
-// TestInstallPS1 renders /install.ps1 through the real handler chain and
-// asserts the script is well-formed PowerShell: format verbs got substituted,
-// the relay base URL is embedded, the portal fingerprint flows through, and
-// the cross-platform env-var contract is preserved.
-func TestInstallPS1(t *testing.T) {
-	fp := distTestFP(1)
-	t.Setenv("WANCTL_PORTAL_FP", fp)
-	t.Setenv("WANCTL_PUBLIC_URL", "https://downloads.example.test")
+func TestTamperedDistributionFailsClosed(t *testing.T) {
+	dir := signedDist(t)
+	if err := os.WriteFile(filepath.Join(dir, "wanctl-linux-amd64"), []byte("tampered"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WANCTL_DIST_DIR", dir)
 	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
 	defer srv.Close()
-
-	s := getInstaller(t, srv, "/install.ps1")
-
-	for _, bad := range []string{"%[1]s", "%[2]s", "%!", "%!(EXTRA"} {
-		if strings.Contains(s, bad) {
-			t.Errorf("rendered script still contains %q (unrendered format verb)", bad)
-		}
+	resp, err := srv.Client().Get(srv.URL + "/dl/manifest.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"https://downloads.example.test",
-		fp,
-		"$env:WANCTL_TOKEN",
-		"$env:WANCTL_NAME",
-		"$env:WANCTL_MODE",
-		"$env:WANCTL_INSTALL_ONLY",
-		"wanctl-windows-amd64.exe",
-		"LOCALAPPDATA",
-		"Invoke-WebRequest",
-		"'--transport','ws'",
-	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("rendered script missing %q", want)
-		}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("tampered distribution status = %d, want 503", resp.StatusCode)
 	}
 }
 
-// TestInstallSh keeps the sh installer honest in the same way: format verbs
-// get substituted and the relay URL + fingerprint flow through.
-func TestInstallSh(t *testing.T) {
-	fp := distTestFP(2)
-	t.Setenv("WANCTL_PORTAL_FP", fp)
-	t.Setenv("WANCTL_PUBLIC_URL", "https://downloads.example.test")
+func TestDistributionChangeAfterStartupFailsClosed(t *testing.T) {
+	dir := signedDist(t)
+	t.Setenv("WANCTL_DIST_DIR", dir)
 	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
 	defer srv.Close()
-	s := getInstaller(t, srv, "/install.sh")
-	if !strings.Contains(s, fp) || !strings.Contains(s, "https://downloads.example.test") {
-		t.Errorf("sh installer missing relay/fingerprint substitution; got:\n%s", s)
+	if err := os.WriteFile(filepath.Join(dir, "wanctl-linux-amd64"), []byte("changed after verification"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(s, `--transport ws`) {
-		t.Errorf("sh installer does not default to WebSocket transport")
+	resp, err := srv.Client().Get(srv.URL + "/dl/wanctl-linux-amd64")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(s, "%[1]s") || strings.Contains(s, "%[2]s") {
-		t.Errorf("sh installer has unrendered verbs")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("changed artifact status = %d, want 503", resp.StatusCode)
 	}
 }
 
-func TestInstallersSeedMultiplePortalFingerprints(t *testing.T) {
-	t.Setenv("WANCTL_PORTAL_FP", "")
-	old, newFP := distTestFP(3), distTestFP(4)
-	t.Setenv("WANCTL_PORTAL_FPS", old+","+newFP)
+func TestDistributionVerificationConcurrencyIsBounded(t *testing.T) {
+	dir := signedDist(t)
+	handler, err := newSignedDistHandler(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := handler.(*signedDistHandler)
+	h.verifySlots <- struct{}{}
+	h.verifySlots <- struct{}{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/wanctl-linux-amd64", nil)
+	req.URL.Path = "wanctl-linux-amd64" // signedDistHandler runs behind StripPrefix("/dl/").
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("busy distribution status = %d, want 503", rec.Code)
+	}
+}
+
+func TestRelayInstallerIsRetired(t *testing.T) {
+	dir := signedDist(t)
+	t.Setenv("WANCTL_DIST_DIR", dir)
 	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
 	defer srv.Close()
 	for _, path := range []string{"/install.sh", "/install.ps1"} {
-		script := getInstaller(t, srv, path)
-		for _, want := range []string{old, newFP, "portal-admins", "seed"} {
-			if !strings.Contains(script, want) {
-				t.Errorf("%s missing %q", path, want)
-			}
+		resp, err := srv.Client().Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusGone || !strings.Contains(string(body), "cannot bootstrap trust") {
+			t.Errorf("GET %s = %d %q", path, resp.StatusCode, body)
 		}
 	}
-}
-
-func TestInstallerIgnoresHostAndForwardedProto(t *testing.T) {
-	t.Setenv("WANCTL_PUBLIC_URL", "https://downloads.example.test")
-	r := New(EnvTokenStore(""))
-	for _, path := range []string{"/install.sh", "/install.ps1"} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Host = "evil.example"
-		req.Header.Set("X-Forwarded-Proto", "javascript")
-		rec := httptest.NewRecorder()
-		r.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("GET %s = %d: %s", path, rec.Code, rec.Body.String())
-		}
-		body := rec.Body.String()
-		if !strings.Contains(body, "https://downloads.example.test") || strings.Contains(body, "evil.example") || strings.Contains(body, "javascript") {
-			t.Errorf("%s used request-controlled public URL: %s", path, body)
-		}
-	}
-}
-
-func TestInstallerRejectsInvalidPortalFingerprints(t *testing.T) {
-	t.Setenv("WANCTL_PORTAL_FPS", "SHA256:not-valid-base64")
-	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
-	defer srv.Close()
-	resp, err := srv.Client().Get(srv.URL + "/install.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("invalid installer config status = %d, want 500", resp.StatusCode)
-	}
-}
-
-func TestInstallerRejectsInvalidPublicURL(t *testing.T) {
-	for _, value := range []string{
-		"javascript://downloads.example.test",
-		"https://user:pass@downloads.example.test",
-		"https://downloads.example.test/path",
-		"https://downloads.example.test?next=https://evil.example",
-		"https://downloads.example.test$(touch-pwned)",
-		"https://downloads.example.test:99999",
-		"//downloads.example.test",
-	} {
-		t.Run(value, func(t *testing.T) {
-			t.Setenv("WANCTL_PUBLIC_URL", value)
-			rec := httptest.NewRecorder()
-			New(EnvTokenStore("")).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/install.sh", nil))
-			if rec.Code != http.StatusServiceUnavailable {
-				t.Fatalf("invalid WANCTL_PUBLIC_URL %q = %d, want 503", value, rec.Code)
-			}
-		})
-	}
-}
-
-func TestInstallerUsesExplicitCompiledDefault(t *testing.T) {
-	t.Setenv("WANCTL_PUBLIC_URL", "")
-	got, err := installerPublicURL()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != defaultPublicURL {
-		t.Fatalf("default public URL = %q, want %q", got, defaultPublicURL)
-	}
-}
-
-func distTestFP(value byte) string {
-	return "SHA256:" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string([]byte{value}), 32)))
 }

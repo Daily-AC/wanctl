@@ -48,6 +48,7 @@ USAGE
  CONTROLLER (run where you / the AI drive from)
   wanctl login                                log in (Feishu) and save the token — no daemon (use this on AI / controller boxes)
   wanctl update                               download the latest binary from the relay and swap it in
+  wanctl version                              print the immutable release version (or dev)
   wanctl mcp                                  run a stdio MCP server (per-process, single-user) for an AI host's child process
   wanctl mcp --http :ADDR                     run a public HTTP/Streamable MCP server (multi-user; needs WANCTL_MCP_SEED env)
   wanctl docs ls [--group SLUG]               list documentation articles
@@ -76,7 +77,6 @@ USAGE
 Defaults: relay=` + defaultRelay + `  transport=` + defaultTransport + ` (override with WANCTL_RELAY/WANCTL_TRANSPORT)
 ENV (controller): WANCTL_TOKEN=... (or run 'wanctl' to log in)  WANCTL_RELAY=...
 ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"  WANCTL_ADMIN_SECRET=...  WANCTL_PORTAL_NS=...
-                  WANCTL_PUBLIC_URL=https://relay.example (canonical installer origin)
 ENV (portal):     RELAY_ADMIN_URL=...  WANCTL_ADMIN_SECRET=...  PORTAL_USER_HEADER=...
               PORTAL_PUBLIC_ORIGIN=https://portal.example  PORTAL_DEBUG_WHOAMI=1 (diagnostics only)
               WANCTL_RELAY=...  WANCTL_PORTAL_TOKEN=...  WANCTL_TRANSPORT=ws
@@ -148,6 +148,9 @@ func main() {
 		err = cmdLogout()
 	case "update":
 		err = cmdUpdate(ctx, os.Args[2:])
+	case "version":
+		fmt.Println(buildVersion)
+		return
 	case "service":
 		err = cmdService(ctx, os.Args[2:])
 	case "mcp":

@@ -13,7 +13,7 @@ trap cleanup EXIT INT TERM
 
 uid=$(docker run --rm --entrypoint id "$image_name" -u)
 [ "$uid" = 10001 ] || { echo "container UID is $uid, want 10001" >&2; exit 1; }
-docker run --rm --entrypoint sh "$image_name" -ec 'test -w /data && test -x /dist/wanctl-linux-amd64 && test -x /dist/wanctl-linux-arm64'
+docker run --rm --entrypoint sh "$image_name" -ec 'test -w /data && test -w /dist'
 
 start_role() {
   role=$1
@@ -38,7 +38,7 @@ start_role() {
   exit 1
 }
 
-start_role relay -e WANCTL_TOKENS=smoke:team -e WANCTL_PUBLIC_URL=https://relay.example
+start_role relay -e WANCTL_TOKENS=smoke:team
 start_role portal
 start_role mcp -e WANCTL_MCP_SEED=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
 
