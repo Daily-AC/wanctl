@@ -52,6 +52,10 @@ The repository now fails closed when a release trust key or signed directory is
 missing, but no production signing seed was generated during this audit. An
 administrator must configure `WANCTL_RELEASE_SIGNING_KEY` as a masked,
 protected, release-environment-scoped GitLab variable before the first release.
-The project also had no GitLab runner and the local Docker daemon and PowerShell
-runtime were unavailable, so container build/SBOM/Trivy smoke and the PowerShell
-installer still require execution in the configured release environment.
+The PowerShell installer was exercised end to end on Windows PowerShell 5.1
+against a temporary signed release served from WSL. It upgraded a historical
+binary without a `version` command, installed `v9.8.7` with the manifest-bound
+SHA-256, rejected a truncated artifact, and rejected a same-version reinstall.
+The project still had no GitLab runner, and neither the development machine nor
+the home WSL environment had a working Docker daemon, so container build,
+SBOM, and Trivy smoke still require a configured container runtime.

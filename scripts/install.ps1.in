@@ -12,7 +12,7 @@ function Receive-SizedFile([string]$uri, [string]$path, [int64]$maxBytes) {
   $outputStream = $null
   try {
     $response = $client.GetAsync($uri, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-    $response.EnsureSuccessStatusCode()
+    $response.EnsureSuccessStatusCode() | Out-Null
     if ($response.Content.Headers.ContentLength -ne $null -and $response.Content.Headers.ContentLength -gt $maxBytes) { throw 'download exceeds signed size limit' }
     $inputStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
     $outputStream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -49,8 +49,17 @@ try {
   $targetVersion = [version]$manifest.version.TrimStart('v')
   $existing = (Get-Command wanctl.exe -ErrorAction SilentlyContinue).Source
   if ($existing) {
-    $currentText = (& $existing version 2>$null)
-    if ($currentText -and $currentText -ne 'dev' -and $targetVersion -le [version]$currentText.TrimStart('v')) {
+    $savedErrorActionPreference = $ErrorActionPreference
+    try {
+      # Releases before the signed updater did not expose `wanctl version`.
+      $ErrorActionPreference = 'SilentlyContinue'
+      $currentText = ((& $existing version 2>$null | Out-String).Trim())
+      $currentExitCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $savedErrorActionPreference
+    }
+    if ($currentExitCode -ne 0 -or $currentText -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { $currentText = $null }
+    if ($currentText -and $targetVersion -le [version]$currentText.TrimStart('v')) {
       throw "refusing release $($manifest.version): installed version is $currentText"
     }
   }
