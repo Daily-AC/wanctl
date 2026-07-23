@@ -13,10 +13,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
+	"wanctl/internal/admission"
 	"wanctl/internal/config"
 	"wanctl/internal/httpconn"
 	"wanctl/internal/protocol"
@@ -149,8 +151,9 @@ func (c *Client) Peers(ctx context.Context) ([]string, error) {
 	if c.transport == "http" {
 		path = "/h/peers"
 	}
-	httpURL := strings.Replace(c.relayURL, "ws", "http", 1) + path + "?token=" + c.token
+	httpURL := strings.Replace(c.relayURL, "ws", "http", 1) + path
 	req, _ := http.NewRequestWithContext(ctx, "GET", httpURL, nil)
+	admission.SetBearer(req, c.token)
 	resp, err := c.httpc.Do(req)
 	if err != nil {
 		return nil, err
@@ -211,12 +214,12 @@ func (c *Client) connectKind(ctx context.Context, target, helloKind string) (*tl
 }
 
 func (c *Client) dialWS(ctx context.Context, target string) (net.Conn, error) {
-	url := c.relayURL + "/dial?token=" + c.token + "&target=" + target
+	dialURL := c.relayURL + "/dial?" + url.Values{"target": {target}}.Encode()
 	var hc *http.Client
 	if c.lan {
 		hc = wsconn.NoProxyClient
 	}
-	nc, resp, err := wsconn.DialWith(ctx, url, nil, hc)
+	nc, resp, err := wsconn.DialWith(ctx, dialURL, admission.Header(c.token), hc)
 	if err != nil {
 		if resp != nil {
 			return nil, fmt.Errorf("dial relay (%d): is %q online?", resp.StatusCode, target)
@@ -228,8 +231,9 @@ func (c *Client) dialWS(ctx context.Context, target string) (net.Conn, error) {
 
 func (c *Client) dialHTTP(ctx context.Context, target string) (net.Conn, error) {
 	base := strings.Replace(c.relayURL, "ws", "http", 1)
-	dialURL := base + "/h/dial?token=" + c.token + "&target=" + target
+	dialURL := base + "/h/dial?" + url.Values{"target": {target}}.Encode()
 	req, _ := http.NewRequestWithContext(ctx, "GET", dialURL, nil)
+	admission.SetBearer(req, c.token)
 	resp, err := c.httpc.Do(req)
 	if err != nil {
 		return nil, err

@@ -94,7 +94,7 @@ const (
 )
 
 func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -177,7 +177,7 @@ func (r *Relay) requeueHTTPJob(key string, open sessionauth.Open) {
 }
 
 func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -217,7 +217,7 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 // handleHDeregister lets an agent announce it is going offline now, so the relay
 // drops it from the live registry immediately (no TTL wait).
 func (r *Relay) handleHDeregister(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -259,7 +259,7 @@ func (r *Relay) deviceLive(ns, device string) bool {
 }
 
 func (r *Relay) handleHPeers(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -276,7 +276,7 @@ func (r *Relay) handleHPeers(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
-	if _, ok := r.auth(req); !ok {
+	if _, ok := r.auth(w, req); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -302,7 +302,7 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
-	if _, ok := r.auth(req); !ok {
+	if _, ok := r.auth(w, req); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -330,7 +330,7 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
-	if _, ok := r.auth(req); !ok {
+	if _, ok := r.auth(w, req); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}

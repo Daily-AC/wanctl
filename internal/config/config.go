@@ -13,8 +13,10 @@ const (
 	DefaultTransport = "ws"
 	// DefaultPortal is the team web app used for OAuth enrollment and approvals.
 	DefaultPortal = "https://wanctl.***REMOVED***.***REMOVED***.com"
-	// DefaultLanRelay is the intranet fast-path relay (WS, WireGuard/netbird
-	// mesh). Reachable only from inside the company network; agents keep a
+	// DefaultLanRelay is the intranet fast-path relay. Its ws:// admission header
+	// is safe only because this address is expected to run inside the encrypted
+	// WireGuard/netbird mesh; deployments without that boundary must override it
+	// with wss://. Reachable only from inside the company network; agents keep a
 	// second uplink to it and controllers switch to it with `wanctl net lan`.
 	// Override with WANCTL_LAN_RELAY.
 	DefaultLanRelay = "ws://***REMOVED-IP***:8080"

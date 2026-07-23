@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"wanctl/internal/admission"
 	"wanctl/internal/config"
 	"wanctl/internal/console"
 	"wanctl/internal/eventlog"
@@ -227,8 +228,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.opts.Transport == "http" {
 		return a.runHTTP(ctx)
 	}
-	ctrlURL := strings.TrimRight(a.opts.RelayURL, "/") + "/agent?token=" + a.opts.Token
-	nc, resp, err := wsconn.Dial(ctx, ctrlURL, nil)
+	ctrlURL := strings.TrimRight(a.opts.RelayURL, "/") + "/agent"
+	nc, resp, err := wsconn.Dial(ctx, ctrlURL, admission.Header(a.opts.Token))
 	if err != nil {
 		if resp != nil && resp.StatusCode == 401 {
 			return fmt.Errorf("relay rejected token (401)")
@@ -271,7 +272,7 @@ func (a *Agent) serveSession(ctx context.Context, open sessionauth.Open) {
 // relay).
 func (a *Agent) serveSessionWS(ctx context.Context, relayURL string, open sessionauth.Open, hc *http.Client) {
 	url := strings.TrimRight(relayURL, "/") + open.URL
-	nc, _, err := wsconn.DialWith(ctx, url, nil, hc)
+	nc, _, err := wsconn.DialWith(ctx, url, admission.Header(a.opts.Token), hc)
 	if err != nil {
 		return
 	}
@@ -566,7 +567,7 @@ func httpBase(relayURL string) string {
 // Called on clean shutdown; uses a fresh short-timeout client since the run ctx
 // is already cancelled.
 func (a *Agent) deregisterHTTP(base string) {
-	qv := url.Values{"token": {a.opts.Token}, "device": {a.opts.Name}}
+	qv := url.Values{"device": {a.opts.Name}}
 	if a.inst != "" {
 		qv.Set("inst", a.inst)
 	}
@@ -576,6 +577,7 @@ func (a *Agent) deregisterHTTP(base string) {
 	if err != nil {
 		return
 	}
+	admission.SetBearer(req, a.opts.Token)
 	if resp, err := hc.Do(req); err == nil {
 		resp.Body.Close()
 	}
@@ -585,7 +587,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 	base := httpBase(a.opts.RelayURL)
 	fmt.Printf("wanctl agent %q online via %s (http transport)\n  fingerprint: %s\n", a.opts.Name, base, a.id.Fingerprint)
 	hc := &http.Client{Timeout: 35 * time.Second}
-	q := url.Values{"token": {a.opts.Token}, "device": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}}.Encode()
+	q := url.Values{"device": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}}.Encode()
 	pollURL := base + "/h/poll?" + q
 	for {
 		if ctx.Err() != nil {
@@ -593,6 +595,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 			return nil
 		}
 		req, _ := http.NewRequestWithContext(ctx, "GET", pollURL, nil)
+		admission.SetBearer(req, a.opts.Token)
 		resp, err := hc.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -705,8 +708,8 @@ func (a *Agent) runLan(ctx context.Context) {
 // it drops or the switch turns off.
 func (a *Agent) runLanOnce(ctx context.Context) error {
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	ctrlURL := strings.TrimRight(a.opts.LanRelay, "/") + "/agent?token=" + a.opts.Token
-	nc, _, err := wsconn.DialWith(dialCtx, ctrlURL, nil, wsconn.NoProxyClient)
+	ctrlURL := strings.TrimRight(a.opts.LanRelay, "/") + "/agent"
+	nc, _, err := wsconn.DialWith(dialCtx, ctrlURL, admission.Header(a.opts.Token), wsconn.NoProxyClient)
 	cancel()
 	if err != nil {
 		return err

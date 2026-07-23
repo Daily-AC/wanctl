@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"wanctl/internal/admission"
 	"wanctl/internal/sessionauth"
 	"wanctl/internal/wsconn"
 
@@ -122,8 +123,15 @@ func (r *Relay) SetMCPHandler(h http.Handler) { r.mcpHandler = h }
 // SetAdmin installs the admin store backing the /admin/* endpoints.
 func (r *Relay) SetAdmin(a AdminStore) { r.admin = a }
 
-func (r *Relay) auth(req *http.Request) (ns string, ok bool) {
-	return r.ts.Resolve(req.URL.Query().Get("token"))
+func (r *Relay) auth(w http.ResponseWriter, req *http.Request) (ns string, ok bool) {
+	token, legacy, ok := admission.Token(req)
+	if !ok {
+		return "", false
+	}
+	if legacy {
+		admission.MarkLegacy(w)
+	}
+	return r.ts.Resolve(token)
 }
 
 // SetACL installs an ACL checker for cross-namespace dials.
@@ -171,7 +179,7 @@ func newID() string {
 }
 
 func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -215,7 +223,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -244,7 +252,7 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 
 	auth.Op = "open"
 	auth.Session = sid
-	auth.URL = "/session/" + sid + "?token=" + req.URL.Query().Get("token")
+	auth.URL = "/session/" + sid
 	if err := ac.send(auth); err != nil {
 		http.Error(w, "agent unreachable", http.StatusBadGateway)
 		return
@@ -265,7 +273,7 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleSession(w http.ResponseWriter, req *http.Request) {
-	if _, ok := r.auth(req); !ok {
+	if _, ok := r.auth(w, req); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -292,7 +300,7 @@ func (r *Relay) handleSession(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handlePeers(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return

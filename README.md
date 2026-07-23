@@ -12,6 +12,13 @@ controller (you)          relay (public, thunderbox)        device (agent)
        └──────── mutual-TLS E2E tunnel over the pipe ──────────┘
 ```
 
+Admission tokens are sent in the `Authorization: Bearer` header and must be
+protected by TLS. The E2E tunnel protects command/file payloads from the relay,
+but it does not encrypt the outer HTTP/WebSocket admission handshake. In
+particular, a `ws://` LAN relay exposes bearer headers to the LAN unless the
+network path is already protected by a trusted encrypted tunnel. Use `wss://`
+for production LAN relays whenever certificates are available.
+
 > **Status:** M1 (cross-internet transport, relay, exec/file) + M2 (policy &
 > approval) + M4 (Feishu-SSO portal + Postgres + sharing ACL) + M5 (JSONL logging)
 > + M6 (skill) done and verified over the public thunderbox relay. The

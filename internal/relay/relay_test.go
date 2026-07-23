@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/admission"
 	"wanctl/internal/sessionauth"
 	"wanctl/internal/wsconn"
 )
@@ -38,7 +39,7 @@ func startAgent(t *testing.T, base, token, device string) {
 			if msg["op"] != "open" {
 				continue
 			}
-			sess, _, err := wsconn.Dial(ctx, base+msg["url"], nil)
+			sess, _, err := wsconn.Dial(ctx, base+msg["url"], admission.Header(token))
 			if err != nil {
 				return
 			}
@@ -92,6 +93,40 @@ func TestRelayRejectsBadToken(t *testing.T) {
 	}
 	if resp != nil && resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestLegacyQueryAuthIsDeprecatedAndBearerIsPreferred(t *testing.T) {
+	r := New(EnvTokenStore("secret-token:alice"))
+	h := r.Handler()
+
+	legacyReq := httptest.NewRequest("GET", "/peers?token=secret-token", nil)
+	legacyResp := httptest.NewRecorder()
+	h.ServeHTTP(legacyResp, legacyReq)
+	if legacyResp.Code != http.StatusOK || legacyResp.Header().Get("Deprecation") != "true" {
+		t.Fatalf("legacy response: status=%d deprecation=%q", legacyResp.Code, legacyResp.Header().Get("Deprecation"))
+	}
+	if warning := legacyResp.Header().Get("Warning"); warning == "" || strings.Contains(warning, "secret-token") {
+		t.Fatal("legacy response must carry a credential-free deprecation warning")
+	}
+
+	bearerReq := httptest.NewRequest("GET", "/peers", nil)
+	bearerReq.Header.Set("Authorization", "Bearer secret-token")
+	bearerResp := httptest.NewRecorder()
+	h.ServeHTTP(bearerResp, bearerReq)
+	if bearerResp.Code != http.StatusOK || bearerResp.Header().Get("Deprecation") != "" {
+		t.Fatalf("bearer response: status=%d deprecation=%q", bearerResp.Code, bearerResp.Header().Get("Deprecation"))
+	}
+
+	malformedReq := httptest.NewRequest("GET", "/peers?token=secret-token", nil)
+	malformedReq.Header.Set("Authorization", "invalid secret-header")
+	malformedResp := httptest.NewRecorder()
+	h.ServeHTTP(malformedResp, malformedReq)
+	if malformedResp.Code != http.StatusUnauthorized {
+		t.Fatalf("malformed bearer status = %d, want 401", malformedResp.Code)
+	}
+	if body := malformedResp.Body.String(); strings.Contains(body, "secret-token") || strings.Contains(body, "secret-header") {
+		t.Fatal("authentication error reflected a credential")
 	}
 }
 
