@@ -32,6 +32,9 @@ const (
 // MaxFrame caps a single frame payload (16 MiB) to bound memory per read.
 const MaxFrame = 16 << 20
 
+// MaxFileSize is the largest file accepted by one upload (1 GiB).
+const MaxFileSize int64 = 1 << 30
+
 // Message kinds for FrameJSON control frames.
 const (
 	KindHello     = "hello"      // client -> server, opening greeting
@@ -39,14 +42,14 @@ const (
 	KindExecAsync = "exec_async" // client -> server, start a background job, return its id
 	KindExecPoll  = "exec_poll"  // client -> server, fetch a background job's new output + status
 	KindExit      = "exit"       // server -> client, command finished
-	KindError    = "error"     // either direction, fatal request error
-	KindReject   = "reject"    // server -> client, pairing/authz denied
-	KindOK       = "ok"        // generic acknowledgement
-	KindFilePut  = "file_put"  // client -> server, begin upload
-	KindFileGet  = "file_get"  // client -> server, request download
-	KindFileMeta = "file_meta" // server -> client, download metadata
-	KindEOF      = "eof"       // end of a FrameData stream
-	KindLogs     = "logs"      // client -> server, request event-log lines
+	KindError     = "error"      // either direction, fatal request error
+	KindReject    = "reject"     // server -> client, pairing/authz denied
+	KindOK        = "ok"         // generic acknowledgement
+	KindFilePut   = "file_put"   // client -> server, begin upload
+	KindFileGet   = "file_get"   // client -> server, request download
+	KindFileMeta  = "file_meta"  // server -> client, download metadata
+	KindEOF       = "eof"        // end of a FrameData stream
+	KindLogs      = "logs"       // client -> server, request event-log lines
 
 	// console session (portal <-> device control plane)
 	KindConsoleHello  = "console_hello"  // portal -> device, opens a control-plane session

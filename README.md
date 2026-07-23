@@ -32,6 +32,8 @@ Every remote command and file op is gated on the device:
   operators, substitutions, and redirections require an exact rule.
 - File rules are enforced by root-scoped opens; symlinks cannot escape an
   allowed directory, and transfers reject non-regular files.
+- Uploads are limited to 1 GiB and atomically replace the destination only
+  after the declared byte count is received and synced successfully.
 - `wanctl exec --cwd /path "cmd"` runs in (and scopes the rule to) that directory.
 
 ### Device console (CLI + remote portal)

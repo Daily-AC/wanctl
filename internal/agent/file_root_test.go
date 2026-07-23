@@ -137,7 +137,7 @@ func TestFilePolicyRootAllowsRegularFileRoundTrip(t *testing.T) {
 	path := filepath.Join(allowed, "regular.txt")
 	payload := []byte("inside-root")
 
-	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindFilePut, Path: path, Mode: 0o600}); err != nil {
+	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindFilePut, Path: path, Size: int64(len(payload)), Mode: 0o600}); err != nil {
 		t.Fatal(err)
 	}
 	if reply, err := protocol.ReadMessage(conn); err != nil || reply.Kind != protocol.KindOK {

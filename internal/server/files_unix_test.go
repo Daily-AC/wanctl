@@ -18,7 +18,7 @@ func TestOpenPolicyFileRejectsFIFOWithoutBlocking(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		f, err := openPolicyFile(root, fifo, false, 0)
+		f, err := openPolicyFile(root, fifo)
 		if f != nil {
 			f.Close()
 		}

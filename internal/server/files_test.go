@@ -8,7 +8,7 @@ import (
 
 func TestOpenPolicyFileRejectsNonRegularFiles(t *testing.T) {
 	root := t.TempDir()
-	if f, err := openPolicyFile(root, root, false, 0); err == nil {
+	if f, err := openPolicyFile(root, root); err == nil {
 		f.Close()
 		t.Fatal("directory was accepted as a downloadable regular file")
 	}
@@ -17,8 +17,8 @@ func TestOpenPolicyFileRejectsNonRegularFiles(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, "missing"), link); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	if f, err := openPolicyFile(root, link, true, 0o600); err == nil {
-		f.Close()
+	if upload, err := newPendingUpload(root, link, 0o600); err == nil {
+		upload.abort()
 		t.Fatal("symbolic link was accepted as an upload target")
 	}
 }
