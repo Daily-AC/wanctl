@@ -3,12 +3,17 @@ package relay
 import (
 	_ "embed"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"wanctl/internal/config"
 )
+
+const defaultPublicURL = "https://***REMOVED-IP***"
 
 // skillMD is the canonical wanctl SKILL.md, served at GET /skills. The relay is
 // public (unlike the SSO-gated portal), so AI clients can WebFetch it directly.
@@ -51,11 +56,11 @@ func (r *Relay) handleSkills(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleInstall(w http.ResponseWriter, req *http.Request) {
-	scheme := "https"
-	if xf := req.Header.Get("X-Forwarded-Proto"); xf != "" {
-		scheme = xf
+	base, err := installerPublicURL()
+	if err != nil {
+		http.Error(w, "installer is not configured", http.StatusServiceUnavailable)
+		return
 	}
-	base := scheme + "://" + req.Host
 	portalFPs, err := installerPortalFingerprints()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -70,11 +75,11 @@ func (r *Relay) handleInstall(w http.ResponseWriter, req *http.Request) {
 //
 //	irm https://<relay>/install.ps1 | iex
 func (r *Relay) handleInstallPS1(w http.ResponseWriter, req *http.Request) {
-	scheme := "https"
-	if xf := req.Header.Get("X-Forwarded-Proto"); xf != "" {
-		scheme = xf
+	base, err := installerPublicURL()
+	if err != nil {
+		http.Error(w, "installer is not configured", http.StatusServiceUnavailable)
+		return
 	}
-	base := scheme + "://" + req.Host
 	portalFPs, err := installerPortalFingerprints()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -90,6 +95,55 @@ func installerPortalFingerprints() (string, error) {
 		return "", fmt.Errorf("invalid WANCTL_PORTAL_FPS: %w", err)
 	}
 	return strings.Join(fingerprints, ","), nil
+}
+
+func installerPublicURL() (string, error) {
+	raw := strings.TrimSpace(os.Getenv("WANCTL_PUBLIC_URL"))
+	if raw == "" {
+		raw = defaultPublicURL
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" ||
+		u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" ||
+		u.Opaque != "" || !validPublicHost(u) {
+		return "", fmt.Errorf("WANCTL_PUBLIC_URL must be an HTTP(S) origin")
+	}
+	u.Path = ""
+	u.RawPath = ""
+	u.ForceQuery = false
+	return u.String(), nil
+}
+
+func validPublicHost(u *url.URL) bool {
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return false
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if len(host) > 253 || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // installScript is a POSIX sh installer. %[1]s is the relay base URL,

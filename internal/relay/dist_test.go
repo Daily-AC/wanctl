@@ -9,16 +9,12 @@ import (
 	"testing"
 )
 
-// getInstaller fetches /install.{sh,ps1} from the test server while passing
-// X-Forwarded-Proto=http so the rendered RELAY URL matches httptest's plain
-// HTTP origin (in production nginx sets this header for us).
 func getInstaller(t *testing.T, srv *httptest.Server, path string) string {
 	t.Helper()
 	req, err := http.NewRequest("GET", srv.URL+path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("X-Forwarded-Proto", "http")
 	resp, err := srv.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +34,7 @@ func getInstaller(t *testing.T, srv *httptest.Server, path string) string {
 func TestInstallPS1(t *testing.T) {
 	fp := distTestFP(1)
 	t.Setenv("WANCTL_PORTAL_FP", fp)
+	t.Setenv("WANCTL_PUBLIC_URL", "https://downloads.example.test")
 	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
 	defer srv.Close()
 
@@ -49,7 +46,7 @@ func TestInstallPS1(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		srv.URL,
+		"https://downloads.example.test",
 		fp,
 		"$env:WANCTL_TOKEN",
 		"$env:WANCTL_NAME",
@@ -71,10 +68,11 @@ func TestInstallPS1(t *testing.T) {
 func TestInstallSh(t *testing.T) {
 	fp := distTestFP(2)
 	t.Setenv("WANCTL_PORTAL_FP", fp)
+	t.Setenv("WANCTL_PUBLIC_URL", "https://downloads.example.test")
 	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
 	defer srv.Close()
 	s := getInstaller(t, srv, "/install.sh")
-	if !strings.Contains(s, fp) || !strings.Contains(s, srv.URL) {
+	if !strings.Contains(s, fp) || !strings.Contains(s, "https://downloads.example.test") {
 		t.Errorf("sh installer missing relay/fingerprint substitution; got:\n%s", s)
 	}
 	if !strings.Contains(s, `--transport ws`) {
@@ -101,6 +99,25 @@ func TestInstallersSeedMultiplePortalFingerprints(t *testing.T) {
 	}
 }
 
+func TestInstallerIgnoresHostAndForwardedProto(t *testing.T) {
+	t.Setenv("WANCTL_PUBLIC_URL", "https://downloads.example.test")
+	r := New(EnvTokenStore(""))
+	for _, path := range []string{"/install.sh", "/install.ps1"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Host = "evil.example"
+		req.Header.Set("X-Forwarded-Proto", "javascript")
+		rec := httptest.NewRecorder()
+		r.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d: %s", path, rec.Code, rec.Body.String())
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "https://downloads.example.test") || strings.Contains(body, "evil.example") || strings.Contains(body, "javascript") {
+			t.Errorf("%s used request-controlled public URL: %s", path, body)
+		}
+	}
+}
+
 func TestInstallerRejectsInvalidPortalFingerprints(t *testing.T) {
 	t.Setenv("WANCTL_PORTAL_FPS", "SHA256:not-valid-base64")
 	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
@@ -112,6 +129,38 @@ func TestInstallerRejectsInvalidPortalFingerprints(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("invalid installer config status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestInstallerRejectsInvalidPublicURL(t *testing.T) {
+	for _, value := range []string{
+		"javascript://downloads.example.test",
+		"https://user:pass@downloads.example.test",
+		"https://downloads.example.test/path",
+		"https://downloads.example.test?next=https://evil.example",
+		"https://downloads.example.test$(touch-pwned)",
+		"https://downloads.example.test:99999",
+		"//downloads.example.test",
+	} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("WANCTL_PUBLIC_URL", value)
+			rec := httptest.NewRecorder()
+			New(EnvTokenStore("")).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/install.sh", nil))
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("invalid WANCTL_PUBLIC_URL %q = %d, want 503", value, rec.Code)
+			}
+		})
+	}
+}
+
+func TestInstallerUsesExplicitCompiledDefault(t *testing.T) {
+	t.Setenv("WANCTL_PUBLIC_URL", "")
+	got, err := installerPublicURL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != defaultPublicURL {
+		t.Fatalf("default public URL = %q, want %q", got, defaultPublicURL)
 	}
 }
 

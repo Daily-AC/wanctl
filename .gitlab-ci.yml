@@ -1,0 +1,21 @@
+stages:
+  - test
+  - security
+
+variables:
+  GOTOOLCHAIN: go1.25.12
+
+test:
+  stage: test
+  script:
+    - go test ./...
+
+supply-chain:
+  stage: security
+  script:
+    - ./scripts/security-scan.sh all
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - artifacts/wanctl.sbom.cdx.json
