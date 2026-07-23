@@ -52,18 +52,25 @@ func TestRemoteConsoleApprovalOverRelay(t *testing.T) {
 		return id, known
 	}
 
-	// Device "lab" in namespace alice. AutoYes auto-trusts new controllers
-	// (stand-in for the production enroll-time portal-fingerprint pre-trust).
+	// Portal-style controller (privileged token, its own identity). Its
+	// fingerprint is enrolled on the device as the console-admin capability.
+	pid, pknown := loadRole(t.TempDir())
+	portal := NewWith(pid, pknown, base, "ptok", "ws")
+
+	// Device "lab" in namespace alice. AutoYes auto-trusts new ordinary
+	// controllers, independently of the portal-only console capability.
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
-	ag, err := agent.New(agent.Options{RelayURL: base, Token: "dtok", Name: "lab", AutoYes: true}) // normal mode
+	ag, err := agent.New(agent.Options{
+		RelayURL: base,
+		Token:    "dtok",
+		Name:     "lab",
+		AutoYes:  true,
+		PortalFP: pid.Fingerprint,
+	}) // normal mode
 	if err != nil {
 		t.Fatal(err)
 	}
 	go ag.Run(ctx)
-
-	// Portal-style controller (privileged token, its own identity).
-	pid, pknown := loadRole(t.TempDir())
-	portal := NewWith(pid, pknown, base, "ptok", "ws")
 
 	// CLI controller (device-namespace token, its own identity).
 	cid, cknown := loadRole(t.TempDir())

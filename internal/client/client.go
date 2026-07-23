@@ -55,8 +55,8 @@ type Client struct {
 	known     *transport.Store
 	relayURL  string
 	token     string
-	transport string // "ws" (default) or "http"
-	label     string // self-description sent at pairing (WANCTL_LABEL)
+	transport string       // "ws" (default) or "http"
+	label     string       // self-description sent at pairing (WANCTL_LABEL)
 	httpc     *http.Client // relay HTTP client (no-proxy variant for the intranet relay)
 	lan       bool         // true when this client resolved to the intranet relay
 }
@@ -282,9 +282,10 @@ func rejectError(m protocol.Message) error {
 	return &RejectError{Reason: m.Reason, PairingURL: m.PairingURL}
 }
 
-// OpenConsole dials target and opens a control-plane (console) session,
-// returning the authenticated TLS conn. The caller drives the console RPC /
-// notification protocol over it (see internal/portal/deviceconn.go).
+// OpenConsole dials target and requests a control-plane (console) session,
+// returning the authenticated TLS conn when this client's fingerprint matches
+// the device's enrolled console administrator. The caller drives the console
+// RPC / notification protocol over it (see internal/portal/deviceconn.go).
 func (c *Client) OpenConsole(ctx context.Context, target string) (*tls.Conn, error) {
 	return c.connectKind(ctx, target, protocol.KindConsoleHello)
 }

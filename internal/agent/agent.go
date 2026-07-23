@@ -42,7 +42,7 @@ type Options struct {
 	AutoYes   bool
 	Transport string      // "ws" (default) or "http" (proxy-agnostic)
 	Mode      policy.Mode // "normal" (default) or "bypass"
-	PortalFP  string      // pre-trusted portal fingerprint ("SHA256:..."), enrolled at install time
+	PortalFP  string      // console-admin portal fingerprint ("SHA256:..."), enrolled at install time
 	LanRelay  string      // intranet fast-path relay (ws://...); "" disables the second uplink
 }
 
@@ -249,6 +249,17 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
 		return
 	}
 	if hello.Kind != protocol.KindHello && hello.Kind != protocol.KindConsoleHello {
+		return
+	}
+	// Pairing grants a controller permission to submit device operations; it
+	// must not grant the control-plane capability to approve those operations,
+	// change rules, or enable bypass mode. Only the enrolled portal identity is
+	// a console administrator. An empty PortalFP therefore fails closed.
+	if hello.Kind == protocol.KindConsoleHello && fp != a.opts.PortalFP {
+		protocol.WriteMessage(conn, protocol.Message{
+			Kind:   protocol.KindReject,
+			Reason: "controller is not authorized as this device's console administrator",
+		})
 		return
 	}
 	// Authorize (TOFU / pre-trusted portal key) and reply OK for BOTH exec and
