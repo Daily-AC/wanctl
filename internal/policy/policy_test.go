@@ -25,6 +25,50 @@ func TestMatchCommand(t *testing.T) {
 	}
 }
 
+func TestMatchCommandRejectsAdditionalShellOperations(t *testing.T) {
+	cases := []string{
+		"git status && rm -rf /tmp/project",
+		"git status; rm -rf /tmp/project",
+		"git status ; rm -rf /tmp/project",
+		"git status || rm -rf /tmp/project",
+		"git status | sh",
+		"git status\nrm -rf /tmp/project",
+		"git status \nrm -rf /tmp/project",
+		"git status & rm -rf /tmp/project",
+		"git status $(rm -rf /tmp/project)",
+		"git status <(rm -rf /tmp/project)",
+		"git status > /tmp/status",
+	}
+	for _, command := range cases {
+		if MatchCommand("git status", command) {
+			t.Errorf("git status rule unexpectedly authorized %q", command)
+		}
+	}
+}
+
+func TestMatchCommandPreservesArgumentPrefixSemantics(t *testing.T) {
+	cases := []string{
+		"git status --short",
+		"git status --porcelain=v1",
+		`git status -- "path with spaces"`,
+	}
+	for _, command := range cases {
+		if !MatchCommand("git status", command) {
+			t.Errorf("git status rule should authorize argv command %q", command)
+		}
+	}
+}
+
+func TestMatchCommandAllowsExplicitExactCompoundRule(t *testing.T) {
+	const command = "git status && git diff"
+	if !MatchCommand(command, command) {
+		t.Fatal("an exact rule should authorize the exact compound command")
+	}
+	if MatchCommand(command, command+" && rm -rf /tmp/project") {
+		t.Fatal("an exact compound rule should not authorize an appended command")
+	}
+}
+
 func TestWithin(t *testing.T) {
 	if !Within("", "/anything") {
 		t.Error("empty dir should match any path")

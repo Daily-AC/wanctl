@@ -514,7 +514,7 @@ func cmdRules(args []string) error {
 	case "add":
 		fs := flag.NewFlagSet("rules add", flag.ExitOnError)
 		kind := fs.String("kind", "exec", "exec | read | write")
-		pattern := fs.String("pattern", "", "exec: command (+arg prefix, trailing * ok); file: directory")
+		pattern := fs.String("pattern", "", "exec: command (single-command arg prefix, trailing * ok); file: directory")
 		dir := fs.String("dir", "", "for exec dir-scope: the working directory")
 		fs.Parse(args)
 		if *pattern == "" && *dir == "" {

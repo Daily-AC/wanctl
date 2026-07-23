@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"mvdan.cc/sh/v3/syntax"
+
 	"wanctl/internal/transport"
 )
 
@@ -52,7 +54,7 @@ type Request struct {
 // Rule is one persisted allow-list entry.
 type Rule struct {
 	Kind    Kind      `json:"kind"`
-	Pattern string    `json:"pattern"` // exec: command (+arg prefix, trailing * ok); file: directory ("" = any)
+	Pattern string    `json:"pattern"` // exec: command (single-command arg prefix, trailing * ok); file: directory ("" = any)
 	Dir     string    `json:"dir,omitempty"`
 	Scope   Scope     `json:"scope"`
 	Added   time.Time `json:"added"`
@@ -179,18 +181,51 @@ func ruleMatches(r Rule, req Request) bool {
 	return false
 }
 
-// MatchCommand reports whether command c matches pattern p. A trailing " *"
-// matches any suffix; otherwise c must equal p or start with "p ".
+// MatchCommand reports whether command c matches pattern p. Exact rules may
+// contain shell operators. Prefix rules only extend a single simple command,
+// so an argv prefix cannot authorize another command, a command substitution,
+// or a redirection. A trailing " *" explicitly matches any argument suffix.
 func MatchCommand(p, c string) bool {
 	p = strings.TrimSpace(p)
 	c = strings.TrimSpace(c)
-	if strings.HasSuffix(p, " *") {
-		return strings.HasPrefix(c, p[:len(p)-1]) // keep the space before *
+	if c == p {
+		return true
 	}
 	if p == "*" {
 		return true
 	}
-	return c == p || strings.HasPrefix(c, p+" ")
+	if !isSingleSimpleCommand(c) {
+		return false
+	}
+	if strings.HasSuffix(p, " *") {
+		return strings.HasPrefix(c, p[:len(p)-1]) // keep the space before *
+	}
+	return strings.HasPrefix(c, p+" ")
+}
+
+func isSingleSimpleCommand(command string) bool {
+	f, err := syntax.NewParser().Parse(strings.NewReader(command), "")
+	if err != nil || len(f.Stmts) != 1 {
+		return false
+	}
+	stmt := f.Stmts[0]
+	if stmt.Negated || stmt.Background || stmt.Coprocess || stmt.Disown ||
+		stmt.Semicolon.IsValid() || len(stmt.Redirs) != 0 {
+		return false
+	}
+	if _, ok := stmt.Cmd.(*syntax.CallExpr); !ok {
+		return false
+	}
+	safe := true
+	syntax.Walk(stmt, func(node syntax.Node) bool {
+		switch node.(type) {
+		case *syntax.CmdSubst, *syntax.ProcSubst:
+			safe = false
+			return false
+		}
+		return safe
+	})
+	return safe
 }
 
 // Within reports whether path is dir or under dir. An empty dir matches any path.

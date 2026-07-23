@@ -28,6 +28,8 @@ Every remote command and file op is gated on the device:
 - `wanctl agent --mode bypass` auto-allows everything (warns; for trusted/isolated devices).
 - Headless agents deny on a miss — pre-load rules with `wanctl rules add`.
 - Manage rules on the device: `wanctl rules list|add|rm`.
+- Exec rules match additional arguments only within one simple command; shell
+  operators, substitutions, and redirections require an exact rule.
 - `wanctl exec --cwd /path "cmd"` runs in (and scopes the rule to) that directory.
 
 ### Device console (CLI + remote portal)
