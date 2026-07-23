@@ -48,6 +48,15 @@ func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
 			values:  [][]driver.Value{{"renjinxi"}, {"***REMOVED***"}},
 		}, nil
 	}
+	if strings.Contains(s.query, "SELECT perms FROM acl") {
+		if !strings.Contains(s.query, "revoked_at IS NULL") {
+			return nil, errors.New("ACL lookup must exclude revoked grants")
+		}
+		if len(args) == 3 && args[0] == "owner" && args[1] == "home-pc" && args[2] == "reader" {
+			return &adminRows{columns: []string{"perms"}, values: [][]driver.Value{{"read"}}}, nil
+		}
+		return &adminRows{columns: []string{"perms"}}, nil
+	}
 	if !strings.Contains(s.query, "UNION ALL") || !strings.Contains(s.query, "revoked_at IS NULL") {
 		return nil, errors.New("ListDevices query must include own devices, ACL devices, and revoked filter")
 	}
@@ -267,6 +276,24 @@ func TestPGStoreListUsersReturnsNamespaces(t *testing.T) {
 	want := []string{"renjinxi", "***REMOVED***"}
 	if !reflect.DeepEqual(namespaces, want) {
 		t.Fatalf("namespaces = %+v, want %+v", namespaces, want)
+	}
+}
+
+func TestPGStoreACLPermsReturnsLiveGrant(t *testing.T) {
+	p := newAdminTestPGStore(t)
+	perms, ok := p.ACLPerms("reader", "owner", "home-pc")
+	if !ok || perms != "read" {
+		t.Fatalf("ACLPerms = %q, %v", perms, ok)
+	}
+	if _, ok := p.ACLPerms("other", "owner", "home-pc"); ok {
+		t.Fatal("missing grant should not be allowed")
+	}
+}
+
+func TestPGStoreAddACLRejectsInvalidPermissionsBeforeDatabase(t *testing.T) {
+	p := newAdminTestPGStore(t)
+	if err := p.AddACL("owner", "home-pc", "reader", "read,unknown"); err == nil {
+		t.Fatal("invalid permissions were accepted")
 	}
 }
 

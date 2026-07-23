@@ -6,13 +6,15 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"wanctl/internal/sessionauth"
 )
 
 // httpAgent is an online device reachable over the HTTP transport. The agent
 // keeps a long-poll on /h/poll; the relay pushes session ids to open onto `open`.
 type httpAgent struct {
 	ns, device string
-	open       chan string
+	open       chan sessionauth.Open
 	lastSeen   time.Time
 	inst       string
 	retired    map[string]struct{}
@@ -107,7 +109,7 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	r.hmu.Lock()
 	a := r.hagents[key]
 	if a == nil {
-		a = &httpAgent{ns: ns, device: device, open: make(chan string, 8), changed: make(chan struct{})}
+		a = &httpAgent{ns: ns, device: device, open: make(chan sessionauth.Open, 8), changed: make(chan struct{})}
 		r.hagents[key] = a
 	}
 	if inst != "" {
@@ -134,13 +136,13 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	}
 
 	select {
-	case sid := <-a.open:
+	case open := <-a.open:
 		if inst != "" && r.httpAgentObsolete(key, inst) {
-			r.requeueHTTPJob(key, sid)
+			r.requeueHTTPJob(key, open)
 			http.Error(w, "another agent instance registered this device name", http.StatusConflict)
 			return
 		}
-		writeJSON(w, map[string]string{"session": sid})
+		writeJSON(w, open)
 	case <-changed:
 		if inst != "" && r.httpAgentObsolete(key, inst) {
 			http.Error(w, "another agent instance registered this device name", http.StatusConflict)
@@ -164,14 +166,14 @@ func (r *Relay) httpAgentObsolete(key, inst string) bool {
 	return a.inst != "" && a.inst != inst
 }
 
-func (r *Relay) requeueHTTPJob(key, sid string) {
+func (r *Relay) requeueHTTPJob(key string, open sessionauth.Open) {
 	r.hmu.Lock()
 	a := r.hagents[key]
 	r.hmu.Unlock()
 	if a == nil {
 		return
 	}
-	a.open <- sid
+	a.open <- open
 }
 
 func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
@@ -180,7 +182,7 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	targetKey, targetNS, device, ok := r.dialAllowed(ns, req.URL.Query().Get("target"))
+	targetKey, auth, ok := r.dialAllowed(ns, req.URL.Query().Get("target"))
 	if !ok {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -193,11 +195,12 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	sid := newID()
+	auth.Session = sid
 	r.hsess[sid] = &httpSession{toClient: newSideQueue(), toAgent: newSideQueue()}
 	r.hmu.Unlock()
 
 	select {
-	case a.open <- sid:
+	case a.open <- auth:
 	default:
 		r.hmu.Lock()
 		delete(r.hsess, sid)
@@ -206,7 +209,7 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if r.audit != nil {
-		r.audit.Audit(targetNS, device, "dial")
+		r.audit.Audit(auth.OwnerNamespace, auth.Device, "dial")
 	}
 	writeJSON(w, map[string]string{"session": sid})
 }

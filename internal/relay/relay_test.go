@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/sessionauth"
 	"wanctl/internal/wsconn"
 )
 
@@ -98,18 +99,43 @@ func TestDialAllowedPortal(t *testing.T) {
 	r := New(EnvTokenStore("ptok:portal,utok:alice"))
 	r.SetPortalNS("portal")
 	// portal may dial any namespace's device
-	if _, _, _, ok := r.dialAllowed("portal", "alice/legion"); !ok {
+	if _, auth, ok := r.dialAllowed("portal", "alice/legion"); !ok || auth.Capabilities != sessionauth.FullCapabilities {
 		t.Fatal("portal should be allowed to dial alice/legion")
 	}
+	if _, auth, ok := r.dialAllowed("alice", "alice/legion"); !ok || auth.Capabilities != sessionauth.FullCapabilities {
+		t.Fatal("device owner should receive full capabilities")
+	}
 	// a normal user still cannot cross namespaces without ACL
-	if _, _, _, ok := r.dialAllowed("alice", "bob/box"); ok {
+	if _, _, ok := r.dialAllowed("alice", "bob/box"); ok {
 		t.Fatal("alice should not dial bob without ACL")
 	}
 
 	// unset portalNS: the portal path must be entirely inert (no bypass)
 	r2 := New(EnvTokenStore("ptok:portal,utok:alice"))
 	// SetPortalNS intentionally NOT called
-	if _, _, _, ok := r2.dialAllowed("portal", "alice/legion"); ok {
+	if _, _, ok := r2.dialAllowed("portal", "alice/legion"); ok {
 		t.Fatal("unset portalNS must not grant any dial bypass")
+	}
+}
+
+type staticACL string
+
+func (p staticACL) ACLPerms(_, _, _ string) (string, bool) { return string(p), true }
+
+func TestDialAllowedParsesACLPermissionsStrictly(t *testing.T) {
+	r := New(EnvTokenStore("tok:reader"))
+	r.SetACL(staticACL("read,exec"))
+	_, auth, ok := r.dialAllowed("reader", "owner/home-pc")
+	if !ok || auth.Capabilities != sessionauth.Read|sessionauth.Exec {
+		t.Fatalf("authorization = %#v, ok=%v", auth, ok)
+	}
+
+	r.SetACL(staticACL("read,unknown"))
+	if _, _, ok := r.dialAllowed("reader", "owner/home-pc"); ok {
+		t.Fatal("unknown ACL permission must fail closed")
+	}
+	r.SetACL(staticACL("read,console"))
+	if _, _, ok := r.dialAllowed("reader", "owner/home-pc"); ok {
+		t.Fatal("owner-only capability must fail closed")
 	}
 }

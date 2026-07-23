@@ -68,6 +68,9 @@ func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io
 	if ack.Kind == protocol.KindError {
 		return fmt.Errorf("remote refused upload: %s", ack.Reason)
 	}
+	if ack.Kind == protocol.KindReject {
+		return rejectError(ack)
+	}
 	if ack.Kind != protocol.KindOK {
 		return fmt.Errorf("unexpected reply: %s", ack.Kind)
 	}
@@ -123,6 +126,9 @@ func (c *Client) Pull(ctx context.Context, target, remotePath, local string) err
 	}
 	if meta.Kind == protocol.KindError {
 		return fmt.Errorf("remote refused download: %s", meta.Reason)
+	}
+	if meta.Kind == protocol.KindReject {
+		return rejectError(meta)
 	}
 	if meta.Kind != protocol.KindFileMeta {
 		return fmt.Errorf("unexpected reply: %s", meta.Kind)

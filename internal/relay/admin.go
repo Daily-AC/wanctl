@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"wanctl/internal/sessionauth"
 )
 
 // Admin endpoints let the portal (which has no DB of its own) manage tokens,
@@ -566,9 +568,13 @@ func (p *PGStore) AddACL(namespace, device, grantee, perms string) error {
 	if perms == "" {
 		perms = "exec,read,write"
 	}
-	_, err := p.db.Exec(
+	caps, err := sessionauth.ParseGrant(perms)
+	if err != nil {
+		return fmt.Errorf("invalid ACL permissions: %w", err)
+	}
+	_, err = p.db.Exec(
 		`INSERT INTO acl (owner_namespace, device, grantee_namespace, perms) VALUES ($1,$2,$3,$4)`,
-		namespace, device, grantee, perms)
+		namespace, device, grantee, caps.String())
 	return err
 }
 

@@ -28,6 +28,7 @@ import (
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/server"
+	"wanctl/internal/sessionauth"
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
 
@@ -230,7 +231,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	dec := json.NewDecoder(bufio.NewReader(nc))
 	for {
-		var msg struct{ Op, Session, URL string }
+		var msg sessionauth.Open
 		if err := dec.Decode(&msg); err != nil {
 			select {
 			case <-ctx.Done():
@@ -239,31 +240,31 @@ func (a *Agent) Run(ctx context.Context) error {
 				return fmt.Errorf("control channel closed: %w", err)
 			}
 		}
-		if msg.Op == "open" {
-			go a.serveSession(ctx, msg.URL)
+		if msg.Op == "open" && msg.ValidFor(a.opts.Name) {
+			go a.serveSession(ctx, msg)
 		}
 	}
 }
 
-func (a *Agent) serveSession(ctx context.Context, relPath string) {
-	a.serveSessionWS(ctx, a.opts.RelayURL, relPath, nil)
+func (a *Agent) serveSession(ctx context.Context, open sessionauth.Open) {
+	a.serveSessionWS(ctx, a.opts.RelayURL, open, nil)
 }
 
 // serveSessionWS opens the per-session WebSocket on the given relay and serves
 // it. hc overrides the handshake HTTP client (NoProxyClient for the intranet
 // relay).
-func (a *Agent) serveSessionWS(ctx context.Context, relayURL, relPath string, hc *http.Client) {
-	url := strings.TrimRight(relayURL, "/") + relPath
+func (a *Agent) serveSessionWS(ctx context.Context, relayURL string, open sessionauth.Open, hc *http.Client) {
+	url := strings.TrimRight(relayURL, "/") + open.URL
 	nc, _, err := wsconn.DialWith(ctx, url, nil, hc)
 	if err != nil {
 		return
 	}
-	a.handleSession(ctx, nc)
+	a.handleSession(ctx, nc, open)
 }
 
 // handleSession completes the server-side handshake and serves requests on an
 // already-established transport conn (WebSocket or HTTP).
-func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
+func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth.Open) {
 	conn, fp, err := transport.ServerHandshake(ctx, nc, a.id)
 	if err != nil {
 		return
@@ -277,16 +278,27 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
 	if hello.Kind != protocol.KindHello && hello.Kind != protocol.KindConsoleHello {
 		return
 	}
+	if !auth.ValidFor(a.opts.Name) {
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "invalid relay session capabilities"})
+		return
+	}
 	// Pairing grants a controller permission to submit device operations; it
 	// must not grant the control-plane capability to approve those operations,
 	// change rules, or enable bypass mode. Only the enrolled portal identity is
-	// a console administrator. An empty PortalFP therefore fails closed.
-	if hello.Kind == protocol.KindConsoleHello && fp != a.opts.PortalFP {
-		protocol.WriteMessage(conn, protocol.Message{
-			Kind:   protocol.KindReject,
-			Reason: "controller is not authorized as this device's console administrator",
-		})
-		return
+	// a console administrator, and the relay session must independently carry
+	// the console capability. An empty PortalFP therefore fails closed.
+	if hello.Kind == protocol.KindConsoleHello {
+		if !auth.Capabilities.Has(sessionauth.Console) {
+			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "session capability denied: console"})
+			return
+		}
+		if fp != a.opts.PortalFP {
+			protocol.WriteMessage(conn, protocol.Message{
+				Kind:   protocol.KindReject,
+				Reason: "controller is not authorized as this device's console administrator",
+			})
+			return
+		}
 	}
 	// Authorize (TOFU / pre-trusted portal key) and reply OK for BOTH exec and
 	// console sessions BEFORE serving — the controller/portal blocks on this OK,
@@ -305,7 +317,7 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
 		a.serveConsole(ctx, conn)
 		return
 	}
-	a.serve(conn, fp, hello.Name)
+	a.serve(conn, fp, hello.Name, auth.Capabilities)
 }
 
 func (a *Agent) authorize(fp, name, label string) bool {
@@ -358,11 +370,15 @@ func (a *Agent) trustedControllers() []console.TrustedController {
 	return out
 }
 
-func (a *Agent) serve(conn *tls.Conn, fp, peerName string) {
+func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capabilities) {
 	for {
 		m, err := protocol.ReadMessage(conn)
 		if err != nil {
 			return
+		}
+		if required := requiredCapability(m.Kind); required != 0 && !caps.Has(required) {
+			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "session capability denied: " + required.String()})
+			continue
 		}
 		switch m.Kind {
 		case protocol.KindExec:
@@ -393,6 +409,21 @@ func (a *Agent) serve(conn *tls.Conn, fp, peerName string) {
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "unknown request: " + m.Kind})
 			return
 		}
+	}
+}
+
+func requiredCapability(kind string) sessionauth.Capabilities {
+	switch kind {
+	case protocol.KindExec, protocol.KindExecAsync, protocol.KindExecPoll:
+		return sessionauth.Exec
+	case protocol.KindFileGet:
+		return sessionauth.Read
+	case protocol.KindFilePut:
+		return sessionauth.Write
+	case protocol.KindLogs:
+		return sessionauth.Logs
+	default:
+		return 0
 	}
 }
 
@@ -555,21 +586,21 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 			resp.Body.Close()
 			return fmt.Errorf("another wanctl agent instance registered this device name; this instance is standing down")
 		}
-		var msg struct{ Session string }
+		var msg sessionauth.Open
 		json.NewDecoder(resp.Body).Decode(&msg)
 		resp.Body.Close()
-		if msg.Session != "" {
-			go a.serveSessionHTTP(ctx, base, msg.Session)
+		if msg.ValidFor(a.opts.Name) {
+			go a.serveSessionHTTP(ctx, base, msg)
 		}
 	}
 }
 
-func (a *Agent) serveSessionHTTP(ctx context.Context, base, session string) {
-	nc, err := httpconn.Dial(ctx, base, session, "agent", a.opts.Token)
+func (a *Agent) serveSessionHTTP(ctx context.Context, base string, open sessionauth.Open) {
+	nc, err := httpconn.Dial(ctx, base, open.Session, "agent", a.opts.Token)
 	if err != nil {
 		return
 	}
-	a.handleSession(ctx, nc)
+	a.handleSession(ctx, nc, open)
 }
 
 // lanInfo snapshots the LAN-uplink state for the console/portal.
@@ -683,12 +714,12 @@ func (a *Agent) runLanOnce(ctx context.Context) error {
 
 	dec := json.NewDecoder(bufio.NewReader(nc))
 	for {
-		var msg struct{ Op, Session, URL string }
+		var msg sessionauth.Open
 		if err := dec.Decode(&msg); err != nil {
 			return err
 		}
-		if msg.Op == "open" {
-			go a.serveSessionWS(ctx, a.opts.LanRelay, msg.URL, wsconn.NoProxyClient)
+		if msg.Op == "open" && msg.ValidFor(a.opts.Name) {
+			go a.serveSessionWS(ctx, a.opts.LanRelay, msg, wsconn.NoProxyClient)
 		}
 	}
 }
