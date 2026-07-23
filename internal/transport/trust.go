@@ -25,11 +25,9 @@ type Peer struct {
 // uses it as its client allow-list (known_clients.json); the client uses it to
 // pin server identities (known_servers.json).
 type Store struct {
-	path    string
-	mu      sync.Mutex
-	m       map[string]Peer
-	modTime time.Time
-	size    int64
+	path string
+	mu   sync.Mutex
+	m    map[string]Peer
 }
 
 // NewMemStore returns a trust store that lives in memory only — never persists
@@ -57,8 +55,6 @@ func (s *Store) load() error {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			s.modTime = time.Time{}
-			s.size = 0
 			s.m = map[string]Peer{}
 			return nil
 		}
@@ -73,10 +69,6 @@ func (s *Store) load() error {
 		m[peerKey(p.Fingerprint, p.Name)] = p
 	}
 	s.m = m
-	if st, err := os.Stat(s.path); err == nil {
-		s.modTime = st.ModTime()
-		s.size = st.Size()
-	}
 	return nil
 }
 
@@ -84,11 +76,10 @@ func (s *Store) load() error {
 func (s *Store) Get(fp string) (Peer, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.getByFingerprintLocked(fp)
-	if !ok && s.reloadChangedLocked() {
-		p, ok = s.getByFingerprintLocked(fp)
+	if s.path != "" {
+		_ = s.load()
 	}
-	return p, ok
+	return s.getByFingerprintLocked(fp)
 }
 
 func (s *Store) getByFingerprintLocked(fp string) (Peer, bool) {
@@ -104,20 +95,6 @@ func (s *Store) getByFingerprintLocked(fp string) (Peer, bool) {
 func (s *Store) Has(fp string) bool {
 	_, ok := s.Get(fp)
 	return ok
-}
-
-func (s *Store) reloadChangedLocked() bool {
-	if s.path == "" {
-		return false
-	}
-	st, err := os.Stat(s.path)
-	if err != nil {
-		return false
-	}
-	if st.ModTime().Equal(s.modTime) && st.Size() == s.size {
-		return false
-	}
-	return s.load() == nil
 }
 
 // GetByName returns the remembered peer with the given name, if any. Used by the
@@ -247,12 +224,6 @@ func (s *Store) save() error {
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		return err
-	}
-	if st, err := os.Stat(s.path); err == nil {
-		s.mu.Lock()
-		s.modTime = st.ModTime()
-		s.size = st.Size()
-		s.mu.Unlock()
 	}
 	return nil
 }

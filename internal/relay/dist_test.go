@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -35,7 +36,8 @@ func getInstaller(t *testing.T, srv *httptest.Server, path string) string {
 // the relay base URL is embedded, the portal fingerprint flows through, and
 // the cross-platform env-var contract is preserved.
 func TestInstallPS1(t *testing.T) {
-	t.Setenv("WANCTL_PORTAL_FP", "sha256:DEADBEEF")
+	fp := distTestFP(1)
+	t.Setenv("WANCTL_PORTAL_FP", fp)
 	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
 	defer srv.Close()
 
@@ -48,7 +50,7 @@ func TestInstallPS1(t *testing.T) {
 	}
 	for _, want := range []string{
 		srv.URL,
-		"DEADBEEF",
+		fp,
 		"$env:WANCTL_TOKEN",
 		"$env:WANCTL_NAME",
 		"$env:WANCTL_MODE",
@@ -67,11 +69,12 @@ func TestInstallPS1(t *testing.T) {
 // TestInstallSh keeps the sh installer honest in the same way: format verbs
 // get substituted and the relay URL + fingerprint flow through.
 func TestInstallSh(t *testing.T) {
-	t.Setenv("WANCTL_PORTAL_FP", "sha256:CAFEBABE")
+	fp := distTestFP(2)
+	t.Setenv("WANCTL_PORTAL_FP", fp)
 	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
 	defer srv.Close()
 	s := getInstaller(t, srv, "/install.sh")
-	if !strings.Contains(s, "CAFEBABE") || !strings.Contains(s, srv.URL) {
+	if !strings.Contains(s, fp) || !strings.Contains(s, srv.URL) {
 		t.Errorf("sh installer missing relay/fingerprint substitution; got:\n%s", s)
 	}
 	if !strings.Contains(s, `--transport ws`) {
@@ -80,4 +83,38 @@ func TestInstallSh(t *testing.T) {
 	if strings.Contains(s, "%[1]s") || strings.Contains(s, "%[2]s") {
 		t.Errorf("sh installer has unrendered verbs")
 	}
+}
+
+func TestInstallersSeedMultiplePortalFingerprints(t *testing.T) {
+	t.Setenv("WANCTL_PORTAL_FP", "")
+	old, newFP := distTestFP(3), distTestFP(4)
+	t.Setenv("WANCTL_PORTAL_FPS", old+","+newFP)
+	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
+	defer srv.Close()
+	for _, path := range []string{"/install.sh", "/install.ps1"} {
+		script := getInstaller(t, srv, path)
+		for _, want := range []string{old, newFP, "portal-admins", "seed"} {
+			if !strings.Contains(script, want) {
+				t.Errorf("%s missing %q", path, want)
+			}
+		}
+	}
+}
+
+func TestInstallerRejectsInvalidPortalFingerprints(t *testing.T) {
+	t.Setenv("WANCTL_PORTAL_FPS", "SHA256:not-valid-base64")
+	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
+	defer srv.Close()
+	resp, err := srv.Client().Get(srv.URL + "/install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("invalid installer config status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func distTestFP(value byte) string {
+	return "SHA256:" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string([]byte{value}), 32)))
 }

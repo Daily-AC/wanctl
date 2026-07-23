@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
+
+	"wanctl/internal/config"
 )
 
 // skillMD is the canonical wanctl SKILL.md, served at GET /skills. The relay is
@@ -53,9 +56,13 @@ func (r *Relay) handleInstall(w http.ResponseWriter, req *http.Request) {
 		scheme = xf
 	}
 	base := scheme + "://" + req.Host
-	portalFP := os.Getenv("WANCTL_PORTAL_FP")
+	portalFPs, err := installerPortalFingerprints()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
-	fmt.Fprintf(w, installScript, base, portalFP)
+	fmt.Fprintf(w, installScript, base, portalFPs)
 }
 
 // handleInstallPS1 is the Windows counterpart to handleInstall. Windows has no
@@ -68,13 +75,25 @@ func (r *Relay) handleInstallPS1(w http.ResponseWriter, req *http.Request) {
 		scheme = xf
 	}
 	base := scheme + "://" + req.Host
-	portalFP := os.Getenv("WANCTL_PORTAL_FP")
+	portalFPs, err := installerPortalFingerprints()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, installScriptPS1, base, portalFP)
+	fmt.Fprintf(w, installScriptPS1, base, portalFPs)
+}
+
+func installerPortalFingerprints() (string, error) {
+	fingerprints, err := config.ParsePortalFingerprints(config.PortalFingerprintsEnv())
+	if err != nil {
+		return "", fmt.Errorf("invalid WANCTL_PORTAL_FPS: %w", err)
+	}
+	return strings.Join(fingerprints, ","), nil
 }
 
 // installScript is a POSIX sh installer. %[1]s is the relay base URL,
-// %[2]s is the portal public-key fingerprint (may be empty). It detects the
+// %[2]s is the comma-separated portal public-key fingerprint set (may be empty). It detects the
 // OS/arch, downloads the matching binary, installs it, and (unless
 // WANCTL_INSTALL_ONLY=1) runs the agent. Token comes from $WANCTL_TOKEN.
 const installScript = `#!/bin/sh
@@ -85,7 +104,7 @@ const installScript = `#!/bin/sh
 #   /usr/local/bin/wanctl), WANCTL_INSTALL_ONLY=1 (don't run).
 set -eu
 RELAY="%[1]s"
-PORTAL_PK="%[2]s"
+PORTAL_FPS="%[2]s"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -153,7 +172,8 @@ case ":$PATH:" in
     ;;
 esac
 
-[ -n "$PORTAL_PK" ] && export WANCTL_PORTAL_PK="$PORTAL_PK"
+[ -n "$PORTAL_FPS" ] && "$DEST" portal-admins seed --fingerprints "$PORTAL_FPS"
+[ -n "$PORTAL_FPS" ] && export WANCTL_PORTAL_FPS="$PORTAL_FPS"
 
 if [ "${WANCTL_INSTALL_ONLY:-}" = "1" ]; then
   echo "done. run '$DEST' to authorize this device (Feishu login)."
@@ -181,7 +201,7 @@ echo "(授权后服务转入后台; 停止用 'wanctl stop')"
 `
 
 // installScriptPS1 is the Windows / PowerShell counterpart to installScript.
-// %[1]s is the relay base URL, %[2]s the portal public-key fingerprint (may be
+// %[1]s is the relay base URL, %[2]s the comma-separated portal public-key fingerprints (may be
 // empty). Same env-var contract as the sh installer: WANCTL_TOKEN (automation),
 // WANCTL_NAME, WANCTL_MODE, WANCTL_BIN (install path override),
 // WANCTL_INSTALL_ONLY=1 (download only, don't start the agent).
@@ -197,7 +217,7 @@ $ErrorActionPreference = 'Stop'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $Relay    = '%[1]s'
-$PortalPK = '%[2]s'
+$PortalFPs = '%[2]s'
 
 # Only amd64 binaries are published; Windows-on-ARM runs them via the kernel's
 # x86_64 emulation layer just fine, so we don't need a separate arm64 build.
@@ -263,7 +283,11 @@ foreach ($p in ($env:PATH -split ';')) {
 }
 if (-not $onSessionPath) { $env:PATH = "$destDirAbs;$env:PATH" }
 
-if ($PortalPK) { $env:WANCTL_PORTAL_PK = $PortalPK }
+if ($PortalFPs) {
+  & $dest portal-admins seed --fingerprints $PortalFPs
+  if ($LASTEXITCODE -ne 0) { throw "failed to seed portal admin fingerprints" }
+  $env:WANCTL_PORTAL_FPS = $PortalFPs
+}
 
 if ($env:WANCTL_INSTALL_ONLY -eq '1') {
   Write-Host "done. run '$dest' to authorize this device (Feishu login)."

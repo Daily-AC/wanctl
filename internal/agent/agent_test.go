@@ -7,12 +7,38 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/config"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/relay"
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
 )
+
+func TestNewMigratesLegacyPortalTrustMarker(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	portalFP, ordinaryFP := testPortalFP(10), testPortalFP(11)
+	known, err := transport.OpenStore("known_clients.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := known.Add(portalFP, "portal"); err != nil {
+		t.Fatal(err)
+	}
+	if err := known.Add(ordinaryFP, "controller"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(Options{RelayURL: "ws://x", Token: "t", Name: "dev1"}); err != nil {
+		t.Fatal(err)
+	}
+	admins, err := config.OpenPortalAdmins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !admins.Contains(portalFP) || admins.Contains(ordinaryFP) {
+		t.Fatalf("legacy migration admins = %v", admins.List())
+	}
+}
 
 func TestAgentExecOverRelay(t *testing.T) {
 	// Relay.

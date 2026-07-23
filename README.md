@@ -159,11 +159,28 @@ hard error unless explicitly re-pinned with `--replace`. After that, a new
 controller still needs device-side approval (auto-trusted with `--yes` for
 unattended agents). Token leakage alone therefore does not grant control.
 
+Self-hosted builds contain no portal root. A production relay injects its
+configured roots into both installers through `WANCTL_PORTAL_FPS` (a
+comma-separated list of full `SHA256:` fingerprints); the installer persists
+them locally before starting the agent. Direct installs can enroll roots with:
+
+```bash
+wanctl portal-admins add --fingerprints SHA256:<old>,SHA256:<new>
+wanctl portal-admins list
+wanctl portal-admins remove SHA256:<old>
+```
+
+Rotation must overlap old and new roots. Add the new root to every device first,
+then remove the old root. Removing the final portal admin is rejected so a
+remote action cannot silently lock out portal administration.
+
 ## Security model
 
 - **Token** (relay admission, machine-to-machine) → hashed/revocable later via the portal.
 - **E2E mutual TLS 1.3** (relay sees only ciphertext) — Ed25519 identity reused from lanctl.
 - **Explicit server fingerprint pinning** on controllers; device-side approval for new controllers.
+- **Explicit portal roots** persisted on each device, with overlapping rotation
+  and last-root removal protection. Self-hosted binaries trust no portal by default.
 
 ## Driving it from an agent (the skill)
 

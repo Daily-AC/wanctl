@@ -2,12 +2,14 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"wanctl/internal/config"
 	"wanctl/internal/console"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/policy"
@@ -261,6 +263,84 @@ func TestConsoleRPCDecide(t *testing.T) {
 	if resp.Verdict != "not-found" {
 		t.Fatalf("want verdict %q, got %q", "not-found", resp.Verdict)
 	}
+}
+
+func TestPortalAdminOverlapAllowsOldKeyRevocation(t *testing.T) {
+	a := newTestAgent(t)
+	known, err := transport.OpenStore("known_clients.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.known = known
+	a.portalAdmins, err = config.OpenPortalAdmins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, newFP := testPortalFP(1), testPortalFP(2)
+	if err := a.portalAdmins.Add(old, newFP); err != nil {
+		t.Fatal(err)
+	}
+	for _, fp := range []string{old, newFP} {
+		if err := known.Add(fp, "portal"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp := a.handleConsoleRPC(protocol.Message{Kind: protocol.KindTrustRevoke, FP: old})
+	if len(resp.Data) != 0 || known.Has(old) || !known.Has(newFP) {
+		t.Fatalf("old portal key was not revoked after overlap: resp=%s old=%v new=%v", resp.Data, known.Has(old), known.Has(newFP))
+	}
+	if a.authorize(old, "portal", "") {
+		t.Fatal("revoked portal key was still authorized for a new session")
+	}
+}
+
+func TestPortalAdminRefusesLastKeyRevocation(t *testing.T) {
+	a := newTestAgent(t)
+	known, err := transport.OpenStore("known_clients.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.known = known
+	a.portalAdmins, err = config.OpenPortalAdmins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := testPortalFP(3)
+	if err := a.portalAdmins.Add(last); err != nil {
+		t.Fatal(err)
+	}
+	if err := known.Add(last, "portal"); err != nil {
+		t.Fatal(err)
+	}
+	resp := a.handleConsoleRPC(protocol.Message{Kind: protocol.KindTrustRevoke, FP: last})
+	if len(resp.Data) == 0 || !known.Has(last) {
+		t.Fatalf("last portal key revocation was not blocked: resp=%s trusted=%v", resp.Data, known.Has(last))
+	}
+}
+
+func TestRevokingOrdinaryControllerDoesNotPromoteItToPortalAdmin(t *testing.T) {
+	a := newTestAgent(t)
+	known, err := transport.OpenStore("known_clients.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.known = known
+	a.portalAdmins, err = config.OpenPortalAdmins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinary := testPortalFP(4)
+	if err := known.Add(ordinary, "controller"); err != nil {
+		t.Fatal(err)
+	}
+	resp := a.handleConsoleRPC(protocol.Message{Kind: protocol.KindTrustRevoke, FP: ordinary})
+	if len(resp.Data) != 0 || known.Has(ordinary) || a.portalAdmins.Contains(ordinary) {
+		t.Fatalf("ordinary revoke changed portal admins: resp=%s trusted=%v admin=%v", resp.Data, known.Has(ordinary), a.portalAdmins.Contains(ordinary))
+	}
+}
+
+func testPortalFP(value byte) string {
+	return "SHA256:" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string([]byte{value}), 32)))
 }
 
 // mkConsole returns a minimal console.Service for use in pump tests.

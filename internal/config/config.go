@@ -20,12 +20,9 @@ const (
 	// second uplink to it and controllers switch to it with `wanctl net lan`.
 	// Override with WANCTL_LAN_RELAY.
 	DefaultLanRelay = "ws://***REMOVED-IP***:8080"
-	// DefaultPortalFP is the portal's controller fingerprint. Agents pre-trust it
-	// so the portal can open a console session to surface pairing/approval
-	// requests on the web. Overridable via WANCTL_PORTAL_PK; if the portal's
-	// identity is ever regenerated, update this. Stable across portal redeploys
-	// (identity persists on the portal's /data volume).
-	DefaultPortalFP = "SHA256:e+gYUIcZfC7HcEGiQyMhimwE8LK+67ocG7pUKYrw4TI="
+	// Portal trust is deployment data injected by the installer, never a
+	// compile-time fleet root. Kept as an empty compatibility constant.
+	DefaultPortalFP = ""
 )
 
 // EnvOr returns the value of env var key, or def if unset/empty.

@@ -45,21 +45,23 @@ type Options struct {
 	AutoYes   bool
 	Transport string      // "ws" (default) or "http" (proxy-agnostic)
 	Mode      policy.Mode // "normal" (default) or "bypass"
-	PortalFP  string      // console-admin portal fingerprint ("SHA256:..."), enrolled at install time
+	PortalFP  string      // deprecated single portal admin fingerprint
+	PortalFPs []string    // pre-trusted portal admin fingerprints, enrolled locally
 	LanRelay  string      // intranet fast-path relay (ws://...); "" disables the second uplink
 }
 
 // Agent is a running controlled node.
 type Agent struct {
-	id      *transport.Identity
-	known   *transport.Store
-	opts    Options
-	engine  *policy.Engine
-	console *console.Service
-	log     *eventlog.Logger
-	inst    string
-	apprMu  sync.Mutex
-	appr    policy.Approver
+	id           *transport.Identity
+	known        *transport.Store
+	portalAdmins *config.PortalAdmins
+	opts         Options
+	engine       *policy.Engine
+	console      *console.Service
+	log          *eventlog.Logger
+	inst         string
+	apprMu       sync.Mutex
+	appr         policy.Approver
 
 	sessMu   sync.Mutex
 	sessions map[string]*server.ShellSession
@@ -84,6 +86,32 @@ func New(opts Options) (*Agent, error) {
 	known, err := transport.OpenStore("known_clients.json")
 	if err != nil {
 		return nil, err
+	}
+	portalAdmins, err := config.OpenPortalAdmins()
+	if err != nil {
+		return nil, err
+	}
+	portalFPs := append([]string(nil), opts.PortalFPs...)
+	if opts.PortalFP != "" {
+		portalFPs = append(portalFPs, opts.PortalFP)
+	}
+	// Before portal_admins.json existed, installer-enrolled roots were stored as
+	// ordinary known clients named "portal". Promote that explicit legacy marker
+	// on first startup so upgrades retain rotation and last-root protection.
+	for _, peer := range known.List() {
+		if peer.Name == "portal" {
+			portalFPs = append(portalFPs, peer.Fingerprint)
+		}
+	}
+	if err := portalAdmins.Add(portalFPs...); err != nil {
+		return nil, fmt.Errorf("seed portal admins: %w", err)
+	}
+	for _, fp := range portalAdmins.List() {
+		if !known.Has(fp) {
+			if err := known.Add(fp, "portal"); err != nil {
+				return nil, fmt.Errorf("trust portal admin %s: %w", fp, err)
+			}
+		}
 	}
 	if opts.Shell == "" {
 		opts.Shell = server.DefaultShell()
@@ -111,12 +139,9 @@ func New(opts Options) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{
-		id: id, known: known, opts: opts, engine: engine, log: logger,
+		id: id, known: known, portalAdmins: portalAdmins, opts: opts, engine: engine, log: logger,
 		inst:     inst,
 		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(), stdin: bufio.NewReader(os.Stdin),
-	}
-	if opts.PortalFP != "" && !known.Has(opts.PortalFP) {
-		_ = known.Add(opts.PortalFP, "portal")
 	}
 	a.console = console.New(engine, logger, console.Info{
 		Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL,
@@ -303,13 +328,13 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	// must not grant the control-plane capability to approve those operations,
 	// change rules, or enable bypass mode. Only the enrolled portal identity is
 	// a console administrator, and the relay session must independently carry
-	// the console capability. An empty PortalFP therefore fails closed.
+	// the console capability. An empty administrator set therefore fails closed.
 	if hello.Kind == protocol.KindConsoleHello {
 		if !auth.Capabilities.Has(sessionauth.Console) {
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "session capability denied: console"})
 			return
 		}
-		if fp != a.opts.PortalFP {
+		if a.portalAdmins == nil || !a.portalAdmins.Contains(fp) {
 			protocol.WriteMessage(conn, protocol.Message{
 				Kind:   protocol.KindReject,
 				Reason: "controller is not authorized as this device's console administrator",
@@ -349,7 +374,7 @@ func (a *Agent) authorize(fp, name, label string) bool {
 	}
 	// Surface the pairing request to a connected front-end (the portal web
 	// console) and block for a human's trust decision. A headless agent with no
-	// portal connected denies (pre-trust with --portal-pk or --yes instead).
+	// portal connected denies (pre-trust with --portal-fps or --yes instead).
 	if a.console.AskPair(fp, name, label) {
 		a.known.AddLabeled(fp, name, label)
 		fmt.Printf("[paired] controller %q trusted via console: %s\n", name, fp)
@@ -823,12 +848,23 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 
 	case protocol.KindTrustRevoke:
 		resp := protocol.Message{Kind: protocol.KindTrustRevoke}
-		if msg.FP == a.opts.PortalFP {
-			errJSON, _ := json.Marshal("refusing to revoke the portal (it would break web control)")
+		removedPortalAdmin := false
+		if a.portalAdmins != nil && a.portalAdmins.Contains(msg.FP) {
+			if err := a.portalAdmins.Remove(msg.FP); err != nil {
+				errJSON, _ := json.Marshal(err.Error())
+				resp.Data = json.RawMessage(errJSON)
+				return resp
+			}
+			removedPortalAdmin = true
+		}
+		if err := a.known.Remove(msg.FP); err != nil {
+			if removedPortalAdmin {
+				_ = a.portalAdmins.Add(msg.FP)
+			}
+			errJSON, _ := json.Marshal(err.Error())
 			resp.Data = json.RawMessage(errJSON)
 		} else {
-			_ = a.known.Remove(msg.FP)
-			a.console.Notify() // refresh the trusted list in connected front-ends
+			a.console.Notify()
 		}
 		return resp
 

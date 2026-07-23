@@ -1,9 +1,13 @@
 package main
 
 import (
+	"encoding/base64"
+	"errors"
 	"os/exec"
+	"strings"
 	"testing"
 
+	"wanctl/internal/config"
 	"wanctl/internal/transport"
 )
 
@@ -33,4 +37,36 @@ func TestCmdTrustServerPinsVerifiedIdentity(t *testing.T) {
 	if !ok || got.Fingerprint != fp {
 		t.Fatalf("CLI pin missing: %+v, ok=%v", got, ok)
 	}
+}
+
+func TestPortalAdminsCLIUpdatesAdminAndTrustStores(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	oldFP, newFP := mainTestFP(1), mainTestFP(2)
+	if err := cmdPortalAdmins([]string{"add", "--fingerprints", oldFP + "," + newFP}); err != nil {
+		t.Fatal(err)
+	}
+	admins, err := config.OpenPortalAdmins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	known, err := transport.OpenStore("known_clients.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !admins.Contains(oldFP) || !admins.Contains(newFP) || !known.Has(oldFP) || !known.Has(newFP) {
+		t.Fatalf("seed did not update both stores: admins=%v old=%v new=%v", admins.List(), known.Has(oldFP), known.Has(newFP))
+	}
+	if err := cmdPortalAdmins([]string{"remove", oldFP}); err != nil {
+		t.Fatal(err)
+	}
+	if admins.Contains(oldFP) || known.Has(oldFP) || !admins.Contains(newFP) || !known.Has(newFP) {
+		t.Fatalf("rotation did not revoke only old root: admins=%v old=%v new=%v", admins.List(), known.Has(oldFP), known.Has(newFP))
+	}
+	if err := cmdPortalAdmins([]string{"remove", newFP}); !errors.Is(err, config.ErrLastPortalAdmin) {
+		t.Fatalf("remove final portal admin error = %v", err)
+	}
+}
+
+func mainTestFP(value byte) string {
+	return "SHA256:" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string([]byte{value}), 32)))
 }

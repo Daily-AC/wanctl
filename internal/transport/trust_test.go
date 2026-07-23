@@ -27,6 +27,12 @@ func TestStoreReloadsOnMissAfterAnotherStoreAddsPeer(t *testing.T) {
 	if !store1.Has(fp) {
 		t.Fatal("store1 did not reload missing fingerprint added by store2")
 	}
+	if err := store2.Remove(fp); err != nil {
+		t.Fatal(err)
+	}
+	if store1.Has(fp) {
+		t.Fatal("store1 did not immediately reload revoked fingerprint")
+	}
 }
 
 func TestServerPinsAreNamespacedAndReplaceIsExplicit(t *testing.T) {
