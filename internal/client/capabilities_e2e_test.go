@@ -73,6 +73,10 @@ func startCapabilityFixture(t *testing.T, transportName, grant string) (*Client,
 	}
 
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	agentID, err := transport.LoadOrCreateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
 	ag, err := agent.New(agent.Options{
 		RelayURL: relayURL, Token: "owner-token", Name: "home-pc",
 		AutoYes: true, Mode: policy.ModeBypass, Transport: transportName,
@@ -98,7 +102,11 @@ func startCapabilityFixture(t *testing.T, transportName, grant string) (*Client,
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewWith(id, known, relayURL, "shared-token", transportName), ctx
+	c := NewWith(id, known, relayURL, "shared-token", transportName)
+	if _, err := c.PinServer(ctx, "owner/home-pc", agentID.Fingerprint, false); err != nil {
+		t.Fatal(err)
+	}
+	return c, ctx
 }
 
 func execError(ctx context.Context, c *Client) error {

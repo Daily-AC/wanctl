@@ -105,6 +105,10 @@ func startCapturedRelay(t *testing.T) (*admissionCapture, *httptest.Server) {
 func startCapturedAgentAndClient(t *testing.T, relayURL, transportName string) *Client {
 	t.Helper()
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	agentID, err := transport.LoadOrCreateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
 	ag, err := agent.New(agent.Options{
 		RelayURL: relayURL, Token: captureToken, Name: "home-pc", Transport: transportName,
 		AutoYes: true, Mode: policy.ModeBypass,
@@ -130,5 +134,9 @@ func startCapturedAgentAndClient(t *testing.T, relayURL, transportName string) *
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewWith(id, known, relayURL, captureToken, transportName)
+	c := NewWith(id, known, relayURL, captureToken, transportName)
+	if _, err := c.PinServer(context.Background(), "alice/home-pc", agentID.Fingerprint, false); err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
