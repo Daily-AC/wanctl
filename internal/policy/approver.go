@@ -48,6 +48,8 @@ func (c *ConsoleApprover) Ask(req Request) Decision {
 		fmt.Fprintf(c.out, "  Approve READ from %s\n    path: %s\n", short(req.Peer), req.Path)
 	case KindWrite:
 		fmt.Fprintf(c.out, "  Approve WRITE from %s\n    path: %s\n", short(req.Peer), req.Path)
+	case KindLogs:
+		fmt.Fprintf(c.out, "  Approve EVENT LOG READ from %s\n", short(req.Peer))
 	}
 	fmt.Fprintf(c.out, "  [y] once  [a] remember this dir  [g] remember global  [n] deny: ")
 	line, _ := c.in.ReadString('\n')
@@ -55,6 +57,9 @@ func (c *ConsoleApprover) Ask(req Request) Decision {
 	case "y", "yes":
 		return Decision{Allow: true}
 	case "a":
+		if req.Kind == KindLogs {
+			return Decision{Allow: true}
+		}
 		return Decision{Allow: true, Remember: true, Scope: ScopeDir}
 	case "g":
 		return Decision{Allow: true, Remember: true, Scope: ScopeGlobal}

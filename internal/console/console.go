@@ -325,7 +325,11 @@ func (s *Service) Decide(id, verdict string) bool {
 	case "y", "yes":
 		d = policy.Decision{Allow: true}
 	case "a":
-		d = policy.Decision{Allow: true, Remember: true, Scope: policy.ScopeDir}
+		if p.view.Kind == string(policy.KindLogs) {
+			d = policy.Decision{Allow: true}
+		} else {
+			d = policy.Decision{Allow: true, Remember: true, Scope: policy.ScopeDir}
+		}
 	case "g":
 		d = policy.Decision{Allow: true, Remember: true, Scope: policy.ScopeGlobal}
 	default:

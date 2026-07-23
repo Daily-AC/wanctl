@@ -47,14 +47,18 @@ session, no TTY), a rule-miss is denied immediately.
 
 ### Activity log (M5)
 
-The device records every connect/exec/file action to `<config>/logs/events.jsonl`
-with the decision and exit code. Query it:
+The device records connect/exec/file/log-read actions to
+`<config>/logs/events.jsonl` with the decision and exit code. Secret-shaped
+arguments are redacted before JSON encoding, and the log rotates at 1 MiB with
+three backups. Query it:
 
 ```bash
 wanctl logs --target home-pc --type exec --grep deploy --since 2026-06-23T00:00:00Z
 wanctl logs                      # run on the device itself: read the local log
 ```
 Content stays on the device (E2E — the relay never sees it).
+Remote reads use a separate `logs` policy capability; approve the request once,
+remember it globally, or pre-authorize it with `wanctl rules add --kind logs`.
 
 ## Enroll a device in one line
 

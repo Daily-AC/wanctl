@@ -151,6 +151,22 @@ func (a *Agent) setApprover(ap policy.Approver) {
 	a.apprMu.Unlock()
 }
 
+type dataCapability string
+
+const capabilityReadEventLog dataCapability = "read-event-log"
+
+// gateDataCapability keeps data-session capabilities distinct from exec and
+// file requests. A later identity/capability layer can deny here before the
+// existing interactive policy gate without changing the wire handlers.
+func (a *Agent) gateDataCapability(cap dataCapability, peerFP string) (bool, string) {
+	switch cap {
+	case capabilityReadEventLog:
+		return a.gate(policy.Request{Kind: policy.KindLogs, Peer: peerFP})
+	default:
+		return false, "unsupported-capability"
+	}
+}
+
 // gate authorizes a request: bypass/pre-approved pass; otherwise ask the
 // approver and optionally remember a rule. Returns whether the op may proceed
 // and a short decision string for the audit log.
@@ -388,6 +404,17 @@ func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capa
 		case protocol.KindExecPoll:
 			a.doExecPoll(conn, m)
 		case protocol.KindLogs:
+			ok, decision := a.gateDataCapability(capabilityReadEventLog, fp)
+			a.log.Append(eventlog.Event{
+				Type: "logs", PeerFP: fp, PeerName: peerName,
+				Detail: "read event log", Decision: decision,
+			})
+			if !ok {
+				protocol.WriteMessage(conn, protocol.Message{
+					Kind: protocol.KindReject, Reason: "event log access denied by device policy",
+				})
+				continue
+			}
 			a.doLogs(conn, m)
 		case protocol.KindFilePut:
 			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp})

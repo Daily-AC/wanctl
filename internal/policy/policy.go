@@ -40,6 +40,7 @@ const (
 	KindExec  Kind = "exec"
 	KindRead  Kind = "read"
 	KindWrite Kind = "write"
+	KindLogs  Kind = "logs"
 )
 
 // Request is an operation awaiting an authorization decision.
@@ -194,6 +195,8 @@ func ruleMatches(r Rule, req Request) bool {
 		return (r.Kind == KindRead || r.Kind == KindWrite) && Within(r.Pattern, req.Path)
 	case KindWrite:
 		return r.Kind == KindWrite && Within(r.Pattern, req.Path)
+	case KindLogs:
+		return r.Kind == KindLogs && r.Scope == ScopeGlobal
 	}
 	return false
 }
@@ -272,6 +275,9 @@ func RuleFor(req Request, scope Scope) Rule {
 		} else {
 			r.Pattern = "" // any path
 		}
+	case KindLogs:
+		r.Pattern = "*"
+		r.Scope = ScopeGlobal
 	}
 	return r
 }

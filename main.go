@@ -513,26 +513,34 @@ func cmdRules(args []string) error {
 		return nil
 	case "add":
 		fs := flag.NewFlagSet("rules add", flag.ExitOnError)
-		kind := fs.String("kind", "exec", "exec | read | write")
+		kind := fs.String("kind", "exec", "exec | read | write | logs")
 		pattern := fs.String("pattern", "", "exec: command (single-command arg prefix, trailing * ok); file: directory")
 		dir := fs.String("dir", "", "for exec dir-scope: the working directory")
 		fs.Parse(args)
-		if *pattern == "" && *dir == "" {
-			return fmt.Errorf("usage: wanctl rules add --kind exec|read|write --pattern P [--dir D]")
-		}
 		r := policy.Rule{Kind: policy.Kind(*kind), Pattern: *pattern, Scope: policy.ScopeGlobal}
 		switch policy.Kind(*kind) {
 		case policy.KindExec:
+			if *pattern == "" {
+				return fmt.Errorf("exec rules require --pattern")
+			}
 			if *dir != "" { // exec dir-scope: command pattern restricted to a working dir
 				r.Scope = policy.ScopeDir
 				r.Dir = *dir
 			}
 		case policy.KindRead, policy.KindWrite:
+			if *pattern == "" {
+				return fmt.Errorf("%s rules require --pattern", *kind)
+			}
 			if *pattern != "" { // a file pattern is itself a directory restriction
 				r.Scope = policy.ScopeDir
 			}
+		case policy.KindLogs:
+			if *pattern != "" || *dir != "" {
+				return fmt.Errorf("logs rules do not take --pattern or --dir")
+			}
+			r.Pattern = "*"
 		default:
-			return fmt.Errorf("invalid --kind %q (want exec|read|write)", *kind)
+			return fmt.Errorf("invalid --kind %q (want exec|read|write|logs)", *kind)
 		}
 		if err := eng.Add(r); err != nil {
 			return err

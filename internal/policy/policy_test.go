@@ -129,6 +129,18 @@ func TestFileReadWrite(t *testing.T) {
 	}
 }
 
+func TestLogsUseIndependentGlobalRule(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	e, _ := Open("rules.json", ModeNormal)
+	if e.Allowed(Request{Kind: KindLogs, Peer: "controller"}) {
+		t.Fatal("file read rules must not imply event-log access")
+	}
+	e.Add(RuleFor(Request{Kind: KindLogs, Peer: "controller"}, ScopeDir))
+	if !e.Allowed(Request{Kind: KindLogs, Peer: "another-controller"}) {
+		t.Fatal("remembered logs capability should be global")
+	}
+}
+
 func TestRuleForAndPersistence(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("WANCTL_CONFIG_DIR", dir)
