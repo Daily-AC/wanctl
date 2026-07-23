@@ -36,6 +36,7 @@ func TestPairAlreadyTrusted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	trustServer(t, c, "home-pc")
 
 	trusted, pairingURL, err := c.Pair(context.Background(), "home-pc")
 	if err != nil {
@@ -77,6 +78,7 @@ func TestPairRequiresApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	trustServer(t, c, "home-pc")
 
 	trusted, pairingURL, err := c.Pair(context.Background(), "home-pc")
 	if err != nil {

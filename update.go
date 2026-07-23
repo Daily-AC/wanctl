@@ -14,7 +14,12 @@ import (
 	"time"
 
 	"wanctl/internal/config"
+	wanrelease "wanctl/internal/release"
 )
+
+// buildVersion is set to an immutable vMAJOR.MINOR.PATCH by the release job.
+// Development builds may update to a signed release but cannot claim a version.
+var buildVersion = "dev"
 
 // cmdUpdate replaces the running wanctl binary with the latest one served by
 // the relay's /dl/<bin> endpoint. If the background daemon is running, it is
@@ -48,15 +53,9 @@ func cmdUpdate(ctx context.Context, args []string) error {
 		return splitUpdateViaSudo(ctx, self)
 	}
 
-	binName := fmt.Sprintf("wanctl-%s-%s", runtime.GOOS, runtime.GOARCH)
-	if runtime.GOOS == "windows" {
-		binName += ".exe"
-	}
 	relay := strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
-	url := relay + "/dl/" + binName
-
-	fmt.Printf("下载 %s …\n", url)
-	tmp, err := downloadToTemp(ctx, url, dir)
+	fmt.Printf("正在验证 %s 的签名发布清单 …\n", relay)
+	tmp, version, err := downloadSignedUpdate(ctx, relay, dir, runtime.GOOS, runtime.GOARCH, buildVersion)
 	if err != nil {
 		return err
 	}
@@ -79,7 +78,7 @@ func cmdUpdate(ctx context.Context, args []string) error {
 	}
 	tmp = "" // consumed by Rename
 
-	fmt.Printf("✓ 已替换 %s\n", self)
+	fmt.Printf("✓ 已安装 wanctl %s: %s\n", version, self)
 	pruneStaleCopies(self)
 	if wasRunning {
 		fmt.Println("正在重启后台 agent …")
@@ -181,35 +180,84 @@ func pruneStaleCopies(self string) {
 	}
 }
 
-// downloadToTemp streams url to a *.tmp file in dir (so the eventual Rename to
-// the final path stays atomic — same filesystem) and returns the temp path.
-func downloadToTemp(ctx context.Context, url, dir string) (string, error) {
+func downloadSignedUpdate(ctx context.Context, relay, dir, goos, goarch, currentVersion string) (string, string, error) {
+	manifestRaw, err := fetchLimited(ctx, relay+"/dl/"+wanrelease.ManifestName, wanrelease.MaxManifestSize)
+	if err != nil {
+		return "", "", err
+	}
+	signatureRaw, err := fetchLimited(ctx, relay+"/dl/"+wanrelease.SignatureName, 4096)
+	if err != nil {
+		return "", "", err
+	}
+	manifest, err := wanrelease.VerifyManifest(manifestRaw, signatureRaw, wanrelease.TrustedPublicKeys)
+	if err != nil {
+		return "", "", fmt.Errorf("verify release manifest: %w", err)
+	}
+	artifact, err := wanrelease.Select(manifest, goos, goarch, currentVersion)
+	if err != nil {
+		return "", "", err
+	}
+	url := relay + "/dl/" + artifact.Name
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	cl := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := cl.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("fetch %s: %w", url, err)
+		return "", "", fmt.Errorf("fetch %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("fetch %s: %s", url, resp.Status)
+		return "", "", fmt.Errorf("fetch %s: %s", url, resp.Status)
+	}
+	if resp.ContentLength > artifact.Size {
+		return "", "", fmt.Errorf("artifact content length %d exceeds signed size %d", resp.ContentLength, artifact.Size)
 	}
 
 	f, err := os.CreateTemp(dir, "wanctl-update-*.tmp")
 	if err != nil {
-		return "", fmt.Errorf("create tempfile in %s: %w", dir, err)
+		return "", "", fmt.Errorf("create tempfile in %s: %w", dir, err)
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	if err := wanrelease.VerifyArtifact(resp.Body, f, artifact); err != nil {
 		f.Close()
 		os.Remove(f.Name())
-		return "", fmt.Errorf("write tempfile: %w", err)
+		return "", "", fmt.Errorf("verify downloaded %s: %w", artifact.Name, err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", "", fmt.Errorf("sync downloaded artifact: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(f.Name())
-		return "", err
+		return "", "", err
 	}
-	return f.Name(), nil
+	return f.Name(), manifest.Version, nil
+}
+
+func fetchLimited(ctx context.Context, url string, limit int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := (&http.Client{Timeout: time.Minute}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch %s: %s", url, resp.Status)
+	}
+	if resp.ContentLength > limit {
+		return nil, fmt.Errorf("fetch %s: response too large", url)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", url, err)
+	}
+	if int64(len(raw)) > limit {
+		return nil, fmt.Errorf("fetch %s: response too large", url)
+	}
+	return raw, nil
 }

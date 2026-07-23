@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -22,6 +21,7 @@ import (
 	"wanctl/internal/client"
 	"wanctl/internal/config"
 	"wanctl/internal/eventlog"
+	"wanctl/internal/limits"
 	mcppkg "wanctl/internal/mcp"
 	"wanctl/internal/policy"
 	"wanctl/internal/portal"
@@ -48,6 +48,7 @@ USAGE
  CONTROLLER (run where you / the AI drive from)
   wanctl login                                log in (Feishu) and save the token — no daemon (use this on AI / controller boxes)
   wanctl update                               download the latest binary from the relay and swap it in
+  wanctl version                              print the immutable release version (or dev)
   wanctl mcp                                  run a stdio MCP server (per-process, single-user) for an AI host's child process
   wanctl mcp --http :ADDR                     run a public HTTP/Streamable MCP server (multi-user; needs WANCTL_MCP_SEED env)
   wanctl docs ls [--group SLUG]               list documentation articles
@@ -67,7 +68,9 @@ USAGE
   wanctl id
   wanctl pair  <device>                       check device trust state; if not yet paired print the URL the device owner clicks to approve
   wanctl trust [clients|servers]
-  wanctl agent [--name N] [--relay URL] [--token T] [--yes] [--shell S] [--portal-pk FP]
+  wanctl trust server --target NS/DEV --fingerprint SHA256:... [--replace]
+  wanctl portal-admins [list|add|remove]        manage local portal root fingerprints
+  wanctl agent [--name N] [--relay URL] [--token T] [--yes] [--shell S] [--portal-fps FP[,FP]]
   wanctl relay  [--addr :8080]                run the relay (thunderbox); DATABASE_URL or WANCTL_TOKENS
   wanctl portal [--addr :8080]                run the team portal (thunderbox, internal SSO)
 
@@ -75,8 +78,9 @@ Defaults: relay=` + defaultRelay + `  transport=` + defaultTransport + ` (overri
 ENV (controller): WANCTL_TOKEN=... (or run 'wanctl' to log in)  WANCTL_RELAY=...
 ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"  WANCTL_ADMIN_SECRET=...  WANCTL_PORTAL_NS=...
 ENV (portal):     RELAY_ADMIN_URL=...  WANCTL_ADMIN_SECRET=...  PORTAL_USER_HEADER=...
+              PORTAL_PUBLIC_ORIGIN=https://portal.example  PORTAL_DEBUG_WHOAMI=1 (diagnostics only)
               WANCTL_RELAY=...  WANCTL_PORTAL_TOKEN=...  WANCTL_TRANSPORT=ws
-ENV (agent):      WANCTL_PORTAL_PK=SHA256:...
+ENV (agent):      WANCTL_PORTAL_FPS=SHA256:...[,SHA256:...]  (WANCTL_PORTAL_FP is a legacy alias)
 `
 
 // Compile-time defaults live in internal/config so the controller package shares
@@ -120,6 +124,8 @@ func main() {
 		err = cmdPair(ctx, os.Args[2:])
 	case "trust":
 		err = cmdTrust(os.Args[2:])
+	case "portal-admins":
+		err = cmdPortalAdmins(os.Args[2:])
 	case "rules":
 		err = cmdRules(os.Args[2:])
 	case "logs":
@@ -142,6 +148,9 @@ func main() {
 		err = cmdLogout()
 	case "update":
 		err = cmdUpdate(ctx, os.Args[2:])
+	case "version":
+		fmt.Println(buildVersion)
+		return
 	case "service":
 		err = cmdService(ctx, os.Args[2:])
 	case "mcp":
@@ -231,7 +240,7 @@ func cmdRelay(args []string) error {
 		fmt.Println("wanctl relay: MCP server enabled at /wanctl-mcp (Streamable HTTP)")
 	}
 	fmt.Printf("wanctl relay listening on %s\n", *addr)
-	return http.ListenAndServe(*addr, r.Handler())
+	return limits.HTTPServer(*addr, r.Handler()).ListenAndServe()
 }
 
 func cmdPortal(args []string) error {
@@ -255,11 +264,13 @@ func cmdPortal(args []string) error {
 		Transport:     envOr("WANCTL_TRANSPORT", "http"),
 		Identity:      id,
 		Known:         known,
+		PublicOrigin:  os.Getenv("PORTAL_PUBLIC_ORIGIN"),
+		DebugWhoami:   os.Getenv("PORTAL_DEBUG_WHOAMI") == "1",
 	})
 	fmt.Printf("wanctl portal on %s\n  identity:      %s\n  identity hdr:  %q\n  relay(admin):  %q\n  relay(dial):   %q\n",
 		*addr, id.Fingerprint, envOr("PORTAL_USER_HEADER", "X-Auth-Request-Email"),
 		os.Getenv("RELAY_ADMIN_URL"), os.Getenv("WANCTL_RELAY"))
-	return http.ListenAndServe(*addr, p.Handler())
+	return limits.HTTPServer(*addr, p.Handler()).ListenAndServe()
 }
 
 func cmdAgent(ctx context.Context, args []string) error {
@@ -271,13 +282,25 @@ func cmdAgent(ctx context.Context, args []string) error {
 	yes := fs.Bool("yes", false, "auto-trust new controllers (unattended)")
 	tr := fs.String("transport", envOr("WANCTL_TRANSPORT", defaultTransport), "transport: ws or http (http is proxy-agnostic)")
 	mode := fs.String("mode", "", "policy mode: normal (prompt on miss) or bypass (auto-allow, DANGEROUS). Empty = keep the last persisted mode (default normal).")
-	portalPK := fs.String("portal-pk", envOr("WANCTL_PORTAL_PK", config.DefaultPortalFP), "pre-trust this portal fingerprint (enrolled at install time)")
+	portalFPS := fs.String("portal-fps", config.PortalFingerprintsEnv(), "comma-separated portal admin fingerprints to seed locally")
+	portalPK := fs.String("portal-pk", "", "deprecated alias for one --portal-fps entry")
 	lanRelay := fs.String("lan-relay", config.LanRelay(), "intranet fast-path relay (ws://...); empty disables the second uplink")
 	fs.Parse(args)
+	portalRaw := *portalFPS
+	if *portalPK != "" {
+		if portalRaw != "" {
+			portalRaw += ","
+		}
+		portalRaw += *portalPK
+	}
+	parsedPortalFPs, err := config.ParsePortalFingerprints(portalRaw)
+	if err != nil {
+		return fmt.Errorf("portal fingerprints: %w", err)
+	}
 	if *relayURL == "" || *token == "" {
 		return fmt.Errorf("provide --relay and --token (or WANCTL_RELAY/WANCTL_TOKEN)")
 	}
-	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFP: *portalPK, LanRelay: *lanRelay})
+	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFPs: parsedPortalFPs, LanRelay: *lanRelay})
 	if err != nil {
 		return err
 	}
@@ -513,26 +536,34 @@ func cmdRules(args []string) error {
 		return nil
 	case "add":
 		fs := flag.NewFlagSet("rules add", flag.ExitOnError)
-		kind := fs.String("kind", "exec", "exec | read | write")
-		pattern := fs.String("pattern", "", "exec: command (+arg prefix, trailing * ok); file: directory")
+		kind := fs.String("kind", "exec", "exec | read | write | logs")
+		pattern := fs.String("pattern", "", "exec: command (single-command arg prefix, trailing * ok); file: directory")
 		dir := fs.String("dir", "", "for exec dir-scope: the working directory")
 		fs.Parse(args)
-		if *pattern == "" && *dir == "" {
-			return fmt.Errorf("usage: wanctl rules add --kind exec|read|write --pattern P [--dir D]")
-		}
 		r := policy.Rule{Kind: policy.Kind(*kind), Pattern: *pattern, Scope: policy.ScopeGlobal}
 		switch policy.Kind(*kind) {
 		case policy.KindExec:
+			if *pattern == "" {
+				return fmt.Errorf("exec rules require --pattern")
+			}
 			if *dir != "" { // exec dir-scope: command pattern restricted to a working dir
 				r.Scope = policy.ScopeDir
 				r.Dir = *dir
 			}
 		case policy.KindRead, policy.KindWrite:
+			if *pattern == "" {
+				return fmt.Errorf("%s rules require --pattern", *kind)
+			}
 			if *pattern != "" { // a file pattern is itself a directory restriction
 				r.Scope = policy.ScopeDir
 			}
+		case policy.KindLogs:
+			if *pattern != "" || *dir != "" {
+				return fmt.Errorf("logs rules do not take --pattern or --dir")
+			}
+			r.Pattern = "*"
 		default:
-			return fmt.Errorf("invalid --kind %q (want exec|read|write)", *kind)
+			return fmt.Errorf("invalid --kind %q (want exec|read|write|logs)", *kind)
 		}
 		if err := eng.Add(r); err != nil {
 			return err
@@ -558,6 +589,28 @@ func cmdRules(args []string) error {
 }
 
 func cmdTrust(args []string) error {
+	if len(args) > 0 && args[0] == "server" {
+		fs := flag.NewFlagSet("trust server", flag.ContinueOnError)
+		target := fs.String("target", "", "canonical owner/device target")
+		fingerprint := fs.String("fingerprint", "", "verified SHA256 device fingerprint")
+		replace := fs.Bool("replace", false, "replace an existing pin after independent verification")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *target == "" || *fingerprint == "" {
+			return fmt.Errorf("usage: wanctl trust server --target NS/DEV --fingerprint SHA256:... [--replace]")
+		}
+		c, err := client.New()
+		if err != nil {
+			return err
+		}
+		canonical, err := c.PinServer(context.Background(), *target, *fingerprint, *replace)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("pinned device %q identity %s\n", canonical, *fingerprint)
+		return nil
+	}
 	which := "clients"
 	if len(args) > 0 {
 		which = args[0]
@@ -576,4 +629,69 @@ func cmdTrust(args []string) error {
 		fmt.Printf("  %-20s %s  (added %s)\n", p.Name, transport.ShortFingerprint(p.Fingerprint), p.Added.Format("2006-01-02"))
 	}
 	return nil
+}
+
+func cmdPortalAdmins(args []string) error {
+	admins, err := config.OpenPortalAdmins()
+	if err != nil {
+		return err
+	}
+	known, err := transport.OpenStore("known_clients.json")
+	if err != nil {
+		return err
+	}
+	sub := "list"
+	if len(args) > 0 {
+		sub, args = args[0], args[1:]
+	}
+	switch sub {
+	case "list":
+		fingerprints := admins.List()
+		fmt.Printf("portal admins: %d\n", len(fingerprints))
+		for _, fp := range fingerprints {
+			fmt.Println("  " + fp)
+		}
+		return nil
+	case "add", "seed":
+		fs := flag.NewFlagSet("portal-admins "+sub, flag.ContinueOnError)
+		raw := fs.String("fingerprints", "", "comma-separated SHA256 fingerprints")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		if *raw == "" && fs.NArg() > 0 {
+			*raw = strings.Join(fs.Args(), ",")
+		}
+		fingerprints, err := config.ParsePortalFingerprints(*raw)
+		if err != nil || len(fingerprints) == 0 {
+			if err == nil {
+				err = fmt.Errorf("at least one fingerprint is required")
+			}
+			return err
+		}
+		if err := admins.Add(fingerprints...); err != nil {
+			return err
+		}
+		for _, fp := range fingerprints {
+			if err := known.Add(fp, "portal"); err != nil {
+				return err
+			}
+		}
+		fmt.Printf("portal admins seeded: %d\n", len(fingerprints))
+		return nil
+	case "remove", "rm":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: wanctl portal-admins remove <SHA256:fingerprint>")
+		}
+		if err := admins.Remove(args[0]); err != nil {
+			return err
+		}
+		if err := known.Remove(args[0]); err != nil {
+			_ = admins.Add(args[0])
+			return err
+		}
+		fmt.Println("portal admin removed")
+		return nil
+	default:
+		return fmt.Errorf("usage: wanctl portal-admins [list|add|remove]")
+	}
 }

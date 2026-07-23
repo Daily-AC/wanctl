@@ -12,6 +12,13 @@ controller (you)          relay (public, thunderbox)        device (agent)
        └──────── mutual-TLS E2E tunnel over the pipe ──────────┘
 ```
 
+Admission tokens are sent in the `Authorization: Bearer` header and must be
+protected by TLS. The E2E tunnel protects command/file payloads from the relay,
+but it does not encrypt the outer HTTP/WebSocket admission handshake. In
+particular, a `ws://` LAN relay exposes bearer headers to the LAN unless the
+network path is already protected by a trusted encrypted tunnel. Use `wss://`
+for production LAN relays whenever certificates are available.
+
 > **Status:** M1 (cross-internet transport, relay, exec/file) + M2 (policy &
 > approval) + M4 (Feishu-SSO portal + Postgres + sharing ACL) + M5 (JSONL logging)
 > + M6 (skill) done and verified over the public thunderbox relay. The
@@ -28,6 +35,12 @@ Every remote command and file op is gated on the device:
 - `wanctl agent --mode bypass` auto-allows everything (warns; for trusted/isolated devices).
 - Headless agents deny on a miss — pre-load rules with `wanctl rules add`.
 - Manage rules on the device: `wanctl rules list|add|rm`.
+- Exec rules match additional arguments only within one simple command; shell
+  operators, substitutions, and redirections require an exact rule.
+- File rules are enforced by root-scoped opens; symlinks cannot escape an
+  allowed directory, and transfers reject non-regular files.
+- Uploads are limited to 1 GiB and atomically replace the destination only
+  after the declared byte count is received and synced successfully.
 - `wanctl exec --cwd /path "cmd"` runs in (and scopes the rule to) that directory.
 
 ### Device console (CLI + remote portal)
@@ -41,48 +54,57 @@ session, no TTY), a rule-miss is denied immediately.
 
 ### Activity log (M5)
 
-The device records every connect/exec/file action to `<config>/logs/events.jsonl`
-with the decision and exit code. Query it:
+The device records connect/exec/file/log-read actions to
+`<config>/logs/events.jsonl` with the decision and exit code. Secret-shaped
+arguments are redacted before JSON encoding, and the log rotates at 1 MiB with
+three backups. Query it:
 
 ```bash
 wanctl logs --target home-pc --type exec --grep deploy --since 2026-06-23T00:00:00Z
 wanctl logs                      # run on the device itself: read the local log
 ```
 Content stays on the device (E2E — the relay never sees it).
+Remote reads use a separate `logs` policy capability; approve the request once,
+remember it globally, or pre-authorize it with `wanctl rules add --kind logs`.
 
-## Enroll a device in one line
+HTTP tunnel writes and background jobs are bounded: one tunnel request is at
+most 1 MiB; at most four background jobs run concurrently for up to 30 minutes,
+with 8 MiB output retained per job and 64 MiB across completed jobs.
 
-On the machine you want to control (the agent), no Go needed — the relay serves
-prebuilt binaries and a one-line installer for both shells. Get a token from the
-portal, then:
+## Install and enroll a device
+
+Obtain `install.sh` or `install.ps1` from the independently authenticated GitLab
+release, not from the artifact relay. A relay-hosted installer cannot securely
+bootstrap trust in the same relay. The installer embeds the offline release
+public key and verifies the signed manifest, binary size, and SHA-256 before it
+installs anything. OpenSSL 1.1.1+ is required.
 
 ```bash
 # macOS / Linux
-curl -fsSL https://***REMOVED-IP***/install.sh | WANCTL_TOKEN=<token> sh
+WANCTL_RELAY=https://***REMOVED-IP*** sh ./install.sh
 ```
 
 ```powershell
 # Windows (PowerShell — no bash needed)
-$env:WANCTL_TOKEN='<token>'; irm https://***REMOVED-IP***/install.ps1 | iex
+$env:WANCTL_RELAY='https://***REMOVED-IP***'; .\install.ps1
 ```
 
-Both installers detect OS/arch, install `wanctl`, and start the agent in the
-foreground (wrap in `systemd`/`nohup &` on unix, or a service wrapper like
-`nssm` on Windows, to persist). Optional env (same names on both):
-`WANCTL_NAME` (default hostname), `WANCTL_MODE=bypass`, `WANCTL_INSTALL_ONLY=1`
-(install, don't run), `WANCTL_BIN` (override install path). Install-only +
-launch separately:
+Both installers detect OS/arch and install `wanctl`. Get a token from the portal,
+verify the Portal administrator fingerprint through an independent channel,
+then enroll and install the native service separately:
 
 ```bash
-curl -fsSL https://***REMOVED-IP***/install.sh | WANCTL_INSTALL_ONLY=1 sh
-nohup wanctl agent --relay https://***REMOVED-IP*** --token <token> \
-      --transport ws --name "$(hostname)" >/tmp/wanctl-agent.log 2>&1 &
+wanctl portal-admins add --fingerprints SHA256:<verified-portal-fingerprint>
+wanctl agent --relay https://***REMOVED-IP*** --token <token> \
+      --transport ws --name "$(hostname)"
+wanctl service install
 ```
 
 ```powershell
-$env:WANCTL_INSTALL_ONLY='1'; irm https://***REMOVED-IP***/install.ps1 | iex
+wanctl portal-admins add --fingerprints SHA256:<verified-portal-fingerprint>
 wanctl agent --relay https://***REMOVED-IP*** --token <token> `
              --transport ws --name $env:COMPUTERNAME
+wanctl service install
 ```
 
 > **For AI agents:** how to *drive* a device (run commands, transfer files, read
@@ -97,8 +119,11 @@ wanctl agent --relay https://***REMOVED-IP*** --token <token> `
 
 ```bash
 wanctl update                                  # fetch latest binary from the relay
-                                               # and atomically swap it in; restarts daemon
+                                               # verify its offline signature, then atomically swap
 ```
+
+Release signing, bootstrap, and key rotation are documented in
+[`docs/release-signing.md`](docs/release-signing.md).
 
 ## Build from source
 
@@ -128,18 +153,38 @@ wanctl push ./a.zip /remote/a.zip    # upload
 wanctl pull /remote/log.txt ./log    # download
 wanctl id                            # this node's fingerprint
 wanctl trust [clients|servers]       # list trusted peers
+wanctl trust server --target alice/home-pc --fingerprint SHA256:... # confirm a verified device identity
 ```
 
-First connection to a new device prints a TOFU pairing prompt on the device
-(auto-trusted with `--yes` for unattended agents). Token leakage alone does not
-grant control: the device still pins fingerprints and (later milestone) enforces
-the policy engine.
+First contact with a new device stops before application data is sent and prints
+its full `owner/device` target and certificate fingerprint. Verify both out of
+band, then pin them with `wanctl trust server`; a changed certificate remains a
+hard error unless explicitly re-pinned with `--replace`. After that, a new
+controller still needs device-side approval (auto-trusted with `--yes` for
+unattended agents). Token leakage alone therefore does not grant control.
+
+Self-hosted builds contain no portal root. A production relay injects its
+configured roots into both installers through `WANCTL_PORTAL_FPS` (a
+comma-separated list of full `SHA256:` fingerprints); the installer persists
+them locally before starting the agent. Direct installs can enroll roots with:
+
+```bash
+wanctl portal-admins add --fingerprints SHA256:<old>,SHA256:<new>
+wanctl portal-admins list
+wanctl portal-admins remove SHA256:<old>
+```
+
+Rotation must overlap old and new roots. Add the new root to every device first,
+then remove the old root. Removing the final portal admin is rejected so a
+remote action cannot silently lock out portal administration.
 
 ## Security model
 
 - **Token** (relay admission, machine-to-machine) → hashed/revocable later via the portal.
 - **E2E mutual TLS 1.3** (relay sees only ciphertext) — Ed25519 identity reused from lanctl.
-- **TOFU fingerprint pinning** both directions.
+- **Explicit server fingerprint pinning** on controllers; device-side approval for new controllers.
+- **Explicit portal roots** persisted on each device, with overlapping rotation
+  and last-root removal protection. Self-hosted binaries trust no portal by default.
 
 ## Driving it from an agent (the skill)
 

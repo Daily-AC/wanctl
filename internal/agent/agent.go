@@ -16,10 +16,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"wanctl/internal/admission"
 	"wanctl/internal/config"
 	"wanctl/internal/console"
 	"wanctl/internal/eventlog"
@@ -27,6 +29,7 @@ import (
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/server"
+	"wanctl/internal/sessionauth"
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
 
@@ -42,21 +45,23 @@ type Options struct {
 	AutoYes   bool
 	Transport string      // "ws" (default) or "http" (proxy-agnostic)
 	Mode      policy.Mode // "normal" (default) or "bypass"
-	PortalFP  string      // pre-trusted portal fingerprint ("SHA256:..."), enrolled at install time
+	PortalFP  string      // deprecated single portal admin fingerprint
+	PortalFPs []string    // pre-trusted portal admin fingerprints, enrolled locally
 	LanRelay  string      // intranet fast-path relay (ws://...); "" disables the second uplink
 }
 
 // Agent is a running controlled node.
 type Agent struct {
-	id      *transport.Identity
-	known   *transport.Store
-	opts    Options
-	engine  *policy.Engine
-	console *console.Service
-	log     *eventlog.Logger
-	inst    string
-	apprMu  sync.Mutex
-	appr    policy.Approver
+	id           *transport.Identity
+	known        *transport.Store
+	portalAdmins *config.PortalAdmins
+	opts         Options
+	engine       *policy.Engine
+	console      *console.Service
+	log          *eventlog.Logger
+	inst         string
+	apprMu       sync.Mutex
+	appr         policy.Approver
 
 	sessMu   sync.Mutex
 	sessions map[string]*server.ShellSession
@@ -81,6 +86,32 @@ func New(opts Options) (*Agent, error) {
 	known, err := transport.OpenStore("known_clients.json")
 	if err != nil {
 		return nil, err
+	}
+	portalAdmins, err := config.OpenPortalAdmins()
+	if err != nil {
+		return nil, err
+	}
+	portalFPs := append([]string(nil), opts.PortalFPs...)
+	if opts.PortalFP != "" {
+		portalFPs = append(portalFPs, opts.PortalFP)
+	}
+	// Before portal_admins.json existed, installer-enrolled roots were stored as
+	// ordinary known clients named "portal". Promote that explicit legacy marker
+	// on first startup so upgrades retain rotation and last-root protection.
+	for _, peer := range known.List() {
+		if peer.Name == "portal" {
+			portalFPs = append(portalFPs, peer.Fingerprint)
+		}
+	}
+	if err := portalAdmins.Add(portalFPs...); err != nil {
+		return nil, fmt.Errorf("seed portal admins: %w", err)
+	}
+	for _, fp := range portalAdmins.List() {
+		if !known.Has(fp) {
+			if err := known.Add(fp, "portal"); err != nil {
+				return nil, fmt.Errorf("trust portal admin %s: %w", fp, err)
+			}
+		}
 	}
 	if opts.Shell == "" {
 		opts.Shell = server.DefaultShell()
@@ -108,12 +139,9 @@ func New(opts Options) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{
-		id: id, known: known, opts: opts, engine: engine, log: logger,
+		id: id, known: known, portalAdmins: portalAdmins, opts: opts, engine: engine, log: logger,
 		inst:     inst,
 		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(), stdin: bufio.NewReader(os.Stdin),
-	}
-	if opts.PortalFP != "" && !known.Has(opts.PortalFP) {
-		_ = known.Add(opts.PortalFP, "portal")
 	}
 	a.console = console.New(engine, logger, console.Info{
 		Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL,
@@ -149,6 +177,22 @@ func (a *Agent) setApprover(ap policy.Approver) {
 	a.apprMu.Unlock()
 }
 
+type dataCapability string
+
+const capabilityReadEventLog dataCapability = "read-event-log"
+
+// gateDataCapability keeps data-session capabilities distinct from exec and
+// file requests. A later identity/capability layer can deny here before the
+// existing interactive policy gate without changing the wire handlers.
+func (a *Agent) gateDataCapability(cap dataCapability, peerFP string) (bool, string) {
+	switch cap {
+	case capabilityReadEventLog:
+		return a.gate(policy.Request{Kind: policy.KindLogs, Peer: peerFP})
+	default:
+		return false, "unsupported-capability"
+	}
+}
+
 // gate authorizes a request: bypass/pre-approved pass; otherwise ask the
 // approver and optionally remember a rule. Returns whether the op may proceed
 // and a short decision string for the audit log.
@@ -173,6 +217,31 @@ func (a *Agent) gate(req policy.Request) (bool, string) {
 	return true, "approved"
 }
 
+// gateFile returns the policy root that must constrain the actual filesystem
+// open. A one-shot approval is restricted to the requested file's parent;
+// global and bypass decisions use an empty root, meaning the filesystem volume.
+func (a *Agent) gateFile(req policy.Request) (bool, string, string) {
+	if a.engine.Mode() == policy.ModeBypass {
+		return true, "bypass", ""
+	}
+	if root, ok := a.engine.AllowedFileRoot(req); ok {
+		return true, "pre-approved", root
+	}
+	a.apprMu.Lock()
+	appr := a.appr
+	a.apprMu.Unlock()
+	d := appr.Ask(req)
+	if !d.Allow {
+		return false, "denied", ""
+	}
+	if d.Remember {
+		rule := policy.RuleFor(req, d.Scope)
+		a.engine.Add(rule)
+		return true, "remembered:" + string(d.Scope), rule.Pattern
+	}
+	return true, "approved", filepath.Dir(req.Path)
+}
+
 // Run connects the control channel and serves sessions until ctx is cancelled.
 // If a LAN relay is configured, a second uplink to it runs alongside the
 // primary one; sessions from either relay are served identically (same E2E
@@ -184,8 +253,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.opts.Transport == "http" {
 		return a.runHTTP(ctx)
 	}
-	ctrlURL := strings.TrimRight(a.opts.RelayURL, "/") + "/agent?token=" + a.opts.Token
-	nc, resp, err := wsconn.Dial(ctx, ctrlURL, nil)
+	ctrlURL := strings.TrimRight(a.opts.RelayURL, "/") + "/agent"
+	nc, resp, err := wsconn.Dial(ctx, ctrlURL, admission.Header(a.opts.Token))
 	if err != nil {
 		if resp != nil && resp.StatusCode == 401 {
 			return fmt.Errorf("relay rejected token (401)")
@@ -204,7 +273,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	dec := json.NewDecoder(bufio.NewReader(nc))
 	for {
-		var msg struct{ Op, Session, URL string }
+		var msg sessionauth.Open
 		if err := dec.Decode(&msg); err != nil {
 			select {
 			case <-ctx.Done():
@@ -213,31 +282,31 @@ func (a *Agent) Run(ctx context.Context) error {
 				return fmt.Errorf("control channel closed: %w", err)
 			}
 		}
-		if msg.Op == "open" {
-			go a.serveSession(ctx, msg.URL)
+		if msg.Op == "open" && msg.ValidFor(a.opts.Name) {
+			go a.serveSession(ctx, msg)
 		}
 	}
 }
 
-func (a *Agent) serveSession(ctx context.Context, relPath string) {
-	a.serveSessionWS(ctx, a.opts.RelayURL, relPath, nil)
+func (a *Agent) serveSession(ctx context.Context, open sessionauth.Open) {
+	a.serveSessionWS(ctx, a.opts.RelayURL, open, nil)
 }
 
 // serveSessionWS opens the per-session WebSocket on the given relay and serves
 // it. hc overrides the handshake HTTP client (NoProxyClient for the intranet
 // relay).
-func (a *Agent) serveSessionWS(ctx context.Context, relayURL, relPath string, hc *http.Client) {
-	url := strings.TrimRight(relayURL, "/") + relPath
-	nc, _, err := wsconn.DialWith(ctx, url, nil, hc)
+func (a *Agent) serveSessionWS(ctx context.Context, relayURL string, open sessionauth.Open, hc *http.Client) {
+	url := strings.TrimRight(relayURL, "/") + open.URL
+	nc, _, err := wsconn.DialWith(ctx, url, admission.Header(a.opts.Token), hc)
 	if err != nil {
 		return
 	}
-	a.handleSession(ctx, nc)
+	a.handleSession(ctx, nc, open)
 }
 
 // handleSession completes the server-side handshake and serves requests on an
 // already-established transport conn (WebSocket or HTTP).
-func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
+func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth.Open) {
 	conn, fp, err := transport.ServerHandshake(ctx, nc, a.id)
 	if err != nil {
 		return
@@ -250,6 +319,28 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
 	}
 	if hello.Kind != protocol.KindHello && hello.Kind != protocol.KindConsoleHello {
 		return
+	}
+	if !auth.ValidFor(a.opts.Name) {
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "invalid relay session capabilities"})
+		return
+	}
+	// Pairing grants a controller permission to submit device operations; it
+	// must not grant the control-plane capability to approve those operations,
+	// change rules, or enable bypass mode. Only the enrolled portal identity is
+	// a console administrator, and the relay session must independently carry
+	// the console capability. An empty administrator set therefore fails closed.
+	if hello.Kind == protocol.KindConsoleHello {
+		if !auth.Capabilities.Has(sessionauth.Console) {
+			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "session capability denied: console"})
+			return
+		}
+		if a.portalAdmins == nil || !a.portalAdmins.Contains(fp) {
+			protocol.WriteMessage(conn, protocol.Message{
+				Kind:   protocol.KindReject,
+				Reason: "controller is not authorized as this device's console administrator",
+			})
+			return
+		}
 	}
 	// Authorize (TOFU / pre-trusted portal key) and reply OK for BOTH exec and
 	// console sessions BEFORE serving — the controller/portal blocks on this OK,
@@ -268,7 +359,7 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn) {
 		a.serveConsole(ctx, conn)
 		return
 	}
-	a.serve(conn, fp, hello.Name)
+	a.serve(conn, fp, hello.Name, auth.Capabilities)
 }
 
 func (a *Agent) authorize(fp, name, label string) bool {
@@ -283,7 +374,7 @@ func (a *Agent) authorize(fp, name, label string) bool {
 	}
 	// Surface the pairing request to a connected front-end (the portal web
 	// console) and block for a human's trust decision. A headless agent with no
-	// portal connected denies (pre-trust with --portal-pk or --yes instead).
+	// portal connected denies (pre-trust with --portal-fps or --yes instead).
 	if a.console.AskPair(fp, name, label) {
 		a.known.AddLabeled(fp, name, label)
 		fmt.Printf("[paired] controller %q trusted via console: %s\n", name, fp)
@@ -321,11 +412,15 @@ func (a *Agent) trustedControllers() []console.TrustedController {
 	return out
 }
 
-func (a *Agent) serve(conn *tls.Conn, fp, peerName string) {
+func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capabilities) {
 	for {
 		m, err := protocol.ReadMessage(conn)
 		if err != nil {
 			return
+		}
+		if required := requiredCapability(m.Kind); required != 0 && !caps.Has(required) {
+			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "session capability denied: " + required.String()})
+			continue
 		}
 		switch m.Kind {
 		case protocol.KindExec:
@@ -335,27 +430,53 @@ func (a *Agent) serve(conn *tls.Conn, fp, peerName string) {
 		case protocol.KindExecPoll:
 			a.doExecPoll(conn, m)
 		case protocol.KindLogs:
+			ok, decision := a.gateDataCapability(capabilityReadEventLog, fp)
+			a.log.Append(eventlog.Event{
+				Type: "logs", PeerFP: fp, PeerName: peerName,
+				Detail: "read event log", Decision: decision,
+			})
+			if !ok {
+				protocol.WriteMessage(conn, protocol.Message{
+					Kind: protocol.KindReject, Reason: "event log access denied by device policy",
+				})
+				continue
+			}
 			a.doLogs(conn, m)
 		case protocol.KindFilePut:
-			ok, decision := a.gate(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp})
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp})
 			a.log.Append(eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "PUT " + m.Path, Decision: decision})
 			if !ok {
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "write denied by device policy: " + m.Path})
 				continue
 			}
-			server.HandleFilePut(conn, m)
+			server.HandleFilePut(conn, m, root)
 		case protocol.KindFileGet:
-			ok, decision := a.gate(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp})
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp})
 			a.log.Append(eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "GET " + m.Path, Decision: decision})
 			if !ok {
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "read denied by device policy: " + m.Path})
 				continue
 			}
-			server.HandleFileGet(conn, m)
+			server.HandleFileGet(conn, m, root)
 		default:
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "unknown request: " + m.Kind})
 			return
 		}
+	}
+}
+
+func requiredCapability(kind string) sessionauth.Capabilities {
+	switch kind {
+	case protocol.KindExec, protocol.KindExecAsync, protocol.KindExecPoll:
+		return sessionauth.Exec
+	case protocol.KindFileGet:
+		return sessionauth.Read
+	case protocol.KindFilePut:
+		return sessionauth.Write
+	case protocol.KindLogs:
+		return sessionauth.Logs
+	default:
+		return 0
 	}
 }
 
@@ -366,19 +487,18 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "command denied by device policy: " + m.Command})
 		return
 	}
-	command := withCwd(m.Cwd, m.Command)
 	out := server.FrameWriter(conn, protocol.FrameStdout)
 	var code int
 	var err error
 	if m.OneShot {
-		code, err = server.RunOneShot(a.opts.Shell, command, out)
+		code, err = server.RunOneShot(a.opts.Shell, m.Command, m.Cwd, out)
 	} else {
 		sess, serr := a.session(fp)
 		if serr != nil {
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: serr.Error()})
 			return
 		}
-		code, err = sess.Exec(command, out)
+		code, err = sess.ExecInDir(m.Command, m.Cwd, out)
 	}
 	if err != nil {
 		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision})
@@ -402,7 +522,7 @@ func (a *Agent) doExecAsync(conn *tls.Conn, fp, peerName string, m protocol.Mess
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "command denied by device policy: " + m.Command})
 		return
 	}
-	id, err := a.jobs.start(a.opts.Shell, withCwd(m.Cwd, m.Command))
+	id, err := a.jobs.start(a.opts.Shell, m.Command, m.Cwd)
 	if err != nil {
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return
@@ -453,15 +573,6 @@ func (a *Agent) doLogs(conn *tls.Conn, m protocol.Message) {
 // from a previous run, not just the one passed at construction).
 func (a *Agent) Mode() policy.Mode { return a.engine.Mode() }
 
-// withCwd prefixes a directory change so the command runs in cwd. Uses ';' so it
-// works in both POSIX sh and PowerShell.
-func withCwd(cwd, cmd string) string {
-	if cwd == "" {
-		return cmd
-	}
-	return "cd \"" + cwd + "\"; " + cmd
-}
-
 // httpBase converts the relay URL to an HTTP(S) origin for the HTTP transport.
 func httpBase(relayURL string) string {
 	b := strings.TrimRight(relayURL, "/")
@@ -481,7 +592,7 @@ func httpBase(relayURL string) string {
 // Called on clean shutdown; uses a fresh short-timeout client since the run ctx
 // is already cancelled.
 func (a *Agent) deregisterHTTP(base string) {
-	qv := url.Values{"token": {a.opts.Token}, "device": {a.opts.Name}}
+	qv := url.Values{"device": {a.opts.Name}}
 	if a.inst != "" {
 		qv.Set("inst", a.inst)
 	}
@@ -491,6 +602,7 @@ func (a *Agent) deregisterHTTP(base string) {
 	if err != nil {
 		return
 	}
+	admission.SetBearer(req, a.opts.Token)
 	if resp, err := hc.Do(req); err == nil {
 		resp.Body.Close()
 	}
@@ -500,7 +612,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 	base := httpBase(a.opts.RelayURL)
 	fmt.Printf("wanctl agent %q online via %s (http transport)\n  fingerprint: %s\n", a.opts.Name, base, a.id.Fingerprint)
 	hc := &http.Client{Timeout: 35 * time.Second}
-	q := url.Values{"token": {a.opts.Token}, "device": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}}.Encode()
+	q := url.Values{"device": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}}.Encode()
 	pollURL := base + "/h/poll?" + q
 	for {
 		if ctx.Err() != nil {
@@ -508,6 +620,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 			return nil
 		}
 		req, _ := http.NewRequestWithContext(ctx, "GET", pollURL, nil)
+		admission.SetBearer(req, a.opts.Token)
 		resp, err := hc.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -528,21 +641,21 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 			resp.Body.Close()
 			return fmt.Errorf("another wanctl agent instance registered this device name; this instance is standing down")
 		}
-		var msg struct{ Session string }
+		var msg sessionauth.Open
 		json.NewDecoder(resp.Body).Decode(&msg)
 		resp.Body.Close()
-		if msg.Session != "" {
-			go a.serveSessionHTTP(ctx, base, msg.Session)
+		if msg.ValidFor(a.opts.Name) {
+			go a.serveSessionHTTP(ctx, base, msg)
 		}
 	}
 }
 
-func (a *Agent) serveSessionHTTP(ctx context.Context, base, session string) {
-	nc, err := httpconn.Dial(ctx, base, session, "agent", a.opts.Token)
+func (a *Agent) serveSessionHTTP(ctx context.Context, base string, open sessionauth.Open) {
+	nc, err := httpconn.Dial(ctx, base, open.Session, "agent", a.opts.Token)
 	if err != nil {
 		return
 	}
-	a.handleSession(ctx, nc)
+	a.handleSession(ctx, nc, open)
 }
 
 // lanInfo snapshots the LAN-uplink state for the console/portal.
@@ -620,8 +733,8 @@ func (a *Agent) runLan(ctx context.Context) {
 // it drops or the switch turns off.
 func (a *Agent) runLanOnce(ctx context.Context) error {
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	ctrlURL := strings.TrimRight(a.opts.LanRelay, "/") + "/agent?token=" + a.opts.Token
-	nc, _, err := wsconn.DialWith(dialCtx, ctrlURL, nil, wsconn.NoProxyClient)
+	ctrlURL := strings.TrimRight(a.opts.LanRelay, "/") + "/agent"
+	nc, _, err := wsconn.DialWith(dialCtx, ctrlURL, admission.Header(a.opts.Token), wsconn.NoProxyClient)
 	cancel()
 	if err != nil {
 		return err
@@ -656,12 +769,12 @@ func (a *Agent) runLanOnce(ctx context.Context) error {
 
 	dec := json.NewDecoder(bufio.NewReader(nc))
 	for {
-		var msg struct{ Op, Session, URL string }
+		var msg sessionauth.Open
 		if err := dec.Decode(&msg); err != nil {
 			return err
 		}
-		if msg.Op == "open" {
-			go a.serveSessionWS(ctx, a.opts.LanRelay, msg.URL, wsconn.NoProxyClient)
+		if msg.Op == "open" && msg.ValidFor(a.opts.Name) {
+			go a.serveSessionWS(ctx, a.opts.LanRelay, msg, wsconn.NoProxyClient)
 		}
 	}
 }
@@ -735,12 +848,23 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 
 	case protocol.KindTrustRevoke:
 		resp := protocol.Message{Kind: protocol.KindTrustRevoke}
-		if msg.FP == a.opts.PortalFP {
-			errJSON, _ := json.Marshal("refusing to revoke the portal (it would break web control)")
+		removedPortalAdmin := false
+		if a.portalAdmins != nil && a.portalAdmins.Contains(msg.FP) {
+			if err := a.portalAdmins.Remove(msg.FP); err != nil {
+				errJSON, _ := json.Marshal(err.Error())
+				resp.Data = json.RawMessage(errJSON)
+				return resp
+			}
+			removedPortalAdmin = true
+		}
+		if err := a.known.Remove(msg.FP); err != nil {
+			if removedPortalAdmin {
+				_ = a.portalAdmins.Add(msg.FP)
+			}
+			errJSON, _ := json.Marshal(err.Error())
 			resp.Data = json.RawMessage(errJSON)
 		} else {
-			_ = a.known.Remove(msg.FP)
-			a.console.Notify() // refresh the trusted list in connected front-ends
+			a.console.Notify()
 		}
 		return resp
 

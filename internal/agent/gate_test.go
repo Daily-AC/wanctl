@@ -122,6 +122,81 @@ func TestGateDenyRejects(t *testing.T) {
 	}
 }
 
+func TestLogsRequireIndependentPolicyGate(t *testing.T) {
+	srv := httptest.NewServer(relay.New(relay.EnvTokenStore("tok:alice")).Handler())
+	defer srv.Close()
+	base := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	startAgent(t, base, policy.DenyApprover{}, policy.ModeNormal)
+	dr := connectController(t, base)
+	defer dr.Conn.Close()
+	if err := protocol.WriteMessage(dr.Conn, protocol.Message{Kind: protocol.KindLogs}); err != nil {
+		t.Fatal(err)
+	}
+	ft, payload, err := protocol.ReadFrame(dr.Conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ft != protocol.FrameJSON {
+		t.Fatalf("first logs frame type = %d, want JSON rejection", ft)
+	}
+	msg, err := protocol.DecodeMessage(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Kind != protocol.KindReject {
+		t.Fatalf("trusted controller read logs without capability approval: response kind = %q", msg.Kind)
+	}
+}
+
+type requestKindApprover struct{ kinds chan policy.Kind }
+
+func (a requestKindApprover) Ask(req policy.Request) policy.Decision {
+	a.kinds <- req.Kind
+	return policy.Decision{Allow: true}
+}
+
+func TestLogsUseLogsCapabilityPolicyKind(t *testing.T) {
+	srv := httptest.NewServer(relay.New(relay.EnvTokenStore("tok:alice")).Handler())
+	defer srv.Close()
+	base := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	ap := requestKindApprover{kinds: make(chan policy.Kind, 1)}
+	startAgent(t, base, ap, policy.ModeNormal)
+	dr := connectController(t, base)
+	defer dr.Conn.Close()
+	if err := protocol.WriteMessage(dr.Conn, protocol.Message{Kind: protocol.KindLogs}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		ft, payload, err := protocol.ReadFrame(dr.Conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ft != protocol.FrameJSON {
+			continue
+		}
+		msg, err := protocol.DecodeMessage(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg.Kind == protocol.KindReject {
+			t.Fatalf("approved logs capability was rejected: %s", msg.Reason)
+		}
+		if msg.Kind == protocol.KindExit {
+			break
+		}
+	}
+	select {
+	case kind := <-ap.kinds:
+		if kind != policy.KindLogs {
+			t.Fatalf("logs gated as %q, want %q", kind, policy.KindLogs)
+		}
+	default:
+		t.Fatal("logs request did not enter the policy gate")
+	}
+}
+
 func TestBypassModeAllowsWithoutApprover(t *testing.T) {
 	srv := httptest.NewServer(relay.New(relay.EnvTokenStore("tok:alice")).Handler())
 	defer srv.Close()

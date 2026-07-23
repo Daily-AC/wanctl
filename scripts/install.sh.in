@@ -1,0 +1,71 @@
+#!/bin/sh
+# Obtain this installer from the independently authenticated wanctl release,
+# never from the relay whose binary contents it is meant to verify.
+set -eu
+
+RELAY=${WANCTL_RELAY:?set WANCTL_RELAY to the artifact relay URL}
+command -v openssl >/dev/null 2>&1 || { echo "OpenSSL 1.1.1+ is required for Ed25519 verification" >&2; exit 1; }
+TMPDIR_WANCTL=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_WANCTL"' EXIT HUP INT TERM
+
+cat >"$TMPDIR_WANCTL/release.pub" <<'WANCTL_RELEASE_KEY'
+@WANCTL_RELEASE_PUBLIC_KEY_PEM@
+WANCTL_RELEASE_KEY
+
+BASE=${RELAY%/}/dl
+curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-filesize 1048576 \
+  "$BASE/manifest.json" -o "$TMPDIR_WANCTL/manifest.json"
+curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-filesize 64 \
+  "$BASE/manifest.json.sig" -o "$TMPDIR_WANCTL/manifest.json.sig"
+openssl pkeyutl -verify -pubin -inkey "$TMPDIR_WANCTL/release.pub" -rawin \
+  -in "$TMPDIR_WANCTL/manifest.json" -sigfile "$TMPDIR_WANCTL/manifest.json.sig" >/dev/null
+
+VERSION=$(awk '/"version":/ { gsub(/[",]/, "", $2); print $2; found++ } END { if (found != 1) exit 1 }' "$TMPDIR_WANCTL/manifest.json") || { echo "signed manifest has no unique version" >&2; exit 1; }
+version_gt() {
+  new=${1#v}; old=${2#v}; oldifs=$IFS; IFS=.; set -- $new $old; IFS=$oldifs
+  [ "$#" -eq 6 ] || return 1
+  for n in "$@"; do case "$n" in ''|*[!0-9]*) return 1 ;; esac; done
+  [ "$1" -gt "$4" ] || { [ "$1" -eq "$4" ] && { [ "$2" -gt "$5" ] || { [ "$2" -eq "$5" ] && [ "$3" -gt "$6" ]; }; }; }
+}
+EXISTING=$(command -v wanctl 2>/dev/null || true)
+if [ -n "$EXISTING" ]; then
+  CURRENT=$($EXISTING version 2>/dev/null || true)
+  if [ -n "$CURRENT" ] && [ "$CURRENT" != dev ] && ! version_gt "$VERSION" "$CURRENT"; then
+    echo "refusing release $VERSION: installed version is $CURRENT" >&2
+    exit 1
+  fi
+fi
+
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
+case "$ARCH" in x86_64|amd64) ARCH=amd64 ;; aarch64|arm64) ARCH=arm64 ;; *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;; esac
+BIN="wanctl-$OS-$ARCH"
+
+# The manifest is trusted at this point. Extract only the exact platform block
+# produced by release-manifest; fail if any field is missing or duplicated.
+META=$(awk -v os="$OS" -v arch="$ARCH" '
+  /"os":/ { hit=($0 ~ "\"" os "\""); next }
+  hit && /"arch":/ { hit=($0 ~ "\"" arch "\""); next }
+  hit && /"name":/ { gsub(/[",]/, "", $2); name=$2; next }
+  hit && /"size":/ { gsub(/,/, "", $2); size=$2; next }
+  hit && /"sha256":/ { gsub(/[",]/, "", $2); print name, size, $2; found++; hit=0 }
+  END { if (found != 1) exit 1 }
+' "$TMPDIR_WANCTL/manifest.json") || { echo "signed manifest has no unique $OS/$ARCH artifact" >&2; exit 1; }
+set -- $META
+[ "$#" -eq 3 ] && [ "$1" = "$BIN" ] || { echo "signed artifact identity mismatch" >&2; exit 1; }
+SIZE=$2
+SHA=$3
+
+curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-filesize "$SIZE" \
+  "$BASE/$BIN" -o "$TMPDIR_WANCTL/$BIN"
+ACTUAL_SIZE=$(wc -c <"$TMPDIR_WANCTL/$BIN" | tr -d ' ')
+[ "$ACTUAL_SIZE" = "$SIZE" ] || { echo "artifact size mismatch" >&2; exit 1; }
+if command -v sha256sum >/dev/null 2>&1; then ACTUAL_SHA=$(sha256sum "$TMPDIR_WANCTL/$BIN" | awk '{print $1}');
+else ACTUAL_SHA=$(shasum -a 256 "$TMPDIR_WANCTL/$BIN" | awk '{print $1}'); fi
+[ "$ACTUAL_SHA" = "$SHA" ] || { echo "artifact sha256 mismatch" >&2; exit 1; }
+
+DEST=${WANCTL_BIN:-${EXISTING:-/usr/local/bin/wanctl}}
+if install -m 0755 "$TMPDIR_WANCTL/$BIN" "$DEST" 2>/dev/null; then :
+elif command -v sudo >/dev/null 2>&1; then sudo install -m 0755 "$TMPDIR_WANCTL/$BIN" "$DEST"
+else mkdir -p "$HOME/.local/bin"; DEST="$HOME/.local/bin/wanctl"; install -m 0755 "$TMPDIR_WANCTL/$BIN" "$DEST"; fi
+echo "verified and installed: $DEST"

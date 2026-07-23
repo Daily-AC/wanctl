@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"wanctl/internal/admission"
 	"wanctl/internal/config"
 	"wanctl/internal/relay"
 )
@@ -96,14 +97,9 @@ func relayPOST(ctx context.Context, path string, body any) error {
 		return err
 	}
 	b, _ := json.Marshal(body)
-	url := relayBase() + path
-	if strings.Contains(url, "?") {
-		url += "&token=" + tok
-	} else {
-		url += "?token=" + tok
-	}
-	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(b))
+	req, _ := http.NewRequestWithContext(ctx, "POST", relayBase()+path, bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
+	admission.SetBearer(req, tok)
 	cl := &http.Client{Timeout: 30 * time.Second}
 	resp, err := cl.Do(req)
 	if err != nil {

@@ -1,0 +1,80 @@
+# Obtain this installer from the independently authenticated wanctl release,
+# never from the relay whose binary contents it is meant to verify.
+$ErrorActionPreference = 'Stop'
+if (-not $env:WANCTL_RELAY) { throw 'set WANCTL_RELAY to the artifact relay URL' }
+if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) { throw 'OpenSSL 1.1.1+ is required for Ed25519 verification' }
+
+function Receive-SizedFile([string]$uri, [string]$path, [int64]$maxBytes) {
+  Add-Type -AssemblyName System.Net.Http
+  $client = [Net.Http.HttpClient]::new()
+  $response = $null
+  $inputStream = $null
+  $outputStream = $null
+  try {
+    $response = $client.GetAsync($uri, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+    $response.EnsureSuccessStatusCode() | Out-Null
+    if ($response.Content.Headers.ContentLength -ne $null -and $response.Content.Headers.ContentLength -gt $maxBytes) { throw 'download exceeds signed size limit' }
+    $inputStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+    $outputStream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    $buffer = New-Object byte[] 65536
+    [int64]$total = 0
+    while (($count = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+      $total += $count
+      if ($total -gt $maxBytes) { throw 'download exceeds signed size limit' }
+      $outputStream.Write($buffer, 0, $count)
+    }
+  } finally {
+    if ($outputStream) { $outputStream.Dispose() }
+    if ($inputStream) { $inputStream.Dispose() }
+    if ($response) { $response.Dispose() }
+    $client.Dispose()
+  }
+}
+
+$tmpDir = Join-Path $env:TEMP ("wanctl-release-" + [guid]::NewGuid().Guid)
+New-Item -ItemType Directory -Path $tmpDir | Out-Null
+try {
+  @'
+@WANCTL_RELEASE_PUBLIC_KEY_PEM@
+'@ | Set-Content -NoNewline -Encoding ascii (Join-Path $tmpDir 'release.pub')
+  $base = $env:WANCTL_RELAY.TrimEnd('/') + '/dl'
+  $manifestPath = Join-Path $tmpDir 'manifest.json'
+  $signaturePath = Join-Path $tmpDir 'manifest.json.sig'
+  Receive-SizedFile "$base/manifest.json" $manifestPath 1048576
+  Receive-SizedFile "$base/manifest.json.sig" $signaturePath 64
+  & openssl pkeyutl -verify -pubin -inkey (Join-Path $tmpDir 'release.pub') -rawin -in $manifestPath -sigfile $signaturePath | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'release manifest signature verification failed' }
+
+  $manifest = Get-Content -Raw $manifestPath | ConvertFrom-Json
+  $targetVersion = [version]$manifest.version.TrimStart('v')
+  $existing = (Get-Command wanctl.exe -ErrorAction SilentlyContinue).Source
+  if ($existing) {
+    $savedErrorActionPreference = $ErrorActionPreference
+    try {
+      # Releases before the signed updater did not expose `wanctl version`.
+      $ErrorActionPreference = 'SilentlyContinue'
+      $currentText = ((& $existing version 2>$null | Out-String).Trim())
+      $currentExitCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $savedErrorActionPreference
+    }
+    if ($currentExitCode -ne 0 -or $currentText -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { $currentText = $null }
+    if ($currentText -and $targetVersion -le [version]$currentText.TrimStart('v')) {
+      throw "refusing release $($manifest.version): installed version is $currentText"
+    }
+  }
+  $artifact = @($manifest.artifacts | Where-Object { $_.os -eq 'windows' -and $_.arch -eq 'amd64' })
+  if ($artifact.Count -ne 1 -or $artifact[0].name -ne 'wanctl-windows-amd64.exe') { throw 'signed manifest has no unique windows/amd64 artifact' }
+  if ([int64]$artifact[0].size -le 0 -or [int64]$artifact[0].size -gt 67108864) { throw 'signed artifact size is invalid' }
+  $binaryPath = Join-Path $tmpDir $artifact[0].name
+  Receive-SizedFile "$base/$($artifact[0].name)" $binaryPath ([int64]$artifact[0].size)
+  if ((Get-Item $binaryPath).Length -ne [int64]$artifact[0].size) { throw 'artifact size mismatch' }
+  if ((Get-FileHash -Algorithm SHA256 $binaryPath).Hash.ToLowerInvariant() -ne $artifact[0].sha256) { throw 'artifact sha256 mismatch' }
+
+  $dest = if ($env:WANCTL_BIN) { $env:WANCTL_BIN } elseif ($existing) { $existing } else { Join-Path $env:LOCALAPPDATA 'wanctl\wanctl.exe' }
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+  Move-Item -Force $binaryPath $dest
+  Write-Host "verified and installed: $dest"
+} finally {
+  Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+}

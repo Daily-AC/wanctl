@@ -5,11 +5,13 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -45,6 +47,15 @@ func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
 			columns: []string{"namespace"},
 			values:  [][]driver.Value{{"renjinxi"}, {"***REMOVED***"}},
 		}, nil
+	}
+	if strings.Contains(s.query, "SELECT perms FROM acl") {
+		if !strings.Contains(s.query, "revoked_at IS NULL") {
+			return nil, errors.New("ACL lookup must exclude revoked grants")
+		}
+		if len(args) == 3 && args[0] == "owner" && args[1] == "home-pc" && args[2] == "reader" {
+			return &adminRows{columns: []string{"perms"}, values: [][]driver.Value{{"read"}}}, nil
+		}
+		return &adminRows{columns: []string{"perms"}}, nil
 	}
 	if !strings.Contains(s.query, "UNION ALL") || !strings.Contains(s.query, "revoked_at IS NULL") {
 		return nil, errors.New("ListDevices query must include own devices, ACL devices, and revoked filter")
@@ -92,6 +103,142 @@ func newAdminTestPGStore(t *testing.T) *PGStore {
 	return &PGStore{db: db}
 }
 
+var resolveUserDriverID uint64
+
+type resolveUserState struct {
+	byIdentity  map[string]string
+	byNamespace map[string]string
+	inserts     int
+}
+
+type resolveUserDriver struct{ state *resolveUserState }
+
+func (d resolveUserDriver) Open(string) (driver.Conn, error) {
+	return resolveUserConn{state: d.state}, nil
+}
+
+type resolveUserConn struct{ state *resolveUserState }
+
+func (c resolveUserConn) Prepare(query string) (driver.Stmt, error) {
+	return resolveUserStmt{state: c.state, query: query}, nil
+}
+func (resolveUserConn) Close() error              { return nil }
+func (resolveUserConn) Begin() (driver.Tx, error) { return nil, errors.New("transactions unsupported") }
+
+type resolveUserStmt struct {
+	state *resolveUserState
+	query string
+}
+
+func (resolveUserStmt) Close() error  { return nil }
+func (resolveUserStmt) NumInput() int { return -1 }
+func (resolveUserStmt) Exec([]driver.Value) (driver.Result, error) {
+	return nil, errors.New("exec unsupported")
+}
+func (s resolveUserStmt) Query(args []driver.Value) (driver.Rows, error) {
+	if strings.Contains(s.query, "SELECT namespace FROM users WHERE feishu_open_id") {
+		identity := args[0].(string)
+		if ns, ok := s.state.byIdentity[identity]; ok {
+			return &adminRows{columns: []string{"namespace"}, values: [][]driver.Value{{ns}}}, nil
+		}
+		return &adminRows{columns: []string{"namespace"}}, nil
+	}
+	if strings.Contains(s.query, "INSERT INTO users") {
+		s.state.inserts++
+		identity, ns := args[0].(string), args[1].(string)
+		if owner, exists := s.state.byNamespace[ns]; exists {
+			if strings.Contains(s.query, "DO UPDATE") {
+				delete(s.state.byIdentity, owner)
+				s.state.byIdentity[identity] = ns
+				s.state.byNamespace[ns] = identity
+				return &adminRows{columns: []string{"namespace"}, values: [][]driver.Value{{ns}}}, nil
+			}
+			if strings.Contains(s.query, "DO NOTHING") {
+				return &adminRows{columns: []string{"namespace"}}, nil
+			}
+			return nil, errors.New("unhandled namespace conflict")
+		}
+		s.state.byIdentity[identity] = ns
+		s.state.byNamespace[ns] = identity
+		return &adminRows{columns: []string{"namespace"}, values: [][]driver.Value{{ns}}}, nil
+	}
+	return nil, fmt.Errorf("unexpected query: %s", s.query)
+}
+
+func newResolveUserTestPGStore(t *testing.T, state *resolveUserState) *PGStore {
+	t.Helper()
+	name := fmt.Sprintf("wanctl_resolve_user_test_%d", atomic.AddUint64(&resolveUserDriverID, 1))
+	sql.Register(name, resolveUserDriver{state: state})
+	db, err := sql.Open(name, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return &PGStore{db: db}
+}
+
+func TestPGStoreResolveUserDoesNotReassignNamespace(t *testing.T) {
+	state := &resolveUserState{
+		byIdentity:  map[string]string{"alice@old.example": "alice"},
+		byNamespace: map[string]string{"alice": "alice@old.example"},
+	}
+	p := newResolveUserTestPGStore(t, state)
+
+	if ns, err := p.ResolveUser("alice@new.example"); !errors.Is(err, ErrNamespaceConflict) {
+		t.Fatalf("ResolveUser = %q, %v; want ErrNamespaceConflict", ns, err)
+	}
+	if got := state.byNamespace["alice"]; got != "alice@old.example" {
+		t.Fatalf("namespace owner changed to %q", got)
+	}
+}
+
+type namespaceConflictAdmin struct{ noopAdmin }
+
+func (*namespaceConflictAdmin) ResolveUser(string) (string, error) {
+	return "", fmt.Errorf("%w: %q", ErrNamespaceConflict, "alice")
+}
+
+func TestAdminResolveUserReturnsConflict(t *testing.T) {
+	r := New(envTokens{})
+	r.SetAdminSecret("secret")
+	r.SetAdmin(&namespaceConflictAdmin{})
+	req := httptest.NewRequest("POST", "/admin/resolve-user", strings.NewReader(`{"identity":"alice@new.example"}`))
+	req.Header.Set("X-Admin-Secret", "secret")
+	rr := httptest.NewRecorder()
+
+	r.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body = %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "already owned") {
+		t.Fatalf("conflict reason missing from response: %q", rr.Body.String())
+	}
+}
+
+func TestPGStoreResolveUserIsStableForImmutableIdentity(t *testing.T) {
+	state := &resolveUserState{
+		byIdentity:  map[string]string{},
+		byNamespace: map[string]string{},
+	}
+	p := newResolveUserTestPGStore(t, state)
+
+	first, err := p.ResolveUser("stable@example.com")
+	if err != nil {
+		t.Fatalf("first ResolveUser: %v", err)
+	}
+	second, err := p.ResolveUser("stable@example.com")
+	if err != nil {
+		t.Fatalf("second ResolveUser: %v", err)
+	}
+	if first != "stable" || second != first {
+		t.Fatalf("namespaces = %q, %q; want stable", first, second)
+	}
+	if state.inserts != 1 {
+		t.Fatalf("insert count = %d, want 1", state.inserts)
+	}
+}
+
 func TestPGStoreListDevicesIncludesOwnedAndSharedACLDevices(t *testing.T) {
 	p := newAdminTestPGStore(t)
 
@@ -129,6 +276,24 @@ func TestPGStoreListUsersReturnsNamespaces(t *testing.T) {
 	want := []string{"renjinxi", "***REMOVED***"}
 	if !reflect.DeepEqual(namespaces, want) {
 		t.Fatalf("namespaces = %+v, want %+v", namespaces, want)
+	}
+}
+
+func TestPGStoreACLPermsReturnsLiveGrant(t *testing.T) {
+	p := newAdminTestPGStore(t)
+	perms, ok := p.ACLPerms("reader", "owner", "home-pc")
+	if !ok || perms != "read" {
+		t.Fatalf("ACLPerms = %q, %v", perms, ok)
+	}
+	if _, ok := p.ACLPerms("other", "owner", "home-pc"); ok {
+		t.Fatal("missing grant should not be allowed")
+	}
+}
+
+func TestPGStoreAddACLRejectsInvalidPermissionsBeforeDatabase(t *testing.T) {
+	p := newAdminTestPGStore(t)
+	if err := p.AddACL("owner", "home-pc", "reader", "read,unknown"); err == nil {
+		t.Fatal("invalid permissions were accepted")
 	}
 }
 

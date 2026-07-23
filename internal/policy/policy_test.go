@@ -25,6 +25,50 @@ func TestMatchCommand(t *testing.T) {
 	}
 }
 
+func TestMatchCommandRejectsAdditionalShellOperations(t *testing.T) {
+	cases := []string{
+		"git status && rm -rf /tmp/project",
+		"git status; rm -rf /tmp/project",
+		"git status ; rm -rf /tmp/project",
+		"git status || rm -rf /tmp/project",
+		"git status | sh",
+		"git status\nrm -rf /tmp/project",
+		"git status \nrm -rf /tmp/project",
+		"git status & rm -rf /tmp/project",
+		"git status $(rm -rf /tmp/project)",
+		"git status <(rm -rf /tmp/project)",
+		"git status > /tmp/status",
+	}
+	for _, command := range cases {
+		if MatchCommand("git status", command) {
+			t.Errorf("git status rule unexpectedly authorized %q", command)
+		}
+	}
+}
+
+func TestMatchCommandPreservesArgumentPrefixSemantics(t *testing.T) {
+	cases := []string{
+		"git status --short",
+		"git status --porcelain=v1",
+		`git status -- "path with spaces"`,
+	}
+	for _, command := range cases {
+		if !MatchCommand("git status", command) {
+			t.Errorf("git status rule should authorize argv command %q", command)
+		}
+	}
+}
+
+func TestMatchCommandAllowsExplicitExactCompoundRule(t *testing.T) {
+	const command = "git status && git diff"
+	if !MatchCommand(command, command) {
+		t.Fatal("an exact rule should authorize the exact compound command")
+	}
+	if MatchCommand(command, command+" && rm -rf /tmp/project") {
+		t.Fatal("an exact compound rule should not authorize an appended command")
+	}
+}
+
 func TestWithin(t *testing.T) {
 	if !Within("", "/anything") {
 		t.Error("empty dir should match any path")
@@ -76,6 +120,24 @@ func TestFileReadWrite(t *testing.T) {
 	}
 	if e.Allowed(Request{Kind: KindWrite, Path: "/logs/x"}) {
 		t.Fatal("read rule should NOT allow write")
+	}
+	if root, ok := e.AllowedFileRoot(Request{Kind: KindRead, Path: "/data/a.txt"}); !ok || root != "/data" {
+		t.Fatalf("read authorization root = %q, %v; want /data, true", root, ok)
+	}
+	if _, ok := e.AllowedFileRoot(Request{Kind: KindWrite, Path: "/logs/x"}); ok {
+		t.Fatal("disallowed write unexpectedly returned an authorization root")
+	}
+}
+
+func TestLogsUseIndependentGlobalRule(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	e, _ := Open("rules.json", ModeNormal)
+	if e.Allowed(Request{Kind: KindLogs, Peer: "controller"}) {
+		t.Fatal("file read rules must not imply event-log access")
+	}
+	e.Add(RuleFor(Request{Kind: KindLogs, Peer: "controller"}, ScopeDir))
+	if !e.Allowed(Request{Kind: KindLogs, Peer: "another-controller"}) {
+		t.Fatal("remembered logs capability should be global")
 	}
 }
 

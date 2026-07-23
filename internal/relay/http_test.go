@@ -1,18 +1,22 @@
 package relay
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"wanctl/internal/limits"
+	"wanctl/internal/sessionauth"
 )
 
 type pollResult struct {
-	status  int
-	session string
-	err     error
+	status int
+	open   sessionauth.Open
+	err    error
 }
 
 func startHTTPPoll(t *testing.T, h http.Handler, query string) <-chan pollResult {
@@ -22,9 +26,9 @@ func startHTTPPoll(t *testing.T, h http.Handler, query string) <-chan pollResult
 		req := httptest.NewRequest("GET", "/h/poll?"+query, nil)
 		resp := httptest.NewRecorder()
 		h.ServeHTTP(resp, req)
-		var msg struct{ Session string }
-		_ = json.NewDecoder(resp.Body).Decode(&msg)
-		ch <- pollResult{status: resp.Code, session: msg.Session}
+		var open sessionauth.Open
+		_ = json.NewDecoder(resp.Body).Decode(&open)
+		ch <- pollResult{status: resp.Code, open: open}
 	}()
 	return ch
 }
@@ -108,8 +112,8 @@ func TestHTTPPollNewInstanceReplacesOldAndKeepsJobs(t *testing.T) {
 		if got.status != http.StatusOK {
 			t.Fatalf("B status = %d, want 200", got.status)
 		}
-		if got.session != wantSession {
-			t.Fatalf("B session = %q, want %q", got.session, wantSession)
+		if got.open.Session != wantSession {
+			t.Fatalf("B session = %q, want %q", got.open.Session, wantSession)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("B did not receive queued job")
@@ -153,10 +157,54 @@ func TestHTTPPollLegacyEmptyInstanceKeepsExistingBehavior(t *testing.T) {
 		if got.status != http.StatusOK {
 			t.Fatalf("legacy status = %d, want 200", got.status)
 		}
-		if got.session != wantSession {
-			t.Fatalf("legacy session = %q, want %q", got.session, wantSession)
+		if got.open.Session != wantSession {
+			t.Fatalf("legacy session = %q, want %q", got.open.Session, wantSession)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("legacy poll did not receive queued job")
+	}
+}
+
+func TestHTTPPollReceivesRelayIssuedCapabilities(t *testing.T) {
+	r := New(EnvTokenStore("owner-token:owner,reader-token:reader"))
+	r.SetACL(staticACL("read"))
+	h := r.Handler()
+	poll := startHTTPPoll(t, h, "token=owner-token&device=home-pc&inst=A")
+	waitHTTPAgentInst(t, r, "owner/home-pc", "A")
+
+	req := httptest.NewRequest("GET", "/h/dial?token=reader-token&target=owner/home-pc", nil)
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("dial status = %d, body=%s", resp.Code, resp.Body.String())
+	}
+
+	select {
+	case got := <-poll:
+		if got.status != http.StatusOK || got.open.Capabilities != sessionauth.Read {
+			t.Fatalf("poll result = %+v", got)
+		}
+		if got.open.CallerNamespace != "reader" || got.open.OwnerNamespace != "owner" || got.open.Device != "home-pc" {
+			t.Fatalf("poll authorization metadata = %+v", got.open)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent did not receive session authorization")
+	}
+}
+
+func TestHTTPUploadRejectsOversizedBody(t *testing.T) {
+	r := New(EnvTokenStore("tok-alice:alice"))
+	r.hsess["session"] = &httpSession{toClient: newSideQueue(), toAgent: newSideQueue()}
+	req := httptest.NewRequest("POST", "/h/up?token=tok-alice&session=session&role=client",
+		bytes.NewReader(make([]byte, limits.RelayHTTPUploadBytes+1)))
+	resp := httptest.NewRecorder()
+	r.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized upload status = %d, want %d", resp.Code, http.StatusRequestEntityTooLarge)
+	}
+	select {
+	case queued := <-r.hsess["session"].toAgent.ch:
+		t.Fatalf("oversized body was queued: %d bytes", len(queued))
+	default:
 	}
 }

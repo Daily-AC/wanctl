@@ -1,9 +1,126 @@
 package eventlog
 
 import (
+	"bufio"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestAppendRedactsSecretsBeforeWritingJSONL(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	l, err := Open("events.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	details := []string{
+		"deploy --token raw-token-value --region us-east-1",
+		"db-migrate --password=hunter2 --dry-run",
+		`curl -H 'Authorization: Bearer header-secret' https://api.example.test/v1`,
+		"fetch https://api.example.test/items?token=url-secret&limit=10",
+	}
+	for _, detail := range details {
+		if err := l.Append(Event{Type: "exec", Detail: detail}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(l.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"raw-token-value", "hunter2", "header-secret", "url-secret"} {
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("secret %q was written to disk: %s", secret, raw)
+		}
+	}
+	for _, executable := range []string{"deploy", "db-migrate", "curl", "fetch"} {
+		if !strings.Contains(string(raw), executable) {
+			t.Fatalf("audit summary lost executable %q: %s", executable, raw)
+		}
+	}
+	if strings.Count(string(raw), "[REDACTED]") < len(details) {
+		t.Fatalf("expected one or more redactions per event: %s", raw)
+	}
+	if !strings.Contains(string(raw), "limit=10") || !strings.Contains(string(raw), "region us-east-1") {
+		t.Fatalf("redaction removed non-sensitive audit context: %s", raw)
+	}
+	sc := bufio.NewScanner(strings.NewReader(string(raw)))
+	for sc.Scan() {
+		var event Event
+		if err := json.Unmarshal(sc.Bytes(), &event); err != nil {
+			t.Fatalf("redaction broke JSONL: %v: %q", err, sc.Bytes())
+		}
+	}
+}
+
+func TestAppendRotatesAndBoundsBackups(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	l, err := Open("events.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.maxBytes = 4 << 10
+	payload := strings.Repeat("x", 1024)
+	for i := 0; i < 100; i++ {
+		if err := l.Append(Event{Type: "exec", Detail: payload}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(l.Path() + ".1"); err != nil {
+		t.Fatalf("log did not rotate after exceeding its size limit: %v", err)
+	}
+	matches, err := filepath.Glob(l.Path() + "*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) > 4 {
+		t.Fatalf("log retained %d files, want active + at most 3 backups: %v", len(matches), matches)
+	}
+	for _, path := range matches {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode = %o, want 600", path, info.Mode().Perm())
+		}
+		if info.Size() > l.maxBytes {
+			t.Fatalf("%s size = %d, exceeds %d", path, info.Size(), l.maxBytes)
+		}
+		data, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sc := bufio.NewScanner(data)
+		for sc.Scan() {
+			if !json.Valid(sc.Bytes()) {
+				t.Fatalf("rotation broke JSONL in %s: %q", path, sc.Bytes())
+			}
+		}
+		data.Close()
+	}
+}
+
+func TestAppendBoundsOversizedEvent(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	l, err := Open("events.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Append(Event{Type: "exec", Detail: strings.Repeat("x", 2<<20)}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(l.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() > l.maxBytes {
+		t.Fatalf("single event produced %d-byte segment, exceeds %d", info.Size(), l.maxBytes)
+	}
+}
 
 func TestAppendReadFilter(t *testing.T) {
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())

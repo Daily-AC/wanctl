@@ -1,10 +1,13 @@
 package transport
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,11 +25,9 @@ type Peer struct {
 // uses it as its client allow-list (known_clients.json); the client uses it to
 // pin server identities (known_servers.json).
 type Store struct {
-	path    string
-	mu      sync.Mutex
-	m       map[string]Peer
-	modTime time.Time
-	size    int64
+	path string
+	mu   sync.Mutex
+	m    map[string]Peer
 }
 
 // NewMemStore returns a trust store that lives in memory only — never persists
@@ -54,8 +55,6 @@ func (s *Store) load() error {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			s.modTime = time.Time{}
-			s.size = 0
 			s.m = map[string]Peer{}
 			return nil
 		}
@@ -67,13 +66,9 @@ func (s *Store) load() error {
 	}
 	m := make(map[string]Peer, len(peers))
 	for _, p := range peers {
-		m[p.Fingerprint] = p
+		m[peerKey(p.Fingerprint, p.Name)] = p
 	}
 	s.m = m
-	if st, err := os.Stat(s.path); err == nil {
-		s.modTime = st.ModTime()
-		s.size = st.Size()
-	}
 	return nil
 }
 
@@ -81,31 +76,25 @@ func (s *Store) load() error {
 func (s *Store) Get(fp string) (Peer, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.m[fp]
-	if !ok && s.reloadChangedLocked() {
-		p, ok = s.m[fp]
+	if s.path != "" {
+		_ = s.load()
 	}
-	return p, ok
+	return s.getByFingerprintLocked(fp)
+}
+
+func (s *Store) getByFingerprintLocked(fp string) (Peer, bool) {
+	for _, p := range s.m {
+		if p.Fingerprint == fp {
+			return p, true
+		}
+	}
+	return Peer{}, false
 }
 
 // Has reports whether a fingerprint is trusted.
 func (s *Store) Has(fp string) bool {
 	_, ok := s.Get(fp)
 	return ok
-}
-
-func (s *Store) reloadChangedLocked() bool {
-	if s.path == "" {
-		return false
-	}
-	st, err := os.Stat(s.path)
-	if err != nil {
-		return false
-	}
-	if st.ModTime().Equal(s.modTime) && st.Size() == s.size {
-		return false
-	}
-	return s.load() == nil
 }
 
 // GetByName returns the remembered peer with the given name, if any. Used by the
@@ -131,17 +120,62 @@ func (s *Store) Add(fp, name string) error { return s.AddLabeled(fp, name, "") }
 func (s *Store) AddLabeled(fp, name, label string) error {
 	s.mu.Lock()
 	now := time.Now()
-	s.m[fp] = Peer{Fingerprint: fp, Name: name, Label: label, Added: now, LastSeen: now}
+	s.m[peerKey(fp, name)] = Peer{Fingerprint: fp, Name: name, Label: label, Added: now, LastSeen: now}
 	s.mu.Unlock()
 	return s.save()
 }
 
+// Pin binds a complete logical server name to one fingerprint. Existing pins
+// can only be changed when replace is explicitly true.
+func (s *Store) Pin(name, fp string, replace bool) error {
+	if name == "" {
+		return fmt.Errorf("pin name is required")
+	}
+	if !ValidFingerprint(fp) {
+		return fmt.Errorf("invalid fingerprint %q", fp)
+	}
+	s.mu.Lock()
+	now := time.Now()
+	for key, p := range s.m {
+		if p.Name != name {
+			continue
+		}
+		if p.Fingerprint == fp {
+			p.LastSeen = now
+			s.m[key] = p
+			s.mu.Unlock()
+			return s.save()
+		}
+		if !replace {
+			s.mu.Unlock()
+			return &MismatchError{Name: name, Stored: p.Fingerprint, Offered: fp}
+		}
+		delete(s.m, key)
+	}
+	s.m[peerKey(fp, name)] = Peer{Fingerprint: fp, Name: name, Added: now, LastSeen: now}
+	s.mu.Unlock()
+	return s.save()
+}
+
+func ValidFingerprint(fp string) bool {
+	const prefix = "SHA256:"
+	if !strings.HasPrefix(fp, prefix) {
+		return false
+	}
+	b, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(fp, prefix))
+	return err == nil && len(b) == sha256.Size
+}
+
+func peerKey(fp, name string) string { return fp + "\x00" + name }
+
 // Touch updates LastSeen for an existing peer (best-effort; ignores unknowns).
 func (s *Store) Touch(fp string) {
 	s.mu.Lock()
-	if p, ok := s.m[fp]; ok {
-		p.LastSeen = time.Now()
-		s.m[fp] = p
+	for key, p := range s.m {
+		if p.Fingerprint == fp {
+			p.LastSeen = time.Now()
+			s.m[key] = p
+		}
 	}
 	s.mu.Unlock()
 	_ = s.save()
@@ -161,7 +195,11 @@ func (s *Store) List() []Peer {
 // Remove forgets a fingerprint.
 func (s *Store) Remove(fp string) error {
 	s.mu.Lock()
-	delete(s.m, fp)
+	for key, p := range s.m {
+		if p.Fingerprint == fp {
+			delete(s.m, key)
+		}
+	}
 	s.mu.Unlock()
 	return s.save()
 }
@@ -186,12 +224,6 @@ func (s *Store) save() error {
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		return err
-	}
-	if st, err := os.Stat(s.path); err == nil {
-		s.mu.Lock()
-		s.modTime = st.ModTime()
-		s.size = st.Size()
-		s.mu.Unlock()
 	}
 	return nil
 }

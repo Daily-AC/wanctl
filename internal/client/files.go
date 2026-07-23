@@ -44,6 +44,9 @@ func (c *Client) PushBytes(ctx context.Context, target, remotePath string, data 
 // device's file-put policy gate. Shared by Push (local file) and PushBytes
 // (in-memory blob).
 func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io.Reader, size int64, mode uint32) error {
+	if size < 0 || size > protocol.MaxFileSize {
+		return fmt.Errorf("upload size %d outside supported range 0..%d", size, protocol.MaxFileSize)
+	}
 	conn, err := c.connect(ctx, target)
 	if err != nil {
 		return err
@@ -64,6 +67,9 @@ func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io
 	}
 	if ack.Kind == protocol.KindError {
 		return fmt.Errorf("remote refused upload: %s", ack.Reason)
+	}
+	if ack.Kind == protocol.KindReject {
+		return rejectError(ack)
 	}
 	if ack.Kind != protocol.KindOK {
 		return fmt.Errorf("unexpected reply: %s", ack.Kind)
@@ -94,6 +100,12 @@ func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io
 	if done.Kind == protocol.KindError {
 		return fmt.Errorf("remote write failed: %s", done.Reason)
 	}
+	if done.Kind != protocol.KindOK {
+		return fmt.Errorf("unexpected upload result: %s", done.Kind)
+	}
+	if done.Size != size {
+		return fmt.Errorf("remote write size mismatch: got %d, want %d", done.Size, size)
+	}
 	return nil
 }
 
@@ -114,6 +126,9 @@ func (c *Client) Pull(ctx context.Context, target, remotePath, local string) err
 	}
 	if meta.Kind == protocol.KindError {
 		return fmt.Errorf("remote refused download: %s", meta.Reason)
+	}
+	if meta.Kind == protocol.KindReject {
+		return rejectError(meta)
 	}
 	if meta.Kind != protocol.KindFileMeta {
 		return fmt.Errorf("unexpected reply: %s", meta.Kind)

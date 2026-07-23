@@ -2,17 +2,21 @@ package relay
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
 	"time"
+
+	"wanctl/internal/limits"
+	"wanctl/internal/sessionauth"
 )
 
 // httpAgent is an online device reachable over the HTTP transport. The agent
 // keeps a long-poll on /h/poll; the relay pushes session ids to open onto `open`.
 type httpAgent struct {
 	ns, device string
-	open       chan string
+	open       chan sessionauth.Open
 	lastSeen   time.Time
 	inst       string
 	retired    map[string]struct{}
@@ -92,7 +96,7 @@ const (
 )
 
 func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -107,7 +111,7 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	r.hmu.Lock()
 	a := r.hagents[key]
 	if a == nil {
-		a = &httpAgent{ns: ns, device: device, open: make(chan string, 8), changed: make(chan struct{})}
+		a = &httpAgent{ns: ns, device: device, open: make(chan sessionauth.Open, 8), changed: make(chan struct{})}
 		r.hagents[key] = a
 	}
 	if inst != "" {
@@ -134,13 +138,13 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	}
 
 	select {
-	case sid := <-a.open:
+	case open := <-a.open:
 		if inst != "" && r.httpAgentObsolete(key, inst) {
-			r.requeueHTTPJob(key, sid)
+			r.requeueHTTPJob(key, open)
 			http.Error(w, "another agent instance registered this device name", http.StatusConflict)
 			return
 		}
-		writeJSON(w, map[string]string{"session": sid})
+		writeJSON(w, open)
 	case <-changed:
 		if inst != "" && r.httpAgentObsolete(key, inst) {
 			http.Error(w, "another agent instance registered this device name", http.StatusConflict)
@@ -164,23 +168,23 @@ func (r *Relay) httpAgentObsolete(key, inst string) bool {
 	return a.inst != "" && a.inst != inst
 }
 
-func (r *Relay) requeueHTTPJob(key, sid string) {
+func (r *Relay) requeueHTTPJob(key string, open sessionauth.Open) {
 	r.hmu.Lock()
 	a := r.hagents[key]
 	r.hmu.Unlock()
 	if a == nil {
 		return
 	}
-	a.open <- sid
+	a.open <- open
 }
 
 func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	targetKey, targetNS, device, ok := r.dialAllowed(ns, req.URL.Query().Get("target"))
+	targetKey, auth, ok := r.dialAllowed(ns, req.URL.Query().Get("target"))
 	if !ok {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -193,11 +197,12 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	sid := newID()
+	auth.Session = sid
 	r.hsess[sid] = &httpSession{toClient: newSideQueue(), toAgent: newSideQueue()}
 	r.hmu.Unlock()
 
 	select {
-	case a.open <- sid:
+	case a.open <- auth:
 	default:
 		r.hmu.Lock()
 		delete(r.hsess, sid)
@@ -206,7 +211,7 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if r.audit != nil {
-		r.audit.Audit(targetNS, device, "dial")
+		r.audit.Audit(auth.OwnerNamespace, auth.Device, "dial")
 	}
 	writeJSON(w, map[string]string{"session": sid})
 }
@@ -214,7 +219,7 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 // handleHDeregister lets an agent announce it is going offline now, so the relay
 // drops it from the live registry immediately (no TTL wait).
 func (r *Relay) handleHDeregister(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -256,7 +261,7 @@ func (r *Relay) deviceLive(ns, device string) bool {
 }
 
 func (r *Relay) handleHPeers(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -273,7 +278,7 @@ func (r *Relay) handleHPeers(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
-	if _, ok := r.auth(req); !ok {
+	if _, ok := r.auth(w, req); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -282,8 +287,14 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
 	}
+	req.Body = http.MaxBytesReader(w, req.Body, limits.RelayHTTPUploadBytes)
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "read body", http.StatusBadRequest)
 		return
 	}
@@ -299,7 +310,7 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
-	if _, ok := r.auth(req); !ok {
+	if _, ok := r.auth(w, req); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -327,7 +338,7 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
-	if _, ok := r.auth(req); !ok {
+	if _, ok := r.auth(w, req); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}

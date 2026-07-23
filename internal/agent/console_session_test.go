@@ -2,16 +2,102 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
+	"wanctl/internal/config"
 	"wanctl/internal/console"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
+	"wanctl/internal/sessionauth"
+	"wanctl/internal/transport"
 )
+
+func TestTrustedControllerCannotOpenAdminConsole(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	portalID, err := transport.IdentityFromSeed([]byte(strings.Repeat("p", 32)), "portal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	controllerID, err := transport.IdentityFromSeed([]byte(strings.Repeat("c", 32)), "controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(Options{
+		RelayURL: "ws://x",
+		Token:    "t",
+		Name:     "dev1",
+		PortalFP: portalID.Fingerprint,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.known.Add(controllerID.Fingerprint, "ordinary-controller"); err != nil {
+		t.Fatal(err)
+	}
+
+	dev, controller := net.Pipe()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go a.handleSession(ctx, dev, sessionauth.Open{
+		Session:         "test-session",
+		CallerNamespace: "owner",
+		OwnerNamespace:  "owner",
+		Device:          "dev1",
+		Capabilities:    sessionauth.FullCapabilities,
+	})
+
+	dr, err := transport.ClientHandshake(ctx, controller, "dev1", controllerID, transport.NewMemStore())
+	if err != nil {
+		t.Fatalf("TLS handshake: %v", err)
+	}
+	defer controller.Close()
+	if err := protocol.WriteMessage(dr.Conn, protocol.Message{
+		Kind: protocol.KindConsoleHello,
+		Role: "client",
+		Name: "ordinary-controller",
+	}); err != nil {
+		t.Fatalf("console hello: %v", err)
+	}
+	reply, err := protocol.ReadMessage(dr.Conn)
+	if err != nil {
+		t.Fatalf("console hello reply: %v", err)
+	}
+	if reply.Kind == protocol.KindReject {
+		if !strings.Contains(reply.Reason, "console administrator") {
+			t.Fatalf("rejected for the wrong reason: %q", reply.Reason)
+		}
+		if reply.PairingURL != "" {
+			t.Fatalf("console-admin rejection must not offer pairing: %q", reply.PairingURL)
+		}
+		if a.engine.Mode() != policy.ModeNormal {
+			t.Fatalf("rejected controller changed mode to %q", a.engine.Mode())
+		}
+		return
+	}
+	if reply.Kind != protocol.KindOK {
+		t.Fatalf("unexpected console hello reply: %q", reply.Kind)
+	}
+
+	if err := protocol.WriteMessage(dr.Conn, protocol.Message{
+		Kind:        protocol.KindModeSet,
+		ConsoleMode: string(policy.ModeBypass),
+	}); err != nil {
+		t.Fatalf("mode_set: %v", err)
+	}
+	if _, err := protocol.ReadMessage(dr.Conn); err != nil {
+		t.Fatalf("mode_set reply: %v", err)
+	}
+	if a.engine.Mode() == policy.ModeBypass {
+		t.Fatal("ordinary trusted controller opened the admin console and changed mode to bypass")
+	}
+	t.Fatalf("ordinary trusted controller opened the admin console; mode = %q", a.engine.Mode())
+}
 
 // TestServeConsoleFramedWireAndNotif is the integration test the per-task unit
 // tests stepped around: it drives a real agent.serveConsole over a pipe using
@@ -177,6 +263,84 @@ func TestConsoleRPCDecide(t *testing.T) {
 	if resp.Verdict != "not-found" {
 		t.Fatalf("want verdict %q, got %q", "not-found", resp.Verdict)
 	}
+}
+
+func TestPortalAdminOverlapAllowsOldKeyRevocation(t *testing.T) {
+	a := newTestAgent(t)
+	known, err := transport.OpenStore("known_clients.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.known = known
+	a.portalAdmins, err = config.OpenPortalAdmins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, newFP := testPortalFP(1), testPortalFP(2)
+	if err := a.portalAdmins.Add(old, newFP); err != nil {
+		t.Fatal(err)
+	}
+	for _, fp := range []string{old, newFP} {
+		if err := known.Add(fp, "portal"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp := a.handleConsoleRPC(protocol.Message{Kind: protocol.KindTrustRevoke, FP: old})
+	if len(resp.Data) != 0 || known.Has(old) || !known.Has(newFP) {
+		t.Fatalf("old portal key was not revoked after overlap: resp=%s old=%v new=%v", resp.Data, known.Has(old), known.Has(newFP))
+	}
+	if a.authorize(old, "portal", "") {
+		t.Fatal("revoked portal key was still authorized for a new session")
+	}
+}
+
+func TestPortalAdminRefusesLastKeyRevocation(t *testing.T) {
+	a := newTestAgent(t)
+	known, err := transport.OpenStore("known_clients.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.known = known
+	a.portalAdmins, err = config.OpenPortalAdmins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := testPortalFP(3)
+	if err := a.portalAdmins.Add(last); err != nil {
+		t.Fatal(err)
+	}
+	if err := known.Add(last, "portal"); err != nil {
+		t.Fatal(err)
+	}
+	resp := a.handleConsoleRPC(protocol.Message{Kind: protocol.KindTrustRevoke, FP: last})
+	if len(resp.Data) == 0 || !known.Has(last) {
+		t.Fatalf("last portal key revocation was not blocked: resp=%s trusted=%v", resp.Data, known.Has(last))
+	}
+}
+
+func TestRevokingOrdinaryControllerDoesNotPromoteItToPortalAdmin(t *testing.T) {
+	a := newTestAgent(t)
+	known, err := transport.OpenStore("known_clients.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.known = known
+	a.portalAdmins, err = config.OpenPortalAdmins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinary := testPortalFP(4)
+	if err := known.Add(ordinary, "controller"); err != nil {
+		t.Fatal(err)
+	}
+	resp := a.handleConsoleRPC(protocol.Message{Kind: protocol.KindTrustRevoke, FP: ordinary})
+	if len(resp.Data) != 0 || known.Has(ordinary) || a.portalAdmins.Contains(ordinary) {
+		t.Fatalf("ordinary revoke changed portal admins: resp=%s trusted=%v admin=%v", resp.Data, known.Has(ordinary), a.portalAdmins.Contains(ordinary))
+	}
+}
+
+func testPortalFP(value byte) string {
+	return "SHA256:" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string([]byte{value}), 32)))
 }
 
 // mkConsole returns a minimal console.Service for use in pump tests.

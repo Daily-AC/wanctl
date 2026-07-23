@@ -51,21 +51,18 @@ func (p *PGStore) Resolve(token string) (string, bool) {
 	return ns, true
 }
 
-// AllowedDial reports whether callerNS may reach targetNS/device: same namespace,
-// or a live ACL grant from the target's owner to the caller's namespace.
-func (p *PGStore) AllowedDial(callerNS, targetNS, device string) bool {
-	if callerNS == targetNS {
-		return true
-	}
-	var one int
+// ACLPerms returns the raw permissions of a live cross-namespace grant. The
+// relay parses and validates the value before authorizing a session.
+func (p *PGStore) ACLPerms(callerNS, targetNS, device string) (string, bool) {
+	var perms string
 	err := p.db.QueryRow(
-		`SELECT 1 FROM acl
+		`SELECT perms FROM acl
 		   WHERE owner_namespace = $1 AND device = $2
 		     AND grantee_namespace = $3 AND revoked_at IS NULL
 		   LIMIT 1`,
 		targetNS, device, callerNS,
-	).Scan(&one)
-	return err == nil
+	).Scan(&perms)
+	return perms, err == nil
 }
 
 // Audit records a relay-side metadata event (best-effort; never blocks dials).

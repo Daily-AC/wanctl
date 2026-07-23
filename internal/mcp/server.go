@@ -26,6 +26,7 @@ import (
 
 	"wanctl/internal/client"
 	"wanctl/internal/config"
+	"wanctl/internal/limits"
 	"wanctl/internal/policy"
 	"wanctl/internal/transport"
 
@@ -45,9 +46,9 @@ func ServeStdio() error {
 
 // Handler returns an http.Handler that serves Streamable HTTP MCP at whatever
 // path you mount it under (e.g. /mcp on the relay). seed must be ≥32 bytes; it
-// is used as the master secret for HKDF-deriving each namespace's controller
-// identity (so the same user reconnecting keeps a stable fingerprint without
-// the server ever persisting a private key).
+// is used as the master secret for independently HKDF-deriving each namespace's
+// controller identity and the rebind AEAD key (so reconnects keep a stable
+// fingerprint without persisting private keys or exposing relay tokens).
 //
 // `endpointPath` is the public URL path the AI host POSTs to (usually "/mcp").
 // mcp-go uses it to rewrite session URLs in responses; pass the same value you
@@ -56,7 +57,11 @@ func Handler(seed []byte, endpointPath string) (http.Handler, error) {
 	if len(seed) < 32 {
 		return nil, fmt.Errorf("mcp seed must be at least 32 bytes, got %d", len(seed))
 	}
-	sessions = &sessionStore{seed: append([]byte(nil), seed...), m: map[string]*remoteSession{}}
+	sessions = &sessionStore{
+		seed:    append([]byte(nil), seed...),
+		m:       map[string]*remoteSession{},
+		revoked: map[string]time.Time{},
+	}
 	go sessions.gcLoop()
 	s := server.NewMCPServer("wanctl", "1.0.0")
 	registerMCPTools(s)
@@ -78,7 +83,7 @@ func ServeHTTP(addr string, seed []byte) error {
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", h)
 	mux.Handle("/mcp/", h)
-	return (&http.Server{Addr: addr, Handler: mux}).ListenAndServe()
+	return limits.HTTPServer(addr, mux).ListenAndServe()
 }
 
 // --- session abstraction ---
@@ -101,8 +106,9 @@ type sessionStore struct {
 	stdio *localFsSession
 
 	// http mode
-	seed []byte
-	m    map[string]*remoteSession
+	seed    []byte
+	m       map[string]*remoteSession
+	revoked map[string]time.Time // process-local JTI revocations; not durable across restart
 }
 
 var sessions *sessionStore
@@ -119,7 +125,10 @@ func (s *sessionStore) get(ctx context.Context) sessionAPI {
 	defer s.mu.Unlock()
 	r := s.m[sid]
 	if r == nil {
-		r = &remoteSession{id: sid, seed: s.seed, known: transport.NewMemStore(), lastUsed: time.Now()}
+		r = &remoteSession{
+			id: sid, seed: s.seed, owner: s, known: transport.NewMemStore(),
+			rebindJTIs: map[string]time.Time{}, lastUsed: time.Now(),
+		}
 		s.m[sid] = r
 	}
 	r.lastUsed = time.Now()
@@ -193,14 +202,16 @@ func (l *localFsSession) info() string {
 // --- remote (HTTP) session: per-Mcp-Session-Id, ephemeral, identity derived ---
 
 type remoteSession struct {
-	id        string
-	seed      []byte
-	mu        sync.Mutex
-	token     string
-	namespace string
-	identity  *transport.Identity
-	known     *transport.Store
-	lastUsed  time.Time
+	id         string
+	seed       []byte
+	owner      *sessionStore
+	mu         sync.Mutex
+	token      string
+	namespace  string
+	identity   *transport.Identity
+	known      *transport.Store
+	rebindJTIs map[string]time.Time
+	lastUsed   time.Time
 }
 
 // deriveIdentity returns an Ed25519 cert deterministic for (server seed,
@@ -244,11 +255,88 @@ func (r *remoteSession) saveLogin(token, namespace string) error {
 	return r.ensureIdentity()
 }
 
-func (r *remoteSession) clearLogin() error {
+// saveLoginAndIssue atomically binds a remote session and records the newly
+// issued rebind JTI so a subsequent logout can revoke it in this process.
+func (r *remoteSession) saveLoginAndIssue(token, namespace string, now time.Time) (string, error) {
+	if r.owner == nil {
+		return "", fmt.Errorf("remote session has no owner")
+	}
+	r.owner.mu.Lock()
+	defer r.owner.mu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.token, r.namespace, r.identity = token, namespace, nil
+	if err := r.ensureIdentity(); err != nil {
+		return "", err
+	}
+	credential, claim, err := sealRebind(r.owner.seed, namespace, token, now)
+	if err != nil {
+		return "", err
+	}
+	if r.rebindJTIs == nil {
+		r.rebindJTIs = map[string]time.Time{}
+	}
+	r.rebindJTIs[claim.JTI] = time.Unix(claim.ExpiresAt, 0)
+	return credential, nil
+}
+
+func (r *remoteSession) restoreLogin(claim rebindClaim, namespace string, now time.Time) error {
+	if r.owner == nil {
+		return fmt.Errorf("remote session has no owner")
+	}
+	if namespace != claim.Namespace {
+		return fmt.Errorf("rebind namespace %q does not match Relay namespace %q", claim.Namespace, namespace)
+	}
+	if claim.ExpiresAt <= now.Unix() {
+		return ErrExpiredRebind
+	}
+	r.owner.mu.Lock()
+	defer r.owner.mu.Unlock()
+	if expiry, revoked := r.owner.revoked[claim.JTI]; revoked {
+		if now.Before(expiry) {
+			return ErrRevokedRebind
+		}
+		delete(r.owner.revoked, claim.JTI)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.token, r.namespace, r.identity = claim.Token, namespace, nil
+	if err := r.ensureIdentity(); err != nil {
+		return err
+	}
+	if r.rebindJTIs == nil {
+		r.rebindJTIs = map[string]time.Time{}
+	}
+	r.rebindJTIs[claim.JTI] = time.Unix(claim.ExpiresAt, 0)
+	return nil
+}
+
+func (r *remoteSession) clearLogin() error {
+	if r.owner != nil {
+		r.owner.mu.Lock()
+		defer r.owner.mu.Unlock()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.owner != nil {
+		if r.owner.revoked == nil {
+			r.owner.revoked = map[string]time.Time{}
+		}
+		now := time.Now()
+		for jti, expiry := range r.owner.revoked {
+			if !now.Before(expiry) {
+				delete(r.owner.revoked, jti)
+			}
+		}
+		for jti, expiry := range r.rebindJTIs {
+			if now.Before(expiry) {
+				r.owner.revoked[jti] = expiry
+			}
+		}
+	}
 	r.token, r.namespace, r.identity = "", "", nil
 	r.known = transport.NewMemStore()
+	r.rebindJTIs = map[string]time.Time{}
 	return nil
 }
 
@@ -297,7 +385,7 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpPeers)
 
 	s.AddTool(mcpapi.NewTool("wanctl_pair",
-		mcpapi.WithDescription("Check whether the target device already trusts this MCP session's controller identity, and if not, return the device-side pairing URL up front (without having to fail an exec first). Use this when the user says 'pair my device' / '让 X 信任你' / before the first command against a brand-new device — it gives the user the approval link cleanly instead of as an exec error. Returns '✓ already trusted' OR 'PAIRING REQUIRED' with a URL to relay VERBATIM to the user. The URL is identical to the one wanctl_exec emits on first connect — both paths converge on the same one-click approval flow; the user can hit either."),
+		mcpapi.WithDescription("Check whether the target device already trusts this MCP session's controller identity, and if not, return the device-side pairing URL up front. On first contact this may instead return DEVICE IDENTITY CONFIRMATION REQUIRED; a human must independently verify its exact target and fingerprint, then call wanctl_trust_server before retrying. Once the server identity is pinned, returns '✓ already trusted' OR 'PAIRING REQUIRED' with a URL to relay VERBATIM to the user."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE for shared devices.")),
 	), mcpPair)
 
@@ -310,7 +398,7 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpExec)
 
 	s.AddTool(mcpapi.NewTool("wanctl_exec_async",
-		mcpapi.WithDescription("Start a shell command as a BACKGROUND job on the device and return a job_id IMMEDIATELY, without waiting for it to finish. Use this for anything that may run longer than a single tool call comfortably tolerates — package installs, builds, large downloads, `wsl --shutdown` then a long build, etc. The command keeps running on the device even after this call returns; fetch its output and exit code later with wanctl_exec_poll(job_id). Always runs in a FRESH shell (no shared cwd/env with wanctl_exec's persistent session). Same pairing/policy rules as wanctl_exec. Output + exit code are retained for 1h after the job ends."),
+		mcpapi.WithDescription("Start a shell command as a BACKGROUND job on the device and return a job_id IMMEDIATELY, without waiting for it to finish. Use this for anything that may run longer than a single tool call comfortably tolerates — package installs, builds, large downloads, `wsl --shutdown` then a long build, etc. The command keeps running on the device even after this call returns; fetch its output and exit code later with wanctl_exec_poll(job_id). Always runs in a FRESH shell (no shared cwd/env with wanctl_exec's persistent session). Same pairing/policy rules as wanctl_exec. Jobs run for at most 30 minutes, retain at most 8 MiB output each, and finished results remain pollable for up to 1h subject to device-wide retention budgets."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
 		mcpapi.WithString("command", mcpapi.Required(), mcpapi.Description("Shell command to run in the device's default shell (sh on Unix, powershell on Windows).")),
 		mcpapi.WithString("cwd", mcpapi.Description("Working directory on the device for this command (also the policy scope).")),
@@ -359,9 +447,16 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpID)
 
 	s.AddTool(mcpapi.NewTool("wanctl_trust",
-		mcpapi.WithDescription("List the trust store for THIS MCP session. 'servers' (default) = devices this controller has TOFU-pinned. 'clients' = controllers this machine has trusted to drive it (only meaningful in stdio mode if this machine is also running wanctl agent)."),
+		mcpapi.WithDescription("List the trust store for THIS MCP session. 'servers' (default) = explicitly pinned devices. 'clients' = controllers this machine has trusted to drive it (only meaningful in stdio mode if this machine is also running wanctl agent)."),
 		mcpapi.WithString("which", mcpapi.Description("'servers' (default) or 'clients'.")),
 	), mcpTrust)
+
+	s.AddTool(mcpapi.NewTool("wanctl_trust_server",
+		mcpapi.WithDescription("Confirm an unknown device identity for THIS MCP session. Call only after a human independently verifies the exact target and fingerprint returned by DEVICE IDENTITY CONFIRMATION REQUIRED. Certificate changes remain blocked unless replace=true is explicitly requested after re-verification."),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Exact owner/device target from the confirmation error.")),
+		mcpapi.WithString("fingerprint", mcpapi.Required(), mcpapi.Description("Exact SHA256 fingerprint verified with the device owner.")),
+		mcpapi.WithBoolean("replace", mcpapi.Description("Replace an existing pin after independent re-verification. Default false.")),
+	), mcpTrustServer)
 
 	s.AddTool(mcpapi.NewTool("wanctl_rules",
 		mcpapi.WithDescription("List the local policy rules (allow-list) on THIS machine. Only meaningful in stdio mode if this machine is also running wanctl agent; for controller-only and HTTP-mode hosts the list is empty."),
@@ -413,34 +508,13 @@ func pairingResult(rej *client.RejectError) *mcpapi.CallToolResult {
 
 func loginRequired() *mcpapi.CallToolResult {
 	return mcpapi.NewToolResultError(
-		"LOGIN REQUIRED. This MCP session has no wanctl credentials right now.\n"+
-			"FIRST: if earlier in THIS conversation a wanctl_login succeeded and returned a `rebind` credential, the user is almost certainly still authorized — the in-memory session was just lost (relay restart / reconnect). Call wanctl_login(rebind=\"…\") with that saved credential to restore access INSTANTLY; do NOT bother the user. "+
+		"LOGIN REQUIRED. This MCP session has no wanctl credentials right now.\n" +
+			"FIRST: if earlier in THIS conversation a wanctl_login succeeded and returned a `rebind` credential, the user is almost certainly still authorized — the in-memory session was just lost (relay restart / reconnect). Call wanctl_login(rebind=\"…\") with that saved credential to restore access INSTANTLY; do NOT bother the user. " +
 			"ONLY if you have no saved rebind credential: call wanctl_login() (no args) — it returns a URL + instructions to show the user, who signs in via Feishu and pastes back a one-time code for wanctl_login(code=\"…\"). Then retry your previous tool call.",
 	)
 }
 
 // --- auth tools ---
-
-// encodeRebind packs (namespace, token) into one opaque credential the AI can
-// store and replay to restore a lost session. The token never expires server-
-// side, so this is all that's needed to rebind — no re-OAuth. It is namespace-
-// scoped and still requires device TOFU pairing to control anything, so echoing
-// it into the AI's own conversation is an acceptable exposure.
-func encodeRebind(namespace, token string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(namespace + "\x00" + token))
-}
-
-func decodeRebind(s string) (namespace, token string, err error) {
-	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(s))
-	if err != nil {
-		return "", "", err
-	}
-	i := bytes.IndexByte(raw, 0)
-	if i < 0 {
-		return "", "", fmt.Errorf("malformed rebind credential")
-	}
-	return string(raw[:i]), string(raw[i+1:]), nil
-}
 
 func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
 	s := sessions.get(ctx)
@@ -448,14 +522,29 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 	rebind := reqStr(req, "rebind", "")
 	portal := config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)
 	if rebind != "" {
-		ns, token, err := decodeRebind(rebind)
-		if err != nil {
-			return mcpapi.NewToolResultError("rebind credential is malformed; fall back to wanctl_login() (no args) to re-authenticate via the portal."), nil
+		r, ok := s.(*remoteSession)
+		if !ok {
+			return mcpapi.NewToolResultError("rebind credentials are only supported by the hosted HTTP MCP; run wanctl_login() again."), nil
 		}
-		if err := s.saveLogin(token, ns); err != nil {
+		claim, err := openRebind(r.owner.seed, rebind, time.Now())
+		if err != nil {
+			return mcpapi.NewToolResultError("rebind credential is invalid, expired, revoked, or from the legacy format; run wanctl_login() again to re-authenticate via the portal."), nil
+		}
+		tr := config.EnvOr("WANCTL_TRANSPORT", config.DefaultTransport)
+		realNS, err := client.ResolveTokenNamespace(ctx, s.relayURL(), claim.Token, tr)
+		if err != nil {
+			return mcpapi.NewToolResultError("rebind token was rejected by the Relay; run wanctl_login() again to re-authenticate."), nil
+		}
+		if realNS != claim.Namespace {
+			return mcpapi.NewToolResultError("rebind namespace does not match the Relay token owner; run wanctl_login() again to re-authenticate."), nil
+		}
+		if err := r.restoreLogin(claim, realNS, time.Now()); err != nil {
+			if errors.Is(err, ErrRevokedRebind) {
+				return mcpapi.NewToolResultError("rebind credential was revoked by logout; run wanctl_login() again to re-authenticate."), nil
+			}
 			return mcpapi.NewToolResultError(fmt.Sprintf("保存登录态失败: %s", err)), nil
 		}
-		return mcpapi.NewToolResultText(fmt.Sprintf("✓ 已用 rebind 凭证瞬时恢复到 namespace %q（无需重新授权）。可以继续之前的工具调用了。", ns)), nil
+		return mcpapi.NewToolResultText(fmt.Sprintf("✓ 已用 rebind 凭证恢复到 namespace %q，并经 Relay 复核。可以继续之前的工具调用了。", realNS)), nil
 	}
 	if code == "" {
 		return mcpapi.NewToolResultText(fmt.Sprintf(
@@ -472,7 +561,13 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 	if err != nil {
 		return mcpapi.NewToolResultError(fmt.Sprintf("授权失败: %s\n请让用户回到 %s/enroll 拿一个新 code（旧的可能用过或过期了），然后再调一次 wanctl_login(code=\"…\")。", err, portal)), nil
 	}
-	if err := s.saveLogin(token, ns); err != nil {
+	var credential string
+	if r, ok := s.(*remoteSession); ok {
+		credential, err = r.saveLoginAndIssue(token, ns, time.Now())
+	} else {
+		err = s.saveLogin(token, ns)
+	}
+	if err != nil {
 		return mcpapi.NewToolResultError(fmt.Sprintf("保存登录态失败: %s", err)), nil
 	}
 	msg := fmt.Sprintf(
@@ -482,10 +577,10 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 	// HTTP-MCP credentials are in-memory and keyed by Mcp-Session-Id, so a relay
 	// restart or a re-initialized connection can throw 'LOGIN REQUIRED' mid-task.
 	// Hand the AI a rebind credential so it can self-heal without re-OAuth (#1).
-	if _, ok := s.(*remoteSession); ok {
+	if credential != "" {
 		msg += fmt.Sprintf(
 			"\n\n⚠️ 给 AI 自己记(不必展示给用户): 保存下面这串 rebind 凭证。之后任何工具若返回 'LOGIN REQUIRED'(relay 重启/连接重置会触发,但用户其实仍有授权), 不要再打扰用户走飞书 —— 直接调 wanctl_login(rebind=\"…\") 即可瞬时恢复:\n\n  %s",
-			encodeRebind(ns, token))
+			credential)
 	}
 	return mcpapi.NewToolResultText(msg), nil
 }
@@ -603,7 +698,7 @@ func mcpExecAsync(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Call
 		return mcpapi.NewToolResultError(err.Error()), nil
 	}
 	return mcpapi.NewToolResultText(fmt.Sprintf(
-		"started background job %s on %q.\nPoll it with wanctl_exec_poll(target=%q, job_id=%q) until state is 'done'. Output + exit code are kept for 1h after it finishes.",
+		"started background job %s on %q.\nPoll it with wanctl_exec_poll(target=%q, job_id=%q) until state is 'done'. The job runs for at most 30 minutes and retains at most 8 MiB output; finished results remain available for up to 1h subject to device-wide retention budgets.",
 		id, target, target, id)), nil
 }
 
@@ -795,6 +890,23 @@ func mcpTrust(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 		out += fmt.Sprintf("  %-20s %s  (added %s)\n", p.Name, transport.ShortFingerprint(p.Fingerprint), p.Added.Format("2006-01-02"))
 	}
 	return mcpapi.NewToolResultText(out), nil
+}
+
+func mcpTrustServer(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	target := reqStr(req, "target", "")
+	fingerprint := reqStr(req, "fingerprint", "")
+	if target == "" || fingerprint == "" {
+		return mcpapi.NewToolResultError("target and fingerprint are required"), nil
+	}
+	c, hint := sessions.get(ctx).client()
+	if hint != nil {
+		return hint, nil
+	}
+	canonical, err := c.PinServer(ctx, target, fingerprint, reqBool(req, "replace"))
+	if err != nil {
+		return mcpapi.NewToolResultError(err.Error()), nil
+	}
+	return mcpapi.NewToolResultText(fmt.Sprintf("confirmed device identity: %s %s", canonical, fingerprint)), nil
 }
 
 func mcpRules(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {

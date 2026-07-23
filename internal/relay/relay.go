@@ -14,6 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"wanctl/internal/admission"
+	"wanctl/internal/limits"
+	"wanctl/internal/sessionauth"
 	"wanctl/internal/wsconn"
 
 	"github.com/coder/websocket"
@@ -37,9 +40,10 @@ type pendingSession struct {
 	clientSide chan io.ReadWriteCloser
 }
 
-// ACLChecker authorizes cross-namespace dials (nil = same-namespace only).
+// ACLChecker returns raw permissions for a live cross-namespace grant. Relay
+// parses them strictly before opening a capability-scoped session.
 type ACLChecker interface {
-	AllowedDial(callerNS, targetNS, device string) bool
+	ACLPerms(callerNS, targetNS, device string) (string, bool)
 }
 
 // Auditor records relay-side metadata events (nil = no audit).
@@ -120,8 +124,15 @@ func (r *Relay) SetMCPHandler(h http.Handler) { r.mcpHandler = h }
 // SetAdmin installs the admin store backing the /admin/* endpoints.
 func (r *Relay) SetAdmin(a AdminStore) { r.admin = a }
 
-func (r *Relay) auth(req *http.Request) (ns string, ok bool) {
-	return r.ts.Resolve(req.URL.Query().Get("token"))
+func (r *Relay) auth(w http.ResponseWriter, req *http.Request) (ns string, ok bool) {
+	token, legacy, ok := admission.Token(req)
+	if !ok {
+		return "", false
+	}
+	if legacy {
+		admission.MarkLegacy(w)
+	}
+	return r.ts.Resolve(token)
 }
 
 // SetACL installs an ACL checker for cross-namespace dials.
@@ -135,22 +146,31 @@ func (r *Relay) SetAuditor(a Auditor) { r.audit = a }
 func (r *Relay) SetPortalNS(ns string) { r.portalNS = ns }
 
 // dialAllowed splits target into namespace/device and checks access for caller.
-func (r *Relay) dialAllowed(callerNS, target string) (targetKey, targetNS, device string, ok bool) {
+func (r *Relay) dialAllowed(callerNS, target string) (targetKey string, auth sessionauth.Open, ok bool) {
 	if !strings.Contains(target, "/") {
 		target = callerNS + "/" + target
 	}
 	i := strings.Index(target, "/")
-	targetNS, device = target[:i], target[i+1:]
+	targetNS, device := target[:i], target[i+1:]
+	auth = sessionauth.Open{CallerNamespace: callerNS, OwnerNamespace: targetNS, Device: device}
 	if r.portalNS != "" && callerNS == r.portalNS {
-		return target, targetNS, device, true
+		auth.Capabilities = sessionauth.FullCapabilities
+		return target, auth, true
 	}
 	if targetNS == callerNS {
-		return target, targetNS, device, true
+		auth.Capabilities = sessionauth.FullCapabilities
+		return target, auth, true
 	}
-	if r.acl != nil && r.acl.AllowedDial(callerNS, targetNS, device) {
-		return target, targetNS, device, true
+	if r.acl != nil {
+		if perms, found := r.acl.ACLPerms(callerNS, targetNS, device); found {
+			caps, err := sessionauth.ParseGrant(perms)
+			if err == nil {
+				auth.Capabilities = caps
+				return target, auth, true
+			}
+		}
 	}
-	return target, targetNS, device, false
+	return target, auth, false
 }
 
 func newID() string {
@@ -160,7 +180,7 @@ func newID() string {
 }
 
 func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -169,6 +189,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		return
 	}
+	limits.ClearHijackedDeadline(req.Context())
 	nc := wsconn.FromAccepted(req.Context(), c)
 	dec := json.NewDecoder(nc)
 	var reg struct {
@@ -204,12 +225,12 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	targetKey, targetNS, device, ok := r.dialAllowed(ns, req.URL.Query().Get("target"))
+	targetKey, auth, ok := r.dialAllowed(ns, req.URL.Query().Get("target"))
 	if !ok {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -222,7 +243,7 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if r.audit != nil {
-		r.audit.Audit(targetNS, device, "dial")
+		r.audit.Audit(auth.OwnerNamespace, auth.Device, "dial")
 	}
 	sid := newID()
 	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), clientSide: make(chan io.ReadWriteCloser, 1)}
@@ -231,7 +252,10 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 	r.mu.Unlock()
 	defer func() { r.mu.Lock(); delete(r.pending, sid); r.mu.Unlock() }()
 
-	if err := ac.send(map[string]string{"op": "open", "session": sid, "url": "/session/" + sid + "?token=" + req.URL.Query().Get("token")}); err != nil {
+	auth.Op = "open"
+	auth.Session = sid
+	auth.URL = "/session/" + sid
+	if err := ac.send(auth); err != nil {
 		http.Error(w, "agent unreachable", http.StatusBadGateway)
 		return
 	}
@@ -239,6 +263,7 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		return
 	}
+	limits.ClearHijackedDeadline(req.Context())
 	clientNC := wsconn.FromAccepted(req.Context(), c)
 	ps.clientSide <- clientNC
 
@@ -251,7 +276,7 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleSession(w http.ResponseWriter, req *http.Request) {
-	if _, ok := r.auth(req); !ok {
+	if _, ok := r.auth(w, req); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -267,6 +292,7 @@ func (r *Relay) handleSession(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		return
 	}
+	limits.ClearHijackedDeadline(req.Context())
 	agentNC := wsconn.FromAccepted(req.Context(), c)
 	ps.agentSide <- agentNC
 	select {
@@ -278,7 +304,7 @@ func (r *Relay) handleSession(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handlePeers(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return

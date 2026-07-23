@@ -50,6 +50,9 @@ func TestHandshakeOverPipe(t *testing.T) {
 	if !dr.FirstSeen {
 		t.Fatal("expected FirstSeen on first contact")
 	}
+	if _, ok := known.GetByName("test-server"); ok {
+		t.Fatal("first contact was persisted without explicit confirmation")
+	}
 	s := <-srvCh
 	if s.err != nil {
 		t.Fatalf("server handshake: %v", s.err)

@@ -51,6 +51,7 @@ export WANCTL_TOKEN=<token>                         # pre-provisioned, skips log
 
 ```bash
 wanctl peers                              # list devices you can reach
+wanctl trust server --target NS/NAME --fingerprint SHA256:...  # confirm an independently verified device identity
 wanctl pair NAME                          # check trust state up front; prints the approval URL if not yet paired
 wanctl exec --target NAME "<command>"     # run a command (streams stdout, real exit code)
 wanctl exec --target NAME --cwd /path "<command>"   # run in /path (also the policy scope)
@@ -80,7 +81,14 @@ wanctl id                                 # this controller's fingerprint
   expected; a timeout returns a denial. With no front-end attending (headless, no
   portal session, no TTY) a rule-miss is denied immediately.
 - **Pairing**: the very first connection from a new controller fingerprint
-  needs the device owner to trust it (TOFU). Two ways to hit this:
+  has two separate trust checks. First, the controller refuses an unknown
+  device certificate with `DEVICE IDENTITY CONFIRMATION REQUIRED`, including
+  the exact `NS/DEVICE` target and fingerprint. Do not trust it automatically:
+  ask the user to verify that fingerprint with the device owner, then run the
+  exact `wanctl trust server --target ... --fingerprint ...` command. A changed
+  certificate stays blocked; use `--replace` only after independent
+  re-verification. Once the device identity is pinned, the device owner must
+  trust the controller. Two ways to reach that second check:
   - *Proactive* (preferred when the user explicitly says "pair me with X" or
     you're about to drive a brand-new device): run `wanctl pair NAME` first —
     on a fresh device it exits 0 and prints the approval URL; if already
@@ -125,12 +133,15 @@ controller side.
 ## Enrolling a new device (the controlled side)
 
 If you have shell access to a machine that should become controllable (or are
-telling the user how), enroll it in two lines — no Go needed, the relay serves
-a prebuilt binary + installer. Pick the one for that machine's shell:
+telling the user how), obtain the installer from the independently
+authenticated GitLab release. Never fetch it from the artifact relay whose
+contents it is meant to verify. Pick the one for that machine's shell:
 
 ```bash
 # macOS / Linux (any POSIX shell)
-curl -fsSL https://***REMOVED-IP***/install.sh | sh
+# Obtain install.sh from the independently authenticated GitLab release first.
+WANCTL_RELAY=https://***REMOVED-IP*** sh ./install.sh
+wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
 wanctl                          # then run this on that machine — opens the
                                 # browser for Feishu login, takes a code, and
                                 # starts the agent in the background.
@@ -138,16 +149,16 @@ wanctl                          # then run this on that machine — opens the
 
 ```powershell
 # Windows — PowerShell only, no bash / curl needed
-irm https://***REMOVED-IP***/install.ps1 | iex
+# Obtain install.ps1 from the independently authenticated GitLab release first.
+$env:WANCTL_RELAY='https://***REMOVED-IP***'; .\install.ps1
+wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
 wanctl                          # same flow: browser → Feishu → agent runs.
 ```
 
-For non-interactive setups (CI / pre-issued token), set `WANCTL_TOKEN=<tok>`
-before the one-liner: `curl ... | WANCTL_TOKEN=tok sh` or
-`$env:WANCTL_TOKEN='tok'; irm ... | iex`. Optional env (same on both):
-`WANCTL_NAME`, `WANCTL_MODE=bypass` (auto-allow; trusted devices only),
-`WANCTL_INSTALL_ONLY=1`. On that machine, `wanctl stop` to stop,
-`wanctl status` to inspect.
+For non-interactive setups, run the verified installer first, seed the verified
+Portal fingerprint, then start `wanctl agent --token <pre-issued-token>` and
+install the native service. On that machine, `wanctl stop` stops it and
+`wanctl status` inspects it.
 
 ## Notes
 

@@ -36,6 +36,7 @@ func TestExecDeniedReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	trustServer(t, c, "home-pc")
 
 	done := make(chan struct{})
 	var code int

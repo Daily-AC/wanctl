@@ -12,6 +12,7 @@ require (
 	github.com/mark3labs/mcp-go v0.55.1
 	golang.org/x/crypto v0.53.0
 	golang.org/x/term v0.44.0
+	mvdan.cc/sh/v3 v3.13.1
 )
 
 require (
@@ -24,5 +25,5 @@ require (
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 )

@@ -10,12 +10,12 @@ import (
 
 // DocGroup is one sidebar section.
 type DocGroup struct {
-	ID        int           `json:"id"`
-	Slug      string        `json:"slug"`
-	Title     string        `json:"title"`
-	Position  int           `json:"position"`
-	UpdatedAt time.Time     `json:"updated_at"`
-	Articles  []DocArticle  `json:"articles,omitempty"`
+	ID        int          `json:"id"`
+	Slug      string       `json:"slug"`
+	Title     string       `json:"title"`
+	Position  int          `json:"position"`
+	UpdatedAt time.Time    `json:"updated_at"`
+	Articles  []DocArticle `json:"articles,omitempty"`
 }
 
 // DocArticle is one document. Body is markdown.
@@ -109,7 +109,7 @@ func (r *Relay) handleDocsGroupsNS(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -122,7 +122,7 @@ func (r *Relay) handleDocsGroupDeleteNS(w http.ResponseWriter, req *http.Request
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := r.auth(req); !ok {
+	if _, ok := r.auth(w, req); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -134,7 +134,7 @@ func (r *Relay) handleDocsArticlesNS(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	ns, ok := r.auth(req)
+	ns, ok := r.auth(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -147,7 +147,7 @@ func (r *Relay) handleDocsArticleDeleteNS(w http.ResponseWriter, req *http.Reque
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := r.auth(req); !ok {
+	if _, ok := r.auth(w, req); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}

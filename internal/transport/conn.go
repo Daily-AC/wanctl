@@ -36,8 +36,8 @@ type MismatchError struct {
 }
 
 func (e *MismatchError) Error() string {
-	return fmt.Sprintf("server %q identity changed!\n  pinned:  %s\n  offered: %s\nrefusing to connect (possible impersonation). Remove the old pin to override.",
-		e.Name, e.Stored, e.Offered)
+	return fmt.Sprintf("server %q identity changed!\n  pinned:  %s\n  offered: %s\nrefusing to connect (possible impersonation). To re-pin after independently verifying the fingerprint, run:\n  wanctl trust server --target %q --fingerprint %q --replace",
+		e.Name, e.Stored, e.Offered, e.Name, e.Offered)
 }
 
 // DialResult carries the established connection plus whether this was a first
@@ -76,7 +76,7 @@ func RawDial(ctx context.Context, addr string, id *Identity) (*tls.Conn, string,
 }
 
 // Dial connects to a lanctl server at addr, completes the mutually-authenticated
-// handshake, and applies TOFU pinning against the client's known_servers store.
+// handshake, and checks the client's known_servers store.
 // serverName is the logical name used to pin identity across IP changes.
 func Dial(ctx context.Context, addr, serverName string, id *Identity, known *Store) (*DialResult, error) {
 	conn, fp, err := RawDial(ctx, addr, id)
@@ -94,15 +94,12 @@ func Dial(ctx context.Context, addr, serverName string, id *Identity, known *Sto
 			known.Touch(fp)
 			return res, nil
 		}
+		res.FirstSeen = true
+		return res, nil
 	}
 	if known.Has(fp) {
 		known.Touch(fp)
 		return res, nil
-	}
-	// First contact: pin it.
-	if err := known.Add(fp, serverName); err != nil {
-		conn.Close()
-		return nil, err
 	}
 	res.FirstSeen = true
 	return res, nil

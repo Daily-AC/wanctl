@@ -8,8 +8,8 @@
 // request/response pairs (no upgrade, no streaming body) so a buffering proxy
 // forwards them promptly:
 //
-//	up:   POST /h/up?session=&role=&token=     — one request per Write, body = bytes.
-//	down: GET  /h/down?session=&role=&token=   — long-poll: returns available bytes
+//	up:   POST /h/up?session=&role=     — one request per Write, body = bytes.
+//	down: GET  /h/down?session=&role=   — long-poll: returns available bytes
 //	      (200), 204 if none within the poll window (client re-polls), or 410 when
 //	      the session is closed (-> io.EOF).
 package httpconn
@@ -24,6 +24,8 @@ import (
 	"net/url"
 	"sync"
 	"time"
+
+	"wanctl/internal/admission"
 )
 
 type conn struct {
@@ -75,7 +77,7 @@ func (c *conn) Read(p []byte) (int, error) {
 	if c.eof {
 		return 0, io.EOF
 	}
-	q := url.Values{"session": {c.session}, "role": {c.role}, "token": {c.token}}
+	q := url.Values{"session": {c.session}, "role": {c.role}}
 	downURL := c.base + "/h/down?" + q.Encode()
 	for {
 		if c.isClosed() {
@@ -85,6 +87,7 @@ func (c *conn) Read(p []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
+		admission.SetBearer(req, c.token)
 		resp, err := c.hc.Do(req)
 		if err != nil {
 			if c.isClosed() {
@@ -124,12 +127,13 @@ func (c *conn) Write(p []byte) (int, error) {
 	if c.closed {
 		return 0, io.ErrClosedPipe
 	}
-	q := url.Values{"session": {c.session}, "role": {c.role}, "token": {c.token}}
+	q := url.Values{"session": {c.session}, "role": {c.role}}
 	req, err := http.NewRequest("POST", c.base+"/h/up?"+q.Encode(), bytes.NewReader(p))
 	if err != nil {
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
+	admission.SetBearer(req, c.token)
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return 0, err
@@ -156,9 +160,10 @@ func (c *conn) Close() error {
 	}
 	c.closed = true
 	c.writeM.Unlock()
-	q := url.Values{"session": {c.session}, "token": {c.token}}
+	q := url.Values{"session": {c.session}}
 	req, _ := http.NewRequest("POST", c.base+"/h/close?"+q.Encode(), nil)
 	if req != nil {
+		admission.SetBearer(req, c.token)
 		if resp, err := c.hc.Do(req); err == nil {
 			resp.Body.Close()
 		}

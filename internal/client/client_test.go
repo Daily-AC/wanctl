@@ -2,6 +2,9 @@ package client
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -14,6 +17,24 @@ import (
 	"wanctl/internal/relay"
 	"wanctl/internal/transport"
 )
+
+func trustServer(t *testing.T, c *Client, target string) {
+	t.Helper()
+	_, _, err := c.Pair(context.Background(), target)
+	var required *TrustRequiredError
+	if !errors.As(err, &required) {
+		t.Fatalf("first contact: want TrustRequiredError, got %v", err)
+	}
+	if required.Target == "" || required.Fingerprint == "" {
+		t.Fatalf("incomplete trust request: %+v", required)
+	}
+	if required.Target != "alice/home-pc" && target == "home-pc" {
+		t.Fatalf("trust request target = %q, want canonical alice/home-pc", required.Target)
+	}
+	if _, err := c.PinServer(context.Background(), required.Target, required.Fingerprint, false); err != nil {
+		t.Fatalf("confirm server identity: %v", err)
+	}
+}
 
 func TestClientExecAndFileRoundTrip(t *testing.T) {
 	srv := httptest.NewServer(relay.New(relay.EnvTokenStore("tok:alice")).Handler())
@@ -40,6 +61,7 @@ func TestClientExecAndFileRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	trustServer(t, c, "home-pc")
 
 	code, err := c.Exec(context.Background(), "home-pc", "echo hi", true, "")
 	if err != nil || code != 0 {
@@ -73,5 +95,32 @@ func TestNewWithWiring(t *testing.T) {
 	c := NewWith(id, known, "wss://relay.example/", "tok", "http")
 	if c.relayURL != "wss://relay.example" || c.token != "tok" || c.transport != "http" {
 		t.Fatalf("wiring: %+v", c)
+	}
+}
+
+func TestPinNamePreservesOwnerNamespace(t *testing.T) {
+	alice := pinName("alice/build")
+	bob := pinName("bob/build")
+	if alice != "alice/build" || bob != "bob/build" || alice == bob {
+		t.Fatalf("pin keys collide: alice=%q bob=%q", alice, bob)
+	}
+}
+
+func TestResolveUnqualifiedTargetUsesRelayNamespace(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"namespace": "alice", "devices": []string{"build"}})
+	}))
+	defer srv.Close()
+	c := NewWith(nil, transport.NewMemStore(), srv.URL, "tok", "http")
+	fp := transport.Fingerprint([]byte("device cert"))
+	target, err := c.PinServer(context.Background(), "build", fp, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "alice/build" {
+		t.Fatalf("canonical target = %q, want alice/build", target)
+	}
+	if got, ok := c.known.GetByName("alice/build"); !ok || got.Fingerprint != fp {
+		t.Fatalf("canonical pin missing: %+v, ok=%v", got, ok)
 	}
 }
