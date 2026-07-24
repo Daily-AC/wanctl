@@ -28,15 +28,15 @@ run_govulncheck() {
 run_sbom() {
   need_docker
   [ -f "$artifacts/wanctl-image.tar" ] || build_image
-  docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp \
-    -v "$artifacts:/out" "$syft_image" \
+  docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
+    -e XDG_CACHE_HOME=/tmp/syft-cache -v "$artifacts:/out" "$syft_image" \
     docker-archive:/out/wanctl-image.tar -o cyclonedx-json=/out/wanctl.sbom.cdx.json
 }
 
 run_image_scan() {
   need_docker
   [ -f "$artifacts/wanctl-image.tar" ] || build_image
-  docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp \
+  docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
     -e TRIVY_CACHE_DIR=/tmp/trivy-cache -v "$artifacts:/scan:ro" "$trivy_image" \
     image --input /scan/wanctl-image.tar --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
 }
