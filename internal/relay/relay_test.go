@@ -81,6 +81,37 @@ func TestRelayPipesSession(t *testing.T) {
 	}
 }
 
+func TestRelayPipesRepeatedSessions(t *testing.T) {
+	ts := EnvTokenStore("tok-alice:alice")
+	srv := httptest.NewServer(New(ts).Handler())
+	defer srv.Close()
+	base := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	startAgent(t, base, "tok-alice", "home-pc")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for i := 0; i < 50; i++ {
+		conn, _, err := wsconn.Dial(ctx, base+"/dial?token=tok-alice&target=alice/home-pc", nil)
+		if err != nil {
+			t.Fatalf("session %d dial: %v", i, err)
+		}
+		if _, err := conn.Write([]byte("ping")); err != nil {
+			conn.Close()
+			t.Fatalf("session %d write: %v", i, err)
+		}
+		buf := make([]byte, 64)
+		n, err := conn.Read(buf)
+		conn.Close()
+		if err != nil {
+			t.Fatalf("session %d read: %v", i, err)
+		}
+		if got := string(buf[:n]); got != "echo:ping" {
+			t.Fatalf("session %d got %q", i, got)
+		}
+	}
+}
+
 func TestRelayRejectsBadToken(t *testing.T) {
 	srv := httptest.NewServer(New(EnvTokenStore("tok-alice:alice")).Handler())
 	defer srv.Close()
