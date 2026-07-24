@@ -19,7 +19,7 @@ import (
 //
 // For the team's hosted deployment, the relay's own HTTP mux already mounts
 // the same handler at /mcp (see internal/relay/mux wire-up), so users just
-// register https://***REMOVED-IP***/mcp with their AI host.
+// register https://wanctl-relay.***REMOVED***.***REMOVED***.com/mcp with their AI host.
 func cmdMCP(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
 	httpAddr := fs.String("http", "", "if set, serve HTTP/Streamable MCP on this addr (e.g. :8080) instead of stdio")
