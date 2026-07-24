@@ -73,8 +73,9 @@ with 8 MiB output retained per job and 64 MiB across completed jobs.
 
 ## Install and enroll a device
 
-Obtain `install.sh` or `install.ps1` from the independently authenticated GitLab
-release, not from the artifact relay. A relay-hosted installer cannot securely
+Obtain `install.sh` or `install.ps1` from the independently authenticated
+[GitLab Release](https://g.***REMOVED***.com/ai-native/wanctl/-/releases/v0.1.0), not
+from the artifact relay. A relay-hosted installer cannot securely
 bootstrap trust in the same relay. The installer embeds the offline release
 public key and verifies the signed manifest, binary size, and SHA-256 before it
 installs anything. OpenSSL 1.1.1+ is required.
@@ -142,7 +143,7 @@ WANCTL_TOKENS="tok:teamA" wanctl relay --addr :8080
 wanctl agent --relay https://***REMOVED-IP*** --token tok --name home-pc
 # Behind a reverse proxy that strips WebSocket upgrades,
 # use the proxy-agnostic HTTP transport instead:
-wanctl agent --relay https://***REMOVED-IP*** --token tok --name home-pc --transport http
+wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token tok --name home-pc --transport http
 # ...and on the controller: export WANCTL_TRANSPORT=http
 
 # Controller:
@@ -163,10 +164,9 @@ hard error unless explicitly re-pinned with `--replace`. After that, a new
 controller still needs device-side approval (auto-trusted with `--yes` for
 unattended agents). Token leakage alone therefore does not grant control.
 
-Self-hosted builds contain no portal root. A production relay injects its
-configured roots into both installers through `WANCTL_PORTAL_FPS` (a
-comma-separated list of full `SHA256:` fingerprints); the installer persists
-them locally before starting the agent. Direct installs can enroll roots with:
+Release builds contain no portal root, and signed installers are not dynamically
+modified by the relay. Enroll a portal administrator only after verifying its
+full fingerprint through an independent channel:
 
 ```bash
 wanctl portal-admins add --fingerprints SHA256:<old>,SHA256:<new>
