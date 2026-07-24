@@ -48,14 +48,26 @@ revocation, forced termination of already-established portal sessions, and the
 larger device-bound refresh-session design from `#19` remain explicit follow-up
 work rather than hidden claims of completion.
 
-The repository now fails closed when a release trust key or signed directory is
-missing, but no production signing seed was generated during this audit. An
-administrator must configure `WANCTL_RELEASE_SIGNING_KEY` as a masked,
-protected, release-environment-scoped GitLab variable before the first release.
+The repository fails closed when a release trust key or signed directory is
+missing. A production signing seed is configured as a masked, protected,
+release-environment-scoped GitLab variable, and release tags matching `v*` are
+protected. No production release tag was created solely for this audit, so the
+tag-only signing job remains to be exercised by the first real release.
+
 The PowerShell installer was exercised end to end on Windows PowerShell 5.1
 against a temporary signed release served from WSL. It upgraded a historical
 binary without a `version` command, installed `v9.8.7` with the manifest-bound
 SHA-256, rejected a truncated artifact, and rejected a same-version reinstall.
-The project still had no GitLab runner, and neither the development machine nor
-the home WSL environment had a working Docker daemon, so container build,
-SBOM, and Trivy smoke still require a configured container runtime.
+
+Post-merge pipeline
+[8760](https://g.***REMOVED***.com/ai-native/wanctl/-/pipelines/8760) ran on the
+project-locked, protected Home WSL runner. The test job passed Go tests, vet,
+and the Windows cross-build. The supply-chain job built the digest-pinned image,
+passed relay, portal, and MCP container smoke tests as UID 10001, found no
+reachable Go vulnerabilities, produced a 77,046-byte CycloneDX SBOM with 116
+components, and found no HIGH or CRITICAL vulnerabilities in either the Alpine
+packages or Go binary. The post-merge Linux process-tree timeout regression and
+scanner temporary-storage regression discovered while commissioning this
+runner were fixed in merge requests
+[!2](https://g.***REMOVED***.com/ai-native/wanctl/-/merge_requests/2) and
+[!3](https://g.***REMOVED***.com/ai-native/wanctl/-/merge_requests/3).
