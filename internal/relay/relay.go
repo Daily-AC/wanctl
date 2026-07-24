@@ -36,8 +36,8 @@ func (a *agentConn) send(v any) error {
 }
 
 type pendingSession struct {
-	agentSide  chan io.ReadWriteCloser
-	clientSide chan io.ReadWriteCloser
+	agentSide chan io.ReadWriteCloser
+	done      chan struct{}
 }
 
 // ACLChecker returns raw permissions for a live cross-namespace grant. Relay
@@ -246,11 +246,16 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 		r.audit.Audit(auth.OwnerNamespace, auth.Device, "dial")
 	}
 	sid := newID()
-	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), clientSide: make(chan io.ReadWriteCloser, 1)}
+	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), done: make(chan struct{})}
 	r.mu.Lock()
 	r.pending[sid] = ps
 	r.mu.Unlock()
-	defer func() { r.mu.Lock(); delete(r.pending, sid); r.mu.Unlock() }()
+	defer func() {
+		close(ps.done)
+		r.mu.Lock()
+		delete(r.pending, sid)
+		r.mu.Unlock()
+	}()
 
 	auth.Op = "open"
 	auth.Session = sid
@@ -265,7 +270,6 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 	}
 	limits.ClearHijackedDeadline(req.Context())
 	clientNC := wsconn.FromAccepted(req.Context(), c)
-	ps.clientSide <- clientNC
 
 	select {
 	case agentNC := <-ps.agentSide:
@@ -294,12 +298,11 @@ func (r *Relay) handleSession(w http.ResponseWriter, req *http.Request) {
 	}
 	limits.ClearHijackedDeadline(req.Context())
 	agentNC := wsconn.FromAccepted(req.Context(), c)
-	ps.agentSide <- agentNC
 	select {
-	case clientNC := <-ps.clientSide:
-		pipe(agentNC, clientNC)
-	case <-time.After(15 * time.Second):
-		c.Close(websocket.StatusBadGateway, "client went away")
+	case ps.agentSide <- agentNC:
+		<-ps.done
+	case <-ps.done:
+		c.Close(websocket.StatusGoingAway, "client went away")
 	}
 }
 
