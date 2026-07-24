@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/config"
 	wanrelease "wanctl/internal/release"
 )
 
@@ -93,5 +94,27 @@ func TestDownloadSignedUpdateRejectsTamperedArtifact(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("failed update left files behind: %v", entries)
+	}
+}
+
+func TestPlanUpdateRestartPreservesSupervisorOwnership(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WANCTL_CONFIG_DIR", dir)
+	const pid = 4242
+	if err := config.WriteManagedPID(pid); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := planUpdateRestartWithLiveness(false, pid, true)
+	if plan.stopDetached || plan.restartDetached || plan.restartManagedPID != pid {
+		t.Fatalf("managed plan = %+v", plan)
+	}
+
+	if err := config.WriteManagedPID(pid + 1); err != nil {
+		t.Fatal(err)
+	}
+	plan = planUpdateRestartWithLiveness(false, pid, true)
+	if !plan.stopDetached || !plan.restartDetached || plan.restartManagedPID != 0 {
+		t.Fatalf("stale managed marker plan = %+v", plan)
 	}
 }

@@ -5,18 +5,27 @@ package main
 import (
 	"os"
 	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
-// processAlive is best-effort on Windows: signal-0 liveness probing isn't
-// available without extra syscalls, so a recorded pid is assumed alive. The
-// team runs devices on macOS/Linux; this keeps the Windows binary building and
-// usable for the common case.
+// processAlive checks the process handle instead of relying on os.FindProcess,
+// which succeeds for stale positive pids on Windows.
 func processAlive(pid int) bool {
+	const stillActive = 259
 	if pid <= 0 {
 		return false
 	}
-	_, err := os.FindProcess(pid)
-	return err == nil
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var exitCode uint32
+	if err := windows.GetExitCodeProcess(h, &exitCode); err != nil {
+		return false
+	}
+	return exitCode == stillActive
 }
 
 // detachSysProcAttr truly detaches the child on Windows: DETACHED_PROCESS drops

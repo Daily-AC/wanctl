@@ -5,9 +5,39 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"wanctl/internal/config"
 )
+
+// cmdSupervise is the restart loop used by the Windows Scheduled Task, whose
+// native ONLOGON trigger does not restart a process that exits later. Each
+// iteration executes the stable binary path again, so a replacement is picked
+// up on the next child start.
+func cmdSupervise(ctx context.Context, args []string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	agentArgs := append([]string{"agent", "--managed"}, args...)
+	for {
+		cmd := exec.CommandContext(ctx, self, agentArgs...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err := cmd.Run()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "wanctl supervisor: agent exited: %v; restarting in 3s\n", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
 
 // cmdUp is the bare-`wanctl` entrypoint: enroll over OAuth if we have no token
 // yet, then make sure the agent is running in the background. Idempotent.
