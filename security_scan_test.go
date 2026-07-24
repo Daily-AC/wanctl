@@ -22,7 +22,11 @@ func TestImageScanForwardsProxyEnvironmentToTrivy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(artifactsDir, "wanctl-image.tar"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fakeDocker := "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$DOCKER_LOG\"\n"
+	fakeDocker := `#!/bin/sh
+printf 'ARGS %s\n' "$*" >>"$DOCKER_LOG"
+printf 'ENV HTTP_PROXY=%s HTTPS_PROXY=%s http_proxy=%s https_proxy=%s\n' \
+  "$HTTP_PROXY" "$HTTPS_PROXY" "$http_proxy" "$https_proxy" >>"$DOCKER_LOG"
+`
 	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(fakeDocker), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -32,11 +36,11 @@ func TestImageScanForwardsProxyEnvironmentToTrivy(t *testing.T) {
 		"PATH="+binDir+":"+os.Getenv("PATH"),
 		"DOCKER_LOG="+logPath,
 		"WANCTL_ARTIFACTS_DIR="+artifactsDir,
-		"HTTP_PROXY=http://proxy.example:7890",
-		"HTTPS_PROXY=http://proxy.example:7890",
+		"HTTP_PROXY=http://127.0.0.1:7890",
+		"HTTPS_PROXY=http://127.0.0.1:7890",
 		"NO_PROXY=localhost",
-		"http_proxy=http://proxy.example:7890",
-		"https_proxy=http://proxy.example:7890",
+		"http_proxy=http://127.0.0.1:7890",
+		"https_proxy=http://127.0.0.1:7890",
 		"no_proxy=localhost",
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -47,12 +51,27 @@ func TestImageScanForwardsProxyEnvironmentToTrivy(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := string(log)
+	if !strings.Contains(args, "--add-host host.docker.internal:host-gateway") {
+		t.Errorf("docker run does not map the host proxy address: %s", args)
+	}
 	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"} {
 		if !strings.Contains(args, "-e "+name) {
 			t.Errorf("docker run does not inherit %s: %s", name, args)
 		}
 	}
-	if strings.Contains(args, "proxy.example") {
-		t.Fatalf("proxy values leaked into docker arguments: %s", args)
+	for _, line := range strings.Split(args, "\n") {
+		if strings.HasPrefix(line, "ARGS ") && strings.Contains(line, "127.0.0.1:7890") {
+			t.Fatalf("proxy values leaked into docker arguments: %s", args)
+		}
+	}
+	for _, want := range []string{
+		"HTTP_PROXY=http://host.docker.internal:7890",
+		"HTTPS_PROXY=http://host.docker.internal:7890",
+		"http_proxy=http://host.docker.internal:7890",
+		"https_proxy=http://host.docker.internal:7890",
+	} {
+		if !strings.Contains(args, want) {
+			t.Errorf("container proxy was not translated to the host gateway, want %q in %s", want, args)
+		}
 	}
 }
