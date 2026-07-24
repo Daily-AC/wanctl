@@ -43,7 +43,8 @@ USAGE
   wanctl service status                        show whether the service is installed + active
   wanctl agent [flags]                         run the agent in the FOREGROUND (what 'wanctl'/'start'/the service spawn)
   Persistence: 'wanctl start' survives THIS terminal but may die on logout/reboot.
-  For a real always-on agent (survives terminal close, logout, and reboot), use 'wanctl service install'.
+  'wanctl service install' adds OS-native autostart. Linux needs user lingering
+  for boot-without-login; Windows starts the limited-user task at the next logon.
 
  CONTROLLER (run where you / the AI drive from)
   wanctl login                                log in (Feishu) and save the token — no daemon (use this on AI / controller boxes)

@@ -33,7 +33,10 @@ release maintainers. The release job aborts if the key is absent.
 
 The job builds each platform binary with the matching public key, creates
 `manifest.json`, signs its exact bytes as `manifest.json.sig`, and publishes the
-release directory as a CI artifact. Deploy that directory read-only at
+release directory as a CI artifact. The directory also contains
+`release-public.pem`, which lets a maintainer independently verify the downloaded
+CI artifact without access to the private signing key. Deploy that directory
+read-only at
 `WANCTL_DIST_DIR`. The relay verifies the manifest and every file before serving
 anything. A bad or incomplete directory returns HTTP 503 for all `/dl/*` paths.
 Build the relay image with the public release metadata (public keys are not
@@ -49,7 +52,19 @@ For a local release rehearsal:
 ```sh
 export WANCTL_RELEASE_SIGNING_KEY='<base64 32-byte seed>'
 ./scripts/build-release.sh v1.2.3
+go run ./cmd/release-manifest verify release release/release-public.pem
 ```
+
+To publish an immutable GitLab Release after its protected tag pipeline passes,
+download the `release/` job artifact, check out that exact tag, then run:
+
+```sh
+./scripts/publish-release.sh v1.2.3 release docs/releases/v1.2.3.md
+```
+
+The publisher rejects an existing release, a tag/source mismatch, unexpected or
+missing files, a manifest/tag mismatch, a bad signature or artifact hash, and
+installers whose embedded key differs from `release-public.pem`.
 
 ## Rotation and revocation
 
