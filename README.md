@@ -74,7 +74,7 @@ with 8 MiB output retained per job and 64 MiB across completed jobs.
 ## Install and enroll a device
 
 Obtain `install.sh` or `install.ps1` from the independently authenticated
-[public GitLab Release](https://g.***REMOVED***.com/***REMOVED***/wanctl-releases/-/releases/v0.1.0), not
+[public GitLab Releases](https://g.***REMOVED***.com/ai-native/wanctl/-/releases), not
 from the artifact relay. A relay-hosted installer cannot securely
 bootstrap trust in the same relay. The installer embeds the offline release
 public key and verifies the signed manifest, binary size, and SHA-256 before it
