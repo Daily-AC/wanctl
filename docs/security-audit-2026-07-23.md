@@ -51,8 +51,11 @@ work rather than hidden claims of completion.
 The repository fails closed when a release trust key or signed directory is
 missing. A production signing seed is configured as a masked, protected,
 release-environment-scoped GitLab variable, and release tags matching `v*` are
-protected. No production release tag was created solely for this audit, so the
-tag-only signing job remains to be exercised by the first real release.
+protected. The protected `v0.1.0` tag exercised the complete signing path in
+[pipeline 8768](https://g.***REMOVED***.com/ai-native/wanctl/-/pipelines/8768). Its
+release job published the exact signed artifacts to the
+[v0.1.0 GitLab Release](https://g.***REMOVED***.com/ai-native/wanctl/-/releases/v0.1.0),
+and a separately downloaded copy was verified against `release-public.pem`.
 
 The PowerShell installer was exercised end to end on Windows PowerShell 5.1
 against a temporary signed release served from WSL. It upgraded a historical
