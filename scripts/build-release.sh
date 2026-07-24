@@ -4,10 +4,10 @@ set -eu
 VERSION=${1:?usage: scripts/build-release.sh vMAJOR.MINOR.PATCH}
 : "${WANCTL_RELEASE_SIGNING_KEY:?protected WANCTL_RELEASE_SIGNING_KEY is required}"
 
-case "$VERSION" in
-  v[0-9]*.[0-9]*.[0-9]*) ;;
-  *) echo "invalid release version: $VERSION" >&2; exit 1 ;;
-esac
+printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
+  echo "invalid release version: $VERSION" >&2
+  exit 1
+}
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 DIST="$ROOT/release"
@@ -32,13 +32,14 @@ done
 (cd "$ROOT" && go run ./cmd/release-manifest create "$VERSION" "$DIST")
 (cd "$ROOT" && go run ./cmd/release-manifest sign "$DIST")
 
-PUB_PEM_FILE="$DIST/.release-public.pem"
+PUB_PEM_FILE="$DIST/release-public.pem"
 (cd "$ROOT" && go run ./cmd/release-manifest public-key-pem) > "$PUB_PEM_FILE"
 awk -v pem="$PUB_PEM_FILE" '$0 == "@WANCTL_RELEASE_PUBLIC_KEY_PEM@" { while ((getline line < pem) > 0) print line; close(pem); next } { print }' \
   "$ROOT/scripts/install.sh.in" > "$DIST/install.sh"
 awk -v pem="$PUB_PEM_FILE" '$0 == "@WANCTL_RELEASE_PUBLIC_KEY_PEM@" { while ((getline line < pem) > 0) print line; close(pem); next } { print }' \
   "$ROOT/scripts/install.ps1.in" > "$DIST/install.ps1"
-rm -f "$PUB_PEM_FILE"
 chmod 0755 "$DIST/install.sh"
+
+(cd "$ROOT" && go run ./cmd/release-manifest verify "$DIST" "$PUB_PEM_FILE")
 
 echo "signed release $VERSION written to $DIST"

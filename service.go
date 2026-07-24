@@ -14,7 +14,8 @@ import (
 )
 
 // cmdService installs, removes, or reports an OS-native autostart unit for the
-// agent so it survives the terminal closing AND a reboot — a real service
+// agent so it survives the terminal closing and returns with the user's OS
+// session (or at boot when the selected OS service manager supports that)
 // instead of the bare `wanctl start` detach (which on Windows dies with its
 // console, and on macOS/Linux dies with the login session). The unit just runs
 // `<wanctl> agent`, which reads its token from the config dir, so no secrets are
@@ -211,7 +212,7 @@ const winTaskName = "WanctlAgent"
 
 func winInstall(self string) error {
 	// ONLOGON task running the agent, recreated (/f) if it exists. Survives the
-	// console closing and re-runs at every logon (i.e. across reboots). The agent
+	// console closing and re-runs after the user logs in following a reboot. The agent
 	// itself loops/reconnects, so it rarely exits on its own.
 	tr := fmt.Sprintf(`"%s" agent`, self)
 	if out, err := run("schtasks", "/create", "/tn", winTaskName, "/tr", tr,

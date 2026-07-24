@@ -17,7 +17,7 @@ import (
 // this machine as the device. It is skipped unless WANCTL_LIVE_RELAY (+ DEVTOK +
 // PORTALTOK) are set, so it never runs in normal CI.
 //
-//	WANCTL_LIVE_RELAY=wss://wanctl-relay.***REMOVED***.***REMOVED***.com \
+//	WANCTL_LIVE_RELAY=https://wanctl-relay.***REMOVED***.***REMOVED***.com WANCTL_TRANSPORT=http \
 //	WANCTL_LIVE_DEVTOK=<ns-***REMOVED*** token> \
 //	WANCTL_LIVE_PORTALTOK=<ns-portal token> \
 //	go test ./internal/client/ -run TestLiveRemoteConsole -v -timeout 120s

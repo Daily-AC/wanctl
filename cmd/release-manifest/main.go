@@ -6,6 +6,7 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -23,7 +24,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fatalf("usage: release-manifest create VERSION DIST_DIR | sign DIST_DIR | public-key | public-key-pem")
+		fatalf("usage: release-manifest create VERSION DIST_DIR | sign DIST_DIR | verify DIST_DIR PUBLIC_KEY_FILE | public-key | public-key-pem")
 	}
 	var err error
 	switch os.Args[1] {
@@ -37,6 +38,11 @@ func main() {
 			fatalf("usage: release-manifest sign DIST_DIR")
 		}
 		err = sign(os.Args[2])
+	case "verify":
+		if len(os.Args) != 4 {
+			fatalf("usage: release-manifest verify DIST_DIR PUBLIC_KEY_FILE")
+		}
+		err = verify(os.Args[2], os.Args[3])
 	case "public-key":
 		if len(os.Args) != 2 {
 			fatalf("usage: release-manifest public-key")
@@ -131,6 +137,43 @@ func sign(dir string) error {
 		return errorsNew("signing key is internally inconsistent")
 	}
 	return os.WriteFile(filepath.Join(dir, wanrelease.SignatureName), sig, 0o644)
+}
+
+func verify(dir, publicKeyFile string) error {
+	pemRaw, err := os.ReadFile(publicKeyFile)
+	if err != nil {
+		return fmt.Errorf("read public key: %w", err)
+	}
+	block, rest := pem.Decode(pemRaw)
+	if block == nil || block.Type != "PUBLIC KEY" || len(strings.TrimSpace(string(rest))) != 0 {
+		return errorsNew("public key file is not a single PEM PUBLIC KEY block")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse public key: %w", err)
+	}
+	pub, ok := parsed.(ed25519.PublicKey)
+	if !ok || len(pub) != ed25519.PublicKeySize {
+		return errorsNew("public key is not Ed25519")
+	}
+	manifestRaw, err := os.ReadFile(filepath.Join(dir, wanrelease.ManifestName))
+	if err != nil {
+		return err
+	}
+	signatureRaw, err := os.ReadFile(filepath.Join(dir, wanrelease.SignatureName))
+	if err != nil {
+		return err
+	}
+	trusted := base64.StdEncoding.EncodeToString(pub)
+	manifest, err := wanrelease.VerifyManifest(manifestRaw, signatureRaw, trusted)
+	if err != nil {
+		return err
+	}
+	if err := wanrelease.VerifyDirectory(dir, manifestRaw, signatureRaw, trusted); err != nil {
+		return err
+	}
+	fmt.Printf("verified signed release %s with key %s\n", manifest.Version, wanrelease.KeyID(pub))
+	return nil
 }
 
 func signingKey() (ed25519.PrivateKey, error) {
