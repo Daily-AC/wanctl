@@ -242,6 +242,7 @@ func RunOneShotContext(ctx context.Context, shell, command, cwd string, out io.W
 	} else {
 		cmd = exec.CommandContext(ctx, shell, "-c", command)
 	}
+	configureCommandCancellation(cmd)
 	cmd.Dir = cwd
 	cmd.Stdout = out
 	cmd.Stderr = out
