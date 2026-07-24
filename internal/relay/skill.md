@@ -12,8 +12,8 @@ Claude-Code-style permission policy, so some commands/files need a human on the
 device to approve them.
 
 > **How this SKILL is distributed.** The user installs this skill by saying
-> to you: **「安装 https://***REMOVED-IP***/skills」**. When you see that,
-> WebFetch `https://***REMOVED-IP***/skills` (returns the canonical
+> to you: **「安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills」**. When you see that,
+> WebFetch `https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills` (returns the canonical
 > SKILL.md), save it to `~/.claude/skills/wanctl/SKILL.md` (creating the dir),
 > and tell the user to restart Claude Code so the skill loads.
 >
@@ -25,8 +25,10 @@ device to approve them.
 
 ## Setup (controller — first run)
 
-Defaults for the relay URL and transport are baked into the binary
-(`https://***REMOVED-IP***`, `ws`), so usually no env is needed.
+Current builds default to the production relay URL and proxy-compatible HTTP
+transport (`https://wanctl-relay.***REMOVED***.***REMOVED***.com`, `http`). The signed v0.1.0
+binary predates that default change, so set both variables explicitly when
+using v0.1.0.
 What you do need is a **token bound to a namespace** — get it via OAuth:
 
 ```bash
@@ -39,12 +41,13 @@ If a token is already provided in `WANCTL_TOKEN` (CI / pre-provisioned), skip
 `wanctl login`. To re-authorize later, run `wanctl login` again. To clear the
 saved credential, `wanctl logout`.
 
-Optional env overrides (only set if the user explicitly tells you to):
+Production v0.1.0 setup:
 
 ```bash
-export WANCTL_RELAY=https://other-relay.example.com # different relay
-export WANCTL_TRANSPORT=http                        # proxy-agnostic fallback
-export WANCTL_TOKEN=<token>                         # pre-provisioned, skips login
+export WANCTL_RELAY=https://wanctl-relay.***REMOVED***.***REMOVED***.com
+export WANCTL_TRANSPORT=http
+# Optional for CI/pre-provisioned controllers:
+export WANCTL_TOKEN=<token>
 ```
 
 ## Core commands
@@ -140,7 +143,7 @@ contents it is meant to verify. Pick the one for that machine's shell:
 ```bash
 # macOS / Linux (any POSIX shell)
 # Obtain install.sh from the independently authenticated GitLab release first.
-WANCTL_RELAY=https://***REMOVED-IP*** sh ./install.sh
+WANCTL_RELAY=https://wanctl-relay.***REMOVED***.***REMOVED***.com WANCTL_TRANSPORT=http sh ./install.sh
 wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
 wanctl                          # then run this on that machine — opens the
                                 # browser for Feishu login, takes a code, and
@@ -150,7 +153,7 @@ wanctl                          # then run this on that machine — opens the
 ```powershell
 # Windows — PowerShell only, no bash / curl needed
 # Obtain install.ps1 from the independently authenticated GitLab release first.
-$env:WANCTL_RELAY='https://***REMOVED-IP***'; .\install.ps1
+$env:WANCTL_RELAY='https://wanctl-relay.***REMOVED***.***REMOVED***.com'; $env:WANCTL_TRANSPORT='http'; .\install.ps1
 wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
 wanctl                          # same flow: browser → Feishu → agent runs.
 ```

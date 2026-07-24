@@ -7,10 +7,10 @@ import "os"
 
 const (
 	// DefaultRelay is the public relay devices and controllers reach by default.
-	DefaultRelay = "https://***REMOVED-IP***"
-	// DefaultTransport uses the direct ls relay, whose nginx preserves WebSocket
-	// upgrades. HTTP long-poll remains available as an explicit fallback.
-	DefaultTransport = "ws"
+	DefaultRelay = "https://wanctl-relay.***REMOVED***.***REMOVED***.com"
+	// DefaultTransport uses proxy-agnostic HTTP long-poll because the public
+	// Thunderbox edge does not forward WebSocket upgrades.
+	DefaultTransport = "http"
 	// DefaultPortal is the team web app used for OAuth enrollment and approvals.
 	DefaultPortal = "https://wanctl.***REMOVED***.***REMOVED***.com"
 	// DefaultLanRelay is the intranet fast-path relay. Its ws:// admission header

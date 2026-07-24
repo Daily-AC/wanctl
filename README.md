@@ -8,7 +8,7 @@ endpoints dial a relay deployed on thunderbox; the relay byte-pipes them and
 
 ```
 controller (you)          relay (public, thunderbox)        device (agent)
-  wanctl exec/push ──ws──►  byte-pipe + registry  ◄──ws──  wanctl agent
+  wanctl exec/push ──http─►  byte-pipe + registry  ◄─http──  wanctl agent
        └──────── mutual-TLS E2E tunnel over the pipe ──────────┘
 ```
 
@@ -74,7 +74,7 @@ with 8 MiB output retained per job and 64 MiB across completed jobs.
 ## Install and enroll a device
 
 Obtain `install.sh` or `install.ps1` from the independently authenticated
-[GitLab Release](https://g.***REMOVED***.com/ai-native/wanctl/-/releases/v0.1.0), not
+[public GitLab Release](https://g.***REMOVED***.com/***REMOVED***/wanctl-releases/-/releases/v0.1.0), not
 from the artifact relay. A relay-hosted installer cannot securely
 bootstrap trust in the same relay. The installer embeds the offline release
 public key and verifies the signed manifest, binary size, and SHA-256 before it
@@ -82,12 +82,12 @@ installs anything. OpenSSL 1.1.1+ is required.
 
 ```bash
 # macOS / Linux
-WANCTL_RELAY=https://***REMOVED-IP*** sh ./install.sh
+WANCTL_RELAY=https://wanctl-relay.***REMOVED***.***REMOVED***.com WANCTL_TRANSPORT=http sh ./install.sh
 ```
 
 ```powershell
 # Windows (PowerShell — no bash needed)
-$env:WANCTL_RELAY='https://***REMOVED-IP***'; .\install.ps1
+$env:WANCTL_RELAY='https://wanctl-relay.***REMOVED***.***REMOVED***.com'; $env:WANCTL_TRANSPORT='http'; .\install.ps1
 ```
 
 Both installers detect OS/arch and install `wanctl`. Get a token from the portal,
@@ -96,24 +96,24 @@ then enroll and install the native service separately:
 
 ```bash
 wanctl portal-admins add --fingerprints SHA256:<verified-portal-fingerprint>
-wanctl agent --relay https://***REMOVED-IP*** --token <token> \
-      --transport ws --name "$(hostname)"
+wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token <token> \
+      --transport http --name "$(hostname)"
 wanctl service install
 ```
 
 ```powershell
 wanctl portal-admins add --fingerprints SHA256:<verified-portal-fingerprint>
-wanctl agent --relay https://***REMOVED-IP*** --token <token> `
-             --transport ws --name $env:COMPUTERNAME
+wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token <token> `
+             --transport http --name $env:COMPUTERNAME
 wanctl service install
 ```
 
 > **For AI agents:** how to *drive* a device (run commands, transfer files, read
 > logs, and interpret approval/denial) is in
 > [`internal/portal/skill.md`](internal/portal/skill.md) — read it first.
-> The portal serves the canonical copy at https://***REMOVED-IP***/skills ,
+> The portal serves the canonical copy at https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills ,
 > so users install it by simply saying to their AI:
-> **「安装 https://***REMOVED-IP***/skills」**
+> **「安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills」**
 > (the agent WebFetches that URL and writes it to `~/.claude/skills/wanctl/SKILL.md`).
 
 ## Self-update
@@ -140,14 +140,10 @@ GOOS=windows GOARCH=amd64 go build -o wanctl.exe .    # a Windows device
 WANCTL_TOKENS="tok:teamA" wanctl relay --addr :8080
 
 # Device to be controlled:
-wanctl agent --relay https://***REMOVED-IP*** --token tok --name home-pc
-# Behind a reverse proxy that strips WebSocket upgrades,
-# use the proxy-agnostic HTTP transport instead:
 wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token tok --name home-pc --transport http
-# ...and on the controller: export WANCTL_TRANSPORT=http
 
 # Controller:
-export WANCTL_RELAY=https://***REMOVED-IP*** WANCTL_TOKEN=tok
+export WANCTL_RELAY=https://wanctl-relay.***REMOVED***.***REMOVED***.com WANCTL_TRANSPORT=http WANCTL_TOKEN=tok
 wanctl peers                         # list reachable devices
 wanctl exec --target home-pc "..."   # run a command (streams output, real exit code)
 wanctl push ./a.zip /remote/a.zip    # upload
@@ -191,10 +187,10 @@ remote action cannot silently lock out portal administration.
 `internal/portal/skill.md` is a Claude Code skill that teaches an agent to drive
 the controller CLI: setup env, run/transfer/log commands, and correctly read
 "denied by policy" / "blocked on approval" / TOFU-pairing outcomes. The portal
-serves the canonical copy at <https://***REMOVED-IP***/skills>. Users
+serves the canonical copy at <https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills>. Users
 install it by saying to their AI:
 
-> 安装 https://***REMOVED-IP***/skills
+> 安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills
 
 The agent fetches that URL and writes it to `~/.claude/skills/wanctl/SKILL.md`.
 
