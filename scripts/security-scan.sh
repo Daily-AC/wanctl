@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-artifacts="$root/artifacts"
+artifacts=${WANCTL_ARTIFACTS_DIR:-"$root/artifacts"}
 image_name=${WANCTL_SCAN_IMAGE:-wanctl:security-scan}
 govuln_version=v1.6.0
 syft_image=anchore/syft:v1.49.0@sha256:13b53ebabe3d215268c90cf8fb9b875f0183908245f376fd4b3a2cb69d21d484
@@ -37,6 +37,8 @@ run_image_scan() {
   need_docker
   [ -f "$artifacts/wanctl-image.tar" ] || build_image
   docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
+    -e HTTP_PROXY -e HTTPS_PROXY -e NO_PROXY \
+    -e http_proxy -e https_proxy -e no_proxy \
     -e TRIVY_CACHE_DIR=/tmp/trivy-cache -v "$artifacts:/scan:ro" "$trivy_image" \
     image --input /scan/wanctl-image.tar --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
 }
