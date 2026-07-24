@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,8 +66,8 @@ func cmdUpdate(ctx context.Context, args []string) error {
 		return fmt.Errorf("chmod new binary: %w", err)
 	}
 
-	wasRunning := !*noRestart && processAlive(config.ReadPID())
-	if wasRunning {
+	plan := planUpdateRestart(*noRestart, config.ReadPID())
+	if plan.stopDetached {
 		fmt.Println("正在停止后台 agent …")
 		if err := cmdStop(); err != nil {
 			return fmt.Errorf("stop daemon: %w", err)
@@ -80,10 +81,15 @@ func cmdUpdate(ctx context.Context, args []string) error {
 
 	fmt.Printf("✓ 已安装 wanctl %s: %s\n", version, self)
 	pruneStaleCopies(self)
-	if wasRunning {
+	if plan.restartDetached {
 		fmt.Println("正在重启后台 agent …")
 		if err := cmdStart(); err != nil {
 			return fmt.Errorf("restart daemon: %w", err)
+		}
+	} else if plan.restartManagedPID > 0 {
+		fmt.Println("正在通过原 supervisor 重启 agent …")
+		if err := scheduleManagedRestart(self, plan.restartManagedPID); err != nil {
+			return fmt.Errorf("restart supervised agent: %w", err)
 		}
 	}
 	return nil
@@ -116,8 +122,8 @@ func splitUpdateViaSudo(ctx context.Context, self string) error {
 		return fmt.Errorf("升级 %s 需要 root 权限,但本机找不到 sudo。请用 root 身份直接跑: wanctl update", self)
 	}
 
-	wasRunning := processAlive(config.ReadPID())
-	if wasRunning {
+	plan := planUpdateRestart(false, config.ReadPID())
+	if plan.stopDetached {
 		fmt.Println("正在停止后台 agent …")
 		if err := cmdStop(); err != nil {
 			return fmt.Errorf("stop daemon: %w", err)
@@ -133,13 +139,66 @@ func splitUpdateViaSudo(ctx context.Context, self string) error {
 		return fmt.Errorf("sudo wanctl update: %w", err)
 	}
 
-	if wasRunning {
+	if plan.restartDetached {
 		fmt.Println("正在重启后台 agent …")
 		if err := cmdStart(); err != nil {
 			return fmt.Errorf("restart daemon: %w", err)
 		}
+	} else if plan.restartManagedPID > 0 {
+		fmt.Println("正在通过原 supervisor 重启 agent …")
+		if err := scheduleManagedRestart(self, plan.restartManagedPID); err != nil {
+			return fmt.Errorf("restart supervised agent: %w", err)
+		}
 	}
 	return nil
+}
+
+type updateRestartPlan struct {
+	stopDetached      bool
+	restartDetached   bool
+	restartManagedPID int
+}
+
+func planUpdateRestart(noRestart bool, pid int) updateRestartPlan {
+	return planUpdateRestartWithLiveness(noRestart, pid, processAlive(pid))
+}
+
+func planUpdateRestartWithLiveness(noRestart bool, pid int, alive bool) updateRestartPlan {
+	if noRestart || !alive {
+		return updateRestartPlan{}
+	}
+	if config.ManagedPID() == pid {
+		return updateRestartPlan{restartManagedPID: pid}
+	}
+	return updateRestartPlan{stopDetached: true, restartDetached: true}
+}
+
+// scheduleManagedRestart starts the freshly installed binary outside the
+// agent's process tree. The helper waits for the update command's output to be
+// relayed, terminates the old agent, and lets its existing supervisor restart
+// it with the original flags and identity.
+func scheduleManagedRestart(self string, pid int) error {
+	cmd := exec.Command(self, "__restart-managed", strconv.Itoa(pid))
+	cmd.SysProcAttr = detachSysProcAttr()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+func cmdRestartManaged(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("internal managed restart expects one pid")
+	}
+	pid, err := strconv.Atoi(args[0])
+	if err != nil || pid <= 0 {
+		return fmt.Errorf("invalid managed agent pid %q", args[0])
+	}
+	time.Sleep(time.Second)
+	if config.ReadPID() != pid || config.ManagedPID() != pid || !processAlive(pid) {
+		return nil
+	}
+	return terminatePID(pid)
 }
 
 // pruneStaleCopies walks $PATH and deletes any *other* wanctl binary it finds,

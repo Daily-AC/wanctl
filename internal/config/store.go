@@ -160,3 +160,46 @@ func RemovePID() error {
 	}
 	return nil
 }
+
+// ManagedPIDPath records that the current agent is owned by an external
+// supervisor. The pid in the file prevents a stale marker from changing the
+// lifecycle of a later, independently started agent.
+func ManagedPIDPath() (string, error) { return fileIn("agent.managed") }
+
+func ManagedPID() int {
+	p, err := ManagedPIDPath()
+	if err != nil {
+		return 0
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return 0
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	return pid
+}
+
+func WriteManagedPID(pid int) error {
+	p, err := ManagedPIDPath()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(strconv.Itoa(pid)+"\n"), 0o600)
+}
+
+// RemoveManagedPID only removes the marker owned by pid. This avoids an old
+// agent deleting the marker of a supervisor replacement that has already won
+// the startup race.
+func RemoveManagedPID(pid int) error {
+	if ManagedPID() != pid {
+		return nil
+	}
+	p, err := ManagedPIDPath()
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}

@@ -81,7 +81,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=%s agent
+ExecStart=%s agent --managed
 Restart=always
 RestartSec=3
 
@@ -161,6 +161,7 @@ func macInstall(self string) error {
   <array>
     <string>%s</string>
     <string>agent</string>
+    <string>--managed</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -213,8 +214,10 @@ const winTaskName = "WanctlAgent"
 func winInstall(self string) error {
 	// ONLOGON task running the agent, recreated (/f) if it exists. Survives the
 	// console closing and re-runs after the user logs in following a reboot. The agent
-	// itself loops/reconnects, so it rarely exits on its own.
-	tr := fmt.Sprintf(`"%s" agent`, self)
+	// Scheduled Tasks do not have a restart-on-exit policy. The internal
+	// supervisor keeps the child alive and starts the replaced binary after an
+	// update terminates the old child.
+	tr := fmt.Sprintf(`"%s" __supervise`, self)
 	if out, err := run("schtasks", "/create", "/tn", winTaskName, "/tr", tr,
 		"/sc", "onlogon", "/rl", "limited", "/f"); err != nil {
 		return fmt.Errorf("schtasks create: %v\n%s", err, out)

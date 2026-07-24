@@ -149,6 +149,10 @@ func main() {
 		err = cmdLogout()
 	case "update":
 		err = cmdUpdate(ctx, os.Args[2:])
+	case "__restart-managed":
+		err = cmdRestartManaged(os.Args[2:])
+	case "__supervise":
+		err = cmdSupervise(ctx, os.Args[2:])
 	case "version":
 		fmt.Println(buildVersion)
 		return
@@ -283,6 +287,7 @@ func cmdAgent(ctx context.Context, args []string) error {
 	yes := fs.Bool("yes", false, "auto-trust new controllers (unattended)")
 	tr := fs.String("transport", envOr("WANCTL_TRANSPORT", defaultTransport), "transport: ws or http (http is proxy-agnostic)")
 	mode := fs.String("mode", "", "policy mode: normal (prompt on miss) or bypass (auto-allow, DANGEROUS). Empty = keep the last persisted mode (default normal).")
+	managed := fs.Bool("managed", false, "agent is owned by an external supervisor")
 	portalFPS := fs.String("portal-fps", config.PortalFingerprintsEnv(), "comma-separated portal admin fingerprints to seed locally")
 	portalPK := fs.String("portal-pk", "", "deprecated alias for one --portal-fps entry")
 	lanRelay := fs.String("lan-relay", config.LanRelay(), "intranet fast-path relay (ws://...); empty disables the second uplink")
@@ -322,8 +327,17 @@ func cmdAgent(ctx context.Context, args []string) error {
 	// Self-register the pid so `wanctl status`/`stop` see this agent no matter how
 	// it was launched (bare `wanctl`, a keeper task, a systemd/launchd service),
 	// not just the child that `wanctl start` spawns.
-	_ = config.WritePID(os.Getpid())
-	defer config.RemovePID()
+	pid := os.Getpid()
+	_ = config.WritePID(pid)
+	if *managed {
+		_ = config.WriteManagedPID(pid)
+	} else {
+		_ = config.RemoveManagedPID(config.ManagedPID())
+	}
+	defer func() {
+		_ = config.RemoveManagedPID(pid)
+		_ = config.RemovePID()
+	}()
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return ag.Run(ctx)
