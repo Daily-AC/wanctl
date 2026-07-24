@@ -51,8 +51,8 @@ printf 'ENV HTTP_PROXY=%s HTTPS_PROXY=%s http_proxy=%s https_proxy=%s\n' \
 		t.Fatal(err)
 	}
 	args := string(log)
-	if !strings.Contains(args, "--add-host host.docker.internal:host-gateway") {
-		t.Errorf("docker run does not map the host proxy address: %s", args)
+	if !strings.Contains(args, "--network host") {
+		t.Errorf("docker run does not share the host network for a loopback proxy: %s", args)
 	}
 	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"} {
 		if !strings.Contains(args, "-e "+name) {
@@ -65,13 +65,13 @@ printf 'ENV HTTP_PROXY=%s HTTPS_PROXY=%s http_proxy=%s https_proxy=%s\n' \
 		}
 	}
 	for _, want := range []string{
-		"HTTP_PROXY=http://host.docker.internal:7890",
-		"HTTPS_PROXY=http://host.docker.internal:7890",
-		"http_proxy=http://host.docker.internal:7890",
-		"https_proxy=http://host.docker.internal:7890",
+		"HTTP_PROXY=http://127.0.0.1:7890",
+		"HTTPS_PROXY=http://127.0.0.1:7890",
+		"http_proxy=http://127.0.0.1:7890",
+		"https_proxy=http://127.0.0.1:7890",
 	} {
 		if !strings.Contains(args, want) {
-			t.Errorf("container proxy was not translated to the host gateway, want %q in %s", want, args)
+			t.Errorf("container did not inherit the loopback proxy, want %q in %s", want, args)
 		}
 	}
 }

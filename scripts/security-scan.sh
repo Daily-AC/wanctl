@@ -13,14 +13,13 @@ need_docker() {
   docker info >/dev/null 2>&1 || { echo "docker daemon is unavailable" >&2; exit 1; }
 }
 
-container_proxy_url() {
-  case "$1" in
-    http://127.0.0.1:*) printf 'http://host.docker.internal:%s' "${1#http://127.0.0.1:}" ;;
-    https://127.0.0.1:*) printf 'https://host.docker.internal:%s' "${1#https://127.0.0.1:}" ;;
-    http://localhost:*) printf 'http://host.docker.internal:%s' "${1#http://localhost:}" ;;
-    https://localhost:*) printf 'https://host.docker.internal:%s' "${1#https://localhost:}" ;;
-    *) printf '%s' "$1" ;;
-  esac
+proxy_is_loopback() {
+  for proxy in "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${http_proxy:-}" "${https_proxy:-}"; do
+    case "$proxy" in
+      http://127.0.0.1:*|https://127.0.0.1:*|http://localhost:*|https://localhost:*) return 0 ;;
+    esac
+  done
+  return 1
 }
 
 build_image() {
@@ -46,12 +45,13 @@ run_sbom() {
 run_image_scan() {
   need_docker
   [ -f "$artifacts/wanctl-image.tar" ] || build_image
-  HTTP_PROXY=$(container_proxy_url "${HTTP_PROXY:-}") \
-    HTTPS_PROXY=$(container_proxy_url "${HTTPS_PROXY:-}") \
-    http_proxy=$(container_proxy_url "${http_proxy:-}") \
-    https_proxy=$(container_proxy_url "${https_proxy:-}") \
-    docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
-    --add-host host.docker.internal:host-gateway \
+  if proxy_is_loopback; then
+    set -- --network host
+  else
+    set --
+  fi
+  docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
+    "$@" \
     -e HTTP_PROXY -e HTTPS_PROXY -e NO_PROXY \
     -e http_proxy -e https_proxy -e no_proxy \
     -e TRIVY_CACHE_DIR=/tmp/trivy-cache -v "$artifacts:/scan:ro" "$trivy_image" \

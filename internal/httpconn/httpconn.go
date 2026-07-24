@@ -39,9 +39,18 @@ type conn struct {
 	leftover []byte
 	eof      bool
 
-	writeM sync.Mutex
-	closed bool
+	writeM     sync.Mutex
+	pending    []byte
+	writeErr   error
+	flushTimer *time.Timer
+	flushGen   uint64
+	closed     bool
 }
+
+const (
+	writeBatchBytes = 256 << 10
+	writeFlushDelay = 5 * time.Millisecond
+)
 
 // Dial constructs a net.Conn for a session/role. base is the relay's HTTP origin
 // (http:// or https://, or ws(s):// which is normalized). No network I/O happens
@@ -69,6 +78,9 @@ func normalizeBase(b string) string {
 func (c *conn) Read(p []byte) (int, error) {
 	c.readM.Lock()
 	defer c.readM.Unlock()
+	if err := c.flushWrites(); err != nil {
+		return 0, err
+	}
 	if len(c.leftover) > 0 {
 		n := copy(p, c.leftover)
 		c.leftover = c.leftover[n:]
@@ -127,23 +139,85 @@ func (c *conn) Write(p []byte) (int, error) {
 	if c.closed {
 		return 0, io.ErrClosedPipe
 	}
+	if c.writeErr != nil {
+		return 0, c.writeErr
+	}
+	c.pending = append(c.pending, p...)
+	for len(c.pending) >= writeBatchBytes {
+		if err := c.postPendingLocked(writeBatchBytes); err != nil {
+			c.writeErr = err
+			return 0, err
+		}
+	}
+	if len(c.pending) > 0 && c.flushTimer == nil {
+		c.flushGen++
+		gen := c.flushGen
+		c.flushTimer = time.AfterFunc(writeFlushDelay, func() { c.flushTimerFired(gen) })
+	}
+	return len(p), nil
+}
+
+func (c *conn) flushTimerFired(gen uint64) {
+	c.writeM.Lock()
+	defer c.writeM.Unlock()
+	if c.flushTimer == nil || c.flushGen != gen {
+		return
+	}
+	c.flushTimer = nil
+	if c.closed || c.writeErr != nil || len(c.pending) == 0 {
+		return
+	}
+	if err := c.postPendingLocked(len(c.pending)); err != nil {
+		c.writeErr = err
+	}
+}
+
+func (c *conn) flushWrites() error {
+	c.writeM.Lock()
+	defer c.writeM.Unlock()
+	if c.writeErr != nil {
+		return c.writeErr
+	}
+	c.stopFlushTimerLocked()
+	if len(c.pending) == 0 {
+		return nil
+	}
+	if err := c.postPendingLocked(len(c.pending)); err != nil {
+		c.writeErr = err
+		return err
+	}
+	return nil
+}
+
+func (c *conn) stopFlushTimerLocked() {
+	if c.flushTimer != nil {
+		c.flushTimer.Stop()
+		c.flushTimer = nil
+		c.flushGen++
+	}
+}
+
+func (c *conn) postPendingLocked(n int) error {
+	data := c.pending[:n]
 	q := url.Values{"session": {c.session}, "role": {c.role}}
-	req, err := http.NewRequest("POST", c.base+"/h/up?"+q.Encode(), bytes.NewReader(p))
+	req, err := http.NewRequest("POST", c.base+"/h/up?"+q.Encode(), bytes.NewReader(data))
 	if err != nil {
-		return 0, err
+		return err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 	admission.SetBearer(req, c.token)
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("up chunk: relay returned %d", resp.StatusCode)
+		return fmt.Errorf("up chunk: relay returned %d", resp.StatusCode)
 	}
-	return len(p), nil
+	copy(c.pending, c.pending[n:])
+	c.pending = c.pending[:len(c.pending)-n]
+	return nil
 }
 
 func (c *conn) isClosed() bool {
@@ -158,6 +232,11 @@ func (c *conn) Close() error {
 		c.writeM.Unlock()
 		return nil
 	}
+	c.stopFlushTimerLocked()
+	flushErr := c.writeErr
+	if flushErr == nil && len(c.pending) > 0 {
+		flushErr = c.postPendingLocked(len(c.pending))
+	}
 	c.closed = true
 	c.writeM.Unlock()
 	q := url.Values{"session": {c.session}}
@@ -168,7 +247,7 @@ func (c *conn) Close() error {
 			resp.Body.Close()
 		}
 	}
-	return nil
+	return flushErr
 }
 
 type addr struct{ s string }
