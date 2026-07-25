@@ -3,7 +3,6 @@ package relay
 import (
 	"bytes"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -32,8 +31,8 @@ func (r *Relay) registerDist(mux *http.ServeMux) {
 		fmt.Fprintf(os.Stderr, "wanctl relay: release distribution disabled: %v\n", err)
 	}
 	mux.Handle("/dl/", http.StripPrefix("/dl/", handler))
-	mux.HandleFunc("/install.sh", retiredRelayInstaller)
-	mux.HandleFunc("/install.ps1", retiredRelayInstaller)
+	mux.HandleFunc("/install.sh", installerHandler(dir, "install.sh", "text/x-shellscript; charset=utf-8"))
+	mux.HandleFunc("/install.ps1", installerHandler(dir, "install.ps1", "text/plain; charset=utf-8"))
 	mux.HandleFunc("/skills", r.handleSkills)
 }
 
@@ -123,12 +122,32 @@ func (h *signedDistHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 	http.ServeContent(w, req, name, time.Time{}, bytes.NewReader(verified.Bytes()))
 }
 
-func retiredRelayInstaller(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusGone)
-	json.NewEncoder(w).Encode(map[string]string{
-		"error": "the relay-hosted installer was retired because it cannot bootstrap trust; obtain the signed installer bundle from the independent release channel",
-	})
+// installerHandler serves the bootstrap installer that ships inside the signed
+// release directory. Colleagues without access to the internal GitLab release
+// page have no other way to obtain it, so the relay serves it again.
+//
+// TRUST LIMITATION: unlike /dl/*, this file is NOT covered by the signed
+// manifest, and the public key it embeds is the one this same relay hands out.
+// A compromised relay could therefore serve a malicious installer together with
+// a matching key. Recipients who can reach GitLab should still prefer the
+// release page, and anyone can confirm what they downloaded out-of-band by
+// comparing its SHA-256 against the checksum published with the release.
+func installerHandler(dir, name, contentType string) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet && req.Method != http.MethodHead {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			http.Error(w, "installer unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		http.ServeContent(w, req, name, time.Time{}, bytes.NewReader(body))
+	}
 }
 
 func (r *Relay) handleSkills(w http.ResponseWriter, _ *http.Request) {

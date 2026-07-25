@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -132,20 +131,54 @@ func TestDistributionVerificationConcurrencyIsBounded(t *testing.T) {
 	}
 }
 
-func TestRelayInstallerIsRetired(t *testing.T) {
+// Colleagues without internal GitLab access bootstrap from the relay, so the
+// installers must be served rather than retired. They are not manifest-signed;
+// see installerHandler for the trust limitation this accepts.
+func TestRelayServesInstallers(t *testing.T) {
 	dir := signedDist(t)
+	for name, want := range map[string]string{
+		"install.sh":  "#!/bin/sh\nunix installer\n",
+		"install.ps1": "# windows installer\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(want), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Setenv("WANCTL_DIST_DIR", dir)
 	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
 	defer srv.Close()
-	for _, path := range []string{"/install.sh", "/install.ps1"} {
+	for path, want := range map[string]string{
+		"/install.sh":  "#!/bin/sh\nunix installer\n",
+		"/install.ps1": "# windows installer\n",
+	} {
 		resp, err := srv.Client().Get(srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusGone || !strings.Contains(string(body), "cannot bootstrap trust") {
-			t.Errorf("GET %s = %d %q", path, resp.StatusCode, body)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", path, resp.StatusCode)
 		}
+		if string(body) != want {
+			t.Errorf("GET %s body = %q, want %q", path, body, want)
+		}
+	}
+}
+
+// A relay whose release directory lacks the installers reports that plainly
+// instead of serving an empty file that would silently install nothing.
+func TestRelayInstallerMissing(t *testing.T) {
+	dir := signedDist(t)
+	t.Setenv("WANCTL_DIST_DIR", dir)
+	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
+	defer srv.Close()
+	resp, err := srv.Client().Get(srv.URL + "/install.ps1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("GET /install.ps1 without file = %d, want 503", resp.StatusCode)
 	}
 }
