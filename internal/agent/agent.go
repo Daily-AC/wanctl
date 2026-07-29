@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -309,6 +310,38 @@ func (a *Agent) serveSessionWS(ctx context.Context, relayURL string, open sessio
 
 // handleSession completes the server-side handshake and serves requests on an
 // already-established transport conn (WebSocket or HTTP).
+// rejectHandshakeLinger bounds how long a rejected session stays open waiting
+// for the controller to read its reason. The controller closes as soon as it
+// has the message, so this is only ever spent on a controller that stopped
+// reading.
+const rejectHandshakeLinger = 3 * time.Second
+
+// rejectHandshake sends a handshake rejection and then waits for the controller
+// to close, instead of returning straight into the caller's deferred Close.
+//
+// The relay pipes the two sides and tears BOTH ends down as soon as either
+// direction ends. Closing right after the write therefore races our own
+// rejection through that teardown: the bytes are handed to the controller's
+// transport but the connection can be closed before they are delivered — on the
+// HTTP carrier, before the controller has even polled for them. The controller
+// then reports EOF, and the caller sees a connection failure instead of
+// "capability denied" or a pairing URL it could act on.
+//
+// Waiting for the peer's own close keeps the teardown ordered without relying on
+// flush semantics that differ between the WebSocket and HTTP carriers.
+// The deadline is enforced by closing the connection rather than with
+// SetReadDeadline: the HTTP carrier's conn accepts deadlines and ignores them
+// (internal/httpconn), so a controller that neither reads nor closes would pin
+// this goroutine forever on exactly the transport where the bug shows up.
+func rejectHandshake(conn net.Conn, msg protocol.Message) {
+	if err := protocol.WriteMessage(conn, msg); err != nil {
+		return
+	}
+	stop := time.AfterFunc(rejectHandshakeLinger, func() { conn.Close() })
+	defer stop.Stop()
+	_, _ = io.Copy(io.Discard, conn)
+}
+
 func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth.Open) {
 	conn, fp, err := transport.ServerHandshake(ctx, nc, a.id)
 	if err != nil {
@@ -324,7 +357,7 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 		return
 	}
 	if !auth.ValidFor(a.opts.Name) {
-		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "invalid relay session capabilities"})
+		rejectHandshake(conn, protocol.Message{Kind: protocol.KindReject, Reason: "invalid relay session capabilities"})
 		return
 	}
 	// Pairing grants a controller permission to submit device operations; it
@@ -334,11 +367,11 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	// the console capability. An empty administrator set therefore fails closed.
 	if hello.Kind == protocol.KindConsoleHello {
 		if !auth.Capabilities.Has(sessionauth.Console) {
-			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "session capability denied: console"})
+			rejectHandshake(conn, protocol.Message{Kind: protocol.KindReject, Reason: "session capability denied: console"})
 			return
 		}
 		if a.portalAdmins == nil || !a.portalAdmins.Contains(fp) {
-			protocol.WriteMessage(conn, protocol.Message{
+			rejectHandshake(conn, protocol.Message{
 				Kind:   protocol.KindReject,
 				Reason: "controller is not authorized as this device's console administrator",
 			})
@@ -349,7 +382,7 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	// console sessions BEFORE serving — the controller/portal blocks on this OK,
 	// and a console session must be gated by the same trust check as an exec one.
 	if !a.authorize(fp, hello.Name, hello.Label) {
-		protocol.WriteMessage(conn, protocol.Message{
+		rejectHandshake(conn, protocol.Message{
 			Kind:       protocol.KindReject,
 			Reason:     "device has not paired this controller — ask the user to approve",
 			PairingURL: a.pairingURL(fp, hello.Name, hello.Label),
