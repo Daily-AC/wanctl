@@ -329,11 +329,16 @@ const rejectHandshakeLinger = 3 * time.Second
 //
 // Waiting for the peer's own close keeps the teardown ordered without relying on
 // flush semantics that differ between the WebSocket and HTTP carriers.
+// The deadline is enforced by closing the connection rather than with
+// SetReadDeadline: the HTTP carrier's conn accepts deadlines and ignores them
+// (internal/httpconn), so a controller that neither reads nor closes would pin
+// this goroutine forever on exactly the transport where the bug shows up.
 func rejectHandshake(conn net.Conn, msg protocol.Message) {
 	if err := protocol.WriteMessage(conn, msg); err != nil {
 		return
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(rejectHandshakeLinger))
+	stop := time.AfterFunc(rejectHandshakeLinger, func() { conn.Close() })
+	defer stop.Stop()
 	_, _ = io.Copy(io.Discard, conn)
 }
 

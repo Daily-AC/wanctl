@@ -48,13 +48,23 @@ func TestRejectHandshakeWaitsForController(t *testing.T) {
 	}
 }
 
+// deadlineDeafConn is the HTTP carrier's behaviour: SetReadDeadline is accepted
+// and ignored (internal/httpconn). A linger implemented with read deadlines
+// would pass on net.Pipe and hang here — which is the transport the failure was
+// reported on.
+type deadlineDeafConn struct{ net.Conn }
+
+func (deadlineDeafConn) SetReadDeadline(time.Time) error { return nil }
+func (deadlineDeafConn) SetDeadline(time.Time) error     { return nil }
+
 // A controller that reads its rejection and then goes quiet must not pin the
 // session open indefinitely.
 func TestRejectHandshakeStopsWaitingEventually(t *testing.T) {
 	if testing.Short() {
 		t.Skip("waits out the linger deadline")
 	}
-	controller, device := net.Pipe()
+	rawController, rawDevice := net.Pipe()
+	controller, device := net.Conn(rawController), net.Conn(deadlineDeafConn{rawDevice})
 	defer controller.Close()
 
 	start := time.Now()
