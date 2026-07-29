@@ -54,7 +54,10 @@ run_image_scan() {
     "$@" \
     -e HTTP_PROXY -e HTTPS_PROXY -e NO_PROXY \
     -e http_proxy -e https_proxy -e no_proxy \
-    -e TRIVY_CACHE_DIR=/tmp/trivy-cache -v "$artifacts:/scan:ro" "$trivy_image" \
+    -e TRIVY_CACHE_DIR=/tmp/trivy-cache \
+    ${TRIVY_DB_REPOSITORY:+-e TRIVY_DB_REPOSITORY="$TRIVY_DB_REPOSITORY"} \
+    ${TRIVY_JAVA_DB_REPOSITORY:+-e TRIVY_JAVA_DB_REPOSITORY="$TRIVY_JAVA_DB_REPOSITORY"} \
+    -v "$artifacts:/scan:ro" "$trivy_image" \
     image --input /scan/wanctl-image.tar --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
 }
 
