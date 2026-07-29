@@ -26,12 +26,22 @@ test:
     - go vet ./...
     - CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...
 
-# Unlike the others this needs both a Docker daemon (it builds and scans the
-# image) and Go (govulncheck), so it cannot run on a plain container image and
-# has to name a runner that has both.
+# Needs both a Docker daemon (builds and scans the image) and Go
+# (govulncheck), so it runs on the Go image with a dind sidecar rather than
+# depending on a specific machine having both installed.
 supply-chain:
+  extends: .go
   stage: security
-  tags: [mac-builder]
+  tags: [ai-native]
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq docker.io
+    - docker info >/dev/null
   script:
     - ./scripts/security-scan.sh all
   artifacts:
