@@ -24,6 +24,19 @@ const (
 	SignatureName   = "manifest.json.sig"
 	MaxManifestSize = 1 << 20
 	MaxArtifactSize = 64 << 20
+
+	// RSASignatureName is a second signature over the exact same manifest bytes,
+	// for the install scripts only. `wanctl update` verifies SignatureName with
+	// the Ed25519 key compiled into the binary and never looks at this one.
+	//
+	// The scripts need their own algorithm because Ed25519 verification is not
+	// reachable from a stock shell on two of the three platforms we ship to:
+	// macOS ships LibreSSL, whose pkeyutl has no -rawin, and Windows PowerShell
+	// has no Ed25519 at all (installing OpenSSL to get it means a multi-minute
+	// download from a slow origin, when it succeeds). RSA verifies natively in
+	// both: `openssl dgst -verify` on LibreSSL, RSACryptoServiceProvider on
+	// PowerShell 5.1.
+	RSASignatureName = "manifest.json.rsa.sig"
 )
 
 // TrustedPublicKeys is set by the release build with -ldflags -X. It is a

@@ -4,7 +4,9 @@
 package main
 
 import (
+	"crypto"
 	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -13,18 +15,20 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"wanctl/internal/config"
 	wanrelease "wanctl/internal/release"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fatalf("usage: release-manifest create VERSION DIST_DIR | sign DIST_DIR | verify DIST_DIR PUBLIC_KEY_FILE | public-key | public-key-pem")
+		fatalf("usage: release-manifest create VERSION DIST_DIR | sign DIST_DIR | verify DIST_DIR PUBLIC_KEY_FILE | public-key | public-key-pem | rsa-public-key-pem | rsa-public-key-xml | default-relay")
 	}
 	var err error
 	switch os.Args[1] {
@@ -62,6 +66,35 @@ func main() {
 			// RFC 8410 SubjectPublicKeyInfo prefix for an Ed25519 raw public key.
 			der := append([]byte{0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00}, key.Public().(ed25519.PublicKey)...)
 			err = pem.Encode(os.Stdout, &pem.Block{Type: "PUBLIC KEY", Bytes: der})
+		}
+	case "rsa-public-key-pem":
+		if len(os.Args) != 2 {
+			fatalf("usage: release-manifest rsa-public-key-pem")
+		}
+		var key *rsa.PrivateKey
+		key, err = rsaSigningKey()
+		if err == nil {
+			var der []byte
+			der, err = x509.MarshalPKIXPublicKey(&key.PublicKey)
+			if err == nil {
+				err = pem.Encode(os.Stdout, &pem.Block{Type: "PUBLIC KEY", Bytes: der})
+			}
+		}
+	case "default-relay":
+		// Single source for the relay baked into the installers, so they cannot
+		// drift from the binary's own default.
+		if len(os.Args) != 2 {
+			fatalf("usage: release-manifest default-relay")
+		}
+		fmt.Println(config.DefaultRelay)
+	case "rsa-public-key-xml":
+		if len(os.Args) != 2 {
+			fatalf("usage: release-manifest rsa-public-key-xml")
+		}
+		var key *rsa.PrivateKey
+		key, err = rsaSigningKey()
+		if err == nil {
+			fmt.Println(rsaPublicKeyXML(&key.PublicKey))
 		}
 	default:
 		fatalf("unknown command %q", os.Args[1])
@@ -136,7 +169,24 @@ func sign(dir string) error {
 	if !ed25519.Verify(key.Public().(ed25519.PublicKey), raw, sig) {
 		return errorsNew("signing key is internally inconsistent")
 	}
-	return os.WriteFile(filepath.Join(dir, wanrelease.SignatureName), sig, 0o644)
+	if err := os.WriteFile(filepath.Join(dir, wanrelease.SignatureName), sig, 0o644); err != nil {
+		return err
+	}
+
+	// Second signature over the identical bytes, for the install scripts.
+	rsaKey, err := rsaSigningKey()
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(raw)
+	rsaSig, err := rsa.SignPKCS1v15(nil, rsaKey, crypto.SHA256, digest[:])
+	if err != nil {
+		return fmt.Errorf("rsa sign: %w", err)
+	}
+	if err := rsa.VerifyPKCS1v15(&rsaKey.PublicKey, crypto.SHA256, digest[:], rsaSig); err != nil {
+		return errorsNew("rsa signing key is internally inconsistent")
+	}
+	return os.WriteFile(filepath.Join(dir, wanrelease.RSASignatureName), rsaSig, 0o644)
 }
 
 func verify(dir, publicKeyFile string) error {
@@ -172,8 +222,70 @@ func verify(dir, publicKeyFile string) error {
 	if err := wanrelease.VerifyDirectory(dir, manifestRaw, signatureRaw, trusted); err != nil {
 		return err
 	}
-	fmt.Printf("verified signed release %s with key %s\n", manifest.Version, wanrelease.KeyID(pub))
+
+	// The scripts' signature covers the same bytes; a release where the two
+	// disagree would install fine via `wanctl update` and fail for every new
+	// user, so check both before publishing.
+	rsaKey, err := rsaSigningKey()
+	if err != nil {
+		return err
+	}
+	rsaSigRaw, err := os.ReadFile(filepath.Join(dir, wanrelease.RSASignatureName))
+	if err != nil {
+		return fmt.Errorf("read script signature: %w", err)
+	}
+	digest := sha256.Sum256(manifestRaw)
+	if err := rsa.VerifyPKCS1v15(&rsaKey.PublicKey, crypto.SHA256, digest[:], rsaSigRaw); err != nil {
+		return fmt.Errorf("script signature does not verify: %w", err)
+	}
+	fmt.Printf("verified signed release %s with key %s (+ %d-bit RSA script signature)\n",
+		manifest.Version, wanrelease.KeyID(pub), rsaKey.N.BitLen())
 	return nil
+}
+
+// rsaSigningKey loads the script-facing signing key from WANCTL_RELEASE_RSA_KEY,
+// base64-encoded PKCS#8 DER — same shape as WANCTL_RELEASE_SIGNING_KEY (single
+// line, so GitLab can mask it), different algorithm.
+func rsaSigningKey() (*rsa.PrivateKey, error) {
+	encoded := strings.TrimSpace(os.Getenv("WANCTL_RELEASE_RSA_KEY"))
+	if encoded == "" {
+		return nil, errorsNew("WANCTL_RELEASE_RSA_KEY is required; the install scripts cannot verify a release without it")
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, errorsNew("WANCTL_RELEASE_RSA_KEY is not valid base64")
+	}
+	// Accept both DER encodings: `openssl genpkey -outform DER` emits PKCS#1 for
+	// RSA, while other tooling emits PKCS#8. Rejecting one of them would mean
+	// whoever generates the key has to know which flag produced it.
+	var key *rsa.PrivateKey
+	if parsed, pkcs8Err := x509.ParsePKCS8PrivateKey(raw); pkcs8Err == nil {
+		rsaKey, ok := parsed.(*rsa.PrivateKey)
+		if !ok {
+			return nil, errorsNew("WANCTL_RELEASE_RSA_KEY is not an RSA key")
+		}
+		key = rsaKey
+	} else if parsed, pkcs1Err := x509.ParsePKCS1PrivateKey(raw); pkcs1Err == nil {
+		key = parsed
+	} else {
+		return nil, fmt.Errorf("WANCTL_RELEASE_RSA_KEY is neither PKCS#8 nor PKCS#1 DER (pkcs8: %v; pkcs1: %v)", pkcs8Err, pkcs1Err)
+	}
+	if bits := key.N.BitLen(); bits < 2048 {
+		return nil, fmt.Errorf("WANCTL_RELEASE_RSA_KEY is %d bits; 2048 is the minimum", bits)
+	}
+	return key, nil
+}
+
+// rsaPublicKeyXML renders an RSA public key in the .NET XML format, the only
+// one PowerShell 5.1 can import without ImportSubjectPublicKeyInfo (which is
+// .NET Core and up). Modulus is big-endian with leading zero bytes stripped,
+// matching what RSACryptoServiceProvider.FromXmlString expects.
+func rsaPublicKeyXML(pub *rsa.PublicKey) string {
+	modulus := pub.N.Bytes()
+	exponent := big.NewInt(int64(pub.E)).Bytes()
+	return fmt.Sprintf("<RSAKeyValue><Modulus>%s</Modulus><Exponent>%s</Exponent></RSAKeyValue>",
+		base64.StdEncoding.EncodeToString(modulus),
+		base64.StdEncoding.EncodeToString(exponent))
 }
 
 func signingKey() (ed25519.PrivateKey, error) {

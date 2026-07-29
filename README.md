@@ -73,22 +73,30 @@ with 8 MiB output retained per job and 64 MiB across completed jobs.
 
 ## Install and enroll a device
 
-Obtain `install.sh` or `install.ps1` from the independently authenticated
-[public GitLab Releases](https://g.***REMOVED***.com/ai-native/wanctl/-/releases), not
-from the artifact relay. A relay-hosted installer cannot securely
-bootstrap trust in the same relay. The installer embeds the offline release
-public key and verifies the signed manifest, binary size, and SHA-256 before it
-installs anything. OpenSSL 1.1.1+ is required.
+The installer embeds the offline release public key and verifies the signed
+manifest, binary size, and SHA-256 before it installs anything. No other tooling
+is needed: verification uses the `openssl` already present on macOS and Linux
+(LibreSSL included) and PowerShell's own crypto on Windows.
 
 ```bash
 # macOS / Linux
-WANCTL_RELAY=https://wanctl-relay.***REMOVED***.***REMOVED***.com WANCTL_TRANSPORT=http sh ./install.sh
+curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh
 ```
 
 ```powershell
 # Windows (PowerShell — no bash needed)
-$env:WANCTL_RELAY='https://wanctl-relay.***REMOVED***.***REMOVED***.com'; $env:WANCTL_TRANSPORT='http'; .\install.ps1
+irm https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.ps1 | iex
 ```
+
+For a machine that matters, prefer the independently authenticated
+[public GitLab Releases](https://g.***REMOVED***.com/ai-native/wanctl/-/releases) and
+run the downloaded file: an installer fetched from the relay cannot bootstrap
+trust in that same relay, since whoever can replace the binaries can usually
+replace the script that checks them. The relay-hosted path exists because
+colleagues without GitLab accounts have no other way in.
+
+Both installers default to the relay they were built for; set `WANCTL_RELAY` to
+install from a different one.
 
 Both installers detect OS/arch and install `wanctl`. Get a token from the portal,
 verify the Portal administrator fingerprint through an independent channel,

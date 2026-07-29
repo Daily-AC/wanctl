@@ -1,17 +1,54 @@
 # Release signing
 
-wanctl releases use an offline Ed25519 key. The relay is an untrusted mirror: it
-may serve release files, but neither the updater nor an installer accepts a
-binary unless its exact metadata is present in a valid signed manifest.
+wanctl releases carry **two signatures over the identical manifest bytes**. The
+relay is an untrusted mirror: it may serve release files, but neither the updater
+nor an installer accepts a binary unless its exact metadata is present in a valid
+signed manifest.
+
+| file | algorithm | verified by | key variable |
+|---|---|---|---|
+| `manifest.json.sig` | Ed25519 | `wanctl update`, relay `/dl/*` gating | `WANCTL_RELEASE_SIGNING_KEY` |
+| `manifest.json.rsa.sig` | RSA-3072 PKCS#1 v1.5, SHA-256 | `install.sh`, `install.ps1` | `WANCTL_RELEASE_RSA_KEY` |
+
+Two algorithms because the two verifiers have different constraints. `wanctl
+update` verifies inside Go, where Ed25519 is ideal and has no dependencies. The
+install scripts verify in a stock shell, where Ed25519 is not reachable on two of
+the three platforms we ship to:
+
+- **macOS** ships LibreSSL as `/usr/bin/openssl`, and its `pkeyutl` has no
+  `-rawin`. Ed25519 verification was simply impossible without separately
+  installing OpenSSL, so `curl … | sh` failed on any stock Mac.
+- **Windows PowerShell** has no Ed25519 at all. Getting it meant installing
+  OpenSSL first, a multi-minute download from an origin slow enough that `winget`
+  times out on it.
+
+RSA verifies natively in both — `openssl dgst -verify` works on LibreSSL, and
+`RSACryptoServiceProvider` is present in the PowerShell 5.1 that every Windows
+ships with. Both were verified end to end on real machines before this was
+adopted.
+
+Keeping Ed25519 for the updater rather than switching everything to RSA means
+already-released binaries keep upgrading normally: a v0.1.2 binary verifies with
+the Ed25519 key compiled into it and never looks at the RSA signature.
 
 ## Trust bootstrap
 
-Do not fetch an installer from the artifact relay. If the relay is compromised,
-an attacker can replace both that script and any public key embedded in it.
-Obtain `install.sh` or `install.ps1` from the independently authenticated GitLab
-release, or build it from a reviewed Git commit. Keep the installer with the
-release notes so its embedded public key is auditable. Both installers require
-OpenSSL 1.1.1 or newer and fail closed when Ed25519 verification is unavailable.
+The strongest bootstrap is to obtain `install.sh` or `install.ps1` from the
+independently authenticated GitLab release, or to build it from a reviewed Git
+commit. Keep the installer with the release notes so its embedded public key is
+auditable. If the relay is compromised, an attacker can replace both a script
+served from it and the public key embedded in that copy — signature verification
+cannot save a script the attacker also controls.
+
+The relay serves the installers anyway, because colleagues without GitLab
+accounts have no other way to install, and a one-line install they actually run
+beats a hardened one they skip. Treat that path as "verified against a
+compromised relay's own key" and prefer the GitLab release when the machine
+matters. Verification still fails closed either way: an attacker who can replace
+`/dist` binaries but not the served script gets nothing.
+
+Both installers bake in the relay they were built for, so `WANCTL_RELAY` is only
+needed to point at a different one.
 
 The release build injects a comma-separated set of trusted raw Ed25519 public
 keys into `internal/release.TrustedPublicKeys`. A normal build has no trust key;
@@ -19,14 +56,22 @@ keys into `internal/release.TrustedPublicKeys`. A normal build has no trust key;
 
 ## CI secret
 
-Generate the signing seed on an offline administrative machine:
+Generate both keys on an offline administrative machine:
 
 ```sh
+# WANCTL_RELEASE_SIGNING_KEY — Ed25519 seed, for wanctl update
 openssl rand 32 | base64
+
+# WANCTL_RELEASE_RSA_KEY — for the install scripts. Either DER encoding is
+# accepted (genpkey emits PKCS#1 for RSA; other tooling emits PKCS#8).
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -outform DER | base64 | tr -d '\n'
 ```
 
-Store that value as a masked, protected, environment-scoped GitLab CI variable
-named `WANCTL_RELEASE_SIGNING_KEY`. Do not store it in the repository, a Docker
+Store both as masked, protected, environment-scoped (`release`) GitLab CI
+variables. Base64 keeps them single-line, which is what masking requires; the
+RSA value is ~2.4 KB, within GitLab's limit. Losing the RSA key is not fatal to
+existing installs — it only signs for new ones — but it does force a public-key
+rotation in the next release. Do not store it in the repository, a Docker
 build argument, an image layer, the relay filesystem, or a general-purpose app
 environment. Restrict the `release` environment and protected version tags to
 release maintainers. The release job aborts if the key is absent.
