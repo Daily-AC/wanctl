@@ -27,26 +27,13 @@ test:
     - CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...
 
 # Needs both a Docker daemon (builds and scans the image) and Go
-# (govulncheck), so it runs on the Go image with a dind sidecar rather than
-# depending on a specific machine having both installed.
+# (govulncheck), which no container image gives us and which the group runner
+# cannot provide either — it refuses privileged containers, so a dind sidecar
+# dies with "mount: permission denied". Runs instead on a dedicated runner with
+# both installed on the host, so no privileged access is needed anywhere.
 supply-chain:
-  extends: .go
   stage: security
-  tags: [ai-native]
-  # TODO: remove once the group runner allows privileged containers. Until then
-  # dind cannot start ("mount: permission denied"), and blocking every pipeline
-  # on an infrastructure gap we cannot close from here helps nobody. The job
-  # still runs and still reports, it just does not fail the pipeline.
-  allow_failure: true
-  services:
-    - name: docker:27-dind
-      alias: docker
-  variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
-  before_script:
-    - apt-get update -qq && apt-get install -y -qq docker.io
-    - docker info >/dev/null
+  tags: [wanctl-docker]
   script:
     - ./scripts/security-scan.sh all
   artifacts:
