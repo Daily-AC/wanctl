@@ -26,12 +26,12 @@ test:
     - go vet ./...
     - CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...
 
-# Unlike the others this genuinely needs a Docker daemon (it builds the image
-# and scans it), so it stays on the shell runner that has one. Requiring a tag
-# means it queues instead of failing when that runner is away.
+# Unlike the others this needs both a Docker daemon (it builds and scans the
+# image) and Go (govulncheck), so it cannot run on a plain container image and
+# has to name a runner that has both.
 supply-chain:
   stage: security
-  tags: [wanctl-docker]
+  tags: [mac-builder]
   script:
     - ./scripts/security-scan.sh all
   artifacts:
