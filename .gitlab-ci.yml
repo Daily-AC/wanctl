@@ -40,8 +40,8 @@ supply-chain:
     GOPROXY: https://goproxy.cn,direct
     # Trivy's default DB origin (mirror.gcr.io / ghcr.io) is unreachable from
     # this runner too; Docker Hub is, via the host's registry mirror.
-    TRIVY_DB_REPOSITORY: docker.io/aquasec/trivy-db:2
-    TRIVY_JAVA_DB_REPOSITORY: docker.io/aquasec/trivy-java-db:1
+    TRIVY_DB_REPOSITORY: mirror.ccs.tencentyun.com/aquasec/trivy-db:2
+    TRIVY_JAVA_DB_REPOSITORY: mirror.ccs.tencentyun.com/aquasec/trivy-java-db:1
   script:
     - ./scripts/security-scan.sh all
   artifacts:
