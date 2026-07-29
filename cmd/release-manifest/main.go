@@ -28,7 +28,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fatalf("usage: release-manifest create VERSION DIST_DIR | sign DIST_DIR | verify DIST_DIR PUBLIC_KEY_FILE | public-key | public-key-pem | rsa-public-key-pem | rsa-public-key-xml | default-relay")
+		fatalf("usage: release-manifest create VERSION DIST_DIR | sign DIST_DIR | verify DIST_DIR PUBLIC_KEY_FILE [RSA_PUBLIC_KEY_FILE] | public-key | public-key-pem | rsa-public-key-pem | rsa-public-key-xml [RSA_PUBLIC_KEY_FILE] | default-relay")
 	}
 	var err error
 	switch os.Args[1] {
@@ -43,10 +43,16 @@ func main() {
 		}
 		err = sign(os.Args[2])
 	case "verify":
-		if len(os.Args) != 4 {
-			fatalf("usage: release-manifest verify DIST_DIR PUBLIC_KEY_FILE")
+		// The RSA public key file is optional so that whoever publishes a release
+		// can verify a downloaded CI artifact without holding either private key.
+		if len(os.Args) != 4 && len(os.Args) != 5 {
+			fatalf("usage: release-manifest verify DIST_DIR PUBLIC_KEY_FILE [RSA_PUBLIC_KEY_FILE]")
 		}
-		err = verify(os.Args[2], os.Args[3])
+		rsaPub := ""
+		if len(os.Args) == 5 {
+			rsaPub = os.Args[4]
+		}
+		err = verify(os.Args[2], os.Args[3], rsaPub)
 	case "public-key":
 		if len(os.Args) != 2 {
 			fatalf("usage: release-manifest public-key")
@@ -88,13 +94,23 @@ func main() {
 		}
 		fmt.Println(config.DefaultRelay)
 	case "rsa-public-key-xml":
-		if len(os.Args) != 2 {
-			fatalf("usage: release-manifest rsa-public-key-xml")
+		// With a public key file, this renders the XML the Windows installer must
+		// carry without needing the private key — that is how the publisher
+		// checks a downloaded installer against the release's own public key.
+		if len(os.Args) != 2 && len(os.Args) != 3 {
+			fatalf("usage: release-manifest rsa-public-key-xml [RSA_PUBLIC_KEY_FILE]")
 		}
-		var key *rsa.PrivateKey
-		key, err = rsaSigningKey()
+		var pub *rsa.PublicKey
+		if len(os.Args) == 3 {
+			pub, err = rsaPublicKeyFromPEM(os.Args[2])
+		} else {
+			var key *rsa.PrivateKey
+			if key, err = rsaSigningKey(); err == nil {
+				pub = &key.PublicKey
+			}
+		}
 		if err == nil {
-			fmt.Println(rsaPublicKeyXML(&key.PublicKey))
+			fmt.Println(rsaPublicKeyXML(pub))
 		}
 	default:
 		fatalf("unknown command %q", os.Args[1])
@@ -189,18 +205,10 @@ func sign(dir string) error {
 	return os.WriteFile(filepath.Join(dir, wanrelease.RSASignatureName), rsaSig, 0o644)
 }
 
-func verify(dir, publicKeyFile string) error {
-	pemRaw, err := os.ReadFile(publicKeyFile)
+func verify(dir, publicKeyFile, rsaPublicKeyFile string) error {
+	parsed, err := publicKeyFromPEM(publicKeyFile)
 	if err != nil {
-		return fmt.Errorf("read public key: %w", err)
-	}
-	block, rest := pem.Decode(pemRaw)
-	if block == nil || block.Type != "PUBLIC KEY" || len(strings.TrimSpace(string(rest))) != 0 {
-		return errorsNew("public key file is not a single PEM PUBLIC KEY block")
-	}
-	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return fmt.Errorf("parse public key: %w", err)
+		return err
 	}
 	pub, ok := parsed.(ed25519.PublicKey)
 	if !ok || len(pub) != ed25519.PublicKeySize {
@@ -226,7 +234,15 @@ func verify(dir, publicKeyFile string) error {
 	// The scripts' signature covers the same bytes; a release where the two
 	// disagree would install fine via `wanctl update` and fail for every new
 	// user, so check both before publishing.
-	rsaKey, err := rsaSigningKey()
+	var rsaPub *rsa.PublicKey
+	if rsaPublicKeyFile != "" {
+		rsaPub, err = rsaPublicKeyFromPEM(rsaPublicKeyFile)
+	} else {
+		var rsaKey *rsa.PrivateKey
+		if rsaKey, err = rsaSigningKey(); err == nil {
+			rsaPub = &rsaKey.PublicKey
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -235,12 +251,46 @@ func verify(dir, publicKeyFile string) error {
 		return fmt.Errorf("read script signature: %w", err)
 	}
 	digest := sha256.Sum256(manifestRaw)
-	if err := rsa.VerifyPKCS1v15(&rsaKey.PublicKey, crypto.SHA256, digest[:], rsaSigRaw); err != nil {
+	if err := rsa.VerifyPKCS1v15(rsaPub, crypto.SHA256, digest[:], rsaSigRaw); err != nil {
 		return fmt.Errorf("script signature does not verify: %w", err)
 	}
 	fmt.Printf("verified signed release %s with key %s (+ %d-bit RSA script signature)\n",
-		manifest.Version, wanrelease.KeyID(pub), rsaKey.N.BitLen())
+		manifest.Version, wanrelease.KeyID(pub), rsaPub.N.BitLen())
 	return nil
+}
+
+// publicKeyFromPEM reads exactly one PEM PUBLIC KEY block. Trailing data is
+// rejected rather than ignored: a file with a second key would otherwise look
+// verified while only its first key was ever checked.
+func publicKeyFromPEM(path string) (any, error) {
+	pemRaw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read public key: %w", err)
+	}
+	block, rest := pem.Decode(pemRaw)
+	if block == nil || block.Type != "PUBLIC KEY" || len(strings.TrimSpace(string(rest))) != 0 {
+		return nil, errorsNew("public key file is not a single PEM PUBLIC KEY block")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse public key: %w", err)
+	}
+	return parsed, nil
+}
+
+func rsaPublicKeyFromPEM(path string) (*rsa.PublicKey, error) {
+	parsed, err := publicKeyFromPEM(path)
+	if err != nil {
+		return nil, err
+	}
+	pub, ok := parsed.(*rsa.PublicKey)
+	if !ok {
+		return nil, errorsNew("public key is not RSA")
+	}
+	if bits := pub.N.BitLen(); bits < 2048 {
+		return nil, fmt.Errorf("RSA public key is %d bits; 2048 is the minimum", bits)
+	}
+	return pub, nil
 }
 
 // rsaSigningKey loads the script-facing signing key from WANCTL_RELEASE_RSA_KEY,

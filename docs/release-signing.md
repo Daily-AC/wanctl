@@ -109,7 +109,13 @@ download the `release/` job artifact, check out that exact tag, then run:
 
 The publisher rejects an existing release, a tag/source mismatch, unexpected or
 missing files, a manifest/tag mismatch, a bad signature or artifact hash, and
-installers whose embedded key differs from `release-public.pem`.
+installers whose embedded key differs from `release-public-rsa.pem` — the Unix
+installer carries it as PEM, the Windows one as .NET XML.
+
+Publishing needs neither private key: both signatures are checked against the
+public keys shipped in the release directory. Pin `release-public.pem` against
+the previous release (or a copy kept outside the artifact) — an artifact that
+supplies both key and signature only proves internal consistency.
 
 ## Rotation and revocation
 

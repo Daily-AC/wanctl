@@ -1,12 +1,16 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"encoding/xml"
 	"math/big"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -65,6 +69,77 @@ func TestRSASigningKeyRejectsBadInput(t *testing.T) {
 				t.Fatal("expected an error, got none")
 			}
 		})
+	}
+}
+
+// TestRSAPublicKeyFromPEM covers the publisher's path: it verifies a release it
+// downloaded as a CI artifact and has neither private key, so the RSA public key
+// has to come from the release directory rather than from the signing secret.
+func TestRSAPublicKeyFromPEM(t *testing.T) {
+	key := testKey(t)
+	dir := t.TempDir()
+
+	rsaPath := filepath.Join(dir, "rsa.pem")
+	writePublicKeyPEM(t, rsaPath, &key.PublicKey)
+	loaded, err := rsaPublicKeyFromPEM(rsaPath)
+	if err != nil {
+		t.Fatalf("rsaPublicKeyFromPEM: %v", err)
+	}
+	if loaded.N.Cmp(key.N) != 0 {
+		t.Fatal("loaded a different key than was written")
+	}
+	// The XML the Windows installer carries must be identical whether it was
+	// rendered from the private key at build time or from this file at publish
+	// time; otherwise the publisher's check would reject every good release.
+	if fromPEM, fromKey := rsaPublicKeyXML(loaded), rsaPublicKeyXML(&key.PublicKey); fromPEM != fromKey {
+		t.Fatalf("XML differs by source:\n from pem: %s\n from key: %s", fromPEM, fromKey)
+	}
+
+	ed25519Path := filepath.Join(dir, "ed25519.pem")
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePublicKeyPEM(t, ed25519Path, pub)
+
+	weak, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	weakPath := filepath.Join(dir, "weak.pem")
+	writePublicKeyPEM(t, weakPath, &weak.PublicKey)
+
+	twoKeysPath := filepath.Join(dir, "two.pem")
+	first, err := os.ReadFile(rsaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(twoKeysPath, append(append([]byte{}, first...), first...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, path := range map[string]string{
+		"ed25519 key":  ed25519Path,
+		"undersized":   weakPath,
+		"two keys":     twoKeysPath,
+		"missing file": filepath.Join(dir, "absent.pem"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := rsaPublicKeyFromPEM(path); err == nil {
+				t.Fatal("expected an error, got none")
+			}
+		})
+	}
+}
+
+func writePublicKeyPEM(t *testing.T, path string, pub any) {
+	t.Helper()
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
