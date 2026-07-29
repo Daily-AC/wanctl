@@ -25,7 +25,7 @@ proxy_is_loopback() {
 build_image() {
   need_docker
   mkdir -p "$artifacts"
-  docker build --pull -t "$image_name" "$root"
+  docker build --pull ${GOPROXY:+--build-arg GOPROXY="$GOPROXY"} -t "$image_name" "$root"
   docker save "$image_name" -o "$artifacts/wanctl-image.tar"
 }
 

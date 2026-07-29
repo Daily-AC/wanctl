@@ -34,6 +34,10 @@ test:
 supply-chain:
   stage: security
   tags: [wanctl-docker]
+  variables:
+    # That runner sits on a network where proxy.golang.org is unreachable, which
+    # failed the image build at `go mod download`.
+    GOPROXY: https://goproxy.cn,direct
   script:
     - ./scripts/security-scan.sh all
   artifacts:
