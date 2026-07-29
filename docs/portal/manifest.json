@@ -1,0 +1,61 @@
+{
+  "groups": [
+    {
+      "slug": "quickstart",
+      "title": "快速开始",
+      "position": 10
+    },
+    {
+      "slug": "control",
+      "title": "控制设备",
+      "position": 20
+    },
+    {
+      "slug": "ai",
+      "title": "AI 接入",
+      "position": 30
+    },
+    {
+      "slug": "advanced",
+      "title": "审批与高级",
+      "position": 40
+    }
+  ],
+  "articles": [
+    {
+      "slug": "enroll-device",
+      "title": "把一台设备变成「可远程控制」（Mac / Linux）",
+      "group": "quickstart",
+      "position": 10,
+      "file": "quickstart__enroll-device.md"
+    },
+    {
+      "slug": "windows-install",
+      "title": "Windows 上一行装好并接入",
+      "group": "quickstart",
+      "position": 20,
+      "file": "quickstart__windows-install.md"
+    },
+    {
+      "slug": "control-device",
+      "title": "从你的电脑控制别的设备",
+      "group": "control",
+      "position": 10,
+      "file": "control__control-device.md"
+    },
+    {
+      "slug": "ai-skill",
+      "title": "让你的 AI 来控制设备",
+      "group": "ai",
+      "position": 10,
+      "file": "ai__ai-skill.md"
+    },
+    {
+      "slug": "approval-and-trust",
+      "title": "审批、信任与管理",
+      "group": "advanced",
+      "position": 10,
+      "file": "advanced__approval-and-trust.md"
+    }
+  ]
+}
