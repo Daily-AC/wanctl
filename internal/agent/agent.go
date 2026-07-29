@@ -262,6 +262,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		return fmt.Errorf("connect relay: %w", err)
 	}
 	defer nc.Close()
+	// Without this the Decode below parks forever on an idle control channel and
+	// cancellation (SIGTERM, `wanctl stop`) is never observed.
+	defer wsconn.CloseOnCancel(ctx, nc)()
 	enc := json.NewEncoder(nc)
 	if err := enc.Encode(map[string]string{"op": "register", "device": a.opts.Name, "fingerprint": a.id.Fingerprint}); err != nil {
 		return err
