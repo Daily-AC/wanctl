@@ -2,6 +2,10 @@
 FROM golang:1.25.12-alpine3.24@sha256:56961d79ea8129efddcc0b8643fd8a5416b4e6228cfd477e3fd61deb2672c587 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
+# Overridable so builders behind a slow or blocked route to proxy.golang.org can
+# point at a reachable mirror; unset, this is exactly Go's own default.
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 RUN go mod download
 COPY . .
 ARG WANCTL_VERSION=dev

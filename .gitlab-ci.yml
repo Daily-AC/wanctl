@@ -6,15 +6,42 @@ stages:
 variables:
   GOTOOLCHAIN: go1.25.12
 
+# Two runners accept this project's untagged jobs: the project's own shell
+# runner (Go and Docker installed on the host) and a group runner using a Docker
+# executor whose default image is alpine. Whichever picked up a job first
+# decided whether it passed, so `go: not found` failures came and went at
+# random — including on a merge request that was merged anyway.
+#
+# Pinning an image fixes it for either runner: the Docker executor gets a Go
+# toolchain, and a shell runner ignores `image` and uses the host's Go, which is
+# the same version.
+.go:
+  image: golang:1.25.12
+
 test:
+  extends: .go
   stage: test
   script:
     - go test ./...
     - go vet ./...
     - CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...
 
+# Needs both a Docker daemon (builds and scans the image) and Go
+# (govulncheck), which no container image gives us and which the group runner
+# cannot provide either — it refuses privileged containers, so a dind sidecar
+# dies with "mount: permission denied". Runs instead on a dedicated runner with
+# both installed on the host, so no privileged access is needed anywhere.
 supply-chain:
   stage: security
+  tags: [wanctl-docker]
+  variables:
+    # That runner sits on a network where proxy.golang.org is unreachable, which
+    # failed the image build at `go mod download`.
+    GOPROXY: https://goproxy.cn,direct
+    # Trivy's default DB origin (mirror.gcr.io / ghcr.io) is unreachable from
+    # this runner too; Docker Hub is, via the host's registry mirror.
+    TRIVY_DB_REPOSITORY: mirror.ccs.tencentyun.com/aquasec/trivy-db:2
+    TRIVY_JAVA_DB_REPOSITORY: mirror.ccs.tencentyun.com/aquasec/trivy-java-db:1
   script:
     - ./scripts/security-scan.sh all
   artifacts:
@@ -24,11 +51,13 @@ supply-chain:
       - artifacts/wanctl.sbom.cdx.json
 
 release:
+  extends: .go
   stage: release
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
   script:
     - test -n "$WANCTL_RELEASE_SIGNING_KEY" || { echo 'protected WANCTL_RELEASE_SIGNING_KEY is required' >&2; exit 1; }
+    - test -n "$WANCTL_RELEASE_RSA_KEY" || { echo 'protected WANCTL_RELEASE_RSA_KEY is required' >&2; exit 1; }
     - ./scripts/build-release.sh "$CI_COMMIT_TAG"
   artifacts:
     name: "wanctl-$CI_COMMIT_TAG"

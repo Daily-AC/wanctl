@@ -25,7 +25,7 @@ proxy_is_loopback() {
 build_image() {
   need_docker
   mkdir -p "$artifacts"
-  docker build --pull -t "$image_name" "$root"
+  docker build --pull ${GOPROXY:+--build-arg GOPROXY="$GOPROXY"} -t "$image_name" "$root"
   docker save "$image_name" -o "$artifacts/wanctl-image.tar"
 }
 
@@ -50,11 +50,19 @@ run_image_scan() {
   else
     set --
   fi
+  # Trivy's DB unpacks to ~1GB, which does not fit in a tmpfs sized at half of
+  # RAM on a small host. Keep the cache on disk; it also survives between runs.
+  trivy_cache="$artifacts/trivy-cache"
+  mkdir -p "$trivy_cache"
   docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
     "$@" \
     -e HTTP_PROXY -e HTTPS_PROXY -e NO_PROXY \
     -e http_proxy -e https_proxy -e no_proxy \
-    -e TRIVY_CACHE_DIR=/tmp/trivy-cache -v "$artifacts:/scan:ro" "$trivy_image" \
+    -v "$trivy_cache:/trivy-cache" \
+    -e TRIVY_CACHE_DIR=/trivy-cache \
+    ${TRIVY_DB_REPOSITORY:+-e TRIVY_DB_REPOSITORY="$TRIVY_DB_REPOSITORY"} \
+    ${TRIVY_JAVA_DB_REPOSITORY:+-e TRIVY_JAVA_DB_REPOSITORY="$TRIVY_JAVA_DB_REPOSITORY"} \
+    -v "$artifacts:/scan:ro" "$trivy_image" \
     image --input /scan/wanctl-image.tar --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
 }
 
