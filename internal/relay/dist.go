@@ -52,22 +52,36 @@ func newSignedDistHandler(dir string) (http.Handler, error) {
 	if err := wanrelease.VerifyDirectory(dir, manifestRaw, signatureRaw, wanrelease.TrustedPublicKeys); err != nil {
 		return nil, err
 	}
+	// The install scripts verify this signature instead of the Ed25519 one, which
+	// neither macOS's LibreSSL nor PowerShell 5.1 can check. Serving it is not a
+	// trust decision — the scripts verify it against the key they embed — but
+	// without it they abort before downloading anything. A release directory from
+	// before v0.1.3 has no such file; distribution still works for `wanctl
+	// update`, so warn rather than disable it.
+	rsaSignatureRaw, err := os.ReadFile(filepath.Join(dir, wanrelease.RSASignatureName))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "wanctl relay: %s is missing; the one-line installers will not work: %v\n",
+			wanrelease.RSASignatureName, err)
+		rsaSignatureRaw = nil
+	}
 	artifacts := make(map[string]wanrelease.Artifact)
 	for _, artifact := range manifest.Artifacts {
 		artifacts[artifact.Name] = artifact
 	}
 	return &signedDistHandler{
 		dir: dir, manifestRaw: manifestRaw, signatureRaw: signatureRaw,
-		artifacts: artifacts, verifySlots: make(chan struct{}, 2),
+		rsaSignatureRaw: rsaSignatureRaw,
+		artifacts:       artifacts, verifySlots: make(chan struct{}, 2),
 	}, nil
 }
 
 type signedDistHandler struct {
-	dir          string
-	manifestRaw  []byte
-	signatureRaw []byte
-	artifacts    map[string]wanrelease.Artifact
-	verifySlots  chan struct{}
+	dir             string
+	manifestRaw     []byte
+	signatureRaw    []byte
+	rsaSignatureRaw []byte
+	artifacts       map[string]wanrelease.Artifact
+	verifySlots     chan struct{}
 }
 
 func (h *signedDistHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -83,6 +97,13 @@ func (h *signedDistHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 		http.Error(w, "signed release changed; restart relay to re-verify", http.StatusServiceUnavailable)
 		return
 	}
+	if h.rsaSignatureRaw != nil {
+		rsaNow, rsaErr := os.ReadFile(filepath.Join(h.dir, wanrelease.RSASignatureName))
+		if rsaErr != nil || !bytes.Equal(rsaNow, h.rsaSignatureRaw) {
+			http.Error(w, "signed release changed; restart relay to re-verify", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	name := req.URL.Path
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	switch name {
@@ -92,6 +113,14 @@ func (h *signedDistHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 	case wanrelease.SignatureName:
 		w.Header().Set("Content-Type", "application/octet-stream")
 		http.ServeContent(w, req, name, time.Time{}, bytes.NewReader(h.signatureRaw))
+		return
+	case wanrelease.RSASignatureName:
+		if h.rsaSignatureRaw == nil {
+			http.NotFound(w, req)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		http.ServeContent(w, req, name, time.Time{}, bytes.NewReader(h.rsaSignatureRaw))
 		return
 	}
 	artifact, ok := h.artifacts[name]

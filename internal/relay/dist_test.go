@@ -43,6 +43,12 @@ func signedDist(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(dir, wanrelease.SignatureName), sig, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Stands in for the RSA signature a real release directory carries. Its
+	// contents are never checked by the relay — it hands the bytes to the
+	// install scripts, which verify them against their own embedded key.
+	if err := os.WriteFile(filepath.Join(dir, wanrelease.RSASignatureName), []byte("rsa signature bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	wanrelease.TrustedPublicKeys = base64.StdEncoding.EncodeToString(pub)
 	t.Cleanup(func() { wanrelease.TrustedPublicKeys = "" })
 	return dir
@@ -57,7 +63,10 @@ func TestSignedDistribution(t *testing.T) {
 	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
 	defer srv.Close()
 
-	for _, path := range []string{"/dl/manifest.json", "/dl/manifest.json.sig", "/dl/wanctl-linux-amd64"} {
+	// manifest.json.rsa.sig is what both install scripts fetch immediately after
+	// the manifest; without it they abort before downloading anything, which is
+	// how v0.1.3 shipped with installers that could not install.
+	for _, path := range []string{"/dl/manifest.json", "/dl/manifest.json.sig", "/dl/manifest.json.rsa.sig", "/dl/wanctl-linux-amd64"} {
 		resp, err := srv.Client().Get(srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
