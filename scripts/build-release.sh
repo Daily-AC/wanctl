@@ -34,11 +34,36 @@ done
 
 PUB_PEM_FILE="$DIST/release-public.pem"
 (cd "$ROOT" && go run ./cmd/release-manifest public-key-pem) > "$PUB_PEM_FILE"
-awk -v pem="$PUB_PEM_FILE" '$0 == "@WANCTL_RELEASE_PUBLIC_KEY_PEM@" { while ((getline line < pem) > 0) print line; close(pem); next } { print }' \
-  "$ROOT/scripts/install.sh.in" > "$DIST/install.sh"
-awk -v pem="$PUB_PEM_FILE" '$0 == "@WANCTL_RELEASE_PUBLIC_KEY_PEM@" { while ((getline line < pem) > 0) print line; close(pem); next } { print }' \
-  "$ROOT/scripts/install.ps1.in" > "$DIST/install.ps1"
+
+# The installers verify the RSA signature, so they carry the RSA public key: as
+# PEM for `openssl dgst` on Unix, as .NET XML for PowerShell, which cannot
+# import PEM on 5.1.
+RSA_PUB_PEM_FILE="$DIST/release-public-rsa.pem"
+(cd "$ROOT" && go run ./cmd/release-manifest rsa-public-key-pem) > "$RSA_PUB_PEM_FILE"
+RSA_PUB_XML=$(cd "$ROOT" && go run ./cmd/release-manifest rsa-public-key-xml)
+
+# Baking the relay in is what lets `curl … | sh` and `irm … | iex` work without
+# the caller exporting WANCTL_RELAY first. It narrows nothing: the script is
+# fetched from that same relay.
+DEFAULT_RELAY=$(cd "$ROOT" && go run ./cmd/release-manifest default-relay)
+
+render_installer() {
+  awk -v pem="$RSA_PUB_PEM_FILE" -v xml="$RSA_PUB_XML" -v relay="$DEFAULT_RELAY" '
+    $0 == "@WANCTL_RELEASE_RSA_PUBLIC_KEY_PEM@" { while ((getline line < pem) > 0) print line; close(pem); next }
+    { gsub(/@WANCTL_RELEASE_RSA_PUBLIC_KEY_XML@/, xml); gsub(/@WANCTL_DEFAULT_RELAY@/, relay); print }
+  ' "$1" > "$2"
+}
+render_installer "$ROOT/scripts/install.sh.in" "$DIST/install.sh"
+render_installer "$ROOT/scripts/install.ps1.in" "$DIST/install.ps1"
 chmod 0755 "$DIST/install.sh"
+
+for placeholder_file in "$DIST/install.sh" "$DIST/install.ps1"; do
+  if grep -q '@WANCTL_[A-Z_]*@' "$placeholder_file"; then
+    echo "unsubstituted placeholder left in $placeholder_file" >&2
+    grep -n '@WANCTL_[A-Z_]*@' "$placeholder_file" >&2
+    exit 1
+  fi
+done
 
 (cd "$ROOT" && go run ./cmd/release-manifest verify "$DIST" "$PUB_PEM_FILE")
 

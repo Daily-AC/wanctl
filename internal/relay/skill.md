@@ -136,14 +136,13 @@ controller side.
 ## Enrolling a new device (the controlled side)
 
 If you have shell access to a machine that should become controllable (or are
-telling the user how), obtain the installer from the independently
-authenticated GitLab release. Never fetch it from the artifact relay whose
-contents it is meant to verify. Pick the one for that machine's shell:
+telling the user how), pick the line for that machine's shell. The installer
+verifies a signed manifest before installing anything and needs no extra tooling
+on any platform:
 
 ```bash
 # macOS / Linux (any POSIX shell)
-# Obtain install.sh from the independently authenticated GitLab release first.
-WANCTL_RELAY=https://wanctl-relay.***REMOVED***.***REMOVED***.com WANCTL_TRANSPORT=http sh ./install.sh
+curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh
 wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
 wanctl                          # then run this on that machine — opens the
                                 # browser for Feishu login, takes a code, and
@@ -152,11 +151,15 @@ wanctl                          # then run this on that machine — opens the
 
 ```powershell
 # Windows — PowerShell only, no bash / curl needed
-# Obtain install.ps1 from the independently authenticated GitLab release first.
-$env:WANCTL_RELAY='https://wanctl-relay.***REMOVED***.***REMOVED***.com'; $env:WANCTL_TRANSPORT='http'; .\install.ps1
+irm https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.ps1 | iex
 wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
 wanctl                          # same flow: browser → Feishu → agent runs.
 ```
+
+For a machine where the stakes are high, download the installer from the
+independently authenticated GitLab release and run that file instead: a script
+served by the relay cannot bootstrap trust in that same relay. Tell the user
+this tradeoff rather than deciding it for them.
 
 For non-interactive setups, run the verified installer first, seed the verified
 Portal fingerprint, then start `wanctl agent --token <pre-issued-token>` and

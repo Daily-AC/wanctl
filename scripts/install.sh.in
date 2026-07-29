@@ -1,24 +1,31 @@
 #!/bin/sh
-# Obtain this installer from the independently authenticated wanctl release,
-# never from the relay whose binary contents it is meant to verify.
+# Verifies an RSA signature over the release manifest before installing
+# anything. The strongest place to get this script is the authenticated GitLab
+# release, which is independent of the relay it downloads binaries from.
 set -eu
 
-RELAY=${WANCTL_RELAY:?set WANCTL_RELAY to the artifact relay URL}
-command -v openssl >/dev/null 2>&1 || { echo "OpenSSL 1.1.1+ is required for Ed25519 verification" >&2; exit 1; }
+# Defaults to the relay this installer was built for; override to install from
+# a different one.
+RELAY=${WANCTL_RELAY:-@WANCTL_DEFAULT_RELAY@}
+[ -n "$RELAY" ] || { echo "set WANCTL_RELAY to the artifact relay URL" >&2; exit 1; }
+command -v openssl >/dev/null 2>&1 || { echo "openssl is required to verify the release signature" >&2; exit 1; }
 TMPDIR_WANCTL=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_WANCTL"' EXIT HUP INT TERM
 
 cat >"$TMPDIR_WANCTL/release.pub" <<'WANCTL_RELEASE_KEY'
-@WANCTL_RELEASE_PUBLIC_KEY_PEM@
+@WANCTL_RELEASE_RSA_PUBLIC_KEY_PEM@
 WANCTL_RELEASE_KEY
 
 BASE=${RELAY%/}/dl
 curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-filesize 1048576 \
   "$BASE/manifest.json" -o "$TMPDIR_WANCTL/manifest.json"
-curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-filesize 64 \
-  "$BASE/manifest.json.sig" -o "$TMPDIR_WANCTL/manifest.json.sig"
-openssl pkeyutl -verify -pubin -inkey "$TMPDIR_WANCTL/release.pub" -rawin \
-  -in "$TMPDIR_WANCTL/manifest.json" -sigfile "$TMPDIR_WANCTL/manifest.json.sig" >/dev/null
+curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-filesize 1024 \
+  "$BASE/manifest.json.rsa.sig" -o "$TMPDIR_WANCTL/manifest.json.rsa.sig"
+# `dgst -verify` rather than `pkeyutl -rawin`: the latter is Ed25519-only and
+# absent from the LibreSSL that macOS ships as /usr/bin/openssl, which made this
+# script fail on any Mac without a separately installed OpenSSL.
+openssl dgst -sha256 -verify "$TMPDIR_WANCTL/release.pub" \
+  -signature "$TMPDIR_WANCTL/manifest.json.rsa.sig" "$TMPDIR_WANCTL/manifest.json" >/dev/null
 
 VERSION=$(awk '/"version":/ { gsub(/[",]/, "", $2); print $2; found++ } END { if (found != 1) exit 1 }' "$TMPDIR_WANCTL/manifest.json") || { echo "signed manifest has no unique version" >&2; exit 1; }
 version_gt() {

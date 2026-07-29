@@ -1,8 +1,31 @@
-# Obtain this installer from the independently authenticated wanctl release,
-# never from the relay whose binary contents it is meant to verify.
+# Verifies an RSA signature over the release manifest before installing
+# anything. The strongest place to get this script is the authenticated GitLab
+# release, which is independent of the relay it downloads binaries from.
 $ErrorActionPreference = 'Stop'
-if (-not $env:WANCTL_RELAY) { throw 'set WANCTL_RELAY to the artifact relay URL' }
-if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) { throw 'OpenSSL 1.1.1+ is required for Ed25519 verification' }
+
+# Defaults to the relay this installer was built for; override to install from
+# a different one.
+$relay = if ($env:WANCTL_RELAY) { $env:WANCTL_RELAY } else { '@WANCTL_DEFAULT_RELAY@' }
+if (-not $relay) { throw 'set WANCTL_RELAY to the artifact relay URL' }
+
+# Verification runs on RSACryptoServiceProvider, which is present in the
+# PowerShell 5.1 every Windows ships with. The previous Ed25519 signature had no
+# native verifier here at all and required installing OpenSSL first — a
+# multi-minute download from a slow origin, when it did not simply time out.
+function Test-ReleaseSignature([string]$manifestPath, [string]$signaturePath) {
+  $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+  try {
+    $rsa.FromXmlString('@WANCTL_RELEASE_RSA_PUBLIC_KEY_XML@')
+    $data = [IO.File]::ReadAllBytes($manifestPath)
+    $signature = [IO.File]::ReadAllBytes($signaturePath)
+    # The 3-argument overload is the .NET Framework one; the 4-argument
+    # VerifyData(data, sig, HashAlgorithmName, Padding) is .NET Core only and
+    # throws "cannot find an overload" on 5.1.
+    return $rsa.VerifyData($data, 'SHA256', $signature)
+  } finally {
+    $rsa.Dispose()
+  }
+}
 
 function Receive-SizedFile([string]$uri, [string]$path, [int64]$maxBytes) {
   Add-Type -AssemblyName System.Net.Http
@@ -34,16 +57,12 @@ function Receive-SizedFile([string]$uri, [string]$path, [int64]$maxBytes) {
 $tmpDir = Join-Path $env:TEMP ("wanctl-release-" + [guid]::NewGuid().Guid)
 New-Item -ItemType Directory -Path $tmpDir | Out-Null
 try {
-  @'
-@WANCTL_RELEASE_PUBLIC_KEY_PEM@
-'@ | Set-Content -NoNewline -Encoding ascii (Join-Path $tmpDir 'release.pub')
-  $base = $env:WANCTL_RELAY.TrimEnd('/') + '/dl'
+  $base = $relay.TrimEnd('/') + '/dl'
   $manifestPath = Join-Path $tmpDir 'manifest.json'
-  $signaturePath = Join-Path $tmpDir 'manifest.json.sig'
+  $signaturePath = Join-Path $tmpDir 'manifest.json.rsa.sig'
   Receive-SizedFile "$base/manifest.json" $manifestPath 1048576
-  Receive-SizedFile "$base/manifest.json.sig" $signaturePath 64
-  & openssl pkeyutl -verify -pubin -inkey (Join-Path $tmpDir 'release.pub') -rawin -in $manifestPath -sigfile $signaturePath | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'release manifest signature verification failed' }
+  Receive-SizedFile "$base/manifest.json.rsa.sig" $signaturePath 1024
+  if (-not (Test-ReleaseSignature $manifestPath $signaturePath)) { throw 'release manifest signature verification failed' }
 
   $manifest = Get-Content -Raw $manifestPath | ConvertFrom-Json
   $targetVersion = [version]$manifest.version.TrimStart('v')
