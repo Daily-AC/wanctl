@@ -131,3 +131,36 @@ func TestConsoleApproverUnblocksGate(t *testing.T) {
 		t.Fatalf("gate: ok=%v decision=%q", ok, decision)
 	}
 }
+
+// TestAgentRunStopsOnContextCancel pins the fix for an agent that ignored
+// SIGTERM. The WebSocket control channel is deliberately not bound to any
+// context, so an idle Decode parked forever and cancellation went unnoticed —
+// `wanctl stop` (which sends SIGTERM) could not stop a ws-transport agent, and
+// service managers waited out their kill timeout before resorting to SIGKILL.
+//
+// The device stays idle for the whole test: that is the failing condition. With
+// traffic flowing, Decode returns on its own and the bug hides.
+func TestAgentRunStopsOnContextCancel(t *testing.T) {
+	srv := httptest.NewServer(relay.New(relay.EnvTokenStore("tok:alice")).Handler())
+	defer srv.Close()
+	base := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	ag, err := New(Options{RelayURL: base, Token: "tok", Name: "home-pc", AutoYes: true, Mode: policy.ModeBypass})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- ag.Run(ctx) }()
+
+	time.Sleep(300 * time.Millisecond) // let the control channel register
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return within 5s of cancellation — the agent would ignore SIGTERM")
+	}
+}

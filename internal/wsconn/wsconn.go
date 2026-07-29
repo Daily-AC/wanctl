@@ -7,9 +7,17 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"sync"
 
 	"github.com/coder/websocket"
 )
+
+// A note on the context passed to websocket.NetConn below: it must NOT be the
+// caller's dial context. Callers routinely dial under a handshake deadline
+// (context.WithTimeout(ctx, 10*time.Second), cancelled the moment Dial
+// returns), and binding the conn to that context would kill every connection
+// immediately after it was established. The conn therefore outlives any
+// context by construction; use CloseOnCancel to tie it to one deliberately.
 
 // Dial opens a ws:// or wss:// connection and returns it as a net.Conn carrying
 // binary messages. The returned *http.Response exposes handshake response
@@ -38,4 +46,29 @@ var NoProxyClient = &http.Client{Transport: &http.Transport{Proxy: nil}}
 func FromAccepted(ctx context.Context, c *websocket.Conn) net.Conn {
 	c.SetReadLimit(-1)
 	return websocket.NetConn(context.Background(), c, websocket.MessageBinary)
+}
+
+// CloseOnCancel closes nc once ctx is done, which unblocks whatever read or
+// write is parked on it. Without this a goroutine blocked in Read on a quiet
+// connection never notices cancellation: the conn is deliberately not bound to
+// any context (see the note above), so cancelling ctx alone changes nothing.
+//
+// That is not a theoretical concern — an agent whose control channel sits idle
+// in Decode ignored SIGTERM entirely, so `wanctl stop` could not stop it and
+// service managers had to wait out their kill timeout before SIGKILL.
+//
+// The returned stop function releases the watchdog goroutine; call it (defer is
+// fine) when the caller is done with nc, otherwise the goroutine lives until
+// ctx is done.
+func CloseOnCancel(ctx context.Context, nc net.Conn) (stop func()) {
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = nc.Close()
+		case <-done:
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }) }
 }
