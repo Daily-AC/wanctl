@@ -42,6 +42,29 @@ func (s adminTestStmt) Exec([]driver.Value) (driver.Result, error) {
 	return nil, errors.New("exec unsupported")
 }
 func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
+	updated := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	if strings.Contains(s.query, "INSERT INTO device_lark_approval") {
+		if !strings.Contains(s.query, "ON CONFLICT (namespace, device) DO UPDATE") {
+			return nil, errors.New("lark upsert must use namespace/device conflict target")
+		}
+		want := []driver.Value{"alice", "legion", true, false, "alice@example.com"}
+		if !reflect.DeepEqual(args, want) {
+			return nil, fmt.Errorf("lark upsert args = %#v, want %#v", args, want)
+		}
+		return &adminRows{
+			columns: []string{"namespace", "device", "approval_enabled", "pairing_from_card", "notify_email", "updated_at"},
+			values:  [][]driver.Value{{"alice", "legion", true, false, "alice@example.com", updated}},
+		}, nil
+	}
+	if strings.Contains(s.query, "FROM device_lark_approval") {
+		if len(args) != 1 || args[0] != "alice" || !strings.Contains(s.query, "WHERE namespace = $1") {
+			return nil, fmt.Errorf("lark list is not namespace-parameterized: query=%q args=%#v", s.query, args)
+		}
+		return &adminRows{
+			columns: []string{"namespace", "device", "approval_enabled", "pairing_from_card", "notify_email", "updated_at"},
+			values:  [][]driver.Value{{"alice", "legion", true, false, "alice@example.com", updated}},
+		}, nil
+	}
 	if strings.Contains(s.query, "FROM users") {
 		return &adminRows{
 			columns: []string{"namespace"},

@@ -142,12 +142,18 @@ func (n *noopAdmin) IssueToken(string, string, int) (string, error) { return "",
 func (n *noopAdmin) ListTokens(string) ([]map[string]any, error)    { return nil, nil }
 func (n *noopAdmin) RevokeToken(string, int) error                  { return nil }
 func (n *noopAdmin) ListDevices(string) ([]map[string]any, error)   { return nil, nil }
-func (n *noopAdmin) ListUsers() ([]string, error)                   { return nil, nil }
-func (n *noopAdmin) RemoveDevice(string, string) error              { return nil }
-func (n *noopAdmin) ListACL(string) ([]map[string]any, error)       { return nil, nil }
-func (n *noopAdmin) AddACL(string, string, string, string) error    { return nil }
-func (n *noopAdmin) RevokeACL(string, int) error                    { return nil }
-func (n *noopAdmin) ListAudit(string) ([]map[string]any, error)     { return nil, nil }
+func (n *noopAdmin) ListLarkApproval(string) ([]DeviceLarkApproval, error) {
+	return nil, nil
+}
+func (n *noopAdmin) UpsertLarkApproval(cfg DeviceLarkApproval) (DeviceLarkApproval, error) {
+	return cfg, nil
+}
+func (n *noopAdmin) ListUsers() ([]string, error)                { return nil, nil }
+func (n *noopAdmin) RemoveDevice(string, string) error           { return nil }
+func (n *noopAdmin) ListACL(string) ([]map[string]any, error)    { return nil, nil }
+func (n *noopAdmin) AddACL(string, string, string, string) error { return nil }
+func (n *noopAdmin) RevokeACL(string, int) error                 { return nil }
+func (n *noopAdmin) ListAudit(string) ([]map[string]any, error)  { return nil, nil }
 
 func do(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()

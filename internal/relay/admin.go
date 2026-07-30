@@ -45,6 +45,7 @@ func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/tokens/issue", r.adminTokenIssue)
 	mux.HandleFunc("/admin/tokens/revoke", r.adminTokenRevoke)
 	mux.HandleFunc("/admin/devices", r.adminDevices)
+	mux.HandleFunc("/admin/devices/lark", r.adminDevicesLark)
 	mux.HandleFunc("/admin/devices/remove", r.adminDeviceRemove)
 	mux.HandleFunc("/admin/acl", r.adminACL)
 	mux.HandleFunc("/admin/acl/revoke", r.adminACLRevoke)
@@ -242,6 +243,64 @@ func (r *Relay) adminDevices(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, map[string]any{"devices": out})
 }
 
+func (r *Relay) adminDevicesLark(w http.ResponseWriter, req *http.Request) {
+	if !r.adminOK(req) {
+		if r.admin == nil && r.secretOK(req) {
+			http.Error(w, "Postgres admin store is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	switch req.Method {
+	case http.MethodGet:
+		ns := req.URL.Query().Get("namespace")
+		if ns == "" {
+			http.Error(w, "namespace required", http.StatusBadRequest)
+			return
+		}
+		out, err := r.admin.ListLarkApproval(ns)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"devices": out})
+	case http.MethodPost:
+		var body struct {
+			Namespace       string `json:"namespace"`
+			Device          string `json:"device"`
+			ApprovalEnabled bool   `json:"approval_enabled"`
+			PairingFromCard bool   `json:"pairing_from_card"`
+			NotifyEmail     string `json:"notify_email"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if body.Namespace == "" || body.Device == "" || body.NotifyEmail == "" {
+			http.Error(w, "namespace, device, and notify_email required", http.StatusBadRequest)
+			return
+		}
+		cfg := DeviceLarkApproval{
+			Namespace:       body.Namespace,
+			Device:          body.Device,
+			ApprovalEnabled: body.ApprovalEnabled,
+			PairingFromCard: body.PairingFromCard,
+			NotifyEmail:     body.NotifyEmail,
+		}
+		out, err := r.admin.UpsertLarkApproval(cfg)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, out)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // adminDeviceRemove unbinds a device record from a namespace.
 func (r *Relay) adminDeviceRemove(w http.ResponseWriter, req *http.Request) {
 	if !r.adminOK(req) {
@@ -329,6 +388,8 @@ type AdminStore interface {
 	ListTokens(namespace string) ([]map[string]any, error)
 	RevokeToken(namespace string, id int) error
 	ListDevices(namespace string) ([]map[string]any, error)
+	ListLarkApproval(namespace string) ([]DeviceLarkApproval, error)
+	UpsertLarkApproval(DeviceLarkApproval) (DeviceLarkApproval, error)
 	ListUsers() ([]string, error)
 	RemoveDevice(namespace, device string) error
 	ListACL(namespace string) ([]map[string]any, error)

@@ -1,0 +1,495 @@
+package portal
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"wanctl/internal/console"
+	"wanctl/internal/lark"
+)
+
+type fakeCardSend struct {
+	mu      sync.Mutex
+	sends   []fakeCardMessage
+	updates []fakeCardMessage
+}
+
+type fakeCardMessage struct {
+	email     string
+	messageID string
+	card      any
+}
+
+func (f *fakeCardSend) SendCard(_ context.Context, email string, card any) (string, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	messageID := "om-" + string(rune('1'+len(f.sends)))
+	f.sends = append(f.sends, fakeCardMessage{email: email, messageID: messageID, card: card})
+	return messageID, "oc-owner", nil
+}
+
+func (f *fakeCardSend) UpdateCard(_ context.Context, messageID string, card any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updates = append(f.updates, fakeCardMessage{messageID: messageID, card: card})
+	return nil
+}
+
+func (f *fakeCardSend) counts() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.sends), len(f.updates)
+}
+
+func (f *fakeCardSend) firstCard(t *testing.T) any {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.sends) == 0 {
+		t.Fatal("no card was sent")
+	}
+	return f.sends[0].card
+}
+
+func (f *fakeCardSend) lastUpdateCard(t *testing.T) any {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.updates) == 0 {
+		t.Fatal("no card was updated")
+	}
+	return f.updates[len(f.updates)-1].card
+}
+
+type fakeDeviceSession struct {
+	states chan console.State
+
+	mu           sync.Mutex
+	timeoutCalls []int
+	decisions    []fakeDecision
+	pairings     []fakeDecision
+	decideErr    error
+}
+
+type fakeDecision struct {
+	id       string
+	verdict  string
+	approver string
+}
+
+func newFakeDeviceSession() *fakeDeviceSession {
+	return &fakeDeviceSession{states: make(chan console.State, 16)}
+}
+
+func (f *fakeDeviceSession) subscribe() (<-chan console.State, func()) {
+	return f.states, func() {}
+}
+
+func (f *fakeDeviceSession) decide(id, verdict, approver string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.decisions = append(f.decisions, fakeDecision{id: id, verdict: verdict, approver: approver})
+	return f.decideErr
+}
+
+func (f *fakeDeviceSession) pairDecide(fp, verdict string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pairings = append(f.pairings, fakeDecision{id: fp, verdict: verdict})
+	return f.decideErr
+}
+
+func (f *fakeDeviceSession) setApprovalTimeout(sec int) (int, error) {
+	f.mu.Lock()
+	f.timeoutCalls = append(f.timeoutCalls, sec)
+	f.mu.Unlock()
+	return sec, nil
+}
+
+func (f *fakeDeviceSession) snapshot() ([]int, []fakeDecision) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.timeoutCalls...), append([]fakeDecision(nil), f.decisions...)
+}
+
+func newTestLarkSupervisor(sender cardSender, sessionFor sessionForFunc) (*larkSupervisor, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &larkSupervisor{
+		sender: sender, grants: lark.NewGrants(), sessionFor: sessionFor,
+		portalOrigin: "https://portal.test", logf: func(string, ...any) {},
+		retryMin: time.Millisecond, retryMax: 4 * time.Millisecond,
+		ctx: ctx, cancel: cancel, watchers: make(map[string]*larkWatcher),
+		actions: make(map[string]larkActionRecord), wake: make(chan struct{}, 1),
+	}
+	return s, cancel
+}
+
+func enabledLarkConfig() deviceLarkApproval {
+	return deviceLarkApproval{
+		Namespace: "alice", Device: "legion", ApprovalEnabled: true,
+		PairingFromCard: true, NotifyEmail: "alice@example.com",
+	}
+}
+
+func TestLarkWatcherDiffSendsOnceAndResolvesDisappearedPending(t *testing.T) {
+	sender := &fakeCardSend{}
+	session := newFakeDeviceSession()
+	sup, cancel := newTestLarkSupervisor(sender, func(context.Context, string, string) (deviceSession, error) {
+		return session, nil
+	})
+	defer cancel()
+	sup.applyConfigs([]deviceLarkApproval{enabledLarkConfig()})
+	waitFor(t, func() bool {
+		calls, _ := session.snapshot()
+		return len(calls) > 0 && calls[0] == 180
+	})
+
+	pending := console.Pending{ID: "approval-1", Kind: "exec", Cmd: "echo ok", Cwd: "/tmp", Peer: "controller"}
+	state := console.State{Pending: []console.Pending{pending}}
+	session.states <- state
+	session.states <- state
+	session.states <- state
+	waitFor(t, func() bool {
+		sends, _ := sender.counts()
+		return sends == 1
+	})
+	time.Sleep(10 * time.Millisecond)
+	if sends, _ := sender.counts(); sends != 1 {
+		t.Fatalf("repeated identical State sent %d cards, want 1", sends)
+	}
+
+	nonce := cardNonce(t, sender.firstCard(t))
+	grant, err := sup.grants.Consume(nonce, "oc-owner", "event-card-proof")
+	if err != nil {
+		t.Fatalf("card nonce has no consumable grant: %v", err)
+	}
+	if grant.NS != "alice" || grant.Device != "legion" || grant.PendingID != pending.ID {
+		t.Fatalf("card nonce grant = %+v", grant)
+	}
+
+	session.states <- console.State{}
+	waitFor(t, func() bool {
+		_, updates := sender.counts()
+		return updates == 1
+	})
+	sup.applyConfigs(nil)
+}
+
+func TestLarkWatcherClosedChannelDoesNotResolveAndDisableRestoresTimeout(t *testing.T) {
+	sender := &fakeCardSend{}
+	session := newFakeDeviceSession()
+	var calls int
+	var callsMu sync.Mutex
+	sup, cancel := newTestLarkSupervisor(sender, func(context.Context, string, string) (deviceSession, error) {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+		calls++
+		if calls == 1 {
+			return session, nil
+		}
+		return nil, errors.New("device offline")
+	})
+	defer cancel()
+	sup.applyConfigs([]deviceLarkApproval{enabledLarkConfig()})
+	session.states <- console.State{Pending: []console.Pending{{ID: "approval-1", Kind: "exec", Cmd: "date"}}}
+	waitFor(t, func() bool {
+		sends, _ := sender.counts()
+		return sends == 1
+	})
+	close(session.states)
+	time.Sleep(20 * time.Millisecond)
+	if _, updates := sender.counts(); updates != 0 {
+		t.Fatalf("closed session channel produced %d terminal updates, want 0", updates)
+	}
+
+	sup.applyConfigs(nil)
+	callsSnapshot, _ := session.snapshot()
+	foundReset := false
+	for _, sec := range callsSnapshot {
+		if sec == 0 {
+			foundReset = true
+		}
+	}
+	if !foundReset {
+		t.Fatalf("timeout calls = %v, want a restore call with 0", callsSnapshot)
+	}
+}
+
+func TestLarkSupervisorLoadsEnabledDevicesAcrossNamespaces(t *testing.T) {
+	sender := &fakeCardSend{}
+	sessions := map[string]*fakeDeviceSession{
+		"alice/legion": newFakeDeviceSession(),
+		"bob/build":    newFakeDeviceSession(),
+	}
+	sup, cancel := newTestLarkSupervisor(sender, func(_ context.Context, ns, device string) (deviceSession, error) {
+		return sessions[larkDeviceKey(ns, device)], nil
+	})
+	defer cancel()
+	var requested []string
+	sup.adminReq = func(_ string, path string, query url.Values, _ any) (*http.Response, error) {
+		requested = append(requested, path+"?"+query.Encode())
+		body := `{"namespaces":["bob","alice"]}`
+		if path == "/admin/devices/lark" {
+			switch query.Get("namespace") {
+			case "alice":
+				body = `{"devices":[{"device":"legion","approval_enabled":true,"notify_email":"alice@example.com"}]}`
+			case "bob":
+				body = `{"devices":[{"device":"build","approval_enabled":true,"notify_email":"bob@example.com"},{"device":"off","approval_enabled":false,"notify_email":"bob@example.com"}]}`
+			}
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}
+	if err := sup.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		for _, session := range sessions {
+			calls, _ := session.snapshot()
+			if len(calls) == 0 || calls[0] != 180 {
+				return false
+			}
+		}
+		return true
+	})
+	if strings.Join(requested, ",") != "/admin/users?,/admin/devices/lark?namespace=alice,/admin/devices/lark?namespace=bob" {
+		t.Fatalf("relay requests = %v", requested)
+	}
+	sup.applyConfigs(nil)
+}
+
+func TestLarkActionHandlerAllowsAndRejectsInvalidGrants(t *testing.T) {
+	t.Run("allow", func(t *testing.T) {
+		sup, session, sender, nonce, cancel := actionFixture(t)
+		defer cancel()
+		reply := sup.actionHandler(context.Background(), lark.CardAction{
+			Verdict: "g", Nonce: nonce, ChatID: "oc-owner", MessageID: "om-card", EventID: "event-1",
+		})
+		if reply.ToastText == "" {
+			t.Fatal("empty success toast")
+		}
+		waitFor(t, func() bool {
+			_, decisions := session.snapshot()
+			return len(decisions) == 1
+		})
+		_, decisions := session.snapshot()
+		if decisions[0].id != "approval-1" || decisions[0].verdict != "g" || decisions[0].approver != "lark:alice@example.com" {
+			t.Fatalf("decision = %+v", decisions[0])
+		}
+		waitFor(t, func() bool {
+			_, updates := sender.counts()
+			return updates == 1
+		})
+	})
+
+	t.Run("chat mismatch", func(t *testing.T) {
+		sup, session, sender, nonce, cancel := actionFixture(t)
+		defer cancel()
+		reply := sup.actionHandler(context.Background(), lark.CardAction{
+			Verdict: "y", Nonce: nonce, ChatID: "oc-forwarded", MessageID: "om-forward", EventID: "event-wrong-chat",
+		})
+		if reply.ToastText == "" {
+			t.Fatal("empty chat-mismatch toast")
+		}
+		time.Sleep(10 * time.Millisecond)
+		_, decisions := session.snapshot()
+		if len(decisions) != 0 {
+			t.Fatalf("chat mismatch made decisions: %+v", decisions)
+		}
+		// An unauthorized callback must not cause any write at all. Its
+		// message ID is attacker-supplied, and the tenant token can edit every
+		// message this (shared) Feishu app has ever sent.
+		if _, updates := sender.counts(); updates != 0 {
+			t.Fatalf("unauthorized callback wrote %d card updates, want 0", updates)
+		}
+	})
+
+	t.Run("device decision failure resolves card", func(t *testing.T) {
+		sup, session, sender, nonce, cancel := actionFixture(t)
+		defer cancel()
+		session.mu.Lock()
+		session.decideErr = errors.New("pending no longer exists")
+		session.mu.Unlock()
+		reply := sup.actionHandler(context.Background(), lark.CardAction{
+			Verdict: "y", Nonce: nonce, ChatID: "oc-owner", MessageID: "om-card", EventID: "event-stale",
+		})
+		if reply.ToastText == "" {
+			t.Fatal("empty decision-failure toast")
+		}
+		waitFor(t, func() bool {
+			_, updates := sender.counts()
+			return updates == 1
+		})
+		raw, err := json.Marshal(sender.lastUpdateCard(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), "请求已失效") {
+			t.Fatalf("decision failure card stayed actionable: %s", raw)
+		}
+	})
+
+	t.Run("nonce reuse", func(t *testing.T) {
+		sup, session, _, nonce, cancel := actionFixture(t)
+		defer cancel()
+		first := lark.CardAction{Verdict: "y", Nonce: nonce, ChatID: "oc-owner", MessageID: "om-card", EventID: "event-first"}
+		if reply := sup.actionHandler(context.Background(), first); reply.ToastText == "" {
+			t.Fatal("empty first toast")
+		}
+		waitFor(t, func() bool {
+			_, decisions := session.snapshot()
+			return len(decisions) == 1
+		})
+		first.EventID = "event-reuse"
+		if reply := sup.actionHandler(context.Background(), first); reply.ToastText == "" {
+			t.Fatal("empty nonce-reuse toast")
+		}
+		time.Sleep(10 * time.Millisecond)
+		_, decisions := session.snapshot()
+		if len(decisions) != 1 {
+			t.Fatalf("nonce reuse made %d decisions, want 1", len(decisions))
+		}
+	})
+
+	t.Run("unknown nonce", func(t *testing.T) {
+		sup, session, _, _, cancel := actionFixture(t)
+		defer cancel()
+		reply := sup.actionHandler(context.Background(), lark.CardAction{
+			Verdict: "y", Nonce: "unknown", ChatID: "oc-owner", MessageID: "om-card", EventID: "event-unknown",
+		})
+		if reply.ToastText == "" {
+			t.Fatal("empty unknown-nonce toast")
+		}
+		time.Sleep(10 * time.Millisecond)
+		_, decisions := session.snapshot()
+		if len(decisions) != 0 {
+			t.Fatalf("unknown nonce made decisions: %+v", decisions)
+		}
+	})
+}
+
+func TestLarkActionHandlerRoutesPairingGrant(t *testing.T) {
+	sender := &fakeCardSend{}
+	session := newFakeDeviceSession()
+	sup, cancelContext := newTestLarkSupervisor(sender, func(context.Context, string, string) (deviceSession, error) {
+		return session, nil
+	})
+	defer func() {
+		sup.actionMu.Lock()
+		sup.closing = true
+		sup.actionMu.Unlock()
+		cancelContext()
+		sup.wg.Wait()
+	}()
+	grant, err := sup.grants.Issue("alice", "legion", "", "SHA256:controller", "oc-owner", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairing := console.PendingPairing{FP: "SHA256:controller", Name: "build", Label: "release"}
+	sup.storeAction(grant.Nonce, larkActionRecord{
+		ns: "alice", device: "legion", email: "alice@example.com", messageID: "om-pair",
+		expiresAt: grant.ExpiresAt, pairing: &pairing,
+	})
+	reply := sup.actionHandler(context.Background(), lark.CardAction{
+		Verdict: "y", Nonce: grant.Nonce, ChatID: "oc-owner", MessageID: "om-pair", EventID: "event-pair",
+	})
+	if reply.ToastText == "" {
+		t.Fatal("empty pairing toast")
+	}
+	waitFor(t, func() bool {
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		return len(session.pairings) == 1
+	})
+	session.mu.Lock()
+	got := session.pairings[0]
+	decisions := len(session.decisions)
+	session.mu.Unlock()
+	if got.id != pairing.FP || got.verdict != "y" {
+		t.Fatalf("pairing decision = %+v", got)
+	}
+	if decisions != 0 {
+		t.Fatalf("pairing grant routed through ordinary decide %d times", decisions)
+	}
+}
+
+func actionFixture(t *testing.T) (*larkSupervisor, *fakeDeviceSession, *fakeCardSend, string, context.CancelFunc) {
+	t.Helper()
+	sender := &fakeCardSend{}
+	session := newFakeDeviceSession()
+	sup, cancelContext := newTestLarkSupervisor(sender, func(context.Context, string, string) (deviceSession, error) {
+		return session, nil
+	})
+	grant, err := sup.grants.Issue("alice", "legion", "approval-1", "", "oc-owner", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := console.Pending{ID: "approval-1", Kind: "exec", Cmd: "echo ok"}
+	sup.storeAction(grant.Nonce, larkActionRecord{
+		ns: "alice", device: "legion", email: "alice@example.com", messageID: "om-card",
+		expiresAt: grant.ExpiresAt, pending: &pending,
+	})
+	cancel := func() {
+		sup.actionMu.Lock()
+		sup.closing = true
+		sup.actionMu.Unlock()
+		cancelContext()
+		sup.wg.Wait()
+	}
+	return sup, session, sender, grant.Nonce, cancel
+}
+
+func cardNonce(t *testing.T, card any) string {
+	t.Helper()
+	raw, err := json.Marshal(card)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatal(err)
+	}
+	var nonce string
+	var walk func(any)
+	walk = func(value any) {
+		switch value := value.(type) {
+		case map[string]any:
+			if value["type"] == "callback" {
+				if payload, ok := value["value"].(map[string]any); ok {
+					nonce, _ = payload["n"].(string)
+				}
+			}
+			for _, child := range value {
+				walk(child)
+			}
+		case []any:
+			for _, child := range value {
+				walk(child)
+			}
+		}
+	}
+	walk(root)
+	if nonce == "" {
+		t.Fatal("sent card has no callback nonce")
+	}
+	return nonce
+}
+
+func waitFor(t *testing.T, ready func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if ready() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("condition was not met before timeout")
+}
