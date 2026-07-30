@@ -62,6 +62,7 @@ const (
 	KindPairDecide    = "pair_decide"    // portal -> device, trust/deny a pending controller pairing
 	KindTrustRevoke   = "trust_revoke"   // portal -> device, drop a trusted controller by fingerprint
 	KindLanSet        = "lan_set"        // portal -> device, enable/disable the LAN relay uplink (Verdict "on"/"off")
+	KindTimeoutSet    = "timeout_set"    // portal -> device, set how long an approval waits (TimeoutSec; 0 = default)
 )
 
 // Message is the JSON body of a FrameJSON frame. Fields are reused across kinds;
@@ -119,6 +120,7 @@ type Message struct {
 	Dir         string          `json:"dir,omitempty"`          // rule_add: exec dir scope
 	Scope       string          `json:"scope,omitempty"`        // rule_add: dir/global
 	Index       int             `json:"index,omitempty"`        // rule_rm
+	TimeoutSec  int             `json:"timeout_sec,omitempty"`  // timeout_set: approval wait in seconds (0 = restore default)
 	FP          string          `json:"fp,omitempty"`           // pair_decide: controller fingerprint
 	Data        json.RawMessage `json:"data,omitempty"`         // console_state / approval_notif payload
 }

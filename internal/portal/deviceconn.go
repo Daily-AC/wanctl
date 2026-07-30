@@ -162,6 +162,18 @@ func (d *deviceConn) setLan(on bool) error {
 	return nil
 }
 
+// setApprovalTimeout raises (or, with 0, restores the default of) how long the
+// device blocks waiting for an approval decision. It returns the seconds the
+// device actually applied, which may differ: the device clamps the request into
+// its own accepted range rather than rejecting it.
+func (d *deviceConn) setApprovalTimeout(sec int) (int, error) {
+	m, err := d.rpc(protocol.Message{Kind: protocol.KindTimeoutSet, TimeoutSec: sec})
+	if err != nil {
+		return 0, err
+	}
+	return m.TimeoutSec, nil
+}
+
 func (d *deviceConn) setMode(mode string) error {
 	_, err := d.rpc(protocol.Message{Kind: protocol.KindModeSet, ConsoleMode: mode})
 	return err

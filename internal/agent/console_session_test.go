@@ -250,6 +250,38 @@ func TestConsoleRPCModeSet(t *testing.T) {
 	}
 }
 
+// TestConsoleRPCTimeoutSet covers the RPC a front-end uses when it pushes
+// approvals to a phone: the wait must actually change on the device, and the
+// reply must report the value the device applied — not the one requested, since
+// out-of-range requests are clamped rather than refused.
+func TestConsoleRPCTimeoutSet(t *testing.T) {
+	a := newTestAgent(t)
+
+	resp := a.handleConsoleRPC(protocol.Message{Kind: protocol.KindTimeoutSet, TimeoutSec: 180})
+	if resp.Kind != protocol.KindTimeoutSet {
+		t.Fatalf("want kind %q, got %q", protocol.KindTimeoutSet, resp.Kind)
+	}
+	if resp.TimeoutSec != 180 {
+		t.Fatalf("applied timeout: got %ds, want 180s", resp.TimeoutSec)
+	}
+	if got := a.console.Timeout(); got != 180*time.Second {
+		t.Fatalf("device timeout after RPC: got %s, want 3m0s", got)
+	}
+
+	// An absurd request is clamped to the device's ceiling, and the reply says so.
+	resp = a.handleConsoleRPC(protocol.Message{Kind: protocol.KindTimeoutSet, TimeoutSec: 86400})
+	if want := int(console.MaxTimeout / time.Second); resp.TimeoutSec != want {
+		t.Fatalf("clamped timeout: got %ds, want %ds", resp.TimeoutSec, want)
+	}
+
+	// Zero restores the default, so turning the feature off cannot leave a
+	// device stuck on a long wait.
+	resp = a.handleConsoleRPC(protocol.Message{Kind: protocol.KindTimeoutSet})
+	if want := int(console.DefaultTimeout / time.Second); resp.TimeoutSec != want {
+		t.Fatalf("restored timeout: got %ds, want %ds", resp.TimeoutSec, want)
+	}
+}
+
 func TestConsoleRPCDecide(t *testing.T) {
 	a := newTestAgent(t)
 	resp := a.handleConsoleRPC(protocol.Message{
