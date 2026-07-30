@@ -88,8 +88,8 @@ func cmdUpdate(ctx context.Context, args []string) error {
 		}
 	} else if plan.restartManagedPID > 0 {
 		fmt.Println("正在通过原 supervisor 重启 agent …")
-		if err := scheduleManagedRestart(self, plan.restartManagedPID); err != nil {
-			return fmt.Errorf("restart supervised agent: %w", err)
+		if err := restartManagedAgent(self, plan.restartManagedPID); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -146,8 +146,8 @@ func splitUpdateViaSudo(ctx context.Context, self string) error {
 		}
 	} else if plan.restartManagedPID > 0 {
 		fmt.Println("正在通过原 supervisor 重启 agent …")
-		if err := scheduleManagedRestart(self, plan.restartManagedPID); err != nil {
-			return fmt.Errorf("restart supervised agent: %w", err)
+		if err := restartManagedAgent(self, plan.restartManagedPID); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -171,6 +171,76 @@ func planUpdateRestartWithLiveness(noRestart bool, pid int, alive bool) updateRe
 		return updateRestartPlan{restartManagedPID: pid}
 	}
 	return updateRestartPlan{stopDetached: true, restartDetached: true}
+}
+
+// How long to wait for the supervisor to put a new agent in place of the one we
+// asked to exit. zyl's Scheduled Task wrapper sleeps 3s between runs; systemd
+// units are usually faster.
+const (
+	managedRestartAttempts = 20
+	managedRestartPoll     = time.Second
+)
+
+type managedRestartResult int
+
+const (
+	managedRestartReplaced managedRestartResult = iota // a different, live agent is registered
+	managedRestartStopped                              // the old agent is gone, nothing took over
+	managedRestartStuck                                // the old agent is still running
+)
+
+// restartManagedAgent asks the supervisor-owned agent to exit and confirms that
+// something newer took its place.
+//
+// Reporting success without that confirmation hid a real upgrade failure: when
+// the supervisor runs the agent under another account (a Scheduled Task as
+// SYSTEM, a systemd unit as root), a user-owned `wanctl update` cannot terminate
+// it. The kill happens in a detached helper whose error goes nowhere, so the
+// update printed "正在通过原 supervisor 重启 agent …" and exited 0 while the old
+// build kept serving — the new binary on disk made it look done.
+func restartManagedAgent(self string, pid int) error {
+	if !canTerminatePID(pid) {
+		return fmt.Errorf(`新二进制已装好,但运行中的 agent (pid %d) 属于另一个账户(由 supervisor 托管),当前用户无权终止它 —— 旧版本仍在服务。
+请以管理员/root 重启那个服务,例如:
+  Windows 计划任务  Stop-ScheduledTask -TaskName WanctlAgent; Start-ScheduledTask -TaskName WanctlAgent
+  systemd           sudo systemctl restart <unit>
+  launchd           sudo launchctl kickstart -k system/<label>`, pid)
+	}
+	if err := scheduleManagedRestart(self, pid); err != nil {
+		return fmt.Errorf("restart supervised agent: %w", err)
+	}
+	switch awaitManagedRestart(pid, processAlive, config.ReadPID, managedRestartAttempts, managedRestartPoll, time.Sleep) {
+	case managedRestartReplaced:
+		fmt.Println("✓ agent 已重启,新版本生效")
+		return nil
+	case managedRestartStopped:
+		return fmt.Errorf(`旧 agent (pid %d) 已停止,但 %s 内没有新 agent 接上 —— 这台机器现在没有 agent 在跑。
+如果它由「登录时触发」的任务托管,重新登录或手动启动该服务;或者跑 wanctl start 先把它拉起来`,
+			pid, time.Duration(managedRestartAttempts)*managedRestartPoll)
+	default:
+		return fmt.Errorf(`旧 agent (pid %d) 在 %s 后仍在运行,新二进制没有生效。
+手动重启它托管的服务,然后用 wanctl status 确认 pid 变了`,
+			pid, time.Duration(managedRestartAttempts)*managedRestartPoll)
+	}
+}
+
+// awaitManagedRestart polls until a live agent other than oldPID is registered,
+// then reports what it saw. Clock and probes are injected so the decision table
+// is testable without real processes.
+func awaitManagedRestart(oldPID int, alive func(int) bool, currentPID func() int, attempts int, poll time.Duration, sleep func(time.Duration)) managedRestartResult {
+	for attempt := 0; ; attempt++ {
+		if pid := currentPID(); pid > 0 && pid != oldPID && alive(pid) {
+			return managedRestartReplaced
+		}
+		if attempt >= attempts {
+			break
+		}
+		sleep(poll)
+	}
+	if alive(oldPID) {
+		return managedRestartStuck
+	}
+	return managedRestartStopped
 }
 
 // scheduleManagedRestart starts the freshly installed binary outside the

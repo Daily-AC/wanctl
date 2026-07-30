@@ -28,6 +28,22 @@ func processAlive(pid int) bool {
 	return exitCode == stillActive
 }
 
+// canTerminatePID reports whether this process may terminate pid. A Scheduled
+// Task running the agent as SYSTEM is queryable by any user but killable only
+// with elevation, which is exactly when an update must stop and say so instead
+// of pretending it restarted the agent.
+func canTerminatePID(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	windows.CloseHandle(h)
+	return true
+}
+
 // detachSysProcAttr truly detaches the child on Windows: DETACHED_PROCESS drops
 // the parent console (so closing the launching terminal/SSH session doesn't take
 // the agent down) and CREATE_NEW_PROCESS_GROUP isolates it from Ctrl-C. Without
