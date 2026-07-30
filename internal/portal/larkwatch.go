@@ -411,13 +411,20 @@ func (w *larkWatcher) run(ctx context.Context) {
 			continue
 		}
 		lastSession = session
-		if _, err := session.setApprovalTimeout(int(larkApprovalWait / time.Second)); err != nil {
-			w.sup.logf("lark approval set timeout for %s: %v", larkDeviceKey(w.ns, w.device), err)
-			if !waitContext(ctx, backoff) {
-				return
-			}
-			backoff = nextBackoff(backoff, w.sup.retryMax)
-			continue
+		// A device older than the timeout_set verb answers "unknown RPC kind".
+		// That must not stop us watching it: carrying on with whatever wait the
+		// device already uses degrades the feature to a shorter window, whereas
+		// treating it as a dial failure would make Feishu approvals silently
+		// never work on every agent that has not been upgraded yet.
+		wait := larkApprovalWait
+		if applied, err := session.setApprovalTimeout(int(larkApprovalWait / time.Second)); err != nil {
+			wait = console.DefaultTimeout
+			w.sup.logf("lark approval timeout for %s not set, using the device default %s: %v",
+				larkDeviceKey(w.ns, w.device), wait, err)
+		} else if applied > 0 {
+			// The device clamps, so the card must state what it actually applied
+			// rather than what we asked for.
+			wait = time.Duration(applied) * time.Second
 		}
 
 		states, unsubscribe := session.subscribe()
@@ -433,7 +440,7 @@ func (w *larkWatcher) run(ctx context.Context) {
 					closed = true
 					continue
 				}
-				w.reconcileState(ctx, state, seenPending, seenPairings)
+				w.reconcileState(ctx, state, seenPending, seenPairings, wait)
 			}
 		}
 		unsubscribe()
@@ -446,7 +453,7 @@ func (w *larkWatcher) run(ctx context.Context) {
 	}
 }
 
-func (w *larkWatcher) reconcileState(ctx context.Context, state console.State, pendingSeen map[string]seenPending, pairingSeen map[string]seenPairing) {
+func (w *larkWatcher) reconcileState(ctx context.Context, state console.State, pendingSeen map[string]seenPending, pairingSeen map[string]seenPairing, wait time.Duration) {
 	cfg := w.getConfig()
 	currentPending := make(map[string]console.Pending, len(state.Pending))
 	for _, pending := range state.Pending {
@@ -454,13 +461,13 @@ func (w *larkWatcher) reconcileState(ctx context.Context, state console.State, p
 		if _, ok := pendingSeen[pending.ID]; ok {
 			continue
 		}
-		grant, err := w.sup.grants.Issue(w.ns, w.device, pending.ID, "", "", larkApprovalWait)
+		grant, err := w.sup.grants.Issue(w.ns, w.device, pending.ID, "", "", wait)
 		if err != nil {
 			w.sup.logf("lark approval issue grant for %s/%s: %v", larkDeviceKey(w.ns, w.device), pending.ID, err)
 			continue
 		}
 		messageID, chatID, err := w.sup.sender.SendCard(ctx, cfg.NotifyEmail,
-			lark.ApprovalCard(w.device, pending, grant.Nonce, w.sup.deviceURL(w.device), larkApprovalWait))
+			lark.ApprovalCard(w.device, pending, grant.Nonce, w.sup.deviceURL(w.device), wait))
 		if err != nil {
 			w.sup.logf("lark approval send card for %s/%s: %v", larkDeviceKey(w.ns, w.device), pending.ID, err)
 			continue
