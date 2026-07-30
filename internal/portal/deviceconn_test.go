@@ -36,6 +36,8 @@ func TestDeviceConnRPCAndNotif(t *testing.T) {
 	fakeDevice(t, srv)
 	d := newDeviceConn(cli)
 	defer d.close()
+	notifs, unsubscribe := d.subscribe()
+	defer unsubscribe()
 
 	st, err := d.state()
 	if err != nil || st.Mode != policy.ModeNormal {
@@ -49,12 +51,134 @@ func TestDeviceConnRPCAndNotif(t *testing.T) {
 	b, _ := json.Marshal(console.State{Mode: policy.ModeBypass})
 	protocol.WriteMessage(srv, protocol.Message{Kind: protocol.KindApprovalNotif, Data: b})
 	select {
-	case n := <-d.notifs():
+	case n := <-notifs:
 		if n.Mode != policy.ModeBypass {
 			t.Fatalf("notif mode: %s", n.Mode)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no notif")
+	}
+}
+
+func TestDeviceConnNotifFanOut(t *testing.T) {
+	cli, srv := net.Pipe()
+	d := newDeviceConn(cli)
+	defer d.close()
+	defer srv.Close()
+
+	first, unsubscribeFirst := d.subscribe()
+	defer unsubscribeFirst()
+	second, unsubscribeSecond := d.subscribe()
+	defer unsubscribeSecond()
+
+	writeNotif(t, srv, policy.ModeBypass)
+	assertNotifMode(t, first, policy.ModeBypass)
+	assertNotifMode(t, second, policy.ModeBypass)
+}
+
+func TestDeviceConnNotifUnsubscribeIsolated(t *testing.T) {
+	cli, srv := net.Pipe()
+	d := newDeviceConn(cli)
+	defer d.close()
+	defer srv.Close()
+
+	unsubscribed, unsubscribe := d.subscribe()
+	remaining, unsubscribeRemaining := d.subscribe()
+	defer unsubscribeRemaining()
+
+	unsubscribe()
+	unsubscribe()
+	if _, ok := <-unsubscribed; ok {
+		t.Fatal("unsubscribed notification channel is still open")
+	}
+
+	writeNotif(t, srv, policy.ModeBypass)
+	assertNotifMode(t, remaining, policy.ModeBypass)
+}
+
+func TestDeviceConnSlowNotifSubscriberDoesNotBlockOthers(t *testing.T) {
+	cli, srv := net.Pipe()
+	d := newDeviceConn(cli)
+	defer d.close()
+	defer srv.Close()
+
+	_, unsubscribeSlow := d.subscribe()
+	defer unsubscribeSlow()
+	fast, unsubscribeFast := d.subscribe()
+	defer unsubscribeFast()
+
+	for i := 0; i < 9; i++ {
+		mode := policy.ModeNormal
+		if i == 8 {
+			mode = policy.ModeBypass
+		}
+		writeNotif(t, srv, mode)
+		assertNotifMode(t, fast, mode)
+	}
+}
+
+func TestDeviceConnSubscribeAfterClose(t *testing.T) {
+	cli, srv := net.Pipe()
+	d := newDeviceConn(cli)
+	d.close()
+	defer srv.Close()
+
+	notifs, unsubscribe := d.subscribe()
+	unsubscribe()
+	if _, ok := <-notifs; ok {
+		t.Fatal("subscription created after close is still open")
+	}
+}
+
+// TestDeviceConnCloseWakesLiveSubscribers covers the resident-consumer case: a
+// background watcher subscribes and then the device drops. It must observe the
+// channel closing rather than parking forever on a conn that will never deliver
+// again — a request-scoped consumer survived that only because its own context
+// or poll deadline fired. The deferred cancel also asserts that unsubscribing a
+// channel close() already reclaimed does not double-close.
+func TestDeviceConnCloseWakesLiveSubscribers(t *testing.T) {
+	cli, srv := net.Pipe()
+	d := newDeviceConn(cli)
+	defer srv.Close()
+
+	notifs, unsubscribe := d.subscribe()
+	defer unsubscribe()
+
+	d.close()
+
+	select {
+	case _, ok := <-notifs:
+		if ok {
+			t.Fatal("subscription delivered a value instead of closing")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close() left a live subscriber parked on its channel")
+	}
+}
+
+func writeNotif(t *testing.T, conn net.Conn, mode policy.Mode) {
+	t.Helper()
+	b, err := json.Marshal(console.State{Mode: mode})
+	if err != nil {
+		t.Fatalf("marshal notification: %v", err)
+	}
+	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindApprovalNotif, Data: b}); err != nil {
+		t.Fatalf("write notification: %v", err)
+	}
+}
+
+func assertNotifMode(t *testing.T, notifs <-chan console.State, want policy.Mode) {
+	t.Helper()
+	select {
+	case st, ok := <-notifs:
+		if !ok {
+			t.Fatal("notification channel closed")
+		}
+		if st.Mode != want {
+			t.Fatalf("notification mode: got %q, want %q", st.Mode, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for notification")
 	}
 }
 

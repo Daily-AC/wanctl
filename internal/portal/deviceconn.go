@@ -28,17 +28,18 @@ type deviceConn struct {
 	rpcMu   sync.Mutex // serialize request/response round-trips
 	wmu     sync.Mutex // serialize writes
 	respCh  chan protocol.Message
-	notifCh chan console.State
+	notifMu sync.Mutex
+	notifs  map[chan console.State]struct{}
 	closed  chan struct{}
 	once    sync.Once
 }
 
 func newDeviceConn(conn net.Conn) *deviceConn {
 	d := &deviceConn{
-		conn:    conn,
-		respCh:  make(chan protocol.Message, 1),
-		notifCh: make(chan console.State, 8),
-		closed:  make(chan struct{}),
+		conn:   conn,
+		respCh: make(chan protocol.Message, 1),
+		notifs: make(map[chan console.State]struct{}),
+		closed: make(chan struct{}),
 	}
 	go d.readLoop()
 	return d
@@ -54,10 +55,14 @@ func (d *deviceConn) readLoop() {
 		if m.Kind == protocol.KindApprovalNotif {
 			var st console.State
 			if json.Unmarshal(m.Data, &st) == nil {
-				select {
-				case d.notifCh <- st:
-				default:
+				d.notifMu.Lock()
+				for ch := range d.notifs {
+					select {
+					case ch <- st:
+					default:
+					}
 				}
+				d.notifMu.Unlock()
 			}
 			continue
 		}
@@ -176,7 +181,44 @@ func (d *deviceConn) logs(logType, grep, since string, limit int) (json.RawMessa
 	return m.Data, nil
 }
 
-func (d *deviceConn) notifs() <-chan console.State { return d.notifCh }
+// subscribe returns a channel carrying every approval notification pushed by the
+// device from now on, plus an idempotent cancel func. Each subscriber gets its
+// own buffer so a stalled consumer only ever drops its own events (readLoop
+// delivers non-blocking) — a long-poll browser request and a resident background
+// watcher must not steal notifications from each other.
+//
+// The channel is closed when the subscription is cancelled AND when the
+// connection dies, so a resident consumer can tell "no events yet" from "this
+// conn is gone, re-dial" without polling alive().
+func (d *deviceConn) subscribe() (<-chan console.State, func()) {
+	ch := make(chan console.State, 8)
+
+	d.notifMu.Lock()
+	select {
+	case <-d.closed:
+		close(ch)
+		d.notifMu.Unlock()
+		return ch, func() {}
+	default:
+		d.notifs[ch] = struct{}{}
+	}
+	d.notifMu.Unlock()
+
+	var once sync.Once
+	return ch, func() {
+		once.Do(func() {
+			d.notifMu.Lock()
+			// close() may have already closed and unregistered this channel;
+			// only the holder of the map entry closes, so a double close is
+			// impossible in either order.
+			if _, ok := d.notifs[ch]; ok {
+				delete(d.notifs, ch)
+				close(ch)
+			}
+			d.notifMu.Unlock()
+		})
+	}
+}
 
 // alive reports whether the connection is still usable (its read loop has not
 // torn down). A device restart / network drop closes the conn from the read
@@ -194,5 +236,16 @@ func (d *deviceConn) close() {
 	d.once.Do(func() {
 		close(d.closed)
 		d.conn.Close()
+		// Wake every live subscriber. Without this a resident consumer parks on
+		// a channel nothing will ever write to again and never learns it must
+		// re-dial; a request-scoped consumer only got away with it because its
+		// own context or poll deadline fired. Taking notifMu here also closes
+		// the race where subscribe() saw an open conn microseconds before this.
+		d.notifMu.Lock()
+		for ch := range d.notifs {
+			delete(d.notifs, ch)
+			close(ch)
+		}
+		d.notifMu.Unlock()
 	})
 }

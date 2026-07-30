@@ -1041,10 +1041,12 @@ func (s *Server) handleDeviceEvents(w http.ResponseWriter, r *http.Request) {
 	// ignores X-Accel-Buffering), so an open text/event-stream never reaches the
 	// browser. Block for one approval-state push (or time out), return a finite
 	// JSON response nginx forwards promptly, and let the client re-poll.
+	notifs, unsubscribe := d.subscribe()
+	defer unsubscribe()
 	select {
 	case <-r.Context().Done():
 		w.WriteHeader(http.StatusNoContent)
-	case st := <-d.notifs():
+	case st := <-notifs:
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(st)
 	case <-time.After(eventPollWait):
