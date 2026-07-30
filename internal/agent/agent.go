@@ -914,6 +914,14 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 		a.SetLanEnabled(msg.Verdict == "on")
 		return resp
 
+	case protocol.KindTimeoutSet:
+		// A front-end that pushes approvals somewhere a human reads slowly (a
+		// phone) raises the wait; turning that off restores the default. Echo
+		// back what actually took effect — the service clamps out-of-range
+		// values instead of failing, and the front-end should display the truth.
+		applied := a.console.SetTimeout(time.Duration(msg.TimeoutSec) * time.Second)
+		return protocol.Message{Kind: protocol.KindTimeoutSet, TimeoutSec: int(applied / time.Second)}
+
 	case protocol.KindLogs:
 		if a.log == nil {
 			return protocol.Message{Kind: protocol.KindLogs, Data: json.RawMessage("[]")}

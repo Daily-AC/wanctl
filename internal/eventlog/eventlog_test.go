@@ -10,6 +10,16 @@ import (
 	"time"
 )
 
+func TestRedactText(t *testing.T) {
+	got := RedactText("deploy --token=abcd1234efgh5678 --region us-east-1")
+	if strings.Contains(got, "abcd1234efgh5678") {
+		t.Fatalf("RedactText retained secret: %q", got)
+	}
+	if !strings.Contains(got, "--token=[REDACTED]") || !strings.Contains(got, "--region us-east-1") {
+		t.Fatalf("RedactText lost useful context: %q", got)
+	}
+}
+
 func TestAppendRedactsSecretsBeforeWritingJSONL(t *testing.T) {
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	l, err := Open("events.jsonl")

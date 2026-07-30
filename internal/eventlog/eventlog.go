@@ -78,7 +78,9 @@ func Open(name string) (*Logger, error) {
 	}, nil
 }
 
-func redactText(s string) string {
+// RedactText removes credential-shaped values while preserving enough context
+// for audit logs and approval prompts.
+func RedactText(s string) string {
 	s = urlSecretRE.ReplaceAllString(s, `${1}[REDACTED]`)
 	s = authHeaderRE.ReplaceAllString(s, `${1}[REDACTED]`)
 	s = secretFlagRE.ReplaceAllString(s, `${1}[REDACTED]`)
@@ -86,9 +88,9 @@ func redactText(s string) string {
 }
 
 func redactEvent(e Event) Event {
-	e.PeerName = truncateText(redactText(e.PeerName), maxContextBytes)
-	e.Detail = truncateText(redactText(e.Detail), maxDetailBytes)
-	e.Cwd = truncateText(redactText(e.Cwd), maxContextBytes)
+	e.PeerName = truncateText(RedactText(e.PeerName), maxContextBytes)
+	e.Detail = truncateText(RedactText(e.Detail), maxDetailBytes)
+	e.Cwd = truncateText(RedactText(e.Cwd), maxContextBytes)
 	return e
 }
 

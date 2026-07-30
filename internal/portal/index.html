@@ -221,7 +221,8 @@
   .rowait{margin-top:22px;padding:11px 16px;border-radius:12px;background:#fdf6e8;border:1px dashed #e0cf9f;color:#8a6d3b;font-size:13px;font-weight:600}
   .view.rdonly .rotag{display:inline-flex}
   .view.rdonly .robanner{display:block}
-  .view.rdonly .decide,.view.rdonly #rAdd,.view.rdonly #rmDevice,.view.rdonly .rmx,.view.rdonly #toggle,.view.rdonly #lanToggle{display:none!important}
+  .view.rdonly .decide,.view.rdonly #rAdd,.view.rdonly #rmDevice,.view.rdonly .rmx,.view.rdonly #toggle,.view.rdonly #lanToggle,
+  .view.rdonly #larkToggle,.view.rdonly #larkPairToggle{display:none!important}
   .doc{margin-top:22px;display:flex;flex-direction:column;gap:18px}
   .dcard{display:flex;gap:18px;background:#fff;border:1px solid var(--soft,#efe7d6);border-radius:18px;padding:22px 24px;box-shadow:0 4px 18px rgba(0,0,0,.04)}
   .dcard.hot{border-color:#ffcf9b;background:linear-gradient(180deg,#fffaf2,#fff)}
@@ -490,6 +491,22 @@
           </div>
           <div class="warn" style="display:block;background:#eef4ff;border-color:#d3e2ff;color:#4a6fae" id="lanHint">设备在雷石内网时，会多挂一条到内网中继的直连通道：实时流式输出、低延迟。受控端与被控端都在内网时，控制端跑 <b>wanctl net lan</b>（或 auto）即可走快车道。加密与审批和公网通道完全一致。</div>
         </div>
+        <div class="modecard" id="larkcard" style="margin-top:16px">
+          <div class="now">
+            <span class="landot off" id="larkDot"></span>
+            <span class="txt" id="larkTxt"><b>飞书审批</b>：加载中…</span>
+            <div class="toggle lanoff" id="larkToggle"><span class="k"></span></div>
+          </div>
+          <div class="warn" style="display:block;background:#fff5e9;border-color:#ffe2bd;color:#95642a" id="larkHint">
+            开着的时候，这台设备遇到没命中规则的操作，会把上下文推一张卡到你的飞书私聊，你在卡上直接点允许或拒绝。<br>
+            要知道代价：门户会一直挂着这台设备的连线，所以规则未命中<b>不再立刻拒绝</b>，而是<b>最多等你 3 分钟</b>。
+            没人看手机的时候，脚本会卡满这 3 分钟才失败——无人值守的机器建议先把规则配好。
+          </div>
+          <div class="now" id="larkPairRow" style="margin-top:14px">
+            <span class="txt" id="larkPairTxt"><b>卡片里直接信任新控制端</b>：关着的话卡片只通知，要信任得回门户点</span>
+            <div class="toggle lanoff" id="larkPairToggle"><span class="k"></span></div>
+          </div>
+        </div>
       </div>
 
       <div class="pane" data-pane="log">
@@ -697,6 +714,7 @@ function openDevice(name){
   applyShared(name);
   $('#pending').innerHTML='<div class="empty">连接设备中…</div>';
   renderConsole();
+  loadLark(name);
   pollConsole(name);
 }
 /* 共享设备在门户里严格只读（后端同样强制），这里切换只读视觉态。
@@ -899,6 +917,46 @@ $('#lanToggle').onclick=async()=>{
   const next=!curLanOn;
   try{await jpost('/api/devices/lan',{device:cur,on:next});renderConsole()}catch(e){err('切换内网直连失败：'+e.message)}
 };
+/* 飞书审批开关。这份配置不在 console state 里（它存在中继的库里，不在设备上），
+   所以只在打开设备和改动之后各拉一次，不跟着长轮询走。 */
+let curLark={approval_enabled:false,pairing_from_card:false,notify_email:''};
+async function loadLark(name){
+  $('#larkTxt').innerHTML='<b>飞书审批</b>：加载中…';
+  try{
+    const c=await jget('/api/devices/lark?device='+encodeURIComponent(name));
+    if(cur!==name)return;
+    curLark=c;paintLark();
+  }catch(e){
+    if(cur!==name)return;
+    $('#larkTxt').innerHTML='<b>飞书审批</b>：读不到设置（'+esc(e.message)+'）';
+  }
+}
+function paintLark(){
+  const on=!!curLark.approval_enabled, pair=!!curLark.pairing_from_card;
+  $('#larkDot').className='landot '+(on?'on':'off');
+  $('#larkToggle').className='toggle '+(on?'lanon':'lanoff');
+  $('#larkTxt').innerHTML=on
+    ?'<b>飞书审批</b>：已开启，卡片推给 <b>'+esc(curLark.notify_email||'（还没记下邮箱）')+'</b>'
+    :'<b>飞书审批</b>：已关闭，只能在门户或设备终端上批';
+  $('#larkPairToggle').className='toggle '+(pair?'lanon':'lanoff');
+  $('#larkPairRow').style.opacity=on?'1':'.45';
+  $('#larkPairTxt').innerHTML=pair
+    ?'<b>卡片里直接信任新控制端</b>：开着，卡片上会有信任按钮'
+    :'<b>卡片里直接信任新控制端</b>：关着的话卡片只通知，要信任得回门户点';
+}
+async function saveLark(field,value){
+  if(roGuard())return;
+  const body={device:cur,approval_enabled:curLark.approval_enabled,pairing_from_card:curLark.pairing_from_card};
+  body[field]=value;
+  try{
+    const r=await jpost('/api/devices/lark',body);
+    const saved=await r.json();
+    if(cur!==body.device)return;
+    curLark=saved;paintLark();
+  }catch(e){err('保存飞书审批设置失败：'+e.message)}
+}
+$('#larkToggle').onclick=()=>saveLark('approval_enabled',!curLark.approval_enabled);
+$('#larkPairToggle').onclick=()=>saveLark('pairing_from_card',!curLark.pairing_from_card);
 $('#toggle').onclick=async()=>{
   if(roGuard())return;
   const next=curMode==='bypass'?'normal':'bypass';

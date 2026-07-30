@@ -87,6 +87,19 @@ type pendingPair struct {
 // for a user to click the URL the AI surfaced.
 const pairTTL = 5 * time.Minute
 
+// DefaultTimeout is how long an approval waits for a front-end decision when
+// nothing has raised it. It suits a human already looking at a screen.
+const DefaultTimeout = 60 * time.Second
+
+// MinTimeout and MaxTimeout bound what a front-end may ask for. A push
+// notification to a phone — unlock, read, decide — routinely outlives
+// DefaultTimeout, so the wait is adjustable; but it is also how long a
+// controller's exec appears to hang, so it cannot be unbounded.
+const (
+	MinTimeout = 10 * time.Second
+	MaxTimeout = 10 * time.Minute
+)
+
 // Service is the queue-backed console + approver.
 type Service struct {
 	engine  *policy.Engine
@@ -110,6 +123,34 @@ func (s *Service) SetLanSource(fn func() *LanInfo) {
 	s.mu.Unlock()
 }
 
+// SetTimeout changes how long Ask and AskPair wait for a decision, and returns
+// the value that actually took effect. Zero restores DefaultTimeout; anything
+// else is clamped into [MinTimeout, MaxTimeout] rather than rejected, so a
+// front-end cannot make a device wait forever and cannot accidentally make the
+// window uselessly short either.
+func (s *Service) SetTimeout(d time.Duration) time.Duration {
+	if d == 0 {
+		d = DefaultTimeout
+	}
+	if d < MinTimeout {
+		d = MinTimeout
+	}
+	if d > MaxTimeout {
+		d = MaxTimeout
+	}
+	s.mu.Lock()
+	s.timeout = d
+	s.mu.Unlock()
+	return d
+}
+
+// Timeout reports the current approval wait.
+func (s *Service) Timeout() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.timeout
+}
+
 // SetTrustedSource installs a callback returning the currently trusted
 // controllers, so State can include them for the revoke UI.
 func (s *Service) SetTrustedSource(fn func() []TrustedController) {
@@ -121,7 +162,7 @@ func (s *Service) SetTrustedSource(fn func() []TrustedController) {
 // New builds a console service bound to a policy engine and (optional) event log.
 func New(engine *policy.Engine, log *eventlog.Logger, info Info) *Service {
 	return &Service{
-		engine: engine, log: log, info: info, timeout: 60 * time.Second,
+		engine: engine, log: log, info: info, timeout: DefaultTimeout,
 		pend: map[string]*pending{}, pairs: map[string]*pendingPair{}, subs: map[chan struct{}]struct{}{},
 	}
 }
@@ -171,6 +212,7 @@ func (s *Service) AskPair(fp, name, label string) bool {
 	}
 	hasFrontend := len(s.subs) > 0
 	decided := p.decided
+	wait := s.timeout
 	s.mu.Unlock()
 	s.notify()
 
@@ -186,7 +228,7 @@ func (s *Service) AskPair(fp, name, label string) bool {
 		trust := p.trust
 		s.mu.Unlock()
 		return trust
-	case <-time.After(s.timeout):
+	case <-time.After(wait):
 		// Front-end was attending but didn't decide in time. Entry persists for
 		// retroactive approval; this dial reports a reject + URL.
 		return false
@@ -246,6 +288,7 @@ func (s *Service) pruneExpiredPairsLocked() {
 func (s *Service) Ask(req policy.Request) policy.Decision {
 	s.mu.Lock()
 	hasFrontend := len(s.subs) > 0
+	wait := s.timeout
 	s.mu.Unlock()
 	if !hasFrontend {
 		// No console front-end is listening (headless: no portal session, no TTY
@@ -274,7 +317,7 @@ func (s *Service) Ask(req policy.Request) policy.Decision {
 	select {
 	case d := <-p.decided:
 		return d
-	case <-time.After(s.timeout):
+	case <-time.After(wait):
 		return policy.Decision{Allow: false}
 	}
 }

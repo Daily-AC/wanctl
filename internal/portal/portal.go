@@ -69,6 +69,10 @@ type Server struct {
 
 	mu    sync.Mutex
 	conns map[string]*deviceConn // key "ns/device"
+
+	larkMu      sync.Mutex
+	larkStarted bool
+	larkRuntime *larkRuntime
 }
 
 // New configures the portal. With an empty relayURL/secret the server still
@@ -104,6 +108,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tokens", s.handleTokens)
 	mux.HandleFunc("/api/tokens/revoke", s.handleTokenRevoke)
 	mux.HandleFunc("/api/devices", s.handleDevices)
+	mux.HandleFunc("/api/devices/lark", s.handleDeviceLark)
 	mux.HandleFunc("/api/namespaces", s.handleNamespaces)
 	mux.HandleFunc("/api/acl", s.handleACL)
 	mux.HandleFunc("/api/acl/revoke", s.handleACLRevoke)
@@ -139,6 +144,7 @@ var mutationPaths = map[string]bool{
 	"/api/devices/rules":        true,
 	"/api/devices/mode":         true,
 	"/api/devices/lan":          true,
+	"/api/devices/lark":         true,
 	"/api/docs/articles":        true,
 	"/api/docs/articles/delete": true,
 	"/api/docs/groups":          true,
@@ -146,8 +152,9 @@ var mutationPaths = map[string]bool{
 }
 
 var readWritePaths = map[string]bool{
-	"/api/tokens": true,
-	"/api/acl":    true,
+	"/api/tokens":       true,
+	"/api/acl":          true,
+	"/api/devices/lark": true,
 }
 
 func (s *Server) securityMiddleware(next http.Handler) http.Handler {
@@ -616,6 +623,86 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type deviceLarkApproval struct {
+	Namespace       string `json:"-"`
+	Device          string `json:"device"`
+	ApprovalEnabled bool   `json:"approval_enabled"`
+	PairingFromCard bool   `json:"pairing_from_card"`
+	NotifyEmail     string `json:"notify_email"`
+	UpdatedAt       string `json:"updated_at,omitempty"`
+}
+
+func (s *Server) handleDeviceLark(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		s.handleDeviceLarkWrite(w, r)
+		return
+	}
+
+	device := r.URL.Query().Get("device")
+	ns, _, ok := s.requireDevice(w, r, device)
+	if !ok {
+		return
+	}
+	resp, err := s.adminReq("GET", "/admin/devices/lark", url.Values{"namespace": {ns}}, nil)
+	if err != nil {
+		http.Error(w, "relay unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		copyResp(w, resp)
+		return
+	}
+	var out struct {
+		Devices []deviceLarkApproval `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		http.Error(w, "invalid relay response", http.StatusBadGateway)
+		return
+	}
+	for _, cfg := range out.Devices {
+		if cfg.Device == device {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(cfg)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(deviceLarkApproval{Device: device})
+}
+
+func (s *Server) handleDeviceLarkWrite(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Device          string `json:"device"`
+		ApprovalEnabled bool   `json:"approval_enabled"`
+		PairingFromCard bool   `json:"pairing_from_card"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	ns, ok := s.requireOwnedConsole(w, r, body.Device)
+	if !ok {
+		return
+	}
+	resp, err := s.adminReq("POST", "/admin/devices/lark", nil, map[string]any{
+		"namespace":         ns,
+		"device":            body.Device,
+		"approval_enabled":  body.ApprovalEnabled,
+		"pairing_from_card": body.PairingFromCard,
+		"notify_email":      s.identity(r),
+	})
+	if err != nil {
+		http.Error(w, "relay unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		s.triggerLarkReconcile()
+	}
+	copyResp(w, resp)
+}
+
 func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireNS(w, r); !ok {
 		return
@@ -1041,10 +1128,12 @@ func (s *Server) handleDeviceEvents(w http.ResponseWriter, r *http.Request) {
 	// ignores X-Accel-Buffering), so an open text/event-stream never reaches the
 	// browser. Block for one approval-state push (or time out), return a finite
 	// JSON response nginx forwards promptly, and let the client re-poll.
+	notifs, unsubscribe := d.subscribe()
+	defer unsubscribe()
 	select {
 	case <-r.Context().Done():
 		w.WriteHeader(http.StatusNoContent)
-	case st := <-d.notifs():
+	case st := <-notifs:
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(st)
 	case <-time.After(eventPollWait):

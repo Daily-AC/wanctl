@@ -9,8 +9,10 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -81,6 +83,7 @@ ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"  WANCTL_ADMIN_SECRE
 ENV (portal):     RELAY_ADMIN_URL=...  WANCTL_ADMIN_SECRET=...  PORTAL_USER_HEADER=...
               PORTAL_PUBLIC_ORIGIN=https://portal.example  PORTAL_DEBUG_WHOAMI=1 (diagnostics only)
               WANCTL_RELAY=...  WANCTL_PORTAL_TOKEN=...  WANCTL_TRANSPORT=ws
+              WANCTL_LARK_APP_ID=...  WANCTL_LARK_APP_SECRET=... (optional; enables Feishu approvals)
 ENV (agent):      WANCTL_PORTAL_FPS=SHA256:...[,SHA256:...]  (WANCTL_PORTAL_FP is a legacy alias)
 `
 
@@ -272,10 +275,24 @@ func cmdPortal(args []string) error {
 		PublicOrigin:  os.Getenv("PORTAL_PUBLIC_ORIGIN"),
 		DebugWhoami:   os.Getenv("PORTAL_DEBUG_WHOAMI") == "1",
 	})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	p.Start(ctx)
+	defer p.Close()
 	fmt.Printf("wanctl portal on %s\n  identity:      %s\n  identity hdr:  %q\n  relay(admin):  %q\n  relay(dial):   %q\n",
 		*addr, id.Fingerprint, envOr("PORTAL_USER_HEADER", "X-Auth-Request-Email"),
 		os.Getenv("RELAY_ADMIN_URL"), os.Getenv("WANCTL_RELAY"))
-	return limits.HTTPServer(*addr, p.Handler()).ListenAndServe()
+	server := limits.HTTPServer(*addr, p.Handler())
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func cmdAgent(ctx context.Context, args []string) error {
