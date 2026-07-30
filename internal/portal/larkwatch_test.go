@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -224,6 +226,51 @@ func TestLarkWatcherSurvivesAnAgentWithoutTimeoutSet(t *testing.T) {
 		t.Fatalf("card quoted a 3m wait the device never accepted: %s", raw)
 	}
 	sup.applyConfigs(nil)
+}
+
+// TestLarkWatcherLogsWhenItCannotReachTheDevice covers the failure mode that is
+// invisible by construction. An agent started without the portal's admin
+// fingerprint refuses the console dial, so the watcher retries forever while the
+// switch still reads "on" — and before this the retry path logged nothing at
+// all, leaving no way to tell a misconfigured device from a working one. The
+// first failure must be reported at once, and the rest must be throttled so an
+// unreachable device cannot drown the log.
+func TestLarkWatcherLogsWhenItCannotReachTheDevice(t *testing.T) {
+	const dialError = "controller is not authorized as this device's console administrator"
+	var attempts int64
+	sup, cancel := newTestLarkSupervisor(&fakeCardSend{}, func(context.Context, string, string) (deviceSession, error) {
+		atomic.AddInt64(&attempts, 1)
+		return nil, errors.New(dialError)
+	})
+	defer cancel()
+
+	var mu sync.Mutex
+	var logged []string
+	sup.logf = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	snapshot := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), logged...)
+	}
+
+	sup.applyConfigs([]deviceLarkApproval{enabledLarkConfig()})
+	waitFor(t, func() bool { return atomic.LoadInt64(&attempts) >= larkDialLogEvery+2 })
+	sup.applyConfigs(nil)
+
+	lines := snapshot()
+	if len(lines) == 0 {
+		t.Fatal("the watcher retried an unreachable device without logging anything")
+	}
+	if !strings.Contains(lines[0], dialError) || !strings.Contains(lines[0], "alice/legion") {
+		t.Fatalf("first line = %q, want it to name the device and the underlying error", lines[0])
+	}
+	if tried := int(atomic.LoadInt64(&attempts)); len(lines) >= tried {
+		t.Fatalf("logged %d lines for %d dial attempts; the throttle is not working", len(lines), tried)
+	}
 }
 
 func TestLarkWatcherClosedChannelDoesNotResolveAndDisableRestoresTimeout(t *testing.T) {

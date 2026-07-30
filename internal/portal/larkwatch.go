@@ -24,6 +24,9 @@ const (
 	larkPairingWait       = 5 * time.Minute
 	larkRetryMin          = time.Second
 	larkRetryMax          = 30 * time.Second
+	// larkDialLogEvery throttles the "cannot reach device" line after the first
+	// one: at the ceiling backoff that is roughly one line every five minutes.
+	larkDialLogEvery = 10
 )
 
 // cardSender is the complete outbound Feishu surface used by the orchestrator.
@@ -392,6 +395,7 @@ func (w *larkWatcher) run(ctx context.Context) {
 	seenPending := make(map[string]seenPending)
 	seenPairings := make(map[string]seenPairing)
 	backoff := w.sup.retryMin
+	dialFailures := 0
 	var lastSession deviceSession
 	defer func() {
 		if lastSession != nil {
@@ -404,12 +408,25 @@ func (w *larkWatcher) run(ctx context.Context) {
 	for {
 		session, err := w.sup.sessionFor(ctx, w.ns, w.device)
 		if err != nil {
+			// Say something. An agent started without the portal's admin
+			// fingerprint refuses the console dial, and this loop would then
+			// retry forever in complete silence: the switch reads "on", no card
+			// is ever sent, and nothing anywhere names the cause. Log the first
+			// failure immediately — that is the one somebody is waiting for —
+			// then throttle, so a device that stays unreachable does not drown
+			// the log.
+			dialFailures++
+			if dialFailures == 1 || dialFailures%larkDialLogEvery == 0 {
+				w.sup.logf("lark approval cannot reach %s (dial attempt %d): %v",
+					larkDeviceKey(w.ns, w.device), dialFailures, err)
+			}
 			if !waitContext(ctx, backoff) {
 				return
 			}
 			backoff = nextBackoff(backoff, w.sup.retryMax)
 			continue
 		}
+		dialFailures = 0
 		lastSession = session
 		// A device older than the timeout_set verb answers "unknown RPC kind".
 		// That must not stop us watching it: carrying on with whatever wait the
