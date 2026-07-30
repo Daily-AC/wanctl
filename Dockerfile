@@ -10,7 +10,7 @@ RUN go mod download
 COPY . .
 ARG WANCTL_VERSION=dev
 ARG WANCTL_RELEASE_PUBLIC_KEYS=
-RUN CGO_ENABLED=0 go build -trimpath \
+RUN CGO_ENABLED=0 go build -tags lark -trimpath \
       -ldflags "-X main.buildVersion=${WANCTL_VERSION} -X wanctl/internal/release.TrustedPublicKeys=${WANCTL_RELEASE_PUBLIC_KEYS}" \
       -o /out/wanctl .
 
