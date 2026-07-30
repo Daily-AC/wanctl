@@ -77,6 +77,7 @@ type fakeDeviceSession struct {
 	decisions    []fakeDecision
 	pairings     []fakeDecision
 	decideErr    error
+	timeoutErr   error
 }
 
 type fakeDecision struct {
@@ -110,7 +111,11 @@ func (f *fakeDeviceSession) pairDecide(fp, verdict string) error {
 func (f *fakeDeviceSession) setApprovalTimeout(sec int) (int, error) {
 	f.mu.Lock()
 	f.timeoutCalls = append(f.timeoutCalls, sec)
+	err := f.timeoutErr
 	f.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
 	return sec, nil
 }
 
@@ -180,6 +185,44 @@ func TestLarkWatcherDiffSendsOnceAndResolvesDisappearedPending(t *testing.T) {
 		_, updates := sender.counts()
 		return updates == 1
 	})
+	sup.applyConfigs(nil)
+}
+
+// TestLarkWatcherSurvivesAnAgentWithoutTimeoutSet covers every device running a
+// build older than the timeout_set verb: it answers "unknown RPC kind". Treating
+// that as a dial failure would make Feishu approvals silently never work on any
+// agent that has not been upgraded, which is far worse than a shorter window — so
+// the watcher carries on and the card must state the wait the device actually
+// uses, not the one we asked for.
+func TestLarkWatcherSurvivesAnAgentWithoutTimeoutSet(t *testing.T) {
+	sender := &fakeCardSend{}
+	session := newFakeDeviceSession()
+	session.timeoutErr = errors.New("unknown RPC kind")
+	sup, cancel := newTestLarkSupervisor(sender, func(context.Context, string, string) (deviceSession, error) {
+		return session, nil
+	})
+	defer cancel()
+	sup.applyConfigs([]deviceLarkApproval{enabledLarkConfig()})
+
+	session.states <- console.State{Pending: []console.Pending{
+		{ID: "approval-1", Kind: "exec", Cmd: "echo ok", Cwd: "/tmp", Peer: "controller"},
+	}}
+	waitFor(t, func() bool {
+		sends, _ := sender.counts()
+		return sends == 1
+	})
+
+	encoded, err := json.Marshal(sender.firstCard(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(encoded)
+	if !strings.Contains(raw, "1 分钟") {
+		t.Fatalf("card should quote the device's own 60s default, got: %s", raw)
+	}
+	if strings.Contains(raw, "3 分钟") {
+		t.Fatalf("card quoted a 3m wait the device never accepted: %s", raw)
+	}
 	sup.applyConfigs(nil)
 }
 
