@@ -117,6 +117,13 @@ func cmdStop() error {
 func cmdStatus() error {
 	if pid := config.ReadPID(); processAlive(pid) {
 		fmt.Printf("● 运行中 (pid %d)\n", pid)
+		// Worth saying before an upgrade rather than after: `wanctl update` can
+		// swap the binary here but cannot restart this agent, so the old build
+		// keeps serving until whoever owns it restarts the service.
+		if !canTerminatePID(pid) {
+			fmt.Println("  托管: 由另一个账户运行（supervisor），本用户无法停止或重启它")
+			fmt.Println("        升级后需以管理员/root 重启该服务才能生效")
+		}
 	} else {
 		fmt.Println("○ 未运行（运行 `wanctl` 启动）")
 	}
