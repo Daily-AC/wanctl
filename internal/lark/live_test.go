@@ -55,6 +55,14 @@ func TestLiveSendAndResolveCard(t *testing.T) {
 	}
 	t.Logf("sent %s to %s", messageID, chatID)
 
+	// Set WANCTL_LARK_KEEP_CARD=1 to leave the buttons in place, so a human can
+	// tap one and a TestLiveConsumer run can observe the callback. Without it the
+	// card is resolved immediately and the probe leaves no actionable message
+	// sitting in someone's chat.
+	if os.Getenv("WANCTL_LARK_KEEP_CARD") == "1" {
+		t.Logf("card left actionable at %s — tap a button to exercise the callback", messageID)
+		return
+	}
 	if err := c.UpdateCard(ctx, messageID,
 		ResolvedCard("macbox", pending, "已允许（联调探测，可忽略）", "lark:"+to)); err != nil {
 		t.Fatalf("UpdateCard: %v", err)

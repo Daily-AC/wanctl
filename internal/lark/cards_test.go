@@ -84,6 +84,26 @@ func TestApprovalCardVerdictButtons(t *testing.T) {
 	}
 }
 
+// TestCardsNeverEmitBrTags guards a bug that only a real client showed: a <br>
+// nested inside <font> is accepted by the API (code 0) and then rendered as
+// literal text, so the card read "…(SHA256:kP9x)<br>工作目录 /srv/app". Newlines
+// work in every position, so no template should emit a <br> at all.
+func TestCardsNeverEmitBrTags(t *testing.T) {
+	pending := console.Pending{Kind: "exec", Cmd: "true", Path: "/srv/x", Cwd: "/srv", Peer: "someone"}
+	pairing := console.PendingPairing{FP: "SHA256:fp", Name: "c", Label: "l"}
+	for name, card := range map[string]map[string]any{
+		"approval":         ApprovalCard("macbox", pending, "n", "https://p", time.Minute),
+		"resolved":         ResolvedCard("macbox", pending, "已允许", "lark:a@b.c"),
+		"pairing":          PairingCard("macbox", pairing, "n", "https://p", true),
+		"resolved pairing": ResolvedPairingCard("macbox", pairing, "已信任", "lark:a@b.c"),
+		"action failed":    ActionFailedCard("该审批已失效"),
+	} {
+		if raw := string(mustJSON(t, card)); strings.Contains(raw, "<br>") {
+			t.Errorf("%s card emits a <br>, which renders literally inside <font>: %s", name, raw)
+		}
+	}
+}
+
 func TestHumanWait(t *testing.T) {
 	for _, tc := range []struct {
 		in   time.Duration

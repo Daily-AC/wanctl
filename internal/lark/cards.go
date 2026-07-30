@@ -139,7 +139,7 @@ func ResolvedPairingCard(device string, pairing console.PendingPairing, result, 
 		map[string]any{"tag": "hr"},
 		map[string]any{
 			"tag":       "markdown",
-			"content":   fmt.Sprintf("**结果**  %s<br>**决策人**  %s", result, actor),
+			"content":   fmt.Sprintf("**结果**  %s\n**决策人**  %s", result, actor),
 			"text_size": "notation",
 		},
 	}
@@ -179,7 +179,7 @@ func ResolvedCard(device string, pending console.Pending, result, actor string) 
 		map[string]any{"tag": "hr"},
 		map[string]any{
 			"tag":       "markdown",
-			"content":   fmt.Sprintf("**结果**  %s<br>**决策人**  %s", result, actor),
+			"content":   fmt.Sprintf("**结果**  %s\n**决策人**  %s", result, actor),
 			"text_size": "notation",
 		},
 	)
@@ -206,8 +206,12 @@ func pendingElements(pending console.Pending) []any {
 			"tag": "markdown", "content": "**路径**\n`" + eventlog.RedactText(pending.Path) + "`",
 		})
 	}
+	// Newlines, not <br>: a <br> nested inside <font> is rendered literally by
+	// the Feishu client (observed 2026-07-30 — the API accepted the card with
+	// code 0 and then displayed the tag as text). Each line carries its own
+	// <font> so the colour survives the split.
 	context := fmt.Sprintf(
-		"<font color='grey'>**发起方**  %s<br>**工作目录**  %s</font>",
+		"<font color='grey'>**发起方**  %s</font>\n<font color='grey'>**工作目录**  %s</font>",
 		pending.Peer, eventlog.RedactText(pending.Cwd),
 	)
 	elements = append(elements, map[string]any{
