@@ -11,9 +11,11 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"wanctl/internal/config"
 	"wanctl/internal/console"
 	"wanctl/internal/lark"
 )
@@ -562,11 +564,18 @@ func (w *larkWatcher) reconcileState(ctx context.Context, state console.State, p
 	w.sup.pruneActions(time.Now())
 }
 
+// deviceURL builds the absolute link a Lark card's "open in portal" button
+// carries. It must be absolute: the card is rendered inside someone's Lark
+// client, which has no origin to resolve a path against, so a relative URL makes
+// the button silently do nothing when tapped. PORTAL_PUBLIC_ORIGIN is optional
+// (it only matters when TLS terminates upstream), so fall back to the compiled-in
+// portal address rather than emitting a path that cannot work.
 func (s *larkSupervisor) deviceURL(device string) string {
-	if s.portalOrigin == "" {
-		return "/#device/" + url.PathEscape(device)
+	origin := s.portalOrigin
+	if origin == "" {
+		origin = strings.TrimRight(config.DefaultPortal, "/")
 	}
-	return s.portalOrigin + "/#device/" + url.PathEscape(device)
+	return origin + "/#device/" + url.PathEscape(device)
 }
 
 func (s *larkSupervisor) storeAction(nonce string, record larkActionRecord) {
