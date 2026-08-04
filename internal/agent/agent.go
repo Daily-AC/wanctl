@@ -153,13 +153,15 @@ func New(opts Options) (*Agent, error) {
 	if opts.LanRelay != "" {
 		a.console.SetLanSource(a.lanInfo)
 	}
-	if opts.Mode == policy.ModeBypass {
-		a.appr = policy.AllowApprover{}
-	} else {
-		// Queue-backed approver: the remote portal and/or the local CLI terminal
-		// feed decisions into the same queue. Headless + no portal -> timeout deny.
-		a.appr = a.console
-	}
+	// Queue-backed approver: the remote portal and/or the local CLI terminal
+	// feed decisions into the same queue. Headless + no portal -> timeout deny.
+	//
+	// Bypass is NOT wired in here. It is a runtime property of the engine (the
+	// portal can flip it mid-flight), and both gates already short-circuit on
+	// engine.Mode() before consulting the approver. Pinning an AllowApprover at
+	// construction time would survive the portal turning bypass off, auto-allowing
+	// everything while the audit log claimed a human said "approved".
+	a.appr = a.console
 	return a, nil
 }
 
