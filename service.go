@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,7 +39,22 @@ func cmdService(ctx context.Context, args []string) error {
 		if config.EnvOr("WANCTL_TOKEN", config.StoredToken()) == "" {
 			return fmt.Errorf("not logged in yet — run `wanctl` (device) or `wanctl login` first so the service has a token")
 		}
-		return serviceInstall(self)
+		fs := flag.NewFlagSet("service install", flag.ContinueOnError)
+		name := fs.String("name", "", "device name to bake into the unit (default: hostname, resolved at every start)")
+		portalFPs := fs.String("portal-fps", "", "comma-separated portal admin fingerprints the agent must trust")
+		mode := fs.String("mode", "", "policy mode to bake in; omit so the persisted mode (and portal switches) win")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		extra, err := serviceAgentArgs(*name, *portalFPs, *mode)
+		if err != nil {
+			return err
+		}
+		if err := serviceInstall(self, extra); err != nil {
+			return err
+		}
+		warnMissingPortalTrust(*portalFPs)
+		return nil
 	case "uninstall", "remove":
 		return serviceUninstall()
 	case "status":
@@ -46,6 +62,55 @@ func cmdService(ctx context.Context, args []string) error {
 	default:
 		return fmt.Errorf("usage: wanctl service install|uninstall|status")
 	}
+}
+
+// serviceAgentArgs turns the install-time options into the `wanctl agent`
+// arguments the unit will carry. They are baked in because a unit is what runs
+// after a reboot, when nobody is at a terminal to re-supply them: a name left
+// out silently degrades to the hostname, and portal fingerprints left out leave
+// the device unable to accept portal-side decisions at all.
+//
+// --mode is deliberately available but not defaulted: baking a mode in makes the
+// unit outrank the persisted mode, so a portal-side switch is undone by the next
+// restart.
+func serviceAgentArgs(name, portalFPs, mode string) ([]string, error) {
+	var extra []string
+	if name != "" {
+		extra = append(extra, "--name", name)
+	}
+	if portalFPs != "" {
+		if _, err := config.ParsePortalFingerprints(portalFPs); err != nil {
+			return nil, fmt.Errorf("--portal-fps: %w", err)
+		}
+		extra = append(extra, "--portal-fps", portalFPs)
+	}
+	if mode != "" {
+		if mode != "normal" && mode != "bypass" {
+			return nil, fmt.Errorf("--mode: want normal or bypass, got %q", mode)
+		}
+		extra = append(extra, "--mode", mode)
+	}
+	return extra, nil
+}
+
+// warnMissingPortalTrust reports the one misconfiguration whose only symptom is
+// a bare 502 in someone else's browser: with no portal admin fingerprint the
+// agent refuses the portal's console session, so clicking "trust" (or any
+// approval) on the portal fails without ever reaching this device.
+func warnMissingPortalTrust(portalFPs string) {
+	if portalFPs != "" {
+		return
+	}
+	admins, err := config.OpenPortalAdmins()
+	if err != nil || len(admins.List()) > 0 {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "wanctl: warning — no portal admin fingerprint is configured on this device.")
+	fmt.Fprintln(os.Stderr, "  The portal cannot open a console session here, so approving this device's")
+	fmt.Fprintln(os.Stderr, "  pairings or requests from the web UI will fail with a 502.")
+	fmt.Fprintln(os.Stderr, "  Fix: wanctl service install --portal-fps SHA256:...")
+	fmt.Fprintln(os.Stderr, "  The fingerprint is the portal's `identity:` line, also present in")
+	fmt.Fprintln(os.Stderr, "  portal_admins.json on any already-working device.")
 }
 
 // run executes a command, returning combined output for diagnostics.
@@ -64,7 +129,23 @@ func linuxUnitPath() (string, error) {
 	return filepath.Join(home, ".config", "systemd", "user", "wanctl.service"), nil
 }
 
-func linuxInstall(self string) error {
+// systemdArgs renders arguments for an ExecStart line. systemd splits on
+// whitespace unless the argument is quoted, so anything with a space (a device
+// name like "lab box") would otherwise become two arguments.
+func systemdArgs(extra []string) string {
+	var b strings.Builder
+	for _, a := range extra {
+		b.WriteByte(' ')
+		if strings.ContainsAny(a, " \t\"\\") {
+			b.WriteString(`"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(a) + `"`)
+			continue
+		}
+		b.WriteString(a)
+	}
+	return b.String()
+}
+
+func linuxInstall(self string, extra []string) error {
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return fmt.Errorf("systemctl not found; this auto-installer needs systemd. Run `%s agent` from your own init/supervisor instead", self)
 	}
@@ -81,13 +162,13 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=%s agent --managed
+ExecStart=%s agent --managed%s
 Restart=always
 RestartSec=3
 
 [Install]
 WantedBy=default.target
-`, self)
+`, self, systemdArgs(extra))
 	if err := os.WriteFile(unit, []byte(body), 0o644); err != nil {
 		return err
 	}
@@ -143,7 +224,7 @@ func macPlistPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", macLabel+".plist"), nil
 }
 
-func macInstall(self string) error {
+func macInstall(self string, extra []string) error {
 	plist, err := macPlistPath()
 	if err != nil {
 		return err
@@ -152,6 +233,10 @@ func macInstall(self string) error {
 		return err
 	}
 	logPath, _ := config.LogPath()
+	var extraXML strings.Builder
+	for _, a := range extra {
+		extraXML.WriteString("\n    <string>" + xmlEscape(a) + "</string>")
+	}
 	body := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -161,7 +246,7 @@ func macInstall(self string) error {
   <array>
     <string>%s</string>
     <string>agent</string>
-    <string>--managed</string>
+    <string>--managed</string>%s
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -169,7 +254,7 @@ func macInstall(self string) error {
   <key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, macLabel, self, logPath, logPath)
+`, macLabel, self, extraXML.String(), logPath, logPath)
 	if err := os.WriteFile(plist, []byte(body), 0o644); err != nil {
 		return err
 	}
@@ -211,13 +296,23 @@ func macStatus() error {
 
 const winTaskName = "WanctlAgent"
 
-func winInstall(self string) error {
+// xmlEscape keeps an argument from breaking the plist it is embedded in.
+func xmlEscape(s string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;").Replace(s)
+}
+
+func winInstall(self string, extra []string) error {
 	// ONLOGON task running the agent, recreated (/f) if it exists. Survives the
 	// console closing and re-runs after the user logs in following a reboot. The agent
 	// Scheduled Tasks do not have a restart-on-exit policy. The internal
 	// supervisor keeps the child alive and starts the replaced binary after an
 	// update terminates the old child.
+	// schtasks takes the whole command as one string, so each argument that could
+	// contain a space needs its own quotes.
 	tr := fmt.Sprintf(`"%s" __supervise`, self)
+	for _, a := range extra {
+		tr += ` "` + strings.ReplaceAll(a, `"`, `\"`) + `"`
+	}
 	if out, err := run("schtasks", "/create", "/tn", winTaskName, "/tr", tr,
 		"/sc", "onlogon", "/rl", "limited", "/f"); err != nil {
 		return fmt.Errorf("schtasks create: %v\n%s", err, out)
@@ -249,14 +344,14 @@ func winStatus() error {
 
 // --- dispatch by OS ---
 
-func serviceInstall(self string) error {
+func serviceInstall(self string, extra []string) error {
 	switch runtime.GOOS {
 	case "linux":
-		return linuxInstall(self)
+		return linuxInstall(self, extra)
 	case "darwin":
-		return macInstall(self)
+		return macInstall(self, extra)
 	case "windows":
-		return winInstall(self)
+		return winInstall(self, extra)
 	}
 	return fmt.Errorf("`wanctl service` is not supported on %s; run `%s agent` from your own supervisor", runtime.GOOS, self)
 }

@@ -40,7 +40,10 @@ USAGE
   wanctl stop                                 stop the background agent
   wanctl status                               show whether the agent is running + credential state
   wanctl logout                               stop the agent and forget the saved login
-  wanctl service install                      install an OS-native always-on service (systemd/launchd/Scheduled Task)
+  wanctl service install [--name N] [--portal-fps FP[,FP]] [--mode M]
+                                              install an OS-native always-on service (systemd/launchd/Scheduled Task);
+                                              --name/--portal-fps are baked into the unit (a unit restarts unattended);
+                                              omit --mode so the persisted mode and portal switches survive a restart
   wanctl service uninstall                     remove that service
   wanctl service status                        show whether the service is installed + active
   wanctl agent [flags]                         run the agent in the FOREGROUND (what 'wanctl'/'start'/the service spawn)
