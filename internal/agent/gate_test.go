@@ -211,3 +211,36 @@ func TestBypassModeAllowsWithoutApprover(t *testing.T) {
 		t.Fatalf("bypass should allow: out=%q code=%d reason=%q", out, code, reason)
 	}
 }
+
+// TestRuntimeModeChangeRebindsTheApprover pins the fix for a bypass that
+// outlived the mode it came from: the approver used to be chosen once, at
+// construction, from the startup --mode. An agent started with --mode bypass
+// therefore kept an AllowApprover after the portal turned bypass off, and every
+// request was auto-allowed while the audit log recorded "approved" — claiming a
+// human had decided. Bypass belongs to the engine (both gates short-circuit on
+// engine.Mode()), so the approver must always be the queue.
+func TestRuntimeModeChangeRebindsTheApprover(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	ag, err := New(Options{RelayURL: "http://127.0.0.1:1", Token: "tok", Name: "dev", Mode: policy.ModeBypass})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := policy.Request{Kind: policy.KindExec, Cmd: "rm -rf /", Peer: "SHA256:test"}
+
+	if ok, decision := ag.gate(req); !ok || decision != "bypass" {
+		t.Fatalf("while bypass: gate = (%v, %q), want (true, \"bypass\")", ok, decision)
+	}
+
+	// The portal turns bypass off mid-flight. Nothing restarts the agent.
+	ag.engine.SetMode(policy.ModeNormal)
+
+	// No console front-end is attending, so the queue approver denies. The old
+	// behaviour returned (true, "approved") here.
+	ok, decision := ag.gate(req)
+	if ok {
+		t.Fatalf("after leaving bypass: gate allowed %q with decision %q; approver still auto-allows", req.Cmd, decision)
+	}
+	if decision != "denied" {
+		t.Fatalf("after leaving bypass: decision = %q, want \"denied\"", decision)
+	}
+}

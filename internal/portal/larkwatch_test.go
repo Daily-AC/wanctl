@@ -583,3 +583,21 @@ func waitFor(t *testing.T, ready func() bool) {
 	}
 	t.Fatal("condition was not met before timeout")
 }
+
+// A Lark card is rendered inside a Lark client, which has no origin to resolve a
+// relative path against: the "open in portal" button just does nothing when
+// tapped. PORTAL_PUBLIC_ORIGIN is optional, so the unset case must still yield an
+// absolute URL. This was live: portal ran without PORTAL_PUBLIC_ORIGIN and every
+// card shipped a dead button.
+func TestDeviceURLIsAlwaysAbsolute(t *testing.T) {
+	for _, origin := range []string{"", "https://wanctl.example.com"} {
+		s := &larkSupervisor{portalOrigin: origin}
+		got := s.deviceURL("vpn box")
+		if !strings.HasPrefix(got, "https://") {
+			t.Fatalf("portalOrigin=%q: deviceURL = %q, want an absolute https URL", origin, got)
+		}
+		if !strings.HasSuffix(got, "/#device/vpn%20box") {
+			t.Fatalf("portalOrigin=%q: deviceURL = %q, want the escaped device path", origin, got)
+		}
+	}
+}
