@@ -271,6 +271,20 @@
   .docart .docmeta .acts button{font:inherit;font-size:12px;padding:5px 12px;background:#fff;border:1px solid var(--line,#f3e4d3);border-radius:10px;color:#7a6e60;cursor:pointer}
   .docart .docmeta .acts button:hover{border-color:var(--peach,#ffb487);color:var(--peach-d,#ff9e66)}
   .docart .docmeta .acts .del:hover{border-color:var(--berry-d,#ff5f86);color:var(--berry-d,#ff5f86)}
+  .clitem{background:var(--card,#fffdf9);border:1px solid var(--line,#f3e4d3);border-radius:18px;padding:4px 18px;margin-bottom:12px}
+  .clitem summary{display:flex;align-items:center;gap:10px;cursor:pointer;list-style:none;padding:14px 0;
+    font-family:var(--round);font-weight:700;color:var(--ink-2,#7a6a58)}
+  .clitem summary::-webkit-details-marker{display:none}
+  .clver{font-size:16px;color:#7a4a22}
+  .clnow{font-size:11.5px;font-weight:600;color:#9a5a26;background:linear-gradient(180deg,#ffd9a8,#ffc187);
+    border:1px solid #ffbe7e;border-radius:999px;padding:2px 9px}
+  .clchev{width:17px;height:17px;margin-left:auto;color:#c9b49a;transition:transform .18s ease-out}
+  .clitem[open] .clchev{transform:rotate(180deg)}
+  .clitem .mdbody{padding:2px 0 16px;border-top:1px solid var(--line,#f3e4d3);margin-top:-2px}
+  .clitem .mdbody h1{font-size:0;margin:0}
+  .ver{font-family:var(--round);font-size:11.5px;font-weight:600;color:#9a5a26;background:#ffeede;
+    border:1px solid #ecd9c4;border-radius:999px;padding:1px 8px;margin-left:6px;cursor:pointer}
+  .ver:hover{background:#fff;border-color:#ffb487}
   .mdbody{color:#5f5950;font-size:14.5px;line-height:1.78}
   .mdbody h1,.mdbody h2,.mdbody h3,.mdbody h4{color:var(--ink,#6b5446);margin:24px 0 10px;line-height:1.4}
   .mdbody h1{font-size:20px}.mdbody h2{font-size:17px}.mdbody h3{font-size:15px}.mdbody h4{font-size:14px}
@@ -401,7 +415,7 @@
     <div class="logo applogo"></div>
     <div class="brand"><div class="zh">wanctl 控制台</div><div class="en">cream &amp; cute · remote control</div></div>
     <div class="who">
-      <div><div class="ns">命名空间 <b id="ns">…</b></div><div class="fp" id="fp">连接中…</div></div>
+      <div><div class="ns">命名空间 <b id="ns">…</b><button class="ver" id="ver" data-goto="changelog" title="查看更新日志">…</button></div><div class="fp" id="fp">连接中…</div></div>
       <div class="ava"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></div>
     </div>
   </header>
@@ -412,6 +426,7 @@
     <button data-sec="acl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11l2 2 4-4"/></svg>共享授权</button>
     <button data-sec="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Relay 审计</button>
     <button data-sec="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M14 3v5h5M8 13h8M8 17h6" stroke-linecap="round"/></svg>使用文档</button>
+    <button data-sec="changelog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 9 9" stroke-linecap="round"/><path d="M12 7v5l3.5 2" stroke-linecap="round"/><path d="M21 3v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>更新日志</button>
   </nav>
 
   <div class="errbar" id="err"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 9v4M12 17h.01M10.3 4 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0Z"/></svg><span id="errmsg"></span></div>
@@ -569,6 +584,13 @@
       </div>
     </section>
 
+    <!-- changelog -->
+    <section class="view" data-view="changelog">
+      <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><path d="M12 3a9 9 0 1 0 9 9" stroke-linecap="round"/><path d="M12 7v5l3.5 2" stroke-linecap="round"/><path d="M21 3v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>更新日志</h1>
+      <p class="sub">每次发版做了什么、对你有什么影响。最新的那版默认展开，往下都是过去的～</p>
+      <div id="cllist"><div class="empty">加载中…</div></div>
+    </section>
+
     <!-- audit -->
     <section class="view" data-view="audit">
       <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Relay 审计</h1>
@@ -668,6 +690,7 @@ function applyView(s){
   else if(s==='acl')loadACL();
   else if(s==='audit')loadAudit();
   else if(s==='docs')loadDocs();
+  else if(s==='changelog')loadChangelog();
 }
 
 // goTo is the user-gesture entry point: switch view AND push a hash so back /
@@ -966,6 +989,29 @@ $('#toggle').onclick=async()=>{
   }
   try{await jpost('/api/devices/mode',{device:cur,mode:next});renderConsole()}catch(e){err('切换模式失败：'+e.message)}
 };
+
+/* ---- changelog ---- */
+/* Release notes are embedded in the running binary, so this page always
+   describes the version actually deployed. Newest is expanded; the rest are
+   collapsed history. */
+let clLoaded=false;
+async function loadChangelog(){
+  if(clLoaded)return;
+  try{
+    const d=await jget('/api/releases');
+    const rs=d.releases||[];
+    if(!rs.length){$('#cllist').innerHTML='<div class="empty">还没有发布记录～</div>';return}
+    $('#cllist').innerHTML=rs.map((r,i)=>`
+      <details class="clitem"${i===0?' open':''}>
+        <summary><span class="clver">${esc(r.version)}</span>${i===0?'<span class="clnow">当前版本</span>':''}
+          <svg class="clchev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </summary>
+        <div class="mdbody">${mdRender(r.body||'')}</div>
+      </details>`).join('');
+    if(d.current)$('#ver').textContent=d.current;
+    clLoaded=true;
+  }catch(e){$('#cllist').innerHTML='<div class="empty">读不到更新日志（'+esc(e.message)+'）</div>'}
+}
 
 /* ---- device activity log ---- */
 const logTypeLabel={connect:'连接',exec:'命令',file:'文件'};
@@ -1307,7 +1353,7 @@ function route(){
     return;
   }
   if(h.startsWith('#docs'))return applyView('docs');
-  const m={'#tokens':'tokens','#acl':'acl','#audit':'audit','#devices':'devices'};
+  const m={'#tokens':'tokens','#acl':'acl','#audit':'audit','#devices':'devices','#changelog':'changelog'};
   applyView(m[h]||'devices');
 }
 window.addEventListener('hashchange',route);
@@ -1315,6 +1361,9 @@ window.addEventListener('hashchange',route);
 /* ---- me + boot ---- */
 async function loadMe(){try{const m=await jget('/api/me');currentNS=m.namespace||'';$('#ns').textContent=currentNS||'—';$('#fp').textContent=m.identity||'';docMe=m}catch(e){$('#fp').textContent='未登录';err('未登录或会话失效：'+e.message)}}
 loadMe();
+/* The version badge is part of the shell, not of the changelog page, so it has
+   to be filled at boot rather than when that page is first opened. */
+jget('/api/releases').then(d=>{if(d&&d.current)$('#ver').textContent=d.current}).catch(()=>{$('#ver').style.display='none'});
 route();
 </script>
 </body>

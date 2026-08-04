@@ -30,6 +30,15 @@ import (
 //go:embed index.html
 var assets embed.FS
 
+// changelogFS carries the user-facing release notes. They are embedded rather
+// than stored in the docs table so that what the portal shows is whatever
+// version is actually deployed — a changelog that needs a separate sync step is
+// a changelog that is eventually wrong. These are the Chinese, user-facing
+// notes; docs/releases/*.md stays the English engineering record for GitLab.
+//
+//go:embed changelog/*.md
+var changelogFS embed.FS
+
 // skillURL is the canonical public install URL for the wanctl SKILL. The portal
 // is SSO-gated, so AI clients (which have no session) cannot fetch directly
 // from this domain — the skill lives on the relay (public) and the portal /skills
@@ -110,6 +119,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices", s.handleDevices)
 	mux.HandleFunc("/api/devices/lark", s.handleDeviceLark)
 	mux.HandleFunc("/api/namespaces", s.handleNamespaces)
+	mux.HandleFunc("/api/releases", s.handleReleases)
 	mux.HandleFunc("/api/acl", s.handleACL)
 	mux.HandleFunc("/api/acl/revoke", s.handleACLRevoke)
 	mux.HandleFunc("/api/audit", s.handleAudit)
