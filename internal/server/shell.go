@@ -23,10 +23,44 @@ import (
 
 // DefaultShell returns the interpreter used for a session on this OS.
 func DefaultShell() string {
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		return "powershell"
+	case "android":
+		return androidShell(os.Getenv, func(path string) bool {
+			_, err := os.Stat(path)
+			return err == nil
+		})
 	}
 	return "/bin/sh"
+}
+
+// androidShell finds an interpreter on Android, where /bin/sh is not a given.
+//
+// Three environments, three answers:
+//
+//   - Termux — $PREFIX/bin/sh is the shell the user actually has tools in.
+//     Picking the system shell there would hand the controller a session with
+//     none of the Termux PATH, which looks like a broken device rather than a
+//     deliberate choice.
+//   - Any Android — /system/bin/sh always exists (mksh).
+//   - Android 11+ — /bin is a symlink to /system/bin, so /bin/sh resolves too.
+//     Older devices have no /bin at all, which is why it cannot be the default.
+//
+// The order is preference, not availability: the last entry is a shell that is
+// present on every Android release, so the fallback is never unreachable.
+func androidShell(getenv func(string) string, exists func(string) bool) string {
+	var candidates []string
+	if prefix := strings.TrimSpace(getenv("PREFIX")); prefix != "" {
+		candidates = append(candidates, prefix+"/bin/sh")
+	}
+	candidates = append(candidates, "/system/bin/sh", "/bin/sh")
+	for _, c := range candidates {
+		if exists(c) {
+			return c
+		}
+	}
+	return "/system/bin/sh"
 }
 
 // winUTF8Prologue forces a PowerShell session to emit UTF-8 so native-tool

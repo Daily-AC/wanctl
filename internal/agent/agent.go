@@ -121,11 +121,7 @@ func New(opts Options) (*Agent, error) {
 		opts.Mode = policy.ModeNormal
 	}
 	if opts.Name == "" {
-		h, _ := os.Hostname()
-		if h == "" {
-			h = "wanctl-agent"
-		}
-		opts.Name = h
+		opts.Name = defaultDeviceName()
 	}
 	inst, err := newInstanceID()
 	if err != nil {

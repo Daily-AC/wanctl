@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"wanctl/internal/protocol"
@@ -265,7 +266,7 @@ func rootedName(policyRoot, path string) (string, string, error) {
 	}
 	rootPath := policyRoot
 	if rootPath == "" {
-		rootPath = filepath.VolumeName(target) + string(filepath.Separator)
+		rootPath = unconstrainedRoot(target)
 	} else {
 		rootPath, err = filepath.Abs(rootPath)
 		if err != nil {
@@ -280,4 +281,35 @@ func rootedName(policyRoot, path string) (string, string, error) {
 		return "", "", fmt.Errorf("path %q is outside policy root %q", path, policyRoot)
 	}
 	return rootPath, rel, nil
+}
+
+// unconstrainedRoot is the root to bind an open to when policy imposes none
+// (a bypass-mode or global decision) — "the whole volume" everywhere except
+// Android.
+//
+// os.Root walks to its target one openat at a time, and opening a directory
+// needs read permission on it. Android grants the shell user traverse-only
+// access to the directories on the way to anywhere useful:
+//
+//	/data       drwxrwx--x system system
+//	/data/local drwxr-x--x root   root
+//	/data/local/tmp drwxrwx--x shell shell   <- writable, but unreachable from /
+//
+// So rooting at "/" makes every transfer fail with "openat data: permission
+// denied" even though the destination itself is perfectly writable. Rooting at
+// the target's own directory reaches it in one open, which the kernel resolves
+// using traverse permission alone.
+//
+// This does not widen anything: the returned root is narrower than the volume,
+// and it is exactly what a one-shot file approval already binds to
+// (agent.gateFile). The symlink and non-regular-file refusals downstream are
+// unchanged, so a symlink at the destination is still rejected rather than
+// followed.
+func unconstrainedRoot(target string) string { return unconstrainedRootFor(runtime.GOOS, target) }
+
+func unconstrainedRootFor(goos, target string) string {
+	if goos == "android" {
+		return filepath.Dir(target)
+	}
+	return filepath.VolumeName(target) + string(filepath.Separator)
 }

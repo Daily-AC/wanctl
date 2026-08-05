@@ -20,6 +20,10 @@ import (
 	"time"
 
 	"wanctl/internal/agent"
+	// Android has no /etc/resolv.conf, so a CGO_ENABLED=0 binary resolves
+	// nothing until this package's init points the Go resolver somewhere real.
+	// Imported for that side effect; it compiles to nothing elsewhere.
+	_ "wanctl/internal/androiddns"
 	"wanctl/internal/client"
 	"wanctl/internal/config"
 	"wanctl/internal/eventlog"

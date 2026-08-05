@@ -8,7 +8,11 @@ set -eu
 # a different one.
 RELAY=${WANCTL_RELAY:-@WANCTL_DEFAULT_RELAY@}
 [ -n "$RELAY" ] || { echo "set WANCTL_RELAY to the artifact relay URL" >&2; exit 1; }
-command -v openssl >/dev/null 2>&1 || { echo "openssl is required to verify the release signature" >&2; exit 1; }
+command -v openssl >/dev/null 2>&1 || {
+  echo "openssl is required to verify the release signature" >&2
+  [ -n "${PREFIX:-}" ] && [ -x "$PREFIX/bin/pkg" ] && echo "on Termux: pkg install openssl-tool" >&2
+  exit 1
+}
 TMPDIR_WANCTL=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_WANCTL"' EXIT HUP INT TERM
 
@@ -44,8 +48,20 @@ if [ -n "$EXISTING" ]; then
 fi
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+# Android reports itself as Linux through `uname -s` — the kernel is Linux — but
+# it needs the android artifact, which carries the DNS fallback that a phone
+# cannot work without. `uname -o` says Android under Termux; app_process is the
+# Android runtime binary and exists on every Android device, which covers shells
+# whose uname has no -o (busybox, adb shell).
+if [ "$OS" = linux ] && { [ "$(uname -o 2>/dev/null)" = Android ] || [ -x /system/bin/app_process ] || [ -x /system/bin/app_process64 ]; }; then
+  OS=android
+fi
 ARCH=$(uname -m)
 case "$ARCH" in x86_64|amd64) ARCH=amd64 ;; aarch64|arm64) ARCH=arm64 ;; *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;; esac
+if [ "$OS" = android ] && [ "$ARCH" != arm64 ]; then
+  echo "wanctl ships only android/arm64; this device reports $(uname -m)" >&2
+  exit 1
+fi
 BIN="wanctl-$OS-$ARCH"
 
 # The manifest is trusted at this point. Extract only the exact platform block
@@ -71,8 +87,22 @@ if command -v sha256sum >/dev/null 2>&1; then ACTUAL_SHA=$(sha256sum "$TMPDIR_WA
 else ACTUAL_SHA=$(shasum -a 256 "$TMPDIR_WANCTL/$BIN" | awk '{print $1}'); fi
 [ "$ACTUAL_SHA" = "$SHA" ] || { echo "artifact sha256 mismatch" >&2; exit 1; }
 
-DEST=${WANCTL_BIN:-${EXISTING:-/usr/local/bin/wanctl}}
+# Android has no /usr/local/bin and no sudo, and — more importantly — will not
+# execute a binary from most writable locations. $PREFIX/bin is Termux's own
+# bin directory, which is both on PATH and executable; outside Termux the only
+# reliably executable writable path is /data/local/tmp.
+if [ "$OS" = android ]; then
+  DEFAULT_DEST=${PREFIX:+$PREFIX/bin/wanctl}
+  DEFAULT_DEST=${DEFAULT_DEST:-/data/local/tmp/wanctl}
+else
+  DEFAULT_DEST=/usr/local/bin/wanctl
+fi
+DEST=${WANCTL_BIN:-${EXISTING:-$DEFAULT_DEST}}
+mkdir -p "$(dirname "$DEST")" 2>/dev/null || true
 if install -m 0755 "$TMPDIR_WANCTL/$BIN" "$DEST" 2>/dev/null; then :
-elif command -v sudo >/dev/null 2>&1; then sudo install -m 0755 "$TMPDIR_WANCTL/$BIN" "$DEST"
+elif [ "$OS" != android ] && command -v sudo >/dev/null 2>&1; then sudo install -m 0755 "$TMPDIR_WANCTL/$BIN" "$DEST"
 else mkdir -p "$HOME/.local/bin"; DEST="$HOME/.local/bin/wanctl"; install -m 0755 "$TMPDIR_WANCTL/$BIN" "$DEST"; fi
 echo "verified and installed: $DEST"
+case "$OS:$DEST" in
+  android:/data/local/tmp/*) echo "note: /data/local/tmp is not on PATH — run it as $DEST" ;;
+esac
