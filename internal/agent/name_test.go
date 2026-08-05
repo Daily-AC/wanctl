@@ -1,6 +1,10 @@
 package agent
 
-import "testing"
+import (
+	"os"
+	"runtime"
+	"testing"
+)
 
 func TestAndroidDeviceNamePrefersMarketNameThenModel(t *testing.T) {
 	props := map[string]string{"ro.product.marketname": "Pad 3 Pro\n", "ro.product.model": "PA2353\n"}
@@ -37,5 +41,21 @@ func TestSanitizeDeviceName(t *testing.T) {
 		if got := sanitizeDeviceName(tc.in); got != tc.want {
 			t.Errorf("sanitizeDeviceName(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// Non-Android platforms must keep whatever hostname they had, including
+// "localhost": renaming an existing device on upgrade would re-register it
+// under a new name and break every controller's pinned identity for the old one.
+func TestDefaultDeviceNameLeavesNonAndroidHostnamesAlone(t *testing.T) {
+	if runtime.GOOS == "android" {
+		t.Skip("this asserts the non-Android path")
+	}
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		t.Skip("no hostname to compare against")
+	}
+	if got := defaultDeviceName(); got != host {
+		t.Fatalf("defaultDeviceName() = %q, want the hostname %q", got, host)
 	}
 }

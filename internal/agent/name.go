@@ -23,9 +23,12 @@ func defaultDeviceName() string {
 		}
 	}
 	host, _ := os.Hostname()
-	// "localhost" carries no information and is what Android always reports;
-	// on any platform it is a worse identifier than the generic fallback.
-	if host == "" || host == "localhost" {
+	// "localhost" is what Android reports when the property service told us
+	// nothing, and it is no kind of identifier. Elsewhere it is left alone on
+	// purpose: a device that has been registering as "localhost" would silently
+	// re-register under a new name after an upgrade, and every controller's
+	// pinned identity for the old name would stop matching.
+	if host == "" || (runtime.GOOS == "android" && host == "localhost") {
 		return "wanctl-agent"
 	}
 	return host
