@@ -102,12 +102,18 @@ volume root, not wider, and symlinks at the destination are still refused.
 **Argument vector (Termux only).** Go's Android target is always dynamic PIE, so
 the binary names `/system/bin/linker64` as its ELF interpreter, and Termux's exec
 interceptor re-runs such programs through the linker explicitly — which prepends
-the program path to `argv`. `./wanctl version` arrives as
-`[./wanctl, /abs/path/wanctl, version]`, shifting every argument one slot late
-and making the binary inert (`unknown command "/data/data/com.termux/..."`). The
-Android build detects the duplicate — argv[1] naming the same file as argv[0] —
-and drops it. Nothing needs configuring; it is described here because the
-symptom is baffling if you meet it in an older binary.
+the program's resolved absolute path to `argv`. `wanctl version` arrives as
+`[wanctl, /data/data/com.termux/files/usr/bin/wanctl, version]`, shifting every
+argument one slot late and making the binary inert
+(`unknown command "/data/data/com.termux/..."`). The Android build detects the
+duplicate — argv[1] being an absolute path to a regular executable whose base
+name matches argv[0]'s — and drops it.
+
+Nothing needs configuring. It is documented because the symptom is baffling if
+you meet it, and because **v0.1.7 got this wrong**: its check required argv[0]
+to resolve as a file, which a bare `wanctl` off `PATH` does not, so the
+installed binary was unusable in Termux. Fixed in v0.1.8. On v0.1.7, calling it
+by an explicit path (`$PREFIX/bin/wanctl version`) works around it.
 
 **Device name.** Every Android device reports its hostname as `localhost`, so
 the default name would be both meaningless and a collision between any two
