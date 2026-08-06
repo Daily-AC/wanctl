@@ -119,7 +119,7 @@ func New() (*Client, error) {
 		tr = config.DefaultTransport
 	}
 	c := NewWith(id, known, relayURL, token, tr)
-	c.label = os.Getenv("WANCTL_LABEL")
+	c.label = config.EnvOr("WANCTL_LABEL", config.StoredLabel())
 	if lan {
 		c.lan = true
 		c.httpc = wsconn.NoProxyClient

@@ -344,6 +344,18 @@ func rejectHandshake(conn net.Conn, msg protocol.Message) {
 	_, _ = io.Copy(io.Discard, conn)
 }
 
+// refuse rejects a session and records it. The event log only ever contained
+// connections that succeeded, so every refusal — an unpaired controller, a
+// non-admin asking for the console, an anonymous pairing attempt — left the
+// device with no trace at all. Denials are the half worth keeping: they are what
+// you read when something cannot connect, and what would show someone probing.
+func (a *Agent) refuse(conn net.Conn, fp, name, decision string, msg protocol.Message) {
+	if a.log != nil {
+		a.log.Append(eventlog.Event{Type: "connect", PeerFP: fp, PeerName: name, Decision: decision, Detail: msg.Reason})
+	}
+	rejectHandshake(conn, msg)
+}
+
 func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth.Open) {
 	conn, fp, err := transport.ServerHandshake(ctx, nc, a.id)
 	if err != nil {
@@ -359,7 +371,7 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 		return
 	}
 	if !auth.ValidFor(a.opts.Name) {
-		rejectHandshake(conn, protocol.Message{Kind: protocol.KindReject, Reason: "invalid relay session capabilities"})
+		a.refuse(conn, fp, hello.Name, "rejected:session", protocol.Message{Kind: protocol.KindReject, Reason: "invalid relay session capabilities"})
 		return
 	}
 	// Pairing grants a controller permission to submit device operations; it
@@ -369,22 +381,26 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	// the console capability. An empty administrator set therefore fails closed.
 	if hello.Kind == protocol.KindConsoleHello {
 		if !auth.Capabilities.Has(sessionauth.Console) {
-			rejectHandshake(conn, protocol.Message{Kind: protocol.KindReject, Reason: "session capability denied: console"})
+			a.refuse(conn, fp, hello.Name, "rejected:capability", protocol.Message{Kind: protocol.KindReject, Reason: "session capability denied: console"})
 			return
 		}
 		if a.portalAdmins == nil || !a.portalAdmins.Contains(fp) {
-			rejectHandshake(conn, protocol.Message{
+			a.refuse(conn, fp, hello.Name, "rejected:not-console-admin", protocol.Message{
 				Kind:   protocol.KindReject,
 				Reason: "controller is not authorized as this device's console administrator",
 			})
 			return
 		}
 	}
+	if a.mustIdentify(hello.Kind, fp, hello.Label) {
+		a.refuse(conn, fp, hello.Name, "rejected:unlabeled", protocol.Message{Kind: protocol.KindReject, Reason: unlabeledReason})
+		return
+	}
 	// Authorize (TOFU / pre-trusted portal key) and reply OK for BOTH exec and
 	// console sessions BEFORE serving — the controller/portal blocks on this OK,
 	// and a console session must be gated by the same trust check as an exec one.
 	if !a.authorize(fp, hello.Name, hello.Label) {
-		rejectHandshake(conn, protocol.Message{
+		a.refuse(conn, fp, hello.Name, "rejected:unpaired", protocol.Message{
 			Kind:       protocol.KindReject,
 			Reason:     "device has not paired this controller — ask the user to approve",
 			PairingURL: a.pairingURL(fp, hello.Name, hello.Label),
@@ -392,12 +408,38 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 		return
 	}
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindOK, Name: a.opts.Name})
-	a.log.Append(eventlog.Event{Type: "connect", PeerFP: fp, PeerName: hello.Name})
+	a.log.Append(eventlog.Event{Type: "connect", PeerFP: fp, PeerName: hello.Name, Decision: "accepted"})
 	if hello.Kind == protocol.KindConsoleHello {
 		a.serveConsole(ctx, conn)
 		return
 	}
 	a.serve(conn, fp, hello.Name, auth.Capabilities)
+}
+
+// unlabeledReason tells the controller how to become answerable, because the
+// person who would otherwise be asked cannot.
+const unlabeledReason = "controller did not identify itself — set a label (`wanctl label \"<who you are>\"`, or WANCTL_LABEL) and retry; a pairing request without one is not raised to the device owner"
+
+// unlabeledPairing reports whether this hello would raise a pairing decision
+// nobody can actually make. An unknown controller with no self-description
+// reaches the owner as "trust SHA256:… from bogon?", and prompts that carry no
+// answerable information get clicked through — which makes the pairing gate
+// worse than useless. Already-trusted controllers and --yes are unaffected.
+func (a *Agent) unlabeledPairing(fp, label string) bool {
+	return !a.known.Has(fp) && !a.opts.AutoYes && strings.TrimSpace(label) == ""
+}
+
+// mustIdentify decides whether this hello has to carry a self-description.
+// Console sessions are exempt: they have already passed the portal-admin check,
+// which is a stronger statement than a label. Without the exemption a portal
+// fingerprint added to portal_admins.json while the agent is running — not yet
+// mirrored into known_clients — would be told to introduce itself, locking the
+// portal out of the very device someone is trying to repair.
+func (a *Agent) mustIdentify(helloKind, fp, label string) bool {
+	if helloKind == protocol.KindConsoleHello {
+		return false
+	}
+	return a.unlabeledPairing(fp, label)
 }
 
 func (a *Agent) authorize(fp, name, label string) bool {
