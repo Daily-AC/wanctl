@@ -117,9 +117,12 @@ func New(opts Options) (*Agent, error) {
 	if opts.Shell == "" {
 		opts.Shell = server.DefaultShell()
 	}
-	if opts.Mode == "" {
-		opts.Mode = policy.ModeNormal
-	}
+	// opts.Mode is deliberately left empty when no --mode was given: policy.Open
+	// reads an empty mode as "use the persisted one", which is what lets a
+	// portal-side switch survive a restart and why `service install` omits the
+	// flag on purpose. Defaulting it to ModeNormal here made that branch
+	// unreachable, so every flag-less restart quietly reverted the device to
+	// normal while main.go's flag help promised the opposite.
 	if opts.Name == "" {
 		opts.Name = defaultDeviceName()
 	}
