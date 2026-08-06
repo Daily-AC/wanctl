@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"wanctl/internal/client"
@@ -204,5 +205,54 @@ func TestDeviceConnForWrapsMismatchInspectably(t *testing.T) {
 	var mismatch *transport.MismatchError
 	if err == nil || !errors.As(err, &mismatch) {
 		t.Fatalf("err = %v, want a wrapped *transport.MismatchError", err)
+	}
+}
+
+// The portal declares its own console-admin identity when it mints an enrollment
+// code, and shows it on the page. The page is the one leg of the handoff the
+// relay is not on, which is what makes the value the terminal prints checkable.
+func TestEnrollDeclaresAndDisplaysPortalFingerprint(t *testing.T) {
+	id, err := transport.IdentityFromSeed(bytes.Repeat([]byte{9}, 32), "portal-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mintBody map[string]string
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "alice"})
+		case "/admin/enroll/mint":
+			json.NewDecoder(r.Body).Decode(&mintBody)
+			json.NewEncoder(w).Encode(map[string]any{"code": "ABCD-2345", "expires_in": 300})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	s.fp = id.Fingerprint
+
+	rec := httptest.NewRecorder()
+	s.handleEnroll(rec, userReq("GET", "/enroll", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body = %s", rec.Code, rec.Body.String())
+	}
+	if mintBody["portal_fp"] != id.Fingerprint {
+		t.Fatalf("mint carried portal_fp = %q, want %q", mintBody["portal_fp"], id.Fingerprint)
+	}
+	if !strings.Contains(rec.Body.String(), id.Fingerprint) {
+		t.Fatalf("enroll page does not show the fingerprint to compare against:\n%s", rec.Body.String())
+	}
+}
+
+// New() must pick the fingerprint up from the identity it is already given —
+// forgetting to would silently ship an empty portal_fp, which fails closed on
+// every device and looks exactly like the bug this replaces.
+func TestNewCapturesIdentityFingerprint(t *testing.T) {
+	id, err := transport.IdentityFromSeed(bytes.Repeat([]byte{3}, 32), "portal-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := New(Config{Identity: id}).fp; got != id.Fingerprint {
+		t.Fatalf("fp = %q, want %q", got, id.Fingerprint)
 	}
 }

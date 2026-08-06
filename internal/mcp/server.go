@@ -557,7 +557,10 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 			portal,
 		)), nil
 	}
-	token, ns, err := client.ExchangeCode(ctx, s.relayURL(), code)
+	// An MCP session is a controller, not a device: it never runs an agent, so
+	// the enrollment's portal fingerprint has nothing to seed here.
+	en, err := client.ExchangeCode(ctx, s.relayURL(), code)
+	token, ns := en.Token, en.Namespace
 	if err != nil {
 		return mcpapi.NewToolResultError(fmt.Sprintf("授权失败: %s\n请让用户回到 %s/enroll 拿一个新 code（旧的可能用过或过期了），然后再调一次 wanctl_login(code=\"…\")。", err, portal)), nil
 	}

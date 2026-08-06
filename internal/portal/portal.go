@@ -77,6 +77,7 @@ type Server struct {
 
 	dialer *client.Client   // controller used to open console sessions
 	known  *transport.Store // pinned device identities (shared with dialer)
+	fp     string           // this portal's own controller fingerprint
 
 	mu    sync.Mutex
 	conns map[string]*deviceConn // key "ns/device"
@@ -102,6 +103,9 @@ func New(cfg Config) *Server {
 		debugWhoami:  cfg.DebugWhoami,
 		conns:        map[string]*deviceConn{},
 		known:        cfg.Known,
+	}
+	if cfg.Identity != nil {
+		s.fp = cfg.Identity.Fingerprint
 	}
 	if cfg.Identity != nil && cfg.RelayDialURL != "" && cfg.PortalToken != "" {
 		s.dialer = client.NewWith(cfg.Identity, cfg.Known, cfg.RelayDialURL, cfg.PortalToken, cfg.Transport)
@@ -484,7 +488,12 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	resp, err := s.adminReq("POST", "/admin/enroll/mint", nil, map[string]string{"namespace": ns})
+	// Declaring our fingerprint here is what lets a freshly enrolled device
+	// accept this portal's console sessions. Without it the device's portal-admin
+	// set is empty and fails closed, so every install needed a hand-passed
+	// --portal-fps that nobody remembers until a machine is reinstalled.
+	resp, err := s.adminReq("POST", "/admin/enroll/mint", nil,
+		map[string]string{"namespace": ns, "portal_fp": s.fp})
 	if err != nil {
 		http.Error(w, "relay unreachable: "+err.Error(), http.StatusBadGateway)
 		return
@@ -504,11 +513,16 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if mins < 1 {
 		mins = 1
 	}
+	// The fingerprint reaches the device through the relay, so show it here too:
+	// this page is the one leg the relay is not on, which is what makes the
+	// value the terminal prints checkable rather than merely asserted.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, enrollPage, ns, out.Code, mins)
+	fmt.Fprintf(w, enrollPage, ns, out.Code, mins, s.fp)
 }
 
-// enrollPage: %[1]s namespace, %[2]s one-time code, %[3]d minutes-to-expiry.
+// enrollPage: %[1]s namespace, %[2]s one-time code, %[3]d minutes-to-expiry,
+// %[4]s this portal's fingerprint (for the human to compare against what the
+// terminal prints).
 const enrollPage = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>wanctl 设备授权</title><style>
@@ -523,12 +537,15 @@ color:var(--brand);background:var(--cream);border:2px dashed var(--brand);border
 .copy{margin-top:14px;font-size:13px;color:#8a857c}.ns{font-weight:600}
 .steps{text-align:left;margin:26px 0 0;padding:18px;background:var(--cream);border-radius:12px;font-size:13px;line-height:1.7;color:#6b665d}
 .tip{margin-top:18px;font-size:12px;color:#aaa39a}b{color:var(--ink)}
+.fp{margin-top:14px;padding:12px 14px;background:var(--cream);border-radius:12px;text-align:left;font-size:12px;color:#6b665d;line-height:1.6}
+.fp code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--ink);word-break:break-all;user-select:all}
 </style></head><body><div class="card">
 <h1>🛡️ 设备授权</h1>
 <div class="sub">空间 <span class="ns">%[1]s</span> · 把下面的 code 贴回终端</div>
 <div class="code" onclick="navigator.clipboard&&navigator.clipboard.writeText(this.textContent.trim());document.querySelector('.copy').textContent='✓ 已复制'">%[2]s</div>
 <div class="copy">点一下复制 · %[3]d 分钟内有效 · 仅可用一次</div>
 <div class="steps">回到终端,在 <b>输入授权 code:</b> 后粘贴上面的 code,回车即可。<br>设备会自动绑定到空间 <b>%[1]s</b> 并转入后台运行。</div>
+<div class="fp">授权后终端会打印它信任的门户身份，请与这里的一致：<br><code>%[4]s</code></div>
 <div class="tip">这台机器就成了一个可被远程控制的设备。停止用 <b>wanctl stop</b>。</div>
 </div></body></html>`
 
