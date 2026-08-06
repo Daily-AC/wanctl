@@ -52,8 +52,17 @@ func androidDeviceName(prop func(string) string) string {
 // getprop reads one Android system property. /system/bin/getprop is the only
 // interface a non-root process has to the property service, and it exists on
 // every Android build.
+//
+// The absolute path is required, not tidiness. Termux ships its own getprop and
+// puts $PREFIX/bin ahead of /system/bin on PATH, so resolving by name finds a
+// binary inside the app's private data directory — which Android refuses to let
+// this process exec (the same rule that decides the session shell, see
+// server.androidShell). Resolving by name therefore failed on Termux and every
+// device fell back to the generic name; /system/bin/getprop answers fine.
+const getpropPath = "/system/bin/getprop"
+
 func getprop(key string) string {
-	out, err := exec.Command("getprop", key).Output()
+	out, err := exec.Command(getpropPath, key).Output()
 	if err != nil {
 		return ""
 	}
