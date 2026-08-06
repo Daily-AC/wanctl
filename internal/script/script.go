@@ -104,7 +104,10 @@ func Command(interp Interp, script []byte) (string, error) {
 		cmd = "powershell -NoProfile -NonInteractive -EncodedCommand '" + enc + "'"
 	case POSIX:
 		enc := base64.StdEncoding.EncodeToString(script)
-		cmd = "printf %s '" + enc + "' | base64 -d | /bin/sh"
+		// `sh` off PATH rather than /bin/sh: Android only grew a /bin/sh symlink
+		// in 11, and its shell has always been /system/bin/sh. Hardcoding the
+		// absolute path would break exactly the devices the agent supports.
+		cmd = "printf %s '" + enc + "' | base64 -d | sh"
 	default:
 		return "", fmt.Errorf("unknown interpreter %q", interp)
 	}
