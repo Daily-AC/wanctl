@@ -15,7 +15,7 @@ import (
 // iteration executes the stable binary path again, so a replacement is picked
 // up on the next child start.
 func cmdSupervise(ctx context.Context, args []string) error {
-	self, err := os.Executable()
+	self, err := selfPath()
 	if err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ func cmdStart() error {
 	if config.EnvOr("WANCTL_TOKEN", config.StoredToken()) == "" {
 		return fmt.Errorf("尚未登录：先运行 `wanctl`（无参）完成飞书授权")
 	}
-	self, err := os.Executable()
+	self, err := selfPath()
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func cmdStart() error {
 	// The child reads token from <cfg>/token and relay/transport from compile-time
 	// defaults, so no flags are needed. detachSysProcAttr() detaches it from this
 	// terminal so it survives the parent exiting.
-	cmd := exec.Command(self, "agent")
+	cmd := selfCommand(self, "agent")
 	cmd.Stdout = logf
 	cmd.Stderr = logf
 	cmd.SysProcAttr = detachSysProcAttr()

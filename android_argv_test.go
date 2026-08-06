@@ -95,3 +95,51 @@ func TestNormalizeArgsDoesNotMutateItsInput(t *testing.T) {
 		t.Fatalf("input was mutated: %q", args)
 	}
 }
+
+// selfPath must prefer what Termux told us: os.Executable() there answers with
+// the dynamic linker, and `wanctl update` replaces whatever it is given — on a
+// rooted device that would overwrite /apex/.../linker64 and take the Android
+// runtime down with it.
+func TestSelfPathPrefersTheTermuxSuppliedPath(t *testing.T) {
+	real := "/data/data/com.termux/files/usr/bin/wanctl"
+	t.Cleanup(func() { termuxSelf = "" })
+	termuxSelf = real
+	got, err := selfPath()
+	if err != nil || got != real {
+		t.Fatalf("selfPath() = %q, %v; want %q", got, err, real)
+	}
+}
+
+// Everywhere else — including an adb shell, where nothing intercepts exec —
+// os.Executable() is correct and must still be used.
+func TestSelfPathFallsBackToOsExecutable(t *testing.T) {
+	t.Cleanup(func() { termuxSelf = "" })
+	termuxSelf = ""
+	want, err := os.Executable()
+	if err != nil {
+		t.Skip("os.Executable unavailable")
+	}
+	got, err := selfPath()
+	if err != nil || got != want {
+		t.Fatalf("selfPath() = %q, %v; want %q", got, err, want)
+	}
+}
+
+// The recorded path must come from the rewrite, so a normal invocation never
+// sets it.
+func TestNormalizeArgsRecordsSelfOnlyWhenItRewrites(t *testing.T) {
+	t.Cleanup(func() { termuxSelf = "" })
+	termuxSelf = ""
+	normalizeArgs([]string{"wanctl", "exec", "--target", "x"}, statOver(t))
+	if termuxSelf != "" {
+		t.Fatalf("recorded %q on an ordinary invocation", termuxSelf)
+	}
+	if runtime.GOOS != "android" {
+		return
+	}
+	abs := "/data/data/com.termux/files/usr/bin/wanctl"
+	normalizeArgs([]string{"wanctl", abs, "version"}, statOver(t, abs))
+	if termuxSelf != abs {
+		t.Fatalf("termuxSelf = %q, want %q", termuxSelf, abs)
+	}
+}

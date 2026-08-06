@@ -41,7 +41,7 @@ func cmdUpdate(ctx context.Context, args []string) error {
 	noRestart := fs.Bool("no-restart", false, "internal: skip daemon stop/start (used by the sudo-elevated phase)")
 	fs.Parse(args)
 
-	self, err := os.Executable()
+	self, err := selfPath()
 	if err != nil {
 		return fmt.Errorf("locate self: %w", err)
 	}

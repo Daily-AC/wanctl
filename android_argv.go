@@ -3,8 +3,10 @@ package main
 import (
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // normalizeArgs undoes Termux's argv[0] duplication.
@@ -48,6 +50,10 @@ func normalizeArgs(args []string, stat func(string) (fs.FileInfo, error)) []stri
 	if !duplicatedArgv0(args[0], args[1], stat) {
 		return args
 	}
+	// The path Termux inserted is the one thing here that reliably names this
+	// binary, so keep it: os.Executable() cannot, and several commands need it.
+	// See selfPath.
+	termuxSelf = args[1]
 	// Copy rather than slice-and-append in place: args aliases os.Args, and
 	// reusing its backing array would rewrite the vector other readers see.
 	out := make([]string, 0, len(args)-1)
@@ -72,4 +78,75 @@ func duplicatedArgv0(argv0, argv1 string, stat func(string) (fs.FileInfo, error)
 
 func init() {
 	os.Args = normalizeArgs(os.Args, os.Stat)
+}
+
+// termuxSelf is the program's real path, recorded when Termux's exec
+// interception hands it to us as a duplicated argv[0]. Empty everywhere else.
+var termuxSelf string
+
+// selfPath returns the path of the running wanctl binary.
+//
+// os.Executable() reads /proc/self/exe, which is normally exactly right — but
+// under Termux the process really is the dynamic linker, so it answers
+// "/apex/com.android.runtime/bin/linker64". Everything that locates wanctl to
+// act on it then aims at the wrong file, and the consequences are not
+// symmetric: `wanctl update` atomically replaces that path, so on a rooted
+// device it would overwrite the system linker and take the Android runtime with
+// it. (Unrooted, it fails with a permission error naming linker64 — which is
+// how this was found.) `wanctl start` would likewise exec the linker with
+// "agent" as its argument.
+//
+// When Termux told us the real path via the duplicated argv[0], that is the
+// authoritative answer. Otherwise — every other OS, and an adb shell on Android
+// where nothing intercepts exec — os.Executable() is correct.
+func selfPath() (string, error) {
+	if termuxSelf != "" {
+		return termuxSelf, nil
+	}
+	return os.Executable()
+}
+
+// selfCommand builds a command that runs this wanctl binary again.
+//
+// Normally that is just exec.Command(self, ...). Under Termux it cannot be:
+// Android refuses exec of a file inside an app's private data directory from
+// the untrusted_app domain, so `wanctl start` failed with
+//
+//	fork/exec /data/data/com.termux/files/usr/bin/wanctl: permission denied
+//
+// even though that binary is what is currently running. Termux's own
+// interceptor gets around this by invoking the dynamic linker explicitly and
+// passing the program as its first argument, and nothing stops us doing the
+// same — the linker lives in /apex or /system, which the domain may exec.
+//
+// The argument vector is built to look exactly like what Termux produces
+// (program path twice, then the real arguments) so the child's own
+// normalizeArgs strips the duplicate and parses its flags correctly.
+func selfCommand(self string, args ...string) *exec.Cmd {
+	if termuxSelf == "" {
+		return exec.Command(self, args...)
+	}
+	linker := androidLinker()
+	if linker == "" {
+		return exec.Command(self, args...) // no linker found; fail the honest way
+	}
+	cmd := exec.Command(linker)
+	cmd.Args = append([]string{self, self}, args...)
+	return cmd
+}
+
+// androidLinker locates the dynamic linker used to start this process. Under
+// Termux os.Executable() already names it, which is the most accurate answer
+// available; the fixed paths are a fallback for a layout that reports something
+// else.
+func androidLinker() string {
+	if exe, err := os.Executable(); err == nil && strings.Contains(filepath.Base(exe), "linker") {
+		return exe
+	}
+	for _, p := range []string{"/system/bin/linker64", "/apex/com.android.runtime/bin/linker64"} {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
+	}
+	return ""
 }

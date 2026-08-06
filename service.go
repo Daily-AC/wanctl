@@ -26,12 +26,12 @@ func cmdService(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		action = args[0]
 	}
-	self, err := os.Executable()
+	self, err := selfPath()
 	if err != nil {
 		return fmt.Errorf("locate wanctl binary: %w", err)
 	}
 	if self, err = filepath.EvalSymlinks(self); err != nil {
-		self, _ = os.Executable()
+		self, _ = selfPath()
 	}
 
 	switch action {
