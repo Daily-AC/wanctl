@@ -192,6 +192,24 @@ func (s *Store) List() []Peer {
 	return out
 }
 
+// RemoveName forgets whatever is pinned under a logical name, leaving other
+// names that happen to share the same fingerprint intact — one physical device
+// is routinely pinned under several names, so forgetting one must not silently
+// forget the rest.
+func (s *Store) RemoveName(name string) error {
+	if name == "" {
+		return nil
+	}
+	s.mu.Lock()
+	for key, p := range s.m {
+		if p.Name == name {
+			delete(s.m, key)
+		}
+	}
+	s.mu.Unlock()
+	return s.save()
+}
+
 // Remove forgets a fingerprint.
 func (s *Store) Remove(fp string) error {
 	s.mu.Lock()
