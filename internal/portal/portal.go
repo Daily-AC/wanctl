@@ -13,6 +13,7 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -74,7 +75,8 @@ type Server struct {
 	publicOrigin string
 	debugWhoami  bool
 
-	dialer *client.Client // controller used to open console sessions
+	dialer *client.Client   // controller used to open console sessions
+	known  *transport.Store // pinned device identities (shared with dialer)
 
 	mu    sync.Mutex
 	conns map[string]*deviceConn // key "ns/device"
@@ -99,6 +101,7 @@ func New(cfg Config) *Server {
 		publicOrigin: strings.TrimRight(cfg.PublicOrigin, "/"),
 		debugWhoami:  cfg.DebugWhoami,
 		conns:        map[string]*deviceConn{},
+		known:        cfg.Known,
 	}
 	if cfg.Identity != nil && cfg.RelayDialURL != "" && cfg.PortalToken != "" {
 		s.dialer = client.NewWith(cfg.Identity, cfg.Known, cfg.RelayDialURL, cfg.PortalToken, cfg.Transport)
@@ -128,6 +131,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices/pair", s.handleDevicePair)
 	mux.HandleFunc("/api/devices/untrust", s.handleDeviceUntrust)
 	mux.HandleFunc("/api/devices/remove", s.handleDeviceRemove)
+	mux.HandleFunc("/api/devices/identity/accept", s.handleDeviceIdentityAccept)
 	mux.HandleFunc("/api/devices/rules", s.handleDeviceRules)
 	mux.HandleFunc("/api/devices/mode", s.handleDeviceMode)
 	mux.HandleFunc("/api/devices/lan", s.handleDeviceLan)
@@ -143,22 +147,23 @@ func (s *Server) Handler() http.Handler {
 }
 
 var mutationPaths = map[string]bool{
-	"/api/tokens":               true,
-	"/api/tokens/revoke":        true,
-	"/api/acl":                  true,
-	"/api/acl/revoke":           true,
-	"/api/devices/decide":       true,
-	"/api/devices/pair":         true,
-	"/api/devices/untrust":      true,
-	"/api/devices/remove":       true,
-	"/api/devices/rules":        true,
-	"/api/devices/mode":         true,
-	"/api/devices/lan":          true,
-	"/api/devices/lark":         true,
-	"/api/docs/articles":        true,
-	"/api/docs/articles/delete": true,
-	"/api/docs/groups":          true,
-	"/api/docs/groups/delete":   true,
+	"/api/tokens":                  true,
+	"/api/tokens/revoke":           true,
+	"/api/acl":                     true,
+	"/api/acl/revoke":              true,
+	"/api/devices/decide":          true,
+	"/api/devices/pair":            true,
+	"/api/devices/untrust":         true,
+	"/api/devices/remove":          true,
+	"/api/devices/identity/accept": true,
+	"/api/devices/rules":           true,
+	"/api/devices/mode":            true,
+	"/api/devices/lan":             true,
+	"/api/devices/lark":            true,
+	"/api/docs/articles":           true,
+	"/api/docs/articles/delete":    true,
+	"/api/docs/groups":             true,
+	"/api/docs/groups/delete":      true,
 }
 
 var readWritePaths = map[string]bool{
@@ -905,6 +910,84 @@ func (s *Server) registeredFingerprint(ctx context.Context, ns, device string) (
 	return "", fmt.Errorf("relay has no registered identity for %q", ns+"/"+device)
 }
 
+// errDeviceIdentityChanged marks the one console-dial failure a human can
+// resolve, so the SPA can branch on it instead of parsing prose.
+const errDeviceIdentityChanged = "device_identity_changed"
+
+type identityChanged struct {
+	Error   string `json:"error"`
+	Device  string `json:"device"`
+	Pinned  string `json:"pinned"`
+	Offered string `json:"offered"`
+}
+
+// connError renders a console-dial failure. A pinned-identity mismatch becomes a
+// 409 carrying both fingerprints, because it is the only such failure a person
+// can act on and the action needs those two values in front of them; everything
+// else stays a 502 with the underlying text.
+func (s *Server) connError(w http.ResponseWriter, device string, err error) {
+	var mismatch *transport.MismatchError
+	if errors.As(err, &mismatch) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(identityChanged{
+			Error:   errDeviceIdentityChanged,
+			Device:  device,
+			Pinned:  mismatch.Stored,
+			Offered: mismatch.Offered,
+		})
+		return
+	}
+	http.Error(w, err.Error(), http.StatusBadGateway)
+}
+
+// handleDeviceIdentityAccept re-pins a device whose identity changed. The pin is
+// TOFU-seeded from the relay's own claim, so it is a change alarm rather than an
+// authentication: letting the device (or the relay speaking for it) clear the
+// alarm would defeat it entirely. Only the SSO-authenticated owner may, and only
+// to the fingerprint their browser actually displayed.
+func (s *Server) handleDeviceIdentityAccept(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Device, Fingerprint string }
+	json.NewDecoder(r.Body).Decode(&body)
+	ns, ok := s.requireOwnedConsole(w, r, body.Device)
+	if !ok {
+		return
+	}
+	if s.dialer == nil {
+		http.Error(w, "portal console not wired (set WANCTL_RELAY, WANCTL_PORTAL_TOKEN)", http.StatusServiceUnavailable)
+		return
+	}
+	current, err := s.registeredFingerprint(r.Context(), ns, body.Device)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	// A tab left open across a second identity change must not pin whatever the
+	// relay is claiming by the time the click lands — that would turn one
+	// confirmation into a standing permission.
+	if body.Fingerprint != current {
+		http.Error(w, "设备指纹在你确认前又变了，请刷新页面重新确认", http.StatusConflict)
+		return
+	}
+	if _, err := s.dialer.PinServer(r.Context(), ns+"/"+body.Device, current, true); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	s.dropConn(ns, body.Device)
+	w.WriteHeader(http.StatusOK)
+}
+
+// forgetPin drops the identity pinned under ns/device. Unbinding is the owner
+// stating, through SSO, that this name no longer refers to that machine, so the
+// pin must not outlive it: otherwise reinstalling under the same name is locked
+// out of the portal permanently, with no UI anywhere able to clear it.
+func (s *Server) forgetPin(ns, device string) {
+	if s.known == nil {
+		return
+	}
+	_ = s.known.RemoveName(ns + "/" + device)
+}
+
 func (s *Server) dropConn(ns, device string) {
 	key := ns + "/" + device
 	s.mu.Lock()
@@ -923,7 +1006,7 @@ func (s *Server) handleDeviceConsole(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.deviceConnFor(r.Context(), ns, device)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		s.connError(w, device, err)
 		return
 	}
 	st, err := d.state()
@@ -944,7 +1027,7 @@ func (s *Server) handleDeviceDecide(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		s.connError(w, body.Device, err)
 		return
 	}
 	if err := d.decide(body.ID, body.Verdict, "portal:"+s.identity(r)); err != nil {
@@ -964,7 +1047,7 @@ func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		s.connError(w, body.Device, err)
 		return
 	}
 	if err := d.pairDecide(body.FP, body.Verdict); err != nil {
@@ -984,7 +1067,7 @@ func (s *Server) handleDeviceUntrust(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		s.connError(w, body.Device, err)
 		return
 	}
 	if err := d.untrust(body.FP); err != nil {
@@ -1007,6 +1090,7 @@ func (s *Server) handleDeviceRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.dropConn(ns, body.Device) // close any cached console session to it
+	s.forgetPin(ns, body.Device)
 	resp, err := s.adminReq("POST", "/admin/devices/remove", nil, map[string]string{"namespace": ns, "device": body.Device})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -1033,7 +1117,7 @@ func (s *Server) handleDeviceRules(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		s.connError(w, body.Device, err)
 		return
 	}
 	var err2 error
@@ -1063,7 +1147,7 @@ func (s *Server) handleDeviceLan(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		s.connError(w, body.Device, err)
 		return
 	}
 	if err := d.setLan(body.On); err != nil {
@@ -1082,7 +1166,7 @@ func (s *Server) handleDeviceMode(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		s.connError(w, body.Device, err)
 		return
 	}
 	if err := d.setMode(body.Mode); err != nil {
@@ -1103,7 +1187,7 @@ func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.deviceConnFor(r.Context(), ns, device)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		s.connError(w, device, err)
 		return
 	}
 	raw, err := d.logs(r.URL.Query().Get("type"), r.URL.Query().Get("grep"), r.URL.Query().Get("since"), 200)
@@ -1131,7 +1215,7 @@ func (s *Server) handleDeviceEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.deviceConnFor(r.Context(), ns, device)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		s.connError(w, device, err)
 		return
 	}
 	// Long-poll, not SSE: thunderbox's nginx buffers streaming responses (and

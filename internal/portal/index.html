@@ -170,7 +170,10 @@
   .fact{flex:1;min-width:150px;background:#fdf3e8;border:2px dashed var(--line-2);border-radius:16px;padding:12px 15px}
   .fact .k{font-family:var(--round);font-weight:600;font-size:10.5px;color:var(--ink-3);letter-spacing:.04em}
   .fact .v{font-family:var(--mono);font-size:12.5px;color:var(--ink);margin-top:4px;word-break:break-all}
-  .fact .v.warn{color:var(--straw-d)}
+  /* display: the global .warn banner is display:none until .show, and that low-
+     specificity rule was also hiding every fact cell that asks for warn colour —
+     the approval card's 影响 impact line has never actually been visible. */
+  .fact .v.warn{color:var(--straw-d);display:block}
   .decide{display:flex;gap:11px;flex-wrap:wrap;margin-top:22px}
   .candy{font-family:var(--round);font-weight:700;font-size:14.5px;cursor:pointer;border:none;border-radius:20px;
     padding:14px 22px;color:#fff;position:relative;box-shadow:0 7px 0 0 var(--sh-c,#e8a06a);
@@ -660,9 +663,12 @@ function ago(t){if(!t)return '从未';const d=new Date(t);if(isNaN(d))return esc
   if(s<2592000)return Math.floor(s/86400)+' 天前';return d.toLocaleDateString()}
 function fmt(t){if(!t)return '—';const d=new Date(t);return isNaN(d)?esc(t):d.toLocaleString()}
 function isOnline(t){if(!t)return false;const d=new Date(t);return !isNaN(d)&&(Date.now()-d.getTime())<120000}
-async function jget(u){const r=await fetch(u);if(!r.ok)throw new Error(await r.text()||r.status);return r.json()}
+/* Errors carry the response body parsed when it is JSON, so callers can branch on
+   a machine-readable `error` code instead of pattern-matching prose. */
+function httpErr(status,text){const e=new Error(text||status);e.status=status;try{e.data=JSON.parse(text)}catch(_){}return e}
+async function jget(u){const r=await fetch(u);if(!r.ok)throw httpErr(r.status,await r.text());return r.json()}
 function csrfToken(){const p=document.cookie.split('; ').find(x=>x.startsWith('wanctl_csrf='));return p?decodeURIComponent(p.slice(p.indexOf('=')+1)):''}
-async function jpost(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify(b||{})});if(!r.ok)throw new Error(await r.text()||r.status);return r}
+async function jpost(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify(b||{})});if(!r.ok)throw httpErr(r.status,await r.text());return r}
 function toast(kind,msg){const t=$('#toast');t.className='toast '+kind;
   t.innerHTML=(kind==='ok'?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M18 6 6 18M6 6l12 12" stroke-linecap="round"/></svg>')+'<span>'+esc(msg)+'</span>';
   requestAnimationFrame(()=>t.classList.add('show'));clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove('show'),2200)}
@@ -771,7 +777,13 @@ async function pollConsole(name){
       const st=await jget('/api/devices/console?device='+encodeURIComponent(name));
       if(cur!==name||gen!==pollGen)return;
       applyState(st);
-    }catch(_){/* transient (e.g. conn re-dialing after agent restart); retry next tick */}
+    }catch(e){
+      if(cur!==name||gen!==pollGen)return;
+      // An identity change is terminal until a human decides: show the card and
+      // stop polling, rather than re-failing every 3s behind a stale view.
+      if(e.data&&e.data.error==='device_identity_changed'){renderIdentityChanged(e.data);return}
+      /* transient (e.g. conn re-dialing after agent restart); retry next tick */
+    }
   }
 }
 function closeDevice(){pollGen++;cur=null}
@@ -781,7 +793,41 @@ function selTab(t){$$('#tabs .t').forEach(x=>x.classList.toggle('on',x.dataset.t
   if(t==='log')loadDeviceLogs();}
 $$('#tabs .t').forEach(t=>t.onclick=()=>selTab(t.dataset.tab));
 
-async function renderConsole(){try{applyState(await jget('/api/devices/console?device='+encodeURIComponent(cur)))}catch(e){err('连接设备失败：'+e.message);$('#pending').innerHTML='<div class="empty">连不上这台设备，可能它不在线。</div>'}}
+async function renderConsole(){try{applyState(await jget('/api/devices/console?device='+encodeURIComponent(cur)))}catch(e){
+  if(e.data&&e.data.error==='device_identity_changed'){renderIdentityChanged(e.data);return}
+  err('连接设备失败：'+e.message);$('#pending').innerHTML='<div class="empty">连不上这台设备，可能它不在线。</div>'}}
+
+/* 设备身份变了。门户的 pin 是第一次连接时照中继的说法记下的，所以它是「变更告警」而不是
+   认证 —— 能解除它的只有看过新旧指纹的设备主人。这张卡片之前不存在：后端只吐一个 502，
+   页面显示「连不上」，而任何 UI 都清不掉那条 pin，于是同名设备重装一次就永久失联。 */
+const warnIco='<span class="warnico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 9v4M12 17h.01M10.3 4 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0Z"/></svg></span>';
+function renderIdentityChanged(d){
+  const decide=curShared
+    ?'<div class="rowait">只有设备主人能确认新身份 —— 你是共享访问，只能查看</div>'
+    :'<div class="decide"><button class="candy allow" id="idAccept"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"/></svg>是我重装的，接受新身份</button></div>';
+  $('#pending').innerHTML=`<div class="note">
+      <div class="ribbon">${warnIco}<span class="txt">这台设备的身份跟上次不一样了！</span><span class="req">身份变更 · identity</span></div>
+      <div class="body">
+        <div class="stmt">设备 <b>${esc(d.device||cur)}</b> 现在报出的指纹，和门户上次记住的对不上，所以连接被挡下了。重装过它、或者清过它的配置目录，都会这样；但如果你没做过这些，就要当成中继被冒充来查。</div>
+        <div class="facts">
+          <div class="fact"><div class="k">门户记住的 pinned</div><div class="v">${esc(d.pinned||'')}</div></div>
+          <div class="fact"><div class="k">现在报出的 offered</div><div class="v warn">${esc(d.offered||'')}</div></div>
+        </div>
+        ${decide}
+      </div>
+    </div>`;
+  const b=$('#idAccept');if(b)b.onclick=()=>acceptIdentity(d.offered);
+}
+async function acceptIdentity(fp){
+  if(roGuard())return;
+  const ok=await askCute({title:'接受新的设备身份？',msg:'先到那台设备上跑一次 wanctl，核对它自报的 fingerprint 跟这里的新指纹一致，再确认。确认之后门户会改记新指纹。',okText:'确认接受'});
+  if(!ok)return;
+  try{
+    await jpost('/api/devices/identity/accept',{device:cur,fingerprint:fp});
+    toast('ok','已接受新身份');
+    const name=cur;await renderConsole();pollConsole(name);
+  }catch(e){err('接受失败：'+e.message)}
+}
 
 const kindLabel={exec:'命令',read:'读取文件',write:'写入文件'};
 const DANGER=/^(rm|rmdir|dd|mkfs\S*|shutdown|reboot|halt|poweroff|kill|killall|pkill|chmod|chown|chgrp|truncate|format|del|fdisk|wipefs)$/;
