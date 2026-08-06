@@ -71,6 +71,8 @@ USAGE
   wanctl peers
   wanctl net [wan|lan|auto|status]           switch which relay the controller uses: public (wan), intranet
                                               fast-path (lan, real-time WS), or probe-and-pick (auto)
+  wanctl label ["<who you are>"]              show or set this controller's self-description; devices refuse to
+                                              raise a pairing request from a controller without one
   wanctl id
   wanctl pair  <device>                       check device trust state; if not yet paired print the URL the device owner clicks to approve
   wanctl trust [clients|servers]
@@ -139,6 +141,8 @@ func main() {
 		err = cmdLogs(ctx, os.Args[2:])
 	case "net":
 		err = cmdNet(os.Args[2:])
+	case "label":
+		err = cmdLabel(os.Args[2:])
 	case "up":
 		err = cmdUp(ctx)
 	case "login":
@@ -455,6 +459,37 @@ func cmdPeers(ctx context.Context) error {
 	for _, d := range devs {
 		fmt.Println(d)
 	}
+	return nil
+}
+
+// cmdLabel shows or sets this controller's self-description. A device asked to
+// pair an unknown controller shows it to its owner, and refuses the request when
+// it is missing: "trust SHA256:… from bogon?" is not a question anyone can
+// answer, and unanswerable prompts get clicked through.
+func cmdLabel(args []string) error {
+	if len(args) == 0 {
+		label := config.EnvOr("WANCTL_LABEL", config.StoredLabel())
+		if label == "" {
+			fmt.Println("控制端标签: (未设置)")
+			fmt.Println("设备在配对时会拒绝没有标签的控制端。设置方法：")
+			fmt.Println(`  wanctl label "张三的 MacBook / Claude Code"`)
+			return nil
+		}
+		fmt.Printf("控制端标签: %s\n", label)
+		if os.Getenv("WANCTL_LABEL") != "" {
+			fmt.Println("(来自 WANCTL_LABEL 环境变量，覆盖已保存的值)")
+		}
+		return nil
+	}
+	label := strings.TrimSpace(strings.Join(args, " "))
+	if err := config.SaveLabel(label); err != nil {
+		return err
+	}
+	if label == "" {
+		fmt.Println("✓ 已清除控制端标签")
+		return nil
+	}
+	fmt.Printf("✓ 控制端标签: %s\n", label)
 	return nil
 }
 

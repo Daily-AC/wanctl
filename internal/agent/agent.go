@@ -380,6 +380,10 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 			return
 		}
 	}
+	if a.unlabeledPairing(fp, hello.Label) {
+		rejectHandshake(conn, protocol.Message{Kind: protocol.KindReject, Reason: unlabeledReason})
+		return
+	}
 	// Authorize (TOFU / pre-trusted portal key) and reply OK for BOTH exec and
 	// console sessions BEFORE serving — the controller/portal blocks on this OK,
 	// and a console session must be gated by the same trust check as an exec one.
@@ -398,6 +402,19 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 		return
 	}
 	a.serve(conn, fp, hello.Name, auth.Capabilities)
+}
+
+// unlabeledReason tells the controller how to become answerable, because the
+// person who would otherwise be asked cannot.
+const unlabeledReason = "controller did not identify itself — set a label (`wanctl label \"<who you are>\"`, or WANCTL_LABEL) and retry; a pairing request without one is not raised to the device owner"
+
+// unlabeledPairing reports whether this hello would raise a pairing decision
+// nobody can actually make. An unknown controller with no self-description
+// reaches the owner as "trust SHA256:… from bogon?", and prompts that carry no
+// answerable information get clicked through — which makes the pairing gate
+// worse than useless. Already-trusted controllers and --yes are unaffected.
+func (a *Agent) unlabeledPairing(fp, label string) bool {
+	return !a.known.Has(fp) && !a.opts.AutoYes && strings.TrimSpace(label) == ""
 }
 
 func (a *Agent) authorize(fp, name, label string) bool {
