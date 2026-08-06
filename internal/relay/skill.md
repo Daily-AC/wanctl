@@ -59,6 +59,7 @@ wanctl pair NAME                          # check trust state up front; prints t
 wanctl exec --target NAME "<command>"     # run a command (streams stdout, real exit code)
 wanctl exec --target NAME --cwd /path "<command>"   # run in /path (also the policy scope)
 wanctl exec --target NAME --oneshot "<command>"     # fresh shell, no session state
+wanctl exec --target NAME --script ./job.ps1        # run a LOCAL script file on the device (see below)
 wanctl push --target NAME ./local /remote/path      # upload
 wanctl pull --target NAME /remote/path ./local      # download
 wanctl logs --target NAME [--type exec|file|connect] [--grep STR] [--since RFC3339] [--limit N]
@@ -69,6 +70,43 @@ wanctl id                                 # this controller's fingerprint
   device is online you may omit `--target`.
 - Persistent session: separate `exec` calls share working dir + env (like a real
   shell) unless `--oneshot`.
+
+## Anything non-trivial: write a script and use `--script`
+
+**The command string you pass to `exec` is source code for the device's shell.**
+It gets parsed there before anything runs. That is fine for one-liners and a trap
+for everything else — especially on Windows, where the device shell is PowerShell
+and the habit of writing `powershell -Command "..."` creates a *second* parse:
+
+```bash
+# WRONG — the device's PowerShell expands $_ and $null to nothing, and the inner
+# script dies with "The term '.IPv4DefaultGateway' is not recognized",
+# which looks like a PowerShell bug and is really a quoting bug.
+wanctl exec --target NAME 'powershell -Command "Get-NetIPConfiguration | Where-Object {$_.IPv4DefaultGateway -ne $null}"'
+
+# RIGHT — the script never becomes shell source.
+wanctl exec --target NAME --script ./netcheck.ps1
+```
+
+`--script` reads the local file, ships it base64-encoded (for PowerShell, as the
+UTF-16LE that `-EncodedCommand` takes), and runs it on the device. That means:
+
+- **No quoting rules.** `$_`, `$null`, backticks, nested quotes, `%` — all
+  literal. Write the script exactly as you would locally.
+- **No encoding rules.** Non-ASCII text is safe with or without a BOM. (Pushing a
+  BOM-less UTF-8 `.ps1` and running it with `-File` is *not* safe: Windows
+  PowerShell 5.1 reads BOM-less files as the ANSI code page, and mangled bytes
+  inside a `"double-quoted string"` can eat the closing quote — at which point
+  PowerShell echoes your script instead of running it. If you see your own source
+  come back as output, that is this bug. `wanctl push` warns when it spots it.)
+- Interpreter comes from the extension: `.ps1` → PowerShell, `.sh`/none → `sh`.
+  Override with `--interp powershell|sh`.
+- The script gets no stdin, same as `powershell -File` / `sh script.sh`.
+- Scripts over ~9 KB exceed the command-line limit; `push` them and run the
+  pushed path instead. The error tells you this when you hit it.
+
+Prefer `--script` whenever the command has a `$`, a quote inside a quote, or more
+than one statement. It is not a heavier option — it is one call either way.
 
 ## Reading results correctly
 
