@@ -21,7 +21,12 @@ if [ -n "${WANCTL_RELEASE_PREVIOUS_PUBLIC_KEYS:-}" ]; then
 fi
 LDFLAGS="-s -w -X main.buildVersion=$VERSION -X wanctl/internal/release.TrustedPublicKeys=$TRUSTED_KEYS"
 
-for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+# android/arm64 is a distinct GOOS from linux/arm64 on purpose: the Android
+# build pulls in internal/androiddns, without which nothing resolves (Android
+# has no /etc/resolv.conf and a CGO-free Go resolver falls back to 127.0.0.1).
+# Serving a linux/arm64 binary to a phone would install cleanly and then fail
+# every dial.
+for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 android/arm64; do
   os=${target%/*}
   arch=${target#*/}
   suffix=

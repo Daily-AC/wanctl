@@ -21,6 +21,8 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -42,14 +44,51 @@ func ConfigDir() (string, error) {
 		return override, nil
 	}
 	base, err := os.UserConfigDir()
-	if err != nil {
+	if err == nil {
+		dir := filepath.Join(base, "wanctl")
+		if mkErr := os.MkdirAll(dir, 0o700); mkErr == nil {
+			return dir, nil
+		} else if runtime.GOOS != "android" {
+			return "", mkErr
+		}
+	} else if runtime.GOOS != "android" {
 		return "", err
 	}
-	dir := filepath.Join(base, "wanctl")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
+	if dir := androidConfigDir(os.Getenv, os.Executable, os.MkdirAll); dir != "" {
+		return dir, nil
 	}
-	return dir, nil
+	return "", fmt.Errorf("no writable config directory on android; set WANCTL_CONFIG_DIR")
+}
+
+// androidConfigDir finds somewhere writable to keep the node identity on
+// Android, where $HOME is not dependable.
+//
+// Under Termux, HOME is a real writable home directory and this is never
+// reached. Run the same binary from an adb shell — the way you get an agent
+// onto a device without installing anything — and HOME is "/", so
+// os.UserConfigDir() hands back "/.config" and creating it fails with
+// "read-only file system", which killed the agent before it could even generate
+// its key pair.
+//
+// The candidates are the writable-and-executable places Android actually has:
+// TMPDIR (Termux and some shells export it), the directory the binary itself
+// was put in (whoever pushed it there could write there), and /data/local/tmp,
+// which is the one location the adb shell user can always write.
+func androidConfigDir(getenv func(string) string, executable func() (string, error), mkdirAll func(string, os.FileMode) error) string {
+	var candidates []string
+	if tmp := strings.TrimSpace(getenv("TMPDIR")); tmp != "" {
+		candidates = append(candidates, filepath.Join(tmp, "wanctl"))
+	}
+	if self, err := executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(self), ".wanctl"))
+	}
+	candidates = append(candidates, "/data/local/tmp/.wanctl")
+	for _, dir := range candidates {
+		if err := mkdirAll(dir, 0o700); err == nil {
+			return dir
+		}
+	}
+	return ""
 }
 
 // Fingerprint computes the canonical fingerprint of a DER certificate.

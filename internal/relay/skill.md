@@ -70,6 +70,10 @@ wanctl id                                 # this controller's fingerprint
   device is online you may omit `--target`.
 - Persistent session: separate `exec` calls share working dir + env (like a real
   shell) unless `--oneshot`.
+- A device may be an **Android phone or tablet**; it behaves like any other
+  device, but almost nothing on its filesystem is writable. Put files under
+  `/data/local/tmp` (or the Termux home, `/data/data/com.termux/files/home`) —
+  a push elsewhere fails with a permission error, not a wanctl error.
 
 ## Anything non-trivial: write a script and use `--script`
 

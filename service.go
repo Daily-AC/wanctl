@@ -352,6 +352,8 @@ func serviceInstall(self string, extra []string) error {
 		return macInstall(self, extra)
 	case "windows":
 		return winInstall(self, extra)
+	case "android":
+		return androidServiceUnsupported(self)
 	}
 	return fmt.Errorf("`wanctl service` is not supported on %s; run `%s agent` from your own supervisor", runtime.GOOS, self)
 }
@@ -364,6 +366,8 @@ func serviceUninstall() error {
 		return macUninstall()
 	case "windows":
 		return winUninstall()
+	case "android":
+		return fmt.Errorf("nothing to uninstall: Android never had a wanctl service (see `wanctl service install`)")
 	}
 	return fmt.Errorf("not supported on %s", runtime.GOOS)
 }
@@ -376,6 +380,10 @@ func serviceStatus() error {
 		return macStatus()
 	case "windows":
 		return winStatus()
+	case "android":
+		fmt.Println("service: not applicable on Android (no user-installable service manager)")
+		fmt.Println("  use `wanctl status` for the detached agent started by `wanctl start`")
+		return nil
 	}
 	return fmt.Errorf("not supported on %s", runtime.GOOS)
 }

@@ -23,10 +23,53 @@ import (
 
 // DefaultShell returns the interpreter used for a session on this OS.
 func DefaultShell() string {
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		return "powershell"
+	case "android":
+		return androidShell(func(path string) bool {
+			_, err := os.Stat(path)
+			return err == nil
+		})
 	}
 	return "/bin/sh"
+}
+
+// androidShell finds an interpreter on Android, where /bin/sh is not a given.
+//
+//   - /system/bin/sh (mksh) exists on every Android build and is the only shell
+//     the agent can actually start. See below.
+//   - /bin is a symlink to /system/bin from Android 11 on, so /bin/sh resolves
+//     there too; older devices have no /bin at all, which is why it cannot be
+//     the default.
+//
+// Termux's own $PREFIX/bin/sh is deliberately *not* preferred, reversing the
+// first attempt at this. The agent cannot exec it: Android forbids the
+// untrusted_app domain from exec'ing files in an app's private data directory,
+// and Termux only gets away with it because libtermux-exec.so — preloaded into
+// its shell — rewrites every execve to go through the dynamic linker. A
+// CGO-free Go binary loads no such library, so the syscall is refused. Measured
+// on a vivo PA2353 running Termux, 2026-08-06:
+//
+//	exec($PREFIX/bin/sh)      → fork/exec …/usr/bin/sh: permission denied
+//	exec($PREFIX/bin/bash)    → permission denied
+//	exec(/system/bin/sh)      → ok
+//
+// The original reason for preferring the Termux shell — "otherwise the session
+// has none of the user's tools" — turned out to be false. A session in
+// /system/bin/sh inherits Termux's PATH, and Termux binaries launched *by that
+// shell* run fine, because mksh does the exec, not us:
+//
+//	/system/bin/sh -c "git --version"  → git version 2.52.0   (Termux's git)
+//
+// So the system shell costs nothing and is the only one that starts.
+func androidShell(exists func(string) bool) string {
+	for _, c := range []string{"/system/bin/sh", "/bin/sh"} {
+		if exists(c) {
+			return c
+		}
+	}
+	return "/system/bin/sh"
 }
 
 // winUTF8Prologue forces a PowerShell session to emit UTF-8 so native-tool

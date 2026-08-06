@@ -111,6 +111,12 @@ func openBrowser(url string) {
 		cmd, args = "open", []string{url}
 	case "windows":
 		cmd, args = "cmd", []string{"/c", "start", url}
+	case "android":
+		// Android has no xdg-open. `am start` is the platform's own way to hand
+		// a URL to whatever browser the user has, and it is on PATH for the
+		// shell and Termux users alike. (Termux's termux-open-url is nicer but
+		// only exists if termux-tools is installed.)
+		cmd, args = "am", []string{"start", "-a", "android.intent.action.VIEW", "-d", url}
 	default:
 		cmd, args = "xdg-open", []string{url}
 	}

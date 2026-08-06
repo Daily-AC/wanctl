@@ -139,7 +139,12 @@ Release signing, bootstrap, and key rotation are documented in
 ```bash
 go build -o wanctl .                                  # this machine
 GOOS=windows GOARCH=amd64 go build -o wanctl.exe .    # a Windows device
+GOOS=android GOARCH=arm64 go build -o wanctl .        # an Android phone/tablet
 ```
+
+Android devices are controlled like any other, with a handful of platform
+differences (DNS, config location, keeping the agent alive) covered in
+[`docs/android.md`](docs/android.md).
 
 ## Roles (one binary)
 
