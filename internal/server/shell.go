@@ -47,6 +47,19 @@ func DefaultShell() string {
 // is safe to prepend to a command or run as a session prologue.
 const winUTF8Prologue = `try{$e=New-Object System.Text.UTF8Encoding $false;[Console]::OutputEncoding=$e;$OutputEncoding=$e}catch{};$env:WSL_UTF8='1';`
 
+// winExitEpilogue makes a one-shot's process exit code mean what the caller
+// expects. `powershell -Command <source>` exits 0 or 1 from $? regardless of
+// what any native program inside returned, so `wanctl exec -oneshot 'cmd /c
+// exit 7'` reported 1 while the same command in session mode reported 7 — the
+// session path reads $LASTEXITCODE in its end-of-command marker and never had
+// the bug. Ending the source with the same expression closes the gap, so exit
+// codes mean one thing in both modes.
+//
+// The leading newline terminates whatever the command ended with (a comment,
+// say) so the epilogue is always its own statement. Commands that call `exit`
+// themselves never reach it, which is the desired precedence.
+const winExitEpilogue = "\nexit $(if($null -ne $LASTEXITCODE){$LASTEXITCODE}else{[int](-not $?)})"
+
 // ShellSession is a long-lived interpreter process whose working directory and
 // environment persist across commands. Each command is delimited by a unique
 // sentinel that the shell echoes after the command, carrying its exit code, so
@@ -238,7 +251,7 @@ func RunOneShotContext(ctx context.Context, shell, command, cwd string, out io.W
 	}
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, shell, "-NoProfile", "-NoLogo", "-NonInteractive", "-Command", winUTF8Prologue+command)
+		cmd = exec.CommandContext(ctx, shell, "-NoProfile", "-NoLogo", "-NonInteractive", "-Command", winUTF8Prologue+command+winExitEpilogue)
 	} else {
 		cmd = exec.CommandContext(ctx, shell, "-c", command)
 	}
