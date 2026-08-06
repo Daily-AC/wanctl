@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"net"
 	"testing"
 
+	"wanctl/internal/eventlog"
+	"wanctl/internal/protocol"
 	"wanctl/internal/transport"
 )
 
@@ -47,5 +50,39 @@ func TestAutoYesSkipsTheLabelRequirement(t *testing.T) {
 	a, _ := agentWithKnown(t, true)
 	if a.unlabeledPairing("SHA256:stranger", "") {
 		t.Fatal("--yes must keep bootstrapping unattended devices")
+	}
+}
+
+// A device's activity log recorded only connections that succeeded, so every
+// refusal — unpaired, not a console admin, anonymous — left no trace on the
+// device at all. The denials are the half you read when something cannot
+// connect, and the half that would show someone probing.
+func TestRefuseRecordsTheDenial(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	logger, err := eventlog.Open("events.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{known: transport.NewMemStore(), log: logger}
+
+	controller, device := net.Pipe()
+	defer controller.Close()
+	go a.refuse(device, "SHA256:stranger", "bogon", "rejected:unpaired",
+		protocol.Message{Kind: protocol.KindReject, Reason: "device has not paired this controller"})
+	if _, err := protocol.ReadMessage(controller); err != nil {
+		t.Fatalf("controller never got the rejection: %v", err)
+	}
+	controller.Close()
+
+	events, err := logger.Read(eventlog.Filter{Type: "connect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("logged %d connect events, want 1", len(events))
+	}
+	e := events[0]
+	if e.Decision != "rejected:unpaired" || e.PeerFP != "SHA256:stranger" || e.Detail == "" {
+		t.Fatalf("event = %+v; want the fingerprint, the verdict and why", e)
 	}
 }
