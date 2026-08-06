@@ -246,7 +246,13 @@ func (r *remoteSession) client() (*client.Client, *mcpapi.CallToolResult) {
 	}
 	relay := strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
 	tr := config.EnvOr("WANCTL_TRANSPORT", config.DefaultTransport)
-	return client.NewWith(r.identity, r.known, relay, r.token, tr), nil
+	c := client.NewWith(r.identity, r.known, relay, r.token, tr)
+	// Devices refuse a pairing request from a controller that will not say who it
+	// is, and an HTTP MCP session has no config dir to read a label from. Name the
+	// session for what it actually is, so the owner approving it knows an AI is
+	// on the other end rather than seeing the relay's hostname.
+	c.SetLabel(config.EnvOr("WANCTL_LABEL", "AI 助手 · MCP 会话 (ns: "+r.namespace+")"))
+	return c, nil
 }
 
 func (r *remoteSession) saveLogin(token, namespace string) error {
@@ -560,7 +566,10 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 			portal,
 		)), nil
 	}
-	token, ns, err := client.ExchangeCode(ctx, s.relayURL(), code)
+	// An MCP session is a controller, not a device: it never runs an agent, so
+	// the enrollment's portal fingerprint has nothing to seed here.
+	en, err := client.ExchangeCode(ctx, s.relayURL(), code)
+	token, ns := en.Token, en.Namespace
 	if err != nil {
 		return mcpapi.NewToolResultError(fmt.Sprintf("授权失败: %s\n请让用户回到 %s/enroll 拿一个新 code（旧的可能用过或过期了），然后再调一次 wanctl_login(code=\"…\")。", err, portal)), nil
 	}
