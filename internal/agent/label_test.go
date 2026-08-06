@@ -86,3 +86,17 @@ func TestRefuseRecordsTheDenial(t *testing.T) {
 		t.Fatalf("event = %+v; want the fingerprint, the verdict and why", e)
 	}
 }
+
+// The console gate (portal-admin membership) is a stronger statement than a
+// label, and a portal fingerprint added while the agent runs is not yet mirrored
+// into known_clients — telling it to introduce itself would lock the portal out
+// of exactly the device someone is trying to repair.
+func TestConsoleSessionIsExemptFromTheLabelGate(t *testing.T) {
+	a, _ := agentWithKnown(t, false)
+	if !a.mustIdentify(protocol.KindHello, "SHA256:stranger", "") {
+		t.Fatal("a controller session must still have to introduce itself")
+	}
+	if a.mustIdentify(protocol.KindConsoleHello, "SHA256:portal", "") {
+		t.Fatal("the portal was told to introduce itself; it already proved it is a console admin")
+	}
+}

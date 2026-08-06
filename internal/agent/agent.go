@@ -392,7 +392,7 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 			return
 		}
 	}
-	if a.unlabeledPairing(fp, hello.Label) {
+	if a.mustIdentify(hello.Kind, fp, hello.Label) {
 		a.refuse(conn, fp, hello.Name, "rejected:unlabeled", protocol.Message{Kind: protocol.KindReject, Reason: unlabeledReason})
 		return
 	}
@@ -427,6 +427,19 @@ const unlabeledReason = "controller did not identify itself — set a label (`wa
 // worse than useless. Already-trusted controllers and --yes are unaffected.
 func (a *Agent) unlabeledPairing(fp, label string) bool {
 	return !a.known.Has(fp) && !a.opts.AutoYes && strings.TrimSpace(label) == ""
+}
+
+// mustIdentify decides whether this hello has to carry a self-description.
+// Console sessions are exempt: they have already passed the portal-admin check,
+// which is a stronger statement than a label. Without the exemption a portal
+// fingerprint added to portal_admins.json while the agent is running — not yet
+// mirrored into known_clients — would be told to introduce itself, locking the
+// portal out of the very device someone is trying to repair.
+func (a *Agent) mustIdentify(helloKind, fp, label string) bool {
+	if helloKind == protocol.KindConsoleHello {
+		return false
+	}
+	return a.unlabeledPairing(fp, label)
 }
 
 func (a *Agent) authorize(fp, name, label string) bool {
