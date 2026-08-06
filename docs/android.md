@@ -8,11 +8,13 @@ binary has the controller subcommands, they just have not been exercised there.
 Shipped artifact: `wanctl-android-arm64`. There is no 32-bit or x86 Android
 build; every Android device made in the last decade is arm64.
 
-Verified end-to-end on 2026-08-05 against a vivo PA2353 (Android 13, arm64) and
-an Android 16 arm64 emulator, over the production relay:
-`exec` with streaming output and real exit codes, `push`/`pull` (512 KB binary
-round-trip, SHA-256 identical), TOFU pinning both ways, and detached `start` /
-`stop` / `status`.
+Verified end-to-end against the production relay on a vivo PA2353 (Android 13,
+arm64) and an Android 16 arm64 emulator — `exec` with streaming output and real
+exit codes, `push`/`pull` (512 KB binary round-trip, SHA-256 identical), TOFU
+pinning both ways, detached `start` / `stop` / `status`, and the agent surviving
+a locked screen. Run through an adb shell on 2026-08-05 and, separately, from
+inside Termux on 2026-08-06 — the two environments fail differently and neither
+substitutes for the other.
 
 ## Install
 
@@ -25,7 +27,8 @@ wanctl                            # Feishu login, then run detached
 ```
 
 The installer detects Android and puts the binary in `$PREFIX/bin`, which is on
-PATH and is executable — most other writable locations on Android are not.
+PATH. (Until a release ships the `android/arm64` artifact this path cannot work
+yet — see "Not yet verified".)
 
 ### Without installing an app (adb)
 
@@ -72,11 +75,21 @@ read-only, so the agent falls back to the first writable candidate:
 `$TMPDIR/wanctl`, then `.wanctl` next to the binary, then
 `/data/local/tmp/.wanctl`. `WANCTL_CONFIG_DIR` overrides all of it.
 
-**Shell.** `/bin/sh` only exists on Android 11+ (as a symlink into
-`/system/bin`), so it cannot be the default. The agent prefers
-`$PREFIX/bin/sh` in Termux — a session in the system shell would have none of
-your Termux tools — and falls back to `/system/bin/sh`, which every Android
-build has.
+**Shell.** Sessions run in `/system/bin/sh` (mksh), the one shell present on
+every Android build. `/bin/sh` exists only from Android 11 on (a symlink into
+`/system/bin`), so it cannot be the default.
+
+Termux's own `$PREFIX/bin/sh` is deliberately not used, even in Termux: the
+agent physically cannot start it. Android refuses `exec` of a file in an app's
+private data directory from the `untrusted_app` domain, and Termux only manages
+it because `libtermux-exec.so`, preloaded into its shell, rewrites every
+`execve` to go through the dynamic linker — a CGO-free Go binary loads no such
+library, so the call comes back `permission denied`.
+
+You lose nothing by this. A `/system/bin/sh` session inherits Termux's `PATH`,
+and Termux binaries started *by that shell* run normally, because mksh performs
+those execs rather than wanctl. Verified over the relay from a Termux-hosted
+agent: `git --version` → 2.52.0, `python --version` → 3.12.12, both Termux's.
 
 **File transfers.** Android grants the shell user traverse-only access to the
 directories leading anywhere useful (`/data` is `drwxrwx--x system:system`), and
@@ -85,6 +98,16 @@ volume root therefore failed with `openat data/local/tmp: permission denied`
 even though the destination was writable. On Android an otherwise-unconstrained
 transfer binds to the target's own directory instead. This is narrower than the
 volume root, not wider, and symlinks at the destination are still refused.
+
+**Argument vector (Termux only).** Go's Android target is always dynamic PIE, so
+the binary names `/system/bin/linker64` as its ELF interpreter, and Termux's exec
+interceptor re-runs such programs through the linker explicitly — which prepends
+the program path to `argv`. `./wanctl version` arrives as
+`[./wanctl, /abs/path/wanctl, version]`, shifting every argument one slot late
+and making the binary inert (`unknown command "/data/data/com.termux/..."`). The
+Android build detects the duplicate — argv[1] naming the same file as argv[0] —
+and drops it. Nothing needs configuring; it is described here because the
+symptom is baffling if you meet it in an older binary.
 
 **Device name.** Every Android device reports its hostname as `localhost`, so
 the default name would be both meaningless and a collision between any two
@@ -109,13 +132,36 @@ scripts at startup, and `pkg install termux-services` adds a runit supervisor.
 Termux mechanisms, not a tested wanctl integration. Treat this section as a
 starting point rather than a recipe.
 
+## Pairing an Android device
+
+Two things changed in the relay/agent since the first Android round and both
+show up here:
+
+- **The controller must identify itself.** A device refuses a pairing request
+  from a controller with no label, so set one once:
+  `wanctl label "<who you are>"` (or `WANCTL_LABEL`). Already-paired
+  controllers and agents started with `--yes` are unaffected — which is most
+  Android testing, so you may never see it.
+- **The portal fingerprint seeds itself.** Enrolling a device (`wanctl` with no
+  arguments) now writes the portal identity into the device's
+  `portal_admins.json`, so the web console can reach an Android device without
+  anyone passing `--portal-fps` by hand. Compare the printed fingerprint with
+  the one on the enrollment page.
+
+A device's activity log now also records *refused* connections
+(`rejected:unpaired`, `:unlabeled`, `:capability`, …) with a reason, which is
+the fastest way to see why a phone is ignoring you.
+
 ## Not yet verified
 
 - **Self-update on Android.** `wanctl update` resolves `android/arm64` from the
   signed manifest like any other platform, but no release has shipped that
-  artifact yet, so the download-and-swap path has not run on a device.
-- **Anything inside Termux.** Every check above was run through an adb shell.
-  The Termux-specific branches (`$PREFIX` paths, `$PREFIX/bin/sh`, the Termux
-  installer destination) are exercised by unit tests and by simulating `PREFIX`,
-  not by a real Termux session.
-- **Termux:Boot / termux-services**, as above.
+  artifact yet, so the download-and-swap path has not run on a device. That
+  unblocks once this branch's `scripts/build-release.sh` change is on main and
+  a release is cut.
+- **The one-line installer on Android**, for the same reason: there is no
+  `android/arm64` entry in the published manifest to install. Its platform
+  detection and destination logic were exercised on the device by running the
+  same shell in a real Termux session and over adb.
+- **Termux:Boot / termux-services** — the documented Termux mechanisms for
+  surviving a reboot, not a tested wanctl integration.
