@@ -32,6 +32,7 @@ import (
 	"wanctl/internal/policy"
 	"wanctl/internal/portal"
 	"wanctl/internal/relay"
+	"wanctl/internal/script"
 	"wanctl/internal/transport"
 )
 
@@ -70,11 +71,15 @@ USAGE
   wanctl docs group new --slug S --title T [--position N]
   wanctl docs group rm <slug>
   wanctl exec  [--target NS/DEV] [--oneshot] <command...>
+  wanctl exec  [--target NS/DEV] --script <local-file> [--interp powershell|sh]
+                                              run a LOCAL script on the device — no shell quoting or encoding hazards
   wanctl push  [--target NS/DEV] <local> <remote>
   wanctl pull  [--target NS/DEV] <remote> <local>
   wanctl peers
   wanctl net [wan|lan|auto|status]           switch which relay the controller uses: public (wan), intranet
                                               fast-path (lan, real-time WS), or probe-and-pick (auto)
+  wanctl label ["<who you are>"]              show or set this controller's self-description; devices refuse to
+                                              raise a pairing request from a controller without one
   wanctl id
   wanctl pair  <device>                       check device trust state; if not yet paired print the URL the device owner clicks to approve
   wanctl trust [clients|servers]
@@ -143,6 +148,8 @@ func main() {
 		err = cmdLogs(ctx, os.Args[2:])
 	case "net":
 		err = cmdNet(os.Args[2:])
+	case "label":
+		err = cmdLabel(os.Args[2:])
 	case "up":
 		err = cmdUp(ctx)
 	case "login":
@@ -372,11 +379,36 @@ func cmdExec(ctx context.Context, args []string) error {
 	target := fs.String("target", "", "device (NS/DEV or DEV)")
 	oneShot := fs.Bool("oneshot", false, "fresh shell, no session state")
 	cwd := fs.String("cwd", "", "working directory on the device (also the policy scope)")
+	scriptPath := fs.String("script", "", "run a local script file on the device instead of a command string;\n"+
+		"\tno shell quoting or encoding hazards — the file is sent base64-encoded.\n"+
+		"\tInterpreter comes from the extension (.ps1 -> PowerShell, .sh/none -> sh)")
+	interp := fs.String("interp", "", "override the -script interpreter: powershell | sh")
 	fs.Parse(args)
 	command := strings.TrimSpace(strings.Join(fs.Args(), " "))
-	if command == "" {
-		return fmt.Errorf("no command given")
+
+	if *scriptPath != "" {
+		if command != "" {
+			return fmt.Errorf("give either -script or a command, not both")
+		}
+		var err error
+		if command, err = buildScriptCommand(*scriptPath, *interp); err != nil {
+			return err
+		}
 	}
+	if command == "" {
+		return fmt.Errorf("no command given (pass a command string, or -script <file>)")
+	}
+	// The command is source for the device's shell, so it gets parsed there
+	// before anything else runs. A nested `powershell -Command "...$x..."` is
+	// therefore parsed twice and loses its variables to the outer pass — a
+	// failure that surfaces as a bogus "term is not recognized" from the inner
+	// script. Say so at the moment it would happen rather than in the docs.
+	if *scriptPath == "" && script.NestedPowerShellExpansion(command) {
+		fmt.Fprintln(os.Stderr, "wanctl: warning: this command nests `powershell -Command \"...\"` with a $ inside the double quotes.")
+		fmt.Fprintln(os.Stderr, "        The device's shell expands those variables before the inner PowerShell sees them.")
+		fmt.Fprintln(os.Stderr, "        Use single quotes for the inner script, or `wanctl exec -script <file.ps1>`.")
+	}
+
 	c, err := client.New()
 	if err != nil {
 		return err
@@ -389,6 +421,26 @@ func cmdExec(ctx context.Context, args []string) error {
 	return nil
 }
 
+// buildScriptCommand turns a local script file into a command string that
+// carries the script without exposing it to shell parsing. See execscript.go for
+// why this exists.
+func buildScriptCommand(path, interpFlag string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var in script.Interp
+	if interpFlag != "" {
+		in, err = script.ParseInterp(interpFlag)
+	} else {
+		in, err = script.ForPath(path)
+	}
+	if err != nil {
+		return "", err
+	}
+	return script.Command(in, data)
+}
+
 func cmdPush(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("push", flag.ExitOnError)
 	target := fs.String("target", "", "device")
@@ -399,6 +451,16 @@ func cmdPush(ctx context.Context, args []string) error {
 	c, err := client.New()
 	if err != nil {
 		return err
+	}
+	// push is byte-exact on purpose, so this warns rather than rewrites: a
+	// BOM-less UTF-8 .ps1 is read by Windows PowerShell 5.1 as the ANSI code
+	// page, which mangles non-ASCII text and can eat the closing quote of a
+	// string literal — at which point PowerShell echoes the script instead of
+	// running it.
+	if data, err := os.ReadFile(fs.Arg(0)); err == nil && script.BomlessNonASCIIPowerShell(fs.Arg(1), data) {
+		fmt.Fprintln(os.Stderr, "wanctl: warning: "+fs.Arg(0)+" is a .ps1 with non-ASCII text and no UTF-8 BOM.")
+		fmt.Fprintln(os.Stderr, "        Windows PowerShell 5.1 will read it as the ANSI code page and mangle that text.")
+		fmt.Fprintln(os.Stderr, "        Add a BOM before pushing, or run it with `wanctl exec -script` instead.")
 	}
 	return c.Push(ctx, *target, fs.Arg(0), fs.Arg(1))
 }
@@ -459,6 +521,37 @@ func cmdPeers(ctx context.Context) error {
 	for _, d := range devs {
 		fmt.Println(d)
 	}
+	return nil
+}
+
+// cmdLabel shows or sets this controller's self-description. A device asked to
+// pair an unknown controller shows it to its owner, and refuses the request when
+// it is missing: "trust SHA256:… from bogon?" is not a question anyone can
+// answer, and unanswerable prompts get clicked through.
+func cmdLabel(args []string) error {
+	if len(args) == 0 {
+		label := config.EnvOr("WANCTL_LABEL", config.StoredLabel())
+		if label == "" {
+			fmt.Println("控制端标签: (未设置)")
+			fmt.Println("设备在配对时会拒绝没有标签的控制端。设置方法：")
+			fmt.Println(`  wanctl label "张三的 MacBook / Claude Code"`)
+			return nil
+		}
+		fmt.Printf("控制端标签: %s\n", label)
+		if os.Getenv("WANCTL_LABEL") != "" {
+			fmt.Println("(来自 WANCTL_LABEL 环境变量，覆盖已保存的值)")
+		}
+		return nil
+	}
+	label := strings.TrimSpace(strings.Join(args, " "))
+	if err := config.SaveLabel(label); err != nil {
+		return err
+	}
+	if label == "" {
+		fmt.Println("✓ 已清除控制端标签")
+		return nil
+	}
+	fmt.Printf("✓ 控制端标签: %s\n", label)
 	return nil
 }
 

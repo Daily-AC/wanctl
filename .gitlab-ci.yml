@@ -2,6 +2,7 @@ stages:
   - test
   - security
   - release
+  - deploy
 
 variables:
   GOTOOLCHAIN: go1.25.12
@@ -77,3 +78,43 @@ release:
     expire_in: never
   environment:
     name: release
+
+# Deploy is manual and only offered on the production branch. Merging to main and
+# shipping to production are separate decisions here: `deploy/v0.1.0` also carries
+# the baked signed release bundle that /dl serves, so "what is on main" and "what
+# devices download" are deliberately not the same thing. Auto-deploying on merge
+# would erase that gap without anyone choosing to.
+#
+# Needs THUNDERBOX_TOKEN as a protected + masked project variable, and a runner
+# with egress to the company-internal thunderbox API — the job says which of the
+# two is missing rather than failing opaquely.
+.deploy:
+  extends: .go
+  stage: deploy
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "deploy/v0.1.0"'
+      when: manual
+  variables:
+    APP_REF: deploy/v0.1.0
+
+deploy:relay:
+  extends: .deploy
+  environment:
+    name: production/relay
+    url: https://wanctl-relay.***REMOVED***.***REMOVED***.com
+  script:
+    # The manifest version is the one thing only the newly baked bundle can
+    # report, so it proves the image that is serving, not just that one started.
+    - ./scripts/deploy-thunderbox.sh ***REMOVED*** "$APP_REF"
+        https://wanctl-relay.***REMOVED***.***REMOVED***.com/dl/manifest.json
+        "$(sed -n 's/.*wanctl-\(v[0-9.]*\)-release.tar.gz.*/\1/p' Dockerfile | head -1)"
+
+deploy:portal:
+  extends: .deploy
+  environment:
+    name: production/portal
+    url: https://wanctl.***REMOVED***.***REMOVED***.com
+  script:
+    # The portal sits behind SSO, so there is no body a runner can assert on;
+    # this stops at "the platform reports it running" and says so.
+    - ./scripts/deploy-thunderbox.sh ***REMOVED***6k0la0r3j93ktcrg0 "$APP_REF"

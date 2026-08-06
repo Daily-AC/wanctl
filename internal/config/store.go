@@ -56,6 +56,40 @@ func ClearToken() error {
 	return nil
 }
 
+// LabelPath is where the controller's self-description is persisted. A device
+// asked to pair an unknown controller shows this to its owner, so it is the
+// difference between "trust SHA256:… from bogon?" and a question a human can
+// actually answer.
+func LabelPath() (string, error) { return fileIn("label") }
+
+// StoredLabel returns the persisted controller label, or "" if none.
+func StoredLabel() string {
+	p, err := LabelPath()
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// SaveLabel persists the controller label. An empty value clears it.
+func SaveLabel(label string) error {
+	p, err := LabelPath()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(label) == "" {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return os.WriteFile(p, []byte(strings.TrimSpace(label)+"\n"), 0o600)
+}
+
 // NetModePath is where the controller-side network mode is persisted.
 func NetModePath() (string, error) { return fileIn("netmode") }
 

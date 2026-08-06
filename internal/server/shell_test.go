@@ -37,6 +37,35 @@ func TestRunOneShotCwdWithSpecialCharacters(t *testing.T) {
 	}
 }
 
+// A one-shot must report the same exit code the session path reports. The
+// session path reads $LASTEXITCODE in its end-of-command marker; the one-shot
+// path relies on the process exit code, which `powershell -Command` derives from
+// $? (0 or 1) unless the source ends in an explicit exit.
+func TestWinExitEpilogueMirrorsSessionMarker(t *testing.T) {
+	if !strings.HasPrefix(winExitEpilogue, "\n") {
+		t.Error("epilogue must start on its own line, or a trailing comment in the command swallows it")
+	}
+	for _, want := range []string{"exit ", "$LASTEXITCODE", "[int](-not $?)"} {
+		if !strings.Contains(winExitEpilogue, want) {
+			t.Errorf("epilogue missing %q — it must mirror the session marker's expression", want)
+		}
+	}
+}
+
+func TestRunOneShotPropagatesNativeExitCode(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("exercises the PowerShell one-shot path")
+	}
+	var out bytes.Buffer
+	code, err := RunOneShot("powershell", "cmd /c exit 7", "", &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 7 {
+		t.Fatalf("exit code = %d, want 7 (output %q)", code, out.String())
+	}
+}
+
 func TestShellSessionExecInDirPersistsCwd(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses /bin/sh")

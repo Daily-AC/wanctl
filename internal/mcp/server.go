@@ -28,6 +28,7 @@ import (
 	"wanctl/internal/config"
 	"wanctl/internal/limits"
 	"wanctl/internal/policy"
+	"wanctl/internal/script"
 	"wanctl/internal/transport"
 
 	mcpapi "github.com/mark3labs/mcp-go/mcp"
@@ -245,7 +246,13 @@ func (r *remoteSession) client() (*client.Client, *mcpapi.CallToolResult) {
 	}
 	relay := strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
 	tr := config.EnvOr("WANCTL_TRANSPORT", config.DefaultTransport)
-	return client.NewWith(r.identity, r.known, relay, r.token, tr), nil
+	c := client.NewWith(r.identity, r.known, relay, r.token, tr)
+	// Devices refuse a pairing request from a controller that will not say who it
+	// is, and an HTTP MCP session has no config dir to read a label from. Name the
+	// session for what it actually is, so the owner approving it knows an AI is
+	// on the other end rather than seeing the relay's hostname.
+	c.SetLabel(config.EnvOr("WANCTL_LABEL", "AI 助手 · MCP 会话 (ns: "+r.namespace+")"))
+	return c, nil
 }
 
 func (r *remoteSession) saveLogin(token, namespace string) error {
@@ -390,9 +397,11 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpPair)
 
 	s.AddTool(mcpapi.NewTool("wanctl_exec",
-		mcpapi.WithDescription("Run a shell command on a remote wanctl-enrolled device over the encrypted relay. Returns the device's stdout, stderr, and exit code. If the device hasn't paired this controller yet, the result is isError=true with a 'PAIRING REQUIRED' message that carries a URL — surface that URL VERBATIM to the user; do not paraphrase."),
+		mcpapi.WithDescription("Run a shell command, or a whole script, on a remote wanctl-enrolled device over the encrypted relay. Returns the device's stdout, stderr, and exit code. Pass EITHER 'command' (a one-liner) OR 'script' (multi-line source) — prefer 'script' for anything with a $, a quote inside a quote, or more than one statement, because a script is transported encoded and is never parsed by the device's shell. If the device hasn't paired this controller yet, the result is isError=true with a 'PAIRING REQUIRED' message that carries a URL — surface that URL VERBATIM to the user; do not paraphrase."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE for shared devices. If exactly one device is online for this token, you may pass empty string.")),
-		mcpapi.WithString("command", mcpapi.Required(), mcpapi.Description("Shell command to run, in the device's default shell (sh on Unix, powershell on Windows).")),
+		mcpapi.WithString("command", mcpapi.Description("A one-liner for the device's default shell (sh on Unix, powershell on Windows). WARNING: this string is SOURCE CODE for that shell and is parsed there. On Windows that means writing `powershell -Command \"...$x...\"` gets parsed TWICE — the outer shell expands $x to nothing and the inner script fails with a misleading 'term is not recognized'. Use 'script' instead of nesting an interpreter here.")),
+		mcpapi.WithString("script", mcpapi.Description("Script SOURCE to run on the device (not a file path). Sent encoded, so quoting and character-set rules do not apply: $, backticks, nested quotes and non-ASCII text all arrive literally. Requires 'interp'. Use this for multi-statement work; it is the same single call as 'command'. Scripts over ~9KB must be pushed as a file and run by path instead.")),
+		mcpapi.WithString("interp", mcpapi.Description("Interpreter for 'script': 'powershell' for Windows devices, 'sh' for Unix/macOS/Android. Required when 'script' is set.")),
 		mcpapi.WithString("cwd", mcpapi.Description("Working directory on the device for this command (also the policy scope).")),
 		mcpapi.WithBoolean("oneshot", mcpapi.Description("Run in a fresh shell with no persistent session state. Default false — successive exec calls share cwd/env like a real terminal.")),
 	), mcpExec)
@@ -557,7 +566,10 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 			portal,
 		)), nil
 	}
-	token, ns, err := client.ExchangeCode(ctx, s.relayURL(), code)
+	// An MCP session is a controller, not a device: it never runs an agent, so
+	// the enrollment's portal fingerprint has nothing to seed here.
+	en, err := client.ExchangeCode(ctx, s.relayURL(), code)
+	token, ns := en.Token, en.Namespace
 	if err != nil {
 		return mcpapi.NewToolResultError(fmt.Sprintf("授权失败: %s\n请让用户回到 %s/enroll 拿一个新 code（旧的可能用过或过期了），然后再调一次 wanctl_login(code=\"…\")。", err, portal)), nil
 	}
@@ -641,11 +653,45 @@ func mcpPair(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	)), nil
 }
 
+// execSource resolves the two ways to say "run this": a shell one-liner, or a
+// script whose source must survive untouched.
+//
+// The distinction matters because 'command' is source for the device's shell —
+// on Windows that is PowerShell, and an AI reaching for the familiar
+// `powershell -Command "...$_..."` gets it parsed twice, losing every variable
+// before the inner interpreter runs. 'script' sidesteps the shell entirely, so
+// it is the right answer for anything beyond a one-liner.
+func execSource(req mcpapi.CallToolRequest) (string, *mcpapi.CallToolResult) {
+	command := reqStr(req, "command", "")
+	src := reqStr(req, "script", "")
+	switch {
+	case command == "" && src == "":
+		return "", mcpapi.NewToolResultError("pass either 'command' (a one-liner) or 'script' (source to run)")
+	case command != "" && src != "":
+		return "", mcpapi.NewToolResultError("pass either 'command' or 'script', not both")
+	case src == "":
+		return command, nil
+	}
+	interpName := reqStr(req, "interp", "")
+	if interpName == "" {
+		return "", mcpapi.NewToolResultError("'script' requires 'interp': 'powershell' for Windows devices, 'sh' for Unix/macOS/Android")
+	}
+	in, err := script.ParseInterp(interpName)
+	if err != nil {
+		return "", mcpapi.NewToolResultError(err.Error())
+	}
+	built, err := script.Command(in, []byte(src))
+	if err != nil {
+		return "", mcpapi.NewToolResultError(err.Error())
+	}
+	return built, nil
+}
+
 func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
 	target := reqStr(req, "target", "")
-	command := reqStr(req, "command", "")
-	if command == "" {
-		return mcpapi.NewToolResultError("command is required"), nil
+	command, errRes := execSource(req)
+	if errRes != nil {
+		return errRes, nil
 	}
 	c, hint := sessions.get(ctx).client()
 	if hint != nil {

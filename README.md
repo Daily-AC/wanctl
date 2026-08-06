@@ -159,6 +159,7 @@ wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --toke
 export WANCTL_RELAY=https://wanctl-relay.***REMOVED***.***REMOVED***.com WANCTL_TRANSPORT=http WANCTL_TOKEN=tok
 wanctl peers                         # list reachable devices
 wanctl exec --target home-pc "..."   # run a command (streams output, real exit code)
+wanctl exec --target home-pc --script ./job.ps1   # run a local script — no shell quoting/encoding traps
 wanctl push ./a.zip /remote/a.zip    # upload
 wanctl pull /remote/log.txt ./log    # download
 wanctl id                            # this node's fingerprint
@@ -186,6 +187,35 @@ wanctl portal-admins remove SHA256:<old>
 Rotation must overlap old and new roots. Add the new root to every device first,
 then remove the old root. Removing the final portal admin is rejected so a
 remote action cannot silently lock out portal administration.
+
+## Running scripts, not command strings
+
+The string you give `exec` is **source for the device's shell** and is parsed
+there. For one-liners that is what you want. For anything larger it is a trap,
+sharpest on Windows where the device shell is PowerShell and the reflex to write
+`powershell -Command "..."` produces a second parse that eats `$variables`
+before the inner script ever runs — surfacing as a misleading
+`The term '.Foo' is not recognized`.
+
+`--script` sends a local file instead, base64-encoded (UTF-16LE for PowerShell,
+which is what `-EncodedCommand` takes), so the script's own syntax and character
+set never meet a shell:
+
+```bash
+wanctl exec --target home-pc --script ./netcheck.ps1     # interpreter from the extension
+wanctl exec --target home-pc --script ./job --interp sh  # or state it
+```
+
+`$`, backticks, nested quotes and non-ASCII text all arrive literally, with or
+without a BOM. (Pushing a BOM-less UTF-8 `.ps1` and running it by path is *not*
+equivalent: Windows PowerShell 5.1 reads BOM-less files as the ANSI code page,
+and mangled bytes inside a double-quoted string can swallow its closing quote —
+`push` warns when it sees this.) Scripts beyond ~9 KB exceed the command-line
+limit and should be pushed and run by path; the error says so.
+
+The MCP tool takes the same thing as a `script` parameter (source text, plus
+`interp`), which is usually the better shape for an AI: JSON carries the source,
+so there is no quoting layer at all.
 
 ## Security model
 

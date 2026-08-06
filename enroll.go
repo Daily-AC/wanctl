@@ -35,12 +35,44 @@ func enroll(ctx context.Context) (string, error) {
 	}
 
 	fmt.Println("正在验证…")
-	token, ns, err := client.ExchangeCode(ctx, relay, code)
+	en, err := client.ExchangeCode(ctx, relay, code)
 	if err != nil {
 		return "", err
 	}
-	fmt.Printf("✓ 已绑定到空间 \"%s\"\n", ns)
-	return token, nil
+	return applyEnrollment(en), nil
+}
+
+// applyEnrollment lands everything a successful exchange gives us. Split from
+// enroll so the parts that are not stdin and network stay testable.
+func applyEnrollment(en client.Enrollment) string {
+	fmt.Printf("✓ 已绑定到空间 \"%s\"\n", en.Namespace)
+	seedPortalAdmin(en.PortalFP)
+	return en.Token
+}
+
+// seedPortalAdmin trusts the portal identity that came back with the enrollment,
+// so the team portal's web console can reach this device without anyone passing
+// --portal-fps by hand. Only at enrollment: an already-enrolled device never
+// gains a console administrator from the wire, and the fingerprint is printed
+// for comparison with the one the enroll page showed, because it travelled
+// through the relay and a compromised relay could otherwise nominate itself.
+func seedPortalAdmin(fp string) {
+	if fp == "" {
+		return
+	}
+	admins, err := config.OpenPortalAdmins()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "! 无法打开门户管理员列表: %v\n", err)
+		return
+	}
+	if admins.Contains(fp) {
+		return
+	}
+	if err := admins.Add(fp); err != nil {
+		fmt.Fprintf(os.Stderr, "! 信任门户身份失败: %v\n  网页控制台将连不上本机，可稍后手动执行: wanctl portal-admins add %s\n", err, fp)
+		return
+	}
+	fmt.Printf("✓ 已信任门户身份 %s\n  （请核对它与授权网页上显示的一致）\n", fp)
 }
 
 // cmdLogin is the controller-side OAuth entrypoint: opens the portal, exchanges

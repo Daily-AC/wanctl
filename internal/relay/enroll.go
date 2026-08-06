@@ -3,8 +3,12 @@ package relay
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"time"
+
+	"wanctl/internal/transport"
 )
 
 // Device enrollment (OAuth-style). The portal authenticates a human via Feishu
@@ -19,6 +23,7 @@ const enrollCodeTTL = 5 * time.Minute
 type enrollCode struct {
 	token     string
 	namespace string
+	portalFP  string // portal's console-admin identity, as declared at mint time
 	expires   time.Time
 }
 
@@ -38,6 +43,24 @@ func newEnrollCode() string {
 	return string(out)
 }
 
+// parseMintBody reads a mint request. The portal fingerprint is carried
+// opaquely but not blindly: a malformed value would be seeded into a device's
+// console-admin set, where it could only ever fail closed.
+func parseMintBody(r io.Reader) (namespace, portalFP string, err error) {
+	var body struct {
+		Namespace string
+		PortalFP  string `json:"portal_fp"`
+	}
+	json.NewDecoder(r).Decode(&body)
+	if body.Namespace == "" {
+		return "", "", errors.New("namespace required")
+	}
+	if body.PortalFP != "" && !transport.ValidFingerprint(body.PortalFP) {
+		return "", "", errors.New("invalid portal_fp")
+	}
+	return body.Namespace, body.PortalFP, nil
+}
+
 // handleEnrollMint (admin-gated) issues a namespace token and returns a one-time
 // code mapping to it. Called by the portal after SSO.
 func (r *Relay) handleEnrollMint(w http.ResponseWriter, req *http.Request) {
@@ -49,13 +72,12 @@ func (r *Relay) handleEnrollMint(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no admin store", http.StatusServiceUnavailable)
 		return
 	}
-	var body struct{ Namespace string }
-	json.NewDecoder(req.Body).Decode(&body)
-	if body.Namespace == "" {
-		http.Error(w, "namespace required", http.StatusBadRequest)
+	ns, portalFP, err := parseMintBody(req.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	token, err := r.admin.IssueToken(body.Namespace, "device-enroll", 0)
+	token, err := r.admin.IssueToken(ns, "device-enroll", 0)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -63,7 +85,7 @@ func (r *Relay) handleEnrollMint(w http.ResponseWriter, req *http.Request) {
 	code := newEnrollCode()
 	r.enrollMu.Lock()
 	r.purgeEnrollLocked()
-	r.enrollCodes[code] = &enrollCode{token: token, namespace: body.Namespace, expires: time.Now().Add(enrollCodeTTL)}
+	r.enrollCodes[code] = &enrollCode{token: token, namespace: ns, portalFP: portalFP, expires: time.Now().Add(enrollCodeTTL)}
 	r.enrollMu.Unlock()
 	writeJSON(w, map[string]any{"code": code, "expires_in": int(enrollCodeTTL.Seconds())})
 }
@@ -87,7 +109,7 @@ func (r *Relay) handleEnrollExchange(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "invalid or expired code", http.StatusUnauthorized)
 		return
 	}
-	writeJSON(w, map[string]string{"token": ec.token, "namespace": ec.namespace})
+	writeJSON(w, map[string]string{"token": ec.token, "namespace": ec.namespace, "portal_fp": ec.portalFP})
 }
 
 // purgeEnrollLocked drops expired codes. Caller holds enrollMu.
