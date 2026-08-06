@@ -531,7 +531,8 @@ const enrollPage = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 background:var(--cream);color:var(--ink);display:flex;min-height:100vh;align-items:center;justify-content:center}
 .card{background:#fff;border:1px solid var(--soft);border-radius:18px;padding:40px 44px;max-width:440px;
 box-shadow:0 8px 30px rgba(0,0,0,.06);text-align:center}
-h1{font-size:20px;margin:0 0 6px}.sub{color:#8a857c;font-size:14px;margin-bottom:26px}
+h1{font-size:20px;margin:0 0 6px;display:flex;align-items:center;justify-content:center;gap:8px}
+h1 .ico{width:22px;height:22px;color:var(--brand);flex:none}.sub{color:#8a857c;font-size:14px;margin-bottom:26px}
 .code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:38px;letter-spacing:4px;font-weight:700;
 color:var(--brand);background:var(--cream);border:2px dashed var(--brand);border-radius:14px;padding:18px 10px;cursor:pointer;user-select:all}
 .copy{margin-top:14px;font-size:13px;color:#8a857c}.ns{font-weight:600}
@@ -540,7 +541,7 @@ color:var(--brand);background:var(--cream);border:2px dashed var(--brand);border
 .fp{margin-top:14px;padding:12px 14px;background:var(--cream);border-radius:12px;text-align:left;font-size:12px;color:#6b665d;line-height:1.6}
 .fp code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--ink);word-break:break-all;user-select:all}
 </style></head><body><div class="card">
-<h1>🛡️ 设备授权</h1>
+<h1><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4.5 6v5.5c0 4.4 3.1 8.2 7.5 9.5 4.4-1.3 7.5-5.1 7.5-9.5V6Z"/><path d="m9.2 12.1 2 2 3.6-3.8"/></svg>设备授权</h1>
 <div class="sub">空间 <span class="ns">%[1]s</span> · 把下面的 code 贴回终端</div>
 <div class="code" onclick="navigator.clipboard&&navigator.clipboard.writeText(this.textContent.trim());document.querySelector('.copy').textContent='✓ 已复制'">%[2]s</div>
 <div class="copy">点一下复制 · %[3]d 分钟内有效 · 仅可用一次</div>
