@@ -2,5 +2,6 @@ wanctl
 *.exe
 bin/
 /release/
+/build/
 .DS_Store
 artifacts/

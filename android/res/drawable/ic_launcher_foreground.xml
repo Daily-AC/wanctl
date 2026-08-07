@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A shell prompt: ">_". Everything stays inside the central 72x72 safe zone
+     that adaptive-icon masks are guaranteed not to clip. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+  <path
+      android:pathData="M40,42 L54,54 L40,66"
+      android:strokeColor="#7FE3D0"
+      android:strokeWidth="7"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round" />
+  <path
+      android:pathData="M60,66 L72,66"
+      android:strokeColor="#7FE3D0"
+      android:strokeWidth="7"
+      android:strokeLineCap="round" />
+</vector>

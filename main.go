@@ -57,8 +57,10 @@ USAGE
   for boot-without-login; Windows starts the limited-user task at the next logon.
 
  CONTROLLER (run where you / the AI drive from)
-  wanctl login                                log in (Feishu) and save the token — no daemon (use this on AI / controller boxes)
+  wanctl login [--code CODE]                  log in (Feishu) and save the token — no daemon (use this on AI / controller boxes);
+                                              --code skips the prompt for a front-end that already has the enrollment code
   wanctl update                               download the latest binary from the relay and swap it in
+  wanctl update --fetch-apk DIR               Android: download+verify the APK there and print its path (the app installs it)
   wanctl version                              print the immutable release version (or dev)
   wanctl mcp                                  run a stdio MCP server (per-process, single-user) for an AI host's child process
   wanctl mcp --http :ADDR                     run a public HTTP/Streamable MCP server (multi-user; needs WANCTL_MCP_SEED env)
@@ -153,7 +155,7 @@ func main() {
 	case "up":
 		err = cmdUp(ctx)
 	case "login":
-		err = cmdLogin(ctx)
+		err = cmdLogin(ctx, os.Args[2:])
 	case "docs":
 		err = cmdDocs(ctx, os.Args[2:])
 	case "start":

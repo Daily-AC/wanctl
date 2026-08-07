@@ -693,6 +693,25 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 	hc := &http.Client{Timeout: 35 * time.Second}
 	q := url.Values{"device": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}}.Encode()
 	pollURL := base + "/h/poll?" + q
+	// Registration lives or dies by this loop: the relay keeps a device listed
+	// only while its polls keep arriving. Until 2026-08-07 every failure here
+	// was swallowed — sleep two seconds, try again, say nothing — so an agent
+	// whose polls stopped working looked, from the device, exactly like one
+	// that was fine: process alive, no errors, "online" printed at startup and
+	// never contradicted. From the controller it had simply vanished. That is
+	// the least debuggable state a daemon can be in, and it cost an afternoon
+	// on an Android tablet that had roamed onto a different Wi-Fi.
+	//
+	// So: say the first failure out loud, then throttle to roughly once a
+	// minute (a two-second backoff means ~30 attempts), and say when it comes
+	// back. Enough to see the pattern in a log; not enough to fill a disk
+	// overnight on a device that is simply off the network.
+	failures := 0
+	report := func(format string, args ...any) {
+		if failures == 1 || failures%30 == 0 {
+			fmt.Fprintf(os.Stderr, "wanctl: "+format+" (%d consecutive)\n", append(args, failures)...)
+		}
+	}
 	for {
 		if ctx.Err() != nil {
 			a.deregisterHTTP(base)
@@ -709,6 +728,8 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 			if strings.Contains(err.Error(), "401") {
 				return fmt.Errorf("relay rejected token")
 			}
+			failures++
+			report("relay poll failed: %v", err)
 			time.Sleep(2 * time.Second) // backoff then re-poll
 			continue
 		}
@@ -719,6 +740,20 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 		if resp.StatusCode == http.StatusConflict {
 			resp.Body.Close()
 			return fmt.Errorf("another wanctl agent instance registered this device name; this instance is standing down")
+		}
+		// Any other non-2xx keeps the loop running — a relay restart or a
+		// gateway hiccup should not take the agent down — but it is no longer
+		// indistinguishable from success.
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			resp.Body.Close()
+			failures++
+			report("relay poll returned %s", resp.Status)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		if failures > 0 {
+			fmt.Fprintf(os.Stderr, "wanctl: relay poll recovered after %d consecutive failures\n", failures)
+			failures = 0
 		}
 		var msg sessionauth.Open
 		json.NewDecoder(resp.Body).Decode(&msg)

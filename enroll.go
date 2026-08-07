@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,7 +20,6 @@ import (
 // token. Returns the token; the caller persists it. Claude-code-style.
 func enroll(ctx context.Context) (string, error) {
 	portal := config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)
-	relay := strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
 	enrollURL := strings.TrimRight(portal, "/") + "/enroll"
 
 	fmt.Println("正在将本设备授权到 wanctl 空间…")
@@ -33,7 +33,18 @@ func enroll(ctx context.Context) (string, error) {
 	if code == "" {
 		return "", fmt.Errorf("未输入 code")
 	}
+	return exchange(ctx, code)
+}
 
+// exchange turns an enrollment code into a stored-ready token. Split out of
+// enroll because the Android app has the code already — it ran the browser step
+// in its own UI — and driving a stdin prompt from a foreground service is not a
+// thing that can be made to work. Everything after the code is identical, which
+// is the reason to share it rather than let the app talk to the relay itself:
+// the portal fingerprint seeding in applyEnrollment is easy to forget and
+// invisible until the web console cannot reach the device.
+func exchange(ctx context.Context, code string) (string, error) {
+	relay := strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
 	fmt.Println("正在验证…")
 	en, err := client.ExchangeCode(ctx, relay, code)
 	if err != nil {
@@ -80,7 +91,12 @@ func seedPortalAdmin(fp string) {
 // starting the device daemon. Used by AI controllers and humans who only need
 // to drive other devices from this machine. Bare `wanctl` (no args) is still
 // the device path (enroll → save → daemon).
-func cmdLogin(ctx context.Context) error {
+func cmdLogin(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("login", flag.ExitOnError)
+	code := fs.String("code", "", "exchange this enrollment code instead of prompting for one;\n"+
+		"\tfor front-ends that ran the browser step themselves (the Android app)")
+	fs.Parse(args)
+
 	if tok := os.Getenv("WANCTL_TOKEN"); tok != "" {
 		fmt.Println("已通过 WANCTL_TOKEN 环境变量提供凭证；如需重新授权，先 unset 该变量再运行 wanctl login。")
 		return nil
@@ -88,7 +104,13 @@ func cmdLogin(ctx context.Context) error {
 	if existing := config.StoredToken(); existing != "" {
 		fmt.Println("(覆盖已存在的本地凭证)")
 	}
-	t, err := enroll(ctx)
+	var t string
+	var err error
+	if strings.TrimSpace(*code) != "" {
+		t, err = exchange(ctx, strings.TrimSpace(*code))
+	} else {
+		t, err = enroll(ctx)
+	}
 	if err != nil {
 		return err
 	}
