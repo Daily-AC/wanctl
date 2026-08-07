@@ -77,15 +77,21 @@ supply-chain:
 # registry reachability that has bitten this pipeline before (see the GOPROXY
 # and TRIVY_DB_REPOSITORY overrides above).
 #
-# One-time host setup: install a JDK and the SDK's cmdline-tools, then
-#   sdkmanager "platforms;android-35" "build-tools;35.0.0"
-# and export ANDROID_HOME for the runner user. scripts/build-apk.sh names
-# whichever piece is missing rather than failing opaquely.
+# The host setup is done (2026-08-07, runner `ls-tencent-wanctl`): OpenJDK 17
+# from apt, the SDK's cmdline-tools under /opt/android-sdk, and
+#   sdkmanager "platforms;android-36.1" "build-tools;36.1.0"
+# — the same pair the on-device acceptance build used, because build-apk.sh
+# takes the newest of each and a different android.jar is a different compile
+# target. ANDROID_HOME and JAVA_HOME are set in the runner's own `environment`
+# in /etc/gitlab-runner/config.toml rather than a profile script, so they do not
+# depend on whether the executor happens to start a login shell.
 #
-# NOT YET EXERCISED ON A RUNNER — the script is verified locally on macOS only.
-# The first tagged release proves it; if the host turns out not to have the SDK,
-# build the APK locally, attach it at build/android/, and re-run `release`,
-# which picks up a staged APK instead of building one.
+# Verified on that host by building a signed APK from this tree end to end
+# (aapt2 → javac → d8 → zipalign → apksigner verify, 32s, both post-build
+# assertions passing). If the SDK ever goes missing, scripts/build-apk.sh names
+# the piece that is gone rather than failing opaquely; the fallback is to build
+# the APK locally, attach it at build/android/, and re-run `release`, which
+# picks up a staged APK instead of building one.
 package:apk:
   stage: package
   tags: [wanctl-docker]
