@@ -17,8 +17,8 @@ func TestConsoleApproverVerbs(t *testing.T) {
 		{"a\n", true, true, ScopeDir},
 		{"g\n", true, true, ScopeGlobal},
 		{"n\n", false, false, ""},
-		{"\n", false, false, ""},      // empty defaults to deny
-		{"nope\n", false, false, ""},  // anything else denies
+		{"\n", false, false, ""},     // empty defaults to deny
+		{"nope\n", false, false, ""}, // anything else denies
 	}
 	for _, c := range cases {
 		ap := NewConsoleApprover(strings.NewReader(c.in), &bytes.Buffer{})
