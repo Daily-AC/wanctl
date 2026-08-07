@@ -11,15 +11,26 @@ stages:
 variables:
   GOTOOLCHAIN: go1.25.12
 
-# Two runners accept this project's untagged jobs: the project's own shell
-# runner (Go and Docker installed on the host) and a group runner using a Docker
-# executor whose default image is alpine. Whichever picked up a job first
-# decided whether it passed, so `go: not found` failures came and went at
-# random — including on a merge request that was merged anyway.
+# Two runners used to accept this project's untagged jobs: a shell runner on a
+# home machine, and the group's Docker-executor runner whose default image is
+# alpine. Whichever picked up a job first decided whether it passed, so
+# `go: not found` came and went at random — including on a merge request that
+# was merged anyway. Pinning an image fixed it for either kind: a Docker
+# executor gets a Go toolchain, and a shell runner ignores `image` and uses the
+# host's Go, which is the same version.
 #
-# Pinning an image fixes it for either runner: the Docker executor gets a Go
-# toolchain, and a shell runner ignores `image` and uses the host's Go, which is
-# the same version.
+# The home runner is gone (2026-08-07, deregistered — that CI host is retired).
+# It went out badly enough to be worth recording: it accepted untagged jobs, so
+# it could take `test` *and* `release`, and on the v0.1.10 tag it took `test`
+# and wedged — fourteen minutes, no output, no heartbeat, host load 0.00.
+# A hung `release` is a release that neither fails nor finishes.
+#
+# So the pin stays, for two reasons that outlive that runner: the group runner
+# is a Docker executor and needs it, and any future untagged runner inherits the
+# same guarantee without anyone remembering why. Note that the group runner is
+# now the only one taking untagged jobs — `test` and `release` have no second
+# home. Giving another runner `run_untagged` is the fix if that matters; the
+# pin is what makes doing so safe.
 .go:
   image: golang:1.25.12
 
