@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- DayNight exists from API 29, which is this app's minSdk, so there is no
+       separate light-only fallback to keep in sync. -->
+  <style name="AppTheme" parent="@android:style/Theme.DeviceDefault.DayNight" />
+
+  <color name="brand">#FF2E7D6F</color>
+  <color name="ok">#FF2E7D32</color>
+  <color name="warn">#FFB26A00</color>
+  <color name="off">#FF757575</color>
+
+  <style name="Value">
+    <item name="android:textSize">15sp</item>
+    <item name="android:textIsSelectable">true</item>
+  </style>
+
+  <style name="Key">
+    <item name="android:textSize">13sp</item>
+    <item name="android:alpha">0.6</item>
+    <item name="android:paddingTop">10dp</item>
+  </style>
+
+  <style name="Section">
+    <item name="android:textSize">12sp</item>
+    <item name="android:textStyle">bold</item>
+    <item name="android:letterSpacing">0.12</item>
+    <item name="android:alpha">0.5</item>
+    <item name="android:paddingTop">22dp</item>
+    <item name="android:paddingBottom">4dp</item>
+  </style>
+</resources>

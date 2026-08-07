@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The whole point of this APK is one attribute: android:extractNativeLibs="true".
+
+  Android refuses to exec a file labelled app_data_file from the untrusted_app
+  domain, which is every path an ordinary app can write. A directory an app can
+  exec from does exist — lib/<abi>/ inside the installed APK, labelled
+  apk_data_file — but the package manager only materialises it on disk when
+  extractNativeLibs is true. Set it to false (the Android Gradle Plugin's
+  default since AGP 3.6) and the .so files stay inside the APK for the linker to
+  map, nativeLibraryDir holds nothing, and there is no file to run.
+
+  So wanctl ships as lib/arm64-v8a/libwanctl.so. It is not a shared library and
+  nothing dlopen()s it; the name is what makes the installer extract it and set
+  the executable bit. Termux ships its 24 MB bootstrap the same way.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.***REMOVED***.wanctl">
+  <!-- versionCode / versionName are injected by scripts/build-apk.sh from the
+       release tag, so the APK and the wanctl binary inside it can never claim
+       different versions. -->
+
+  <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
+
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <!-- API 34+ requires a type-specific permission to match foregroundServiceType. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <!-- Only to *offer* the exemption dialog; the user still decides. -->
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+  <!-- In-app update: the APK is fetched and signature-verified by the wanctl
+       binary against the release manifest, then handed to the system installer. -->
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+  <application
+      android:label="@string/app_name"
+      android:icon="@mipmap/ic_launcher"
+      android:roundIcon="@mipmap/ic_launcher"
+      android:theme="@style/AppTheme"
+      android:allowBackup="false"
+      android:extractNativeLibs="true">
+
+    <activity
+        android:name=".MainActivity"
+        android:exported="true"
+        android:launchMode="singleTask">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+
+    <activity
+        android:name=".LogActivity"
+        android:exported="false"
+        android:label="@string/log_title"
+        android:parentActivityName=".MainActivity" />
+
+    <!--
+      specialUse rather than dataSync on purpose. From API 35 a dataSync
+      foreground service is capped at six cumulative hours a day, after which
+      the system calls onTimeout() and stops it — which is precisely fatal for
+      an always-on remote-administration agent. specialUse carries no such
+      timer. (Play Store review would ask for a justification; wanctl is not
+      distributed there.)
+    -->
+    <service
+        android:name=".AgentService"
+        android:exported="false"
+        android:foregroundServiceType="specialUse">
+      <property
+          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+          android:value="@string/fgs_justification" />
+    </service>
+
+    <!-- The floor under BOOT_COMPLETED: see KeeperJob for the measurement that
+         made it necessary. -->
+    <service
+        android:name=".KeeperJob"
+        android:exported="false"
+        android:permission="android.permission.BIND_JOB_SERVICE" />
+
+    <receiver
+        android:name=".BootReceiver"
+        android:exported="true"
+        android:directBootAware="false">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+      </intent-filter>
+    </receiver>
+
+  </application>
+</manifest>

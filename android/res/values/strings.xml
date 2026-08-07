@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">wanctl</string>
+  <string name="log_title">agent 日志</string>
+  <string name="fgs_justification">Keeps the wanctl remote-administration agent connected to its relay so the owner can reach this device.</string>
+
+  <string name="channel_name">agent 状态</string>
+  <string name="channel_desc">wanctl agent 是否在线</string>
+
+  <string name="section_device">设备</string>
+  <string name="section_control">控制</string>
+
+  <string name="label_name">设备名</string>
+  <string name="hint_name">留空则用机型名</string>
+  <string name="label_status">状态</string>
+  <string name="label_relay">relay</string>
+  <string name="label_fingerprint">指纹</string>
+  <string name="label_credential">凭证</string>
+
+  <string name="switch_enabled">启用 wanctl</string>
+  <string name="switch_boot">开机自启</string>
+  <string name="switch_autotrust">自动信任新控制端</string>
+  <string name="switch_autotrust_warn">危险：任何持有本空间 token 的控制端都会被直接放行，不再经门户确认。</string>
+
+  <string name="switch_bypass">自动放行所有命令</string>
+  <string name="switch_bypass_warn">危险：已配对的控制端可以在本机执行任何命令、读写任何文件，不再逐条批准。关闭时，未命中规则的命令要在门户网页控制台里人工放行。</string>
+
+  <string name="btn_login">登录</string>
+  <string name="btn_relogin">重新登录</string>
+  <string name="btn_logs">查看日志</string>
+  <string name="btn_update">检查更新</string>
+  <string name="btn_battery">加入电池优化白名单</string>
+
+  <string name="state_running">● 运行中</string>
+  <string name="state_stopped">○ 已停止</string>
+  <string name="state_retrying">⟳ 重连中</string>
+  <string name="state_unknown">— </string>
+
+  <string name="cred_yes">已登录</string>
+  <string name="cred_no">未登录</string>
+
+  <string name="enroll_title">授权本设备</string>
+  <string name="enroll_body">在浏览器里用飞书登录，页面会显示一次性授权 code，粘贴到下面。</string>
+  <string name="enroll_open">打开授权页</string>
+  <string name="enroll_hint">授权 code</string>
+  <string name="enroll_ok">确定</string>
+  <string name="cancel">取消</string>
+
+  <string name="battery_title">电池优化</string>
+  <string name="battery_body">系统的电池优化会在息屏后冻结后台进程，agent 会掉线。把 wanctl 加入白名单可以避免。\n\n注意：国产 ROM（vivo / OPPO / 小米 / 华为等）另有一套自己的后台管控，这个白名单管不到它。在 vivo 上还要去「设置 → 电池 → 后台耗电管理 → wanctl」选「允许后台高耗电」，否则息屏几分钟后整个进程仍会被冻结，前台服务和 wake lock 都拦不住。</string>
+  <string name="battery_exempt">已在白名单中（国产 ROM 还需单独设置，见说明）</string>
+  <string name="battery_oem">息屏后仍然掉线？</string>
+  <string name="battery_oem_body">厂商的后台管控和系统电池优化是两回事，需要分别设置：\n\n• vivo：设置 → 电池 → 后台耗电管理 → wanctl → 允许后台高耗电\n• OPPO：设置 → 电池 → 应用耗电管理 → 允许后台运行\n• 小米：设置 → 应用设置 → 应用管理 → wanctl → 省电策略 → 无限制\n• 华为：设置 → 电池 → 应用启动管理 → wanctl → 手动管理（三项全开）\n\n另外确认「自启动」也是开的，否则重启后不会自动恢复。</string>
+
+  <string name="err_not_logged_in">未登录：先点「登录」授权本设备</string>
+  <string name="err_token_rejected">relay 拒绝了凭证：请重新登录</string>
+  <string name="err_name_taken">同名设备已在线：改一个设备名</string>
+
+  <string name="update_checking">正在向 relay 校验签名清单 …</string>
+  <string name="update_latest">已是最新版本</string>
+  <string name="update_failed">检查更新失败</string>
+</resources>
