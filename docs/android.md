@@ -347,18 +347,23 @@ wanctl side:
   hash identical to the built artifact, and the up-to-date branch returning
   empty stdout with exit 0
 
+And on 2026-08-07, once v0.1.11 was deployed and `/dl` served an APK for the
+first time, **the whole in-app update**: 检查更新 → PackageInstaller → running
+the new build, from the app's own UI. Checked afterwards from the controller
+rather than taken on the app's word:
+
+- the installed `base.apk` hashes to the published artifact byte for byte
+  (`sha256sum $(pm path com.***REMOVED***.wanctl)` against `/dl`'s manifest entry)
+- the binary the app execs reports `v0.1.11`, still under `id -Z` →
+  `u:r:untrusted_app:s0`
+- **the device's identity fingerprint is unchanged.** That is the part worth
+  keeping: the key lives in the app's private data, which only survives an
+  in-place upgrade. A signature mismatch would have forced an uninstall and
+  produced a new fingerprint, so this is what proves the two signature chains —
+  the manifest's Ed25519 and the APK's certificate — agreed independently.
+
 ## Not yet verified
 
-- **The PackageInstaller half of the in-app update.** `--fetch-apk` is verified
-  end to end against a relay; handing the verified file to the system installer
-  has not run, because no published release carries an `android/arm64.apk`
-  artifact yet. Note also that the production relay currently serves **v0.1.7**
-  — v0.1.9 was never deployed — so an update check against production today
-  correctly reports that the manifest has no APK.
-- **The CI job that builds the APK** (`package:apk`) has never run. It expects
-  the Android SDK on the `wanctl-docker` shell runner. The first tagged release
-  proves it; the fallback is to build locally and stage the APK at
-  `build/android/`.
 - **Any device that is not a vivo PA2353.** The OEM gates (autostart lists,
   background-power managers) differ per vendor and are the most likely reason
   for "it stopped coming back after reboots" on a device nobody has tried.
