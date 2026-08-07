@@ -33,6 +33,18 @@ variables:
 # pin is what makes doing so safe.
 .go:
   image: golang:1.25.12
+  variables:
+    # `supply-chain` and `package:apk` have overridden this for their runner
+    # since the day it was set up; `test` and `release` never did, and paid for
+    # it the first time the group runner's route to proxy.golang.org was reset
+    # mid-download. Two reasons that is no longer tolerable: the group runner is
+    # the only one accepting untagged jobs, so there is no second host to retry
+    # on, and `release` is one of those jobs — a signed release that fails on a
+    # module fetch fails after the tag is already cut.
+    #
+    # `direct` stays as the fallback, so this is a preference rather than a
+    # dependency, and go.sum still pins every module either route returns.
+    GOPROXY: https://goproxy.cn,direct
 
 test:
   extends: .go
