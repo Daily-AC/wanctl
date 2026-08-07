@@ -1,6 +1,10 @@
 stages:
   - test
   - security
+  # The APK is built one stage ahead of the release it belongs to, because the
+  # manifest has to hash it and because `needs` on this GitLab only accepts a
+  # job from a prior stage.
+  - package
   - release
   - deploy
 
@@ -82,8 +86,8 @@ supply-chain:
 # The first tagged release proves it; if the host turns out not to have the SDK,
 # build the APK locally, attach it at build/android/, and re-run `release`,
 # which picks up a staged APK instead of building one.
-release:apk:
-  stage: release
+package:apk:
+  stage: package
   tags: [wanctl-docker]
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
@@ -108,7 +112,7 @@ release:
   # The manifest has to hash the APK, so it cannot be created until the APK
   # exists. build-release.sh refuses to produce a release without one unless
   # WANCTL_SKIP_APK=1 says so out loud.
-  needs: ["release:apk"]
+  needs: ["package:apk"]
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
   script:

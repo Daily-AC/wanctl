@@ -43,7 +43,7 @@ done
 # manifest is created.
 #
 # Not built inline, because it needs the Android SDK and the release job's image
-# does not carry one. CI builds it in a separate job and leaves it at
+# does not carry one. CI builds it in the `package:apk` job and leaves it at
 # $APK_STAGED for this script to pick up; a developer running this by hand gets
 # it built on the spot. A release that would silently omit it is refused: the
 # APK's SHA-256 in the manifest is the only thing an already-installed app can

@@ -355,7 +355,7 @@ wanctl side:
   artifact yet. Note also that the production relay currently serves **v0.1.7**
   — v0.1.9 was never deployed — so an update check against production today
   correctly reports that the manifest has no APK.
-- **The CI job that builds the APK** (`release:apk`) has never run. It expects
+- **The CI job that builds the APK** (`package:apk`) has never run. It expects
   the Android SDK on the `wanctl-docker` shell runner. The first tagged release
   proves it; the fallback is to build locally and stage the APK at
   `build/android/`.
