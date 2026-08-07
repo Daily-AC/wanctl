@@ -63,9 +63,52 @@ supply-chain:
     paths:
       - artifacts/wanctl.sbom.cdx.json
 
+# The Android APK is built separately because it needs the Android SDK, which
+# the golang image does not have and which is far too large to install per job.
+#
+# It runs on the dedicated shell runner rather than in a container: that host
+# already carries Go and Docker for the supply-chain job, so adding a JDK plus
+# `sdkmanager` there is a one-time setup under our control — whereas pulling a
+# multi-gigabyte Android image would put the release behind exactly the kind of
+# registry reachability that has bitten this pipeline before (see the GOPROXY
+# and TRIVY_DB_REPOSITORY overrides above).
+#
+# One-time host setup: install a JDK and the SDK's cmdline-tools, then
+#   sdkmanager "platforms;android-35" "build-tools;35.0.0"
+# and export ANDROID_HOME for the runner user. scripts/build-apk.sh names
+# whichever piece is missing rather than failing opaquely.
+#
+# NOT YET EXERCISED ON A RUNNER — the script is verified locally on macOS only.
+# The first tagged release proves it; if the host turns out not to have the SDK,
+# build the APK locally, attach it at build/android/, and re-run `release`,
+# which picks up a staged APK instead of building one.
+release:apk:
+  stage: release
+  tags: [wanctl-docker]
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  variables:
+    GOPROXY: https://goproxy.cn,direct
+  script:
+    - test -n "$WANCTL_ANDROID_KEYSTORE_B64" || { echo 'protected WANCTL_ANDROID_KEYSTORE_B64 is required; a debug-signed APK cannot be distributed' >&2; exit 1; }
+    - test -n "$WANCTL_ANDROID_KEYSTORE_PASS" || { echo 'protected WANCTL_ANDROID_KEYSTORE_PASS is required' >&2; exit 1; }
+    # Not for signing the release — for baking the trust anchors into the binary
+    # inside the APK, which is what lets it verify the *next* release. The
+    # script derives the public keys from it and refuses to build a tagged
+    # version without them.
+    - test -n "$WANCTL_RELEASE_SIGNING_KEY" || { echo 'protected WANCTL_RELEASE_SIGNING_KEY is required to derive the trust anchors' >&2; exit 1; }
+    - ./scripts/build-apk.sh "$CI_COMMIT_TAG"
+  artifacts:
+    paths: [build/android/wanctl-android-arm64.apk]
+    expire_in: 1 day
+
 release:
   extends: .go
   stage: release
+  # The manifest has to hash the APK, so it cannot be created until the APK
+  # exists. build-release.sh refuses to produce a release without one unless
+  # WANCTL_SKIP_APK=1 says so out loud.
+  needs: ["release:apk"]
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
   script:

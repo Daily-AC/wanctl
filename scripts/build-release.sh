@@ -34,6 +34,32 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 an
   (cd "$ROOT" && env -u WANCTL_RELEASE_SIGNING_KEY CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "$LDFLAGS" -o "$DIST/wanctl-$os-$arch$suffix" .)
 done
 
+# The Android APK.
+#
+# It rides in the same signed manifest as everything else, as platform
+# android/arm64.apk — see internal/release.AndroidAPKArch for why that spelling
+# and not a schema change. platformFromName picks it up from the directory with
+# no special case, so all that is needed here is to put it in place before the
+# manifest is created.
+#
+# Not built inline, because it needs the Android SDK and the release job's image
+# does not carry one. CI builds it in a separate job and leaves it at
+# $APK_STAGED for this script to pick up; a developer running this by hand gets
+# it built on the spot. A release that would silently omit it is refused: the
+# APK's SHA-256 in the manifest is the only thing an already-installed app can
+# check an update against, so shipping without it strands every Android device
+# on whatever version it already has.
+APK_STAGED="$ROOT/build/android/wanctl-android-arm64.apk"
+if [ "${WANCTL_SKIP_APK:-}" = 1 ]; then
+  echo "WARNING: skipping the Android APK (WANCTL_SKIP_APK=1); installed Android apps will not see this release" >&2
+elif [ -f "$APK_STAGED" ]; then
+  echo "using the Android APK staged at $APK_STAGED"
+  cp "$APK_STAGED" "$DIST/wanctl-android-arm64.apk"
+else
+  WANCTL_RELEASE_TRUSTED_KEYS="$TRUSTED_KEYS" "$ROOT/scripts/build-apk.sh" "$VERSION"
+  cp "$APK_STAGED" "$DIST/wanctl-android-arm64.apk"
+fi
+
 (cd "$ROOT" && go run ./cmd/release-manifest create "$VERSION" "$DIST")
 (cd "$ROOT" && go run ./cmd/release-manifest sign "$DIST")
 
