@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -47,3 +49,60 @@ func TestAgentErrorsTheAppKeysOn(t *testing.T) {
 // and on the test that pins it. See internal/agent/agent.go for where they are
 // produced.
 const agentFatalMarkers = "--token | rejected token | registered this device name"
+
+// androidAppSources are the files scripts/build-apk.sh compiles. Listed rather
+// than globbed, because a glob over a directory that is not there matches
+// nothing and passes.
+var androidAppSources = []string{
+	"AgentService.java",
+	"AgentState.java",
+	"BootReceiver.java",
+	"Installer.java",
+	"KeeperJob.java",
+	"LogActivity.java",
+	"MainActivity.java",
+	"Prefs.java",
+	"Wanctl.java",
+}
+
+// TestAndroidAppIsInTheRepository asserts the app's sources are in the checkout
+// this test is running from.
+//
+// That sounds like it cannot fail, and it did. `.gitignore` opened with a bare
+// `wanctl` — meant for the built binary at the root, but a pattern without a
+// leading slash matches at every depth, so it also matched
+// android/java/com/***REMOVED***/wanctl/ and kept all nine files out of the
+// repository. Every local build worked, because the files were on disk; the
+// acceptance APK was built from a working tree, not from a clone.
+//
+// Nothing caught it for the same reason it is worth a test: `package:apk` is
+// the only job that compiles Java, and it runs on tags only. So the first
+// checkout that could notice was the release itself, which failed at
+// `find: android/java: No such file or directory` after the signing keys had
+// already been handed out.
+func TestAndroidAppIsInTheRepository(t *testing.T) {
+	for _, name := range androidAppSources {
+		path := filepath.Join("android", "java", "com", "***REMOVED***", "wanctl", name)
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s is missing from the checkout: %v\n"+
+				"\tif it was deleted on purpose, drop it from androidAppSources;\n"+
+				"\tif not, check .gitignore for a pattern with no leading slash", path, err)
+		}
+	}
+}
+
+// TestAppKeysOnMarkersItCanActuallySee closes the other half of
+// TestAgentErrorsTheAppKeysOn, which pinned the Go side of the contract and
+// took the Java side on trust — so it kept passing while AgentService.java was
+// not in the repository at all.
+func TestAppKeysOnMarkersItCanActuallySee(t *testing.T) {
+	service, err := os.ReadFile(filepath.Join("android", "java", "com", "***REMOVED***", "wanctl", "AgentService.java"))
+	if err != nil {
+		t.Fatalf("read AgentService.java: %v", err)
+	}
+	for _, marker := range strings.Split(agentFatalMarkers, " | ") {
+		if !strings.Contains(string(service), marker) {
+			t.Errorf("AgentService.java does not match on %q, so a permanent failure would be retried forever", marker)
+		}
+	}
+}
