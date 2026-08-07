@@ -30,6 +30,7 @@ manifest.json.sig
 release-public-rsa.pem
 release-public.pem
 wanctl-android-arm64
+wanctl-android-arm64.apk
 wanctl-darwin-amd64
 wanctl-darwin-arm64
 wanctl-linux-amd64
