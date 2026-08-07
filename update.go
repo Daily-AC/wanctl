@@ -94,7 +94,7 @@ func cmdUpdate(ctx context.Context, args []string) error {
 	tmp = "" // consumed by Rename
 
 	fmt.Printf("✓ 已安装 wanctl %s: %s\n", version, self)
-	pruneStaleCopies(self)
+	reportPATHShadow(self)
 	if plan.restartDetached {
 		fmt.Println("正在重启后台 agent …")
 		if err := cmdStart(); err != nil {
@@ -349,42 +349,63 @@ func cmdRestartManaged(args []string) error {
 	return terminatePID(pid)
 }
 
-// pruneStaleCopies walks $PATH and deletes any *other* wanctl binary it finds,
-// so a bare `wanctl` in the user's shell always resolves to the freshly-updated
-// copy. Failures are reported as hints (most commonly permission denied — the
-// other copy is in /usr/local/bin and we're running from ~/.local/bin or vice
-// versa). We never `sudo` automatically; we just tell the user.
-func pruneStaleCopies(self string) {
-	binName := "wanctl"
-	if runtime.GOOS == "windows" {
-		binName = "wanctl.exe"
+// pathShadow reports the wanctl that a bare `wanctl` resolves to, when that is
+// not the copy this update just replaced. An empty result means there is
+// nothing to say: either the updated copy is the one that wins, or no bare
+// `wanctl` resolves at all because the user invokes it by path.
+//
+// This replaced a routine that walked $PATH and deleted every *other* file
+// named `wanctl`. Deleting was wrong twice over. A basename match is not an
+// identification — a wrapper script that sets WANCTL_RELAY, a developer's own
+// build, or a distro-packaged file called `wanctl` was removed without ever
+// being read. And the root-owned-directory case re-execs this command under
+// sudo (see splitUpdateViaSudo), so the deletion ran as root, where the "it
+// fails with permission denied and we merely print a hint" mitigation the old
+// code leaned on can never fire: `sudo wanctl update` removed /usr/bin/wanctl
+// outright and whatever put it there found out later.
+//
+// Shadowing is the only thing worth reporting, because it is the only thing
+// that changes what the user gets. A copy that loses the PATH race is inert,
+// and hunting down inert files is not this command's business.
+func pathShadow(self string) string {
+	// LookPath is the resolution itself rather than a reimplementation of it:
+	// it applies the executable bit on Unix and PATHEXT on Windows, so its
+	// answer is the one the user's shell would give.
+	found, lookErr := exec.LookPath("wanctl")
+	// ErrDot still yields a usable path — PATH contains "." and a bare command
+	// name really would run that file.
+	if lookErr != nil && !errors.Is(lookErr, exec.ErrDot) {
+		return ""
 	}
-	selfReal, _ := filepath.EvalSymlinks(self)
-	if selfReal == "" {
-		selfReal = self
+	// SameFile rather than string comparison, so a symlink, a hard link or a
+	// bind mount onto the updated binary is correctly read as "no shadow".
+	selfInfo, err := os.Stat(self)
+	if err != nil {
+		return ""
 	}
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if dir == "" {
-			continue
-		}
-		candidate := filepath.Join(dir, binName)
-		info, err := os.Stat(candidate)
-		if err != nil || info.IsDir() {
-			continue
-		}
-		candReal, _ := filepath.EvalSymlinks(candidate)
-		if candReal == "" {
-			candReal = candidate
-		}
-		if candReal == selfReal {
-			continue
-		}
-		if err := os.Remove(candidate); err == nil {
-			fmt.Printf("清理旧版: %s\n", candidate)
-		} else {
-			fmt.Fprintf(os.Stderr, "提示: 还有一个 wanctl 在 %s 删不掉 (%v)。\n  手动跑: sudo rm %s\n  否则 bare `wanctl` 可能跑到旧版。\n", candidate, err, candidate)
-		}
+	foundInfo, err := os.Stat(found)
+	if err != nil {
+		return ""
 	}
+	if os.SameFile(selfInfo, foundInfo) {
+		return ""
+	}
+	return found
+}
+
+// reportPATHShadow tells the user when the binary they just upgraded is not the
+// one a bare `wanctl` will run, and stops there. It names the command that
+// answers what the other copy is, because this cannot tell them itself.
+func reportPATHShadow(self string) {
+	other := pathShadow(self)
+	if other == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"提示: 升级的是 %s,但 PATH 上先命中的是 %s —— 直接敲 `wanctl` 仍会跑到那一个。\n"+
+			"  先看看它是什么:  %s --version\n"+
+			"  确认是旧版后自行删除,或把 %s 排到 PATH 前面。\n",
+		self, other, other, filepath.Dir(self))
 }
 
 func downloadSignedUpdate(ctx context.Context, relay, dir, goos, goarch, currentVersion string) (string, string, error) {
