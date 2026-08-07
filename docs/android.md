@@ -274,7 +274,7 @@ the agent asks the property service instead (`ro.product.marketname`, then
 
 ```sh
 ./scripts/build-apk.sh              # dev build, debug-signed
-./scripts/build-apk.sh v0.1.10      # release build; needs the keystore env
+./scripts/build-apk.sh v0.1.11      # release build; needs the keystore env
 ```
 
 It needs the Android SDK (`ANDROID_HOME`, or `~/Library/Android/sdk`) and a JDK
