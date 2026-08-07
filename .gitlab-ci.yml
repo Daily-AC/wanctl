@@ -97,6 +97,15 @@ package:apk:
   tags: [wanctl-docker]
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  # Every variable this job needs — both keystore variables and the release
+  # signing key — is scoped to the `release` environment, so without this block
+  # the job sees none of them and fails its own preflight on the first line.
+  # `prepare` rather than the default `start`: this builds an input to the
+  # release, it does not deploy anything, and a deployment record here would
+  # make the environment's history read as if the APK job were the deploy.
+  environment:
+    name: release
+    action: prepare
   variables:
     GOPROXY: https://goproxy.cn,direct
   script:
