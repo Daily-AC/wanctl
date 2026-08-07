@@ -50,6 +50,12 @@ test:
   extends: .go
   stage: test
   script:
+    # `go vet` says nothing about formatting, so nothing in this pipeline did.
+    # internal/policy/approver_test.go drifted out of gofmt and stayed that way
+    # through every green pipeline until someone happened to run `gofmt -l`.
+    # Printing the offenders matters: `gofmt -l` alone exits 0 and the failure
+    # would be a bare non-zero with no indication of which file.
+    - test -z "$(gofmt -l .)" || { echo 'not gofmt-clean:'; gofmt -l .; exit 1; }
     - go test ./...
     - go vet ./...
     # The `lark` tag guards the Feishu SDK so it stays out of the signed release
