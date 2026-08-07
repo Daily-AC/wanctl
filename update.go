@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -39,7 +40,13 @@ var buildVersion = "dev"
 func cmdUpdate(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
 	noRestart := fs.Bool("no-restart", false, "internal: skip daemon stop/start (used by the sudo-elevated phase)")
+	fetchAPK := fs.String("fetch-apk", "", "download and verify the Android APK into this directory, print its path, and exit;\n"+
+		"\tused by the Android app, which installs it through the system package installer")
 	fs.Parse(args)
+
+	if *fetchAPK != "" {
+		return fetchAndroidAPK(ctx, *fetchAPK)
+	}
 
 	self, err := selfPath()
 	if err != nil {
@@ -49,6 +56,13 @@ func cmdUpdate(ctx context.Context, args []string) error {
 		self = real
 	}
 	dir := filepath.Dir(self)
+
+	// Checked before the writability probe, which would otherwise send this
+	// down splitUpdateViaSudo and report a missing `sudo` — an answer to a
+	// question nobody asked.
+	if runningFromAPK(self) {
+		return errAPKSelfUpdate
+	}
 
 	if !canWriteDir(dir) {
 		return splitUpdateViaSudo(ctx, self)
@@ -92,6 +106,70 @@ func cmdUpdate(ctx context.Context, args []string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+var errAPKSelfUpdate = fmt.Errorf(
+	"这个 wanctl 由安卓 APK 分发，无法自我升级：APK 里的 lib 目录是系统只读的，" +
+		"而 app 能写的目录 Android 一律禁止 exec。请在 wanctl 应用里点「检查更新」，" +
+		"或从 relay 的 /dl 下载新 APK 安装。")
+
+// runningFromAPK reports whether this binary is the copy an installed Android
+// app carries, as opposed to one someone pushed to /data/local/tmp or installed
+// under Termux.
+//
+// The marker is the layout the package manager creates and only it creates:
+// <somewhere under /data/app>/<package>-<suffix>/lib/<abi>/lib*.so. That
+// directory is labelled apk_data_file — which is exactly why the binary can run
+// from there at all — and it is owned by system:system with no write access for
+// the app, so an update that tries to swap the file in place cannot succeed and
+// should not be attempted.
+func runningFromAPK(self string) bool {
+	return runtime.GOOS == "android" && isAPKPath(self)
+}
+
+// isAPKPath is the path shape alone, split from the GOOS check so it can be
+// tested on the machine this is developed on rather than only on a phone.
+func isAPKPath(self string) bool {
+	if !strings.HasPrefix(self, "/data/app/") {
+		return false
+	}
+	// .../lib/<abi>/libwanctl.so
+	abiDir := filepath.Dir(self)
+	return filepath.Base(filepath.Dir(abiDir)) == "lib"
+}
+
+// fetchAndroidAPK downloads the APK named by the signed release manifest,
+// verifies it, and prints its path — nothing else on stdout, so the caller can
+// use the output directly. Being already current is success with no path, not
+// an error: the Android app shows "already up to date" for it, and an exit code
+// would make that indistinguishable from a network failure.
+func fetchAndroidAPK(ctx context.Context, dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("prepare %s: %w", dir, err)
+	}
+	relay := strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
+	fmt.Fprintf(os.Stderr, "正在验证 %s 的签名发布清单 …\n", relay)
+	tmp, version, err := downloadSignedUpdate(ctx, relay, dir, "android", wanrelease.AndroidAPKArch, buildVersion)
+	if err != nil {
+		if errors.Is(err, wanrelease.ErrUpToDate) {
+			fmt.Fprintf(os.Stderr, "已是最新版本 (%s)\n", buildVersion)
+			return nil
+		}
+		return err
+	}
+	// The package installer reads the file by path and reports the name it
+	// finds, so give it one that says which version the user is approving.
+	final := filepath.Join(dir, "wanctl-"+version+".apk")
+	if err := os.Rename(tmp, final); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("place APK: %w", err)
+	}
+	if err := os.Chmod(final, 0o600); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "✓ 已下载并验签 wanctl %s\n", version)
+	fmt.Println(final)
 	return nil
 }
 

@@ -222,6 +222,24 @@ func VerifyManifest(manifestRaw, signatureRaw []byte, trusted string) (Manifest,
 	return Manifest{}, errors.New("release manifest signature verification failed")
 }
 
+// AndroidAPKArch is the pseudo-architecture under which the Android APK rides
+// in the release manifest.
+//
+// The APK is a second artifact for one real platform, which the schema has no
+// field for — and bumping the schema would strand every already-installed
+// client, since VerifyManifest rejects a version it does not know and that is
+// the code path `wanctl update` runs before it can update itself. Naming the
+// arch "arm64.apk" fits the existing rule (Name == "wanctl-"+OS+"-"+Arch, so
+// the file is wanctl-android-arm64.apk), keeps the OS/Arch pair unique against
+// the real android/arm64 entry, and is invisible to older clients: no Go
+// toolchain reports GOARCH as "arm64.apk", so Select never matches it for them.
+const AndroidAPKArch = "arm64.apk"
+
+// ErrUpToDate reports that the signed manifest offers nothing newer than what
+// is installed. It is a normal outcome, not a failure, and callers that present
+// it to a user need to tell the two apart.
+var ErrUpToDate = errors.New("already up to date")
+
 func Select(m Manifest, goos, goarch, currentVersion string) (Artifact, error) {
 	if currentVersion != "" && currentVersion != "dev" {
 		current, err := parseVersion(currentVersion)
@@ -230,7 +248,7 @@ func Select(m Manifest, goos, goarch, currentVersion string) (Artifact, error) {
 		}
 		next, _ := parseVersion(m.Version)
 		if compareVersion(next, current) <= 0 {
-			return Artifact{}, fmt.Errorf("release %s is not newer than installed %s", m.Version, currentVersion)
+			return Artifact{}, fmt.Errorf("%w: release %s is not newer than installed %s", ErrUpToDate, m.Version, currentVersion)
 		}
 	}
 	for _, a := range m.Artifacts {
