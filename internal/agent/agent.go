@@ -569,7 +569,9 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 	out := server.FrameWriter(conn, protocol.FrameStdout)
 	var code int
 	var err error
-	if m.OneShot {
+	if handled, builtinCode, builtinErr := server.RunBuiltin(m.Command, out); handled {
+		code, err = builtinCode, builtinErr
+	} else if m.OneShot {
 		code, err = server.RunOneShot(a.opts.Shell, m.Command, m.Cwd, out)
 	} else {
 		sess, serr := a.session(fp)
