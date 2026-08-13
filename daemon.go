@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
+	"wanctl/internal/client"
 	"wanctl/internal/config"
 )
 
@@ -113,8 +117,53 @@ func cmdStop() error {
 	return nil
 }
 
-// cmdStatus reports whether the background agent is running.
-func cmdStatus() error {
+// cmdStatus reports either the local background agent or a specified remote
+// agent. Keeping argument parsing here prevents unknown status arguments from
+// being silently discarded by the top-level dispatcher.
+func cmdStatus(ctx context.Context, args []string) error {
+	target, err := parseStatusArgs(args)
+	if err != nil {
+		return err
+	}
+	if target != "" {
+		c, err := client.New()
+		if err != nil {
+			return err
+		}
+		status, err := c.Status(ctx, target)
+		if err != nil {
+			return fmt.Errorf("remote device %q: %w", target, err)
+		}
+		fmt.Printf("● 远端设备 %s 在线，agent 运行中\n", target)
+		if !status.Detailed {
+			fmt.Println("  详情: 该设备版本较旧，无法报告 policy mode 或 agent 版本")
+			return nil
+		}
+		fmt.Printf("  Policy mode: %s\n", status.Mode)
+		fmt.Printf("  Agent 版本: %s\n", status.Version)
+		return nil
+	}
+	return printLocalStatus()
+}
+
+func parseStatusArgs(args []string) (string, error) {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	target := fs.String("target", "", "device (NS/DEV or DEV)")
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if fs.NArg() != 0 {
+		return "", fmt.Errorf("usage: wanctl status [-target NS/DEV]")
+	}
+	if len(args) != 0 && strings.TrimSpace(*target) == "" {
+		return "", fmt.Errorf("status target must not be empty")
+	}
+	return *target, nil
+}
+
+func printLocalStatus() error {
+	fmt.Println("本机 agent:")
 	if pid := config.ReadPID(); processAlive(pid) {
 		fmt.Printf("● 运行中 (pid %d)\n", pid)
 		// Worth saying before an upgrade rather than after: `wanctl update` can
