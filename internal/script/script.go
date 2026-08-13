@@ -157,6 +157,44 @@ func NestedPowerShellExpansion(command string) bool {
 	return strings.Contains(rest[open+1:open+1+close], "$")
 }
 
+// POSIXShellQuoteLoss reports whether exec arguments look like a POSIX script
+// whose local quoting protected one argv element, but whose boundaries will be
+// lost when wanctl joins the command into device-shell source. In particular,
+// `sh -c 'echo x; cat a'` reaches wanctl as three arguments; after joining, the
+// device parses the script body as separate words and -c runs only `echo`.
+func POSIXShellQuoteLoss(args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+	if len(args) >= 3 && isPOSIXShell(args[0]) && args[1] == "-c" && len(strings.Fields(strings.Join(args[2:], " "))) > 1 {
+		return true
+	}
+	command := strings.Join(args, " ")
+	return strings.Contains(command, ";") ||
+		strings.Contains(command, "&&") ||
+		strings.Contains(command, "||") ||
+		containsShellControlWord(command)
+}
+
+func isPOSIXShell(command string) bool {
+	switch command {
+	case "sh", "bash", "zsh":
+		return true
+	default:
+		return false
+	}
+}
+
+func containsShellControlWord(command string) bool {
+	for _, field := range strings.Fields(command) {
+		switch strings.Trim(field, ";") {
+		case "do", "done", "fi":
+			return true
+		}
+	}
+	return false
+}
+
 // BomlessNonASCIIPowerShell reports whether data is a PowerShell script that
 // Windows PowerShell 5.1 will misread: non-ASCII bytes with no UTF-8 BOM. 5.1
 // falls back to the ANSI code page for BOM-less files, so the text is mangled —
