@@ -76,6 +76,7 @@ USAGE
   wanctl exec  [--target NS/DEV] [--oneshot] [NS/DEV|DEV] <command...>
   wanctl exec  [--target NS/DEV] --script <local-file> [--interp powershell|sh] [NS/DEV|DEV]
                                               run a LOCAL script on the device — no shell quoting or encoding hazards
+  wanctl exec  --target ANDROID-DEV -- battery report fresh battery state from an Android APK agent as JSON
   wanctl push  [--target NS/DEV] <local> <remote>
   wanctl pull  [--target NS/DEV] <remote> <local>
   wanctl peers

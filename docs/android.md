@@ -109,6 +109,35 @@ writable by the adb shell user and **not** by an app — pushing there fails wit
 Exec sessions start in the app's own files directory, so a relative path lands
 somewhere sensible.
 
+### Built-in battery state
+
+The APK agent exposes battery state without sending a command through Android's
+restricted app shell:
+
+```sh
+wanctl exec --target phone -- battery
+```
+
+The command writes one JSON object to stdout:
+
+```json
+{"level":76,"status":"charging","plugged":"usb","temperature_c":31.4,"health":"good","updated_at":"2026-08-13T18:42:03Z","age_seconds":12}
+```
+
+`level` is a percentage. `status` is `charging`, `discharging`, `full`, `not
+charging`, or `unknown`; `plugged` is `ac`, `usb`, `wireless`, `none`, or
+`unknown`. `temperature_c` is Celsius, `health` is Android's normalized battery
+health, and `updated_at` is the app collector's UTC timestamp. `age_seconds` is
+computed by the Go agent when it answers.
+
+The Java service writes the source snapshot atomically to
+`files/state/device.json` when it starts and whenever Android sends a battery
+change broadcast. The Go child receives that file's absolute path through its
+environment. A missing, damaged, or more-than-10-minute-old snapshot is reported
+as unavailable instead of being returned as current data. The verb is available
+only when the agent is launched by the wanctl APK; other platforms return a
+clear Android-only error. Normal exec policy still applies before the verb runs.
+
 ### Coming back after a reboot
 
 Two mechanisms, because one is not reliable enough.

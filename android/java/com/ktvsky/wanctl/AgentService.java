@@ -56,6 +56,7 @@ public final class AgentService extends Service {
     private volatile boolean stopping;
     private volatile boolean restarting;
     private PowerManager.WakeLock wakeLock;
+    private DeviceState deviceState;
 
     /**
      * Whether this service is alive, for the reconcilers to check. A static is
@@ -97,6 +98,8 @@ public final class AgentService extends Service {
     public void onCreate() {
         super.onCreate();
         running = true;
+        deviceState = new DeviceState(this);
+        deviceState.start();
         NotificationManager nm = getSystemService(NotificationManager.class);
         NotificationChannel ch = new NotificationChannel(
                 CHANNEL, getString(R.string.channel_name), NotificationManager.IMPORTANCE_LOW);
@@ -150,6 +153,10 @@ public final class AgentService extends Service {
             t.interrupt();
         }
         supervisor = null;
+        if (deviceState != null) {
+            deviceState.stop();
+            deviceState = null;
+        }
         releaseWakeLock();
         AgentState.get().setPhase(AgentState.Phase.STOPPED, "");
         super.onDestroy();
