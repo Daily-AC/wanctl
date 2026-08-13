@@ -143,6 +143,31 @@ func TestNestedPowerShellExpansion(t *testing.T) {
 	}
 }
 
+func TestPOSIXShellQuoteLoss(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"path probe silently runs ls only", []string{"sh", "-c", "ls -d /data/data/com.termux.api; command -v pkg"}, true},
+		{"for loop breaks at outer shell", []string{"sh", "-c", "for p in a b c; do echo $p; done"}, true},
+		{"cat without argument hangs", []string{"sh", "-c", "echo x; cat a; cat b"}, true},
+		{"bash script with spaces", []string{"bash", "-c", "echo hello"}, true},
+		{"zsh split script arguments", []string{"zsh", "-c", "echo", "hello"}, true},
+		{"control operators outside nested shell", []string{"echo", "x", "&&", "echo", "y"}, true},
+		{"simple command", []string{"ls", "-la"}, false},
+		{"ordinary words", []string{"echo", "hello", "world"}, false},
+		{"single-word nested script", []string{"sh", "-c", "true"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := POSIXShellQuoteLoss(c.args); got != c.want {
+				t.Errorf("POSIXShellQuoteLoss(%q) = %v, want %v", c.args, got, c.want)
+			}
+		})
+	}
+}
+
 func TestBomlessNonASCIIPowerShell(t *testing.T) {
 	zh := []byte("# 说明\nWrite-Output 'ok'")
 	bom := append([]byte{0xEF, 0xBB, 0xBF}, zh...)

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -73,7 +74,7 @@ USAGE
   wanctl docs group new --slug S --title T [--position N]
   wanctl docs group rm <slug>
   wanctl exec  [--target NS/DEV] [--oneshot] [NS/DEV|DEV] <command...>
-  wanctl exec  [--target NS/DEV] --script <local-file> [--interp powershell|sh]
+  wanctl exec  [--target NS/DEV] --script <local-file> [--interp powershell|sh] [NS/DEV|DEV]
                                               run a LOCAL script on the device — no shell quoting or encoding hazards
   wanctl push  [--target NS/DEV] <local> <remote>
   wanctl pull  [--target NS/DEV] <remote> <local>
@@ -425,6 +426,7 @@ func cmdExec(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, "        The device's shell expands those variables before the inner PowerShell sees them.")
 		fmt.Fprintln(os.Stderr, "        Use single quotes for the inner script, or `wanctl exec -script <file.ps1>`.")
 	}
+	warnPOSIXShellQuoteLoss(os.Stderr, *scriptPath, commandArgs)
 
 	if c == nil {
 		c, err = client.New()
@@ -438,6 +440,15 @@ func cmdExec(ctx context.Context, args []string) error {
 	}
 	os.Exit(code)
 	return nil
+}
+
+func warnPOSIXShellQuoteLoss(w io.Writer, scriptPath string, args []string) {
+	if scriptPath != "" || !script.POSIXShellQuoteLoss(args) {
+		return
+	}
+	fmt.Fprintln(w, "wanctl: warning: this looks like `sh -c '<script>'`, but your local shell already removed the quotes,")
+	fmt.Fprintln(w, "        so the device receives separate words and may run only the first one.")
+	fmt.Fprintln(w, "        Use `wanctl exec -script <file.sh>`; it is sent base64-encoded and cannot be re-split.")
 }
 
 // inferExecTarget supports the conventional `exec DEVICE COMMAND` spelling.
@@ -461,7 +472,7 @@ func inferExecTarget(target string, args, peerAliases []string) (string, []strin
 func buildScriptCommand(path, interpFlag string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("-script expects a local file path; cannot read %q: %w", path, err)
 	}
 	var in script.Interp
 	if interpFlag != "" {
