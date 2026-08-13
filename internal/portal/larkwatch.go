@@ -27,9 +27,11 @@ const (
 	larkRetryMin          = time.Second
 	larkRetryMax          = 30 * time.Second
 	larkHealthErrorRunes  = 512
-	// larkDialLogEvery throttles the "cannot reach device" line after the first
-	// one: at the ceiling backoff that is roughly one line every five minutes.
-	larkDialLogEvery = 10
+	// A failed dial still retries at the bounded backoff, but each device gets at
+	// most one follow-up log line per window after its immediate first failure.
+	// This replaces the older count-based throttle, which was unbounded over
+	// unbounded time and is how one unregistered device reached 17700 attempts.
+	larkDialLogInterval = time.Hour
 )
 
 // cardSender is the complete outbound Feishu surface used by the orchestrator.
@@ -61,12 +63,16 @@ type larkSupervisor struct {
 	reconcileEvery time.Duration
 	retryMin       time.Duration
 	retryMax       time.Duration
+	now            func() time.Time
+	waitRetryFn    func(context.Context, time.Duration) bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
 
 	mu       sync.Mutex
 	watchers map[string]*larkWatcher
+	stopped  map[string]larkWatcherStopped
+	dialLogs map[string]time.Time
 	wake     chan struct{}
 
 	actionMu sync.Mutex
@@ -119,6 +125,27 @@ type larkWatcher struct {
 	done   chan struct{}
 }
 
+// larkWatcherStopped is the internal record of a watcher that gave up on a
+// permanent error. It is deliberately separate from larkDeliveryHealth: that one
+// is the outward-facing record of the last delivery attempt and is serialized to
+// clients, whereas this one exists so reconcile can tell "stopped on purpose,
+// leave it stopped" from "not running yet", and holds the config snapshot that
+// decides when a stop is no longer valid. The user-visible consequence of a stop
+// is published through larkDeliveryHealth, not from here.
+type larkWatcherStopped struct {
+	StopReason string
+	StoppedAt  time.Time
+	config     deviceLarkApproval
+}
+
+type larkWatcherStop struct {
+	cause  error
+	config deviceLarkApproval
+}
+
+func (e *larkWatcherStop) Error() string { return e.cause.Error() }
+func (e *larkWatcherStop) Unwrap() error { return e.cause }
+
 type seenPending struct {
 	pending   console.Pending
 	nonce     string
@@ -144,7 +171,11 @@ func newLarkSupervisor(s *Server, sender cardSender, grants *lark.Grants) *larkS
 		reconcileEvery: larkReconcileInterval,
 		retryMin:       larkRetryMin,
 		retryMax:       larkRetryMax,
+		now:            time.Now,
+		waitRetryFn:    waitContext,
 		watchers:       make(map[string]*larkWatcher),
+		stopped:        make(map[string]larkWatcherStopped),
+		dialLogs:       make(map[string]time.Time),
 		actions:        make(map[string]larkActionRecord),
 		health:         make(map[string]larkDeliveryHealth),
 		wake:           make(chan struct{}, 1),
@@ -302,6 +333,10 @@ func (s *larkSupervisor) loadConfigs() ([]deviceLarkApproval, error) {
 
 	configs := make([]deviceLarkApproval, 0)
 	for _, ns := range users.Namespaces {
+		registered, err := s.loadRegisteredDevices(ns)
+		if err != nil {
+			return nil, err
+		}
 		resp, err := s.adminReq(http.MethodGet, "/admin/devices/lark", url.Values{"namespace": {ns}}, nil)
 		if err != nil {
 			return nil, fmt.Errorf("list lark devices for %q: %w", ns, err)
@@ -320,12 +355,45 @@ func (s *larkSupervisor) loadConfigs() ([]deviceLarkApproval, error) {
 		}
 		for i := range out.Devices {
 			out.Devices[i].Namespace = ns
+			out.Devices[i].RegisteredFingerprint = registered[out.Devices[i].Device]
 			if out.Devices[i].ApprovalEnabled {
 				configs = append(configs, out.Devices[i])
 			}
 		}
 	}
 	return configs, nil
+}
+
+func (s *larkSupervisor) loadRegisteredDevices(ns string) (map[string]string, error) {
+	resp, err := s.adminReq(http.MethodGet, "/admin/devices", url.Values{"namespace": {ns}}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list registered devices for %q: %w", ns, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, responseError("list registered devices for "+ns, resp)
+	}
+	var out struct {
+		Devices []struct {
+			Name        string `json:"name"`
+			Owner       string `json:"owner"`
+			Fingerprint string `json:"fingerprint"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode registered devices for %q: %w", ns, err)
+	}
+	registered := make(map[string]string, len(out.Devices))
+	for _, device := range out.Devices {
+		owner := device.Owner
+		if owner == "" {
+			owner = ns
+		}
+		if owner == ns && device.Name != "" && device.Fingerprint != "" {
+			registered[device.Name] = device.Fingerprint
+		}
+	}
+	return registered, nil
 }
 
 func responseError(op string, resp *http.Response) error {
@@ -398,6 +466,20 @@ func (s *larkSupervisor) applyConfigs(configs []deviceLarkApproval) {
 	s.mu.Lock()
 	var stopping []*larkWatcher
 	var stoppingKeys []string
+	// A watcher stopped on a permanent error stays stopped until its config
+	// changes or the device registers — a timer must not resurrect it.
+	for key, stop := range s.stopped {
+		cfg, ok := desired[key]
+		if !ok {
+			delete(s.stopped, key)
+			continue
+		}
+		if cfg == stop.config {
+			delete(desired, key)
+			continue
+		}
+		delete(s.stopped, key)
+	}
 	for key, watcher := range s.watchers {
 		cfg, ok := desired[key]
 		if !ok {
@@ -410,18 +492,7 @@ func (s *larkSupervisor) applyConfigs(configs []deviceLarkApproval) {
 		delete(desired, key)
 	}
 	for key, cfg := range desired {
-		ctx, cancel := context.WithCancel(s.ctx)
-		watcher := &larkWatcher{
-			sup: s, ns: cfg.Namespace, device: cfg.Device,
-			config: cfg, cancel: cancel, done: make(chan struct{}),
-		}
-		s.watchers[key] = watcher
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			defer close(watcher.done)
-			watcher.run(ctx)
-		}()
+		s.startWatcherLocked(key, cfg)
 	}
 	s.mu.Unlock()
 
@@ -431,6 +502,52 @@ func (s *larkSupervisor) applyConfigs(configs []deviceLarkApproval) {
 		s.clearHealth(stoppingKeys[i])
 	}
 	s.pruneActions(time.Now())
+}
+
+func (s *larkSupervisor) startWatcherLocked(key string, cfg deviceLarkApproval) {
+	ctx, cancel := context.WithCancel(s.ctx)
+	watcher := &larkWatcher{
+		sup: s, ns: cfg.Namespace, device: cfg.Device,
+		config: cfg, cancel: cancel, done: make(chan struct{}),
+	}
+	s.watchers[key] = watcher
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		err := watcher.run(ctx)
+		close(watcher.done)
+		s.watcherDone(key, watcher, err)
+	}()
+}
+
+func (s *larkSupervisor) watcherDone(key string, watcher *larkWatcher, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.watchers[key] != watcher {
+		return
+	}
+	delete(s.watchers, key)
+	if isPermanentLarkDialError(err) {
+		var stop *larkWatcherStop
+		config := watcher.getConfig()
+		if errors.As(err, &stop) {
+			config = stop.config
+		}
+		current := watcher.getConfig()
+		if current != config {
+			s.startWatcherLocked(key, current)
+			return
+		}
+		s.stopped[key] = larkWatcherStopped{
+			StopReason: err.Error(),
+			StoppedAt:  s.currentTime(),
+			config:     config,
+		}
+		// Publish the stop through the outward-facing health record too, so the
+		// portal shows "stopped: device not registered" instead of a switch that
+		// silently reads "on" forever. This is where the two halves meet.
+		s.recordHealth(watcher.ns, watcher.device, "dial", err)
+	}
 }
 
 func (s *larkSupervisor) cancelAllWatchers() {
@@ -461,7 +578,7 @@ func (w *larkWatcher) getConfig() deviceLarkApproval {
 	return w.config
 }
 
-func (w *larkWatcher) run(ctx context.Context) {
+func (w *larkWatcher) run(ctx context.Context) error {
 	seenPending := make(map[string]seenPending)
 	seenPairings := make(map[string]seenPairing)
 	backoff := w.sup.retryMin
@@ -484,15 +601,19 @@ func (w *larkWatcher) run(ctx context.Context) {
 			// retry forever in complete silence: the switch reads "on", no card
 			// is ever sent, and nothing anywhere names the cause. Log the first
 			// failure immediately — that is the one somebody is waiting for —
-			// then throttle, so a device that stays unreachable does not drown
-			// the log.
+			// then rate-limit by elapsed time per device, so a device that stays
+			// unreachable cannot produce an unbounded attempt-count log stream.
 			dialFailures++
-			if dialFailures == 1 || dialFailures%larkDialLogEvery == 0 {
+			now := w.sup.currentTime()
+			if w.sup.shouldLogDial(larkDeviceKey(w.ns, w.device), now) {
 				w.sup.logf("lark approval cannot reach %s (dial attempt %d): %v",
 					larkDeviceKey(w.ns, w.device), dialFailures, err)
 			}
-			if !waitContext(ctx, backoff) {
-				return
+			if isPermanentLarkDialError(err) {
+				return &larkWatcherStop{cause: err, config: w.getConfig()}
+			}
+			if !w.sup.waitRetry(ctx, backoff) {
+				return nil
 			}
 			backoff = nextBackoff(backoff, w.sup.retryMax)
 			continue
@@ -523,7 +644,7 @@ func (w *larkWatcher) run(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				unsubscribe()
-				return
+				return nil
 			case state, ok := <-states:
 				if !ok {
 					closed = true
@@ -535,11 +656,43 @@ func (w *larkWatcher) run(ctx context.Context) {
 		unsubscribe()
 		// A closed channel means visibility was lost, not that pending work
 		// disappeared. Preserve both seen maps across the bounded re-dial loop.
-		if !waitContext(ctx, backoff) {
-			return
+		if !w.sup.waitRetry(ctx, backoff) {
+			return nil
 		}
 		backoff = nextBackoff(backoff, w.sup.retryMax)
 	}
+}
+
+func isPermanentLarkDialError(err error) bool {
+	var registrationErr *deviceRegistrationError
+	return errors.As(err, &registrationErr)
+}
+
+func (s *larkSupervisor) currentTime() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+func (s *larkSupervisor) waitRetry(ctx context.Context, delay time.Duration) bool {
+	if s.waitRetryFn != nil {
+		return s.waitRetryFn(ctx, delay)
+	}
+	return waitContext(ctx, delay)
+}
+
+func (s *larkSupervisor) shouldLogDial(key string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dialLogs == nil {
+		s.dialLogs = make(map[string]time.Time)
+	}
+	if last := s.dialLogs[key]; !last.IsZero() && now.Sub(last) < larkDialLogInterval {
+		return false
+	}
+	s.dialLogs[key] = now
+	return true
 }
 
 func (w *larkWatcher) reconcileState(ctx context.Context, state console.State, pendingSeen map[string]seenPending, pairingSeen map[string]seenPairing, wait time.Duration) {
