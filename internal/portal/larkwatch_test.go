@@ -144,7 +144,10 @@ func newTestLarkSupervisor(sender cardSender, sessionFor sessionForFunc) (*larkS
 		portalOrigin: "https://portal.test", logf: func(string, ...any) {},
 		retryMin: time.Millisecond, retryMax: 4 * time.Millisecond,
 		ctx: ctx, cancel: cancel, watchers: make(map[string]*larkWatcher),
-		actions: make(map[string]larkActionRecord), wake: make(chan struct{}, 1),
+		stopped:  make(map[string]larkWatcherStopped),
+		health:   make(map[string]larkDeliveryHealth),
+		dialLogs: make(map[string]time.Time),
+		actions:  make(map[string]larkActionRecord), wake: make(chan struct{}, 1),
 	}
 	return s, cancel
 }
@@ -315,13 +318,285 @@ func TestLarkWatcherSurvivesAnAgentWithoutTimeoutSet(t *testing.T) {
 	sup.applyConfigs(nil)
 }
 
+func TestPermanentLarkDialErrorClassification(t *testing.T) {
+	permanent := &deviceRegistrationError{target: "alice/legion", reason: "relay has no registered identity"}
+	if !isPermanentLarkDialError(fmt.Errorf("portal device identity: %w", permanent)) {
+		t.Fatal("wrapped device registration error was not classified as permanent")
+	}
+	for _, err := range []error{
+		errors.New("device offline"),
+		errors.New(`relay has no registered identity for "lookalike text"`),
+		errors.New("controller is not authorized as this device's console administrator"),
+	} {
+		if isPermanentLarkDialError(err) {
+			t.Fatalf("transient/untyped error %q was classified as permanent", err)
+		}
+	}
+}
+
+// The first dial failure is the one an operator is waiting for, so it must be
+// logged immediately. Further lines are limited by elapsed time per watcher;
+// counting attempts still produces an unbounded stream over an unbounded outage.
+func TestLarkWatcherLimitsTransientDialLogsPerDeviceTimeWindow(t *testing.T) {
+	const dialError = "controller is not authorized as this device's console administrator"
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	attempts := 0
+	sup, cancel := newTestLarkSupervisor(&fakeCardSend{}, func(context.Context, string, string) (deviceSession, error) {
+		attempts++
+		return nil, errors.New(dialError)
+	})
+	defer cancel()
+	sup.now = func() time.Time { return now }
+	sup.waitRetryFn = func(context.Context, time.Duration) bool {
+		now = now.Add(20 * time.Minute)
+		return attempts < 10
+	}
+	var logged []string
+	sup.logf = func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+
+	watcher := &larkWatcher{sup: sup, ns: "alice", device: "legion", config: enabledLarkConfig()}
+	if err := watcher.run(context.Background()); err != nil {
+		t.Fatalf("transient watcher stopped with error: %v", err)
+	}
+
+	if attempts != 10 {
+		t.Fatalf("dial attempts = %d, want 10", attempts)
+	}
+	if len(logged) != 4 {
+		t.Fatalf("logged %d lines over three hours, want 4: %v", len(logged), logged)
+	}
+	if !strings.Contains(logged[0], dialError) || !strings.Contains(logged[0], "dial attempt 1") {
+		t.Fatalf("first line = %q, want the immediate first failure", logged[0])
+	}
+}
+
+func TestLarkWatcherLogWindowSurvivesWatcherRestart(t *testing.T) {
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	sup, cancel := newTestLarkSupervisor(&fakeCardSend{}, func(context.Context, string, string) (deviceSession, error) {
+		return nil, errors.New("temporary network failure")
+	})
+	defer cancel()
+	sup.now = func() time.Time { return now }
+	sup.waitRetryFn = func(context.Context, time.Duration) bool {
+		return false
+	}
+	var logged []string
+	sup.logf = func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+
+	for _, advance := range []time.Duration{0, 20 * time.Minute, 40 * time.Minute} {
+		now = now.Add(advance)
+		watcher := &larkWatcher{sup: sup, ns: "alice", device: "legion", config: enabledLarkConfig()}
+		if err := watcher.run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(logged) != 2 {
+		t.Fatalf("logged %d lines across watcher restarts in one hour, want 2: %v", len(logged), logged)
+	}
+}
+
+func TestLarkWatcherStopsAfterPermanentDialErrorAndRecordsHealth(t *testing.T) {
+	var attempts int64
+	dialErr := &deviceRegistrationError{target: "alice/legion", reason: "relay has no registered identity"}
+	sup, cancel := newTestLarkSupervisor(&fakeCardSend{}, func(context.Context, string, string) (deviceSession, error) {
+		atomic.AddInt64(&attempts, 1)
+		return nil, fmt.Errorf("portal device identity: %w", dialErr)
+	})
+	defer cancel()
+
+	var logged []string
+	var logMu sync.Mutex
+	sup.logf = func(format string, args ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	sup.applyConfigs([]deviceLarkApproval{enabledLarkConfig()})
+	waitFor(t, func() bool {
+		sup.mu.Lock()
+		defer sup.mu.Unlock()
+		_, stopped := sup.stopped["alice/legion"]
+		return stopped
+	})
+	time.Sleep(20 * time.Millisecond)
+
+	if got := atomic.LoadInt64(&attempts); got != 1 {
+		t.Fatalf("permanent error made %d dial attempts, want 1", got)
+	}
+	sup.mu.Lock()
+	stop := sup.stopped["alice/legion"]
+	_, watching := sup.watchers["alice/legion"]
+	sup.mu.Unlock()
+	if watching {
+		t.Fatal("permanently failed watcher remained active")
+	}
+	if stop.StopReason == "" || stop.StoppedAt.IsZero() {
+		t.Fatalf("stopped record = %+v, want reason and timestamp", stop)
+	}
+	// The stop must also surface through the outward-facing health record, or the
+	// portal switch goes on reading "on" with nothing naming the cause.
+	if health := sup.deliveryHealth("alice", "legion"); health == nil ||
+		health.Result != "failure" || health.Kind != "dial" || health.Error == "" {
+		t.Fatalf("delivery health after a permanent stop = %+v", health)
+	}
+	logMu.Lock()
+	defer logMu.Unlock()
+	if len(logged) != 1 || !strings.Contains(logged[0], "dial attempt 1") {
+		t.Fatalf("permanent failure logs = %v, want exactly the immediate first line", logged)
+	}
+}
+
+func TestLarkWatcherTransientDialErrorsKeepRetryingWithBackoff(t *testing.T) {
+	var waits []time.Duration
+	attempts := 0
+	sup, cancel := newTestLarkSupervisor(&fakeCardSend{}, func(context.Context, string, string) (deviceSession, error) {
+		attempts++
+		return nil, errors.New("temporary network failure")
+	})
+	defer cancel()
+	sup.waitRetryFn = func(_ context.Context, delay time.Duration) bool {
+		waits = append(waits, delay)
+		return len(waits) < 5
+	}
+
+	watcher := &larkWatcher{sup: sup, ns: "alice", device: "legion", config: enabledLarkConfig()}
+	if err := watcher.run(context.Background()); err != nil {
+		t.Fatalf("transient watcher stopped with error: %v", err)
+	}
+	want := []time.Duration{time.Millisecond, 2 * time.Millisecond, 4 * time.Millisecond, 4 * time.Millisecond, 4 * time.Millisecond}
+	if fmt.Sprint(waits) != fmt.Sprint(want) {
+		t.Fatalf("backoff waits = %v, want %v", waits, want)
+	}
+	if attempts != len(want) {
+		t.Fatalf("dial attempts = %d, want %d", attempts, len(want))
+	}
+}
+
+func TestLarkWatcherRestartsAfterStoppedConditionChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		resume func(deviceLarkApproval) deviceLarkApproval
+	}{
+		{
+			name: "configuration changed",
+			resume: func(cfg deviceLarkApproval) deviceLarkApproval {
+				cfg.NotifyEmail = "new@example.com"
+				cfg.UpdatedAt = "2026-08-13T11:00:00Z"
+				return cfg
+			},
+		},
+		{
+			name: "device registered",
+			resume: func(cfg deviceLarkApproval) deviceLarkApproval {
+				cfg.RegisteredFingerprint = "SHA256:registered-again"
+				return cfg
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			registered := false
+			session := newFakeDeviceSession()
+			sup, cancel := newTestLarkSupervisor(&fakeCardSend{}, func(context.Context, string, string) (deviceSession, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				if !registered {
+					return nil, &deviceRegistrationError{target: "alice/legion", reason: "relay has no registered identity"}
+				}
+				return session, nil
+			})
+			defer cancel()
+			cfg := enabledLarkConfig()
+			sup.applyConfigs([]deviceLarkApproval{cfg})
+			waitFor(t, func() bool {
+				sup.mu.Lock()
+				defer sup.mu.Unlock()
+				_, stopped := sup.stopped["alice/legion"]
+				return stopped
+			})
+
+			mu.Lock()
+			registered = true
+			mu.Unlock()
+			sup.applyConfigs([]deviceLarkApproval{tc.resume(cfg)})
+			waitFor(t, func() bool {
+				calls, _ := session.snapshot()
+				return len(calls) > 0 && calls[0] == 180
+			})
+			sup.mu.Lock()
+			_, stopped := sup.stopped["alice/legion"]
+			_, watching := sup.watchers["alice/legion"]
+			sup.mu.Unlock()
+			if stopped || !watching {
+				t.Fatalf("after resume: stopped=%v watching=%v", stopped, watching)
+			}
+			sup.applyConfigs(nil)
+		})
+	}
+}
+
+func TestLarkSupervisorReconcileRestartsWatcherAfterDeviceRegisters(t *testing.T) {
+	var mu sync.Mutex
+	registered := false
+	session := newFakeDeviceSession()
+	sup, cancel := newTestLarkSupervisor(&fakeCardSend{}, func(context.Context, string, string) (deviceSession, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !registered {
+			return nil, &deviceRegistrationError{target: "alice/legion", reason: "relay has no registered identity"}
+		}
+		return session, nil
+	})
+	defer cancel()
+	sup.adminReq = func(_ string, path string, _ url.Values, _ any) (*http.Response, error) {
+		body := `{"namespaces":["alice"]}`
+		switch path {
+		case "/admin/devices":
+			mu.Lock()
+			isRegistered := registered
+			mu.Unlock()
+			if isRegistered {
+				body = `{"devices":[{"name":"legion","owner":"alice","fingerprint":"SHA256:registered-again"}]}`
+			} else {
+				body = `{"devices":[]}`
+			}
+		case "/admin/devices/lark":
+			body = `{"devices":[{"device":"legion","approval_enabled":true,"notify_email":"alice@example.com","updated_at":"2026-08-13T10:00:00Z"}]}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}
+
+	if err := sup.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		sup.mu.Lock()
+		defer sup.mu.Unlock()
+		_, stopped := sup.stopped["alice/legion"]
+		return stopped
+	})
+	mu.Lock()
+	registered = true
+	mu.Unlock()
+	if err := sup.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		calls, _ := session.snapshot()
+		return len(calls) > 0 && calls[0] == 180
+	})
+	sup.applyConfigs(nil)
+}
+
 // TestLarkWatcherLogsWhenItCannotReachTheDevice covers the failure mode that is
-// invisible by construction. An agent started without the portal's admin
-// fingerprint refuses the console dial, so the watcher retries forever while the
-// switch still reads "on" — and before this the retry path logged nothing at
-// all, leaving no way to tell a misconfigured device from a working one. The
-// first failure must be reported at once, and the rest must be throttled so an
-// unreachable device cannot drown the log.
+// invisible by construction. A transient dial failure keeps the watcher retrying
+// while the switch still reads "on", so the first failure must be reported at
+// once and the rest throttled — otherwise one unreachable device drowns the log,
+// which is exactly how a single device reached 17700 logged attempts.
 func TestLarkWatcherLogsWhenItCannotReachTheDevice(t *testing.T) {
 	const dialError = "controller is not authorized as this device's console administrator"
 	var attempts int64
@@ -347,12 +622,19 @@ func TestLarkWatcherLogsWhenItCannotReachTheDevice(t *testing.T) {
 	sup.applyConfigs([]deviceLarkApproval{enabledLarkConfig()})
 	waitFor(t, func() bool {
 		health := sup.deliveryHealth("alice", "legion")
-		return health != nil && health.ConsecutiveFailures >= larkDialLogEvery+2
+		return health != nil && health.ConsecutiveFailures >= 3
 	})
 	health := sup.deliveryHealth("alice", "legion")
 	if health == nil || health.Result != "failure" || health.Kind != "dial" ||
-		health.Error != dialError || health.ConsecutiveFailures < larkDialLogEvery+2 {
+		health.Error != dialError || health.ConsecutiveFailures < 3 {
 		t.Fatalf("dial health = %+v", health)
+	}
+	// A transient error must not stop the watcher the way a registration error does.
+	sup.mu.Lock()
+	_, stopped := sup.stopped["alice/legion"]
+	sup.mu.Unlock()
+	if stopped {
+		t.Fatal("a transient dial error stopped the watcher; only permanent errors may do that")
 	}
 	sup.applyConfigs(nil)
 	if health := sup.deliveryHealth("alice", "legion"); health != nil {
@@ -425,7 +707,14 @@ func TestLarkSupervisorLoadsEnabledDevicesAcrossNamespaces(t *testing.T) {
 	sup.adminReq = func(_ string, path string, query url.Values, _ any) (*http.Response, error) {
 		requested = append(requested, path+"?"+query.Encode())
 		body := `{"namespaces":["bob","alice"]}`
-		if path == "/admin/devices/lark" {
+		if path == "/admin/devices" {
+			switch query.Get("namespace") {
+			case "alice":
+				body = `{"devices":[{"name":"legion","owner":"alice","fingerprint":"SHA256:alice"}]}`
+			case "bob":
+				body = `{"devices":[{"name":"build","owner":"bob","fingerprint":"SHA256:bob"}]}`
+			}
+		} else if path == "/admin/devices/lark" {
 			switch query.Get("namespace") {
 			case "alice":
 				body = `{"devices":[{"device":"legion","approval_enabled":true,"notify_email":"alice@example.com"}]}`
@@ -449,6 +738,13 @@ func TestLarkSupervisorLoadsEnabledDevicesAcrossNamespaces(t *testing.T) {
 	})
 	if strings.Join(requested, ",") != "/admin/users?,/admin/devices/lark?namespace=alice,/admin/devices/lark?namespace=bob" {
 		t.Fatalf("relay requests = %v", requested)
+	}
+	sup.mu.Lock()
+	aliceFingerprint := sup.watchers["alice/legion"].getConfig().RegisteredFingerprint
+	bobFingerprint := sup.watchers["bob/build"].getConfig().RegisteredFingerprint
+	sup.mu.Unlock()
+	if aliceFingerprint != "" || bobFingerprint != "" {
+		t.Fatalf("healthy watchers unexpectedly loaded registered fingerprints = %q, %q", aliceFingerprint, bobFingerprint)
 	}
 	sup.applyConfigs(nil)
 }

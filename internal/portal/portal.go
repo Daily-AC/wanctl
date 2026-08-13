@@ -701,13 +701,14 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 type deviceLarkApproval struct {
-	Namespace       string              `json:"-"`
-	Device          string              `json:"device"`
-	ApprovalEnabled bool                `json:"approval_enabled"`
-	PairingFromCard bool                `json:"pairing_from_card"`
-	NotifyEmail     string              `json:"notify_email"`
-	UpdatedAt       string              `json:"updated_at,omitempty"`
-	DeliveryHealth  *larkDeliveryHealth `json:"delivery_health,omitempty"`
+	Namespace             string              `json:"-"`
+	Device                string              `json:"device"`
+	ApprovalEnabled       bool                `json:"approval_enabled"`
+	PairingFromCard       bool                `json:"pairing_from_card"`
+	NotifyEmail           string              `json:"notify_email"`
+	UpdatedAt             string              `json:"updated_at,omitempty"`
+	RegisteredFingerprint string              `json:"-"`
+	DeliveryHealth        *larkDeliveryHealth `json:"delivery_health,omitempty"`
 }
 
 func (s *Server) larkDeliveryHealth(ns, device string) *larkDeliveryHealth {
@@ -976,12 +977,30 @@ func (s *Server) registeredFingerprint(ctx context.Context, ns, device string) (
 		}
 		if owner == ns && d.Name == device {
 			if !transport.ValidFingerprint(d.Fingerprint) {
-				return "", fmt.Errorf("relay has no valid registered fingerprint for %q", ns+"/"+device)
+				return "", &deviceRegistrationError{
+					target: ns + "/" + device,
+					reason: "relay has no valid registered fingerprint",
+				}
 			}
 			return d.Fingerprint, nil
 		}
 	}
-	return "", fmt.Errorf("relay has no registered identity for %q", ns+"/"+device)
+	return "", &deviceRegistrationError{
+		target: ns + "/" + device,
+		reason: "relay has no registered identity",
+	}
+}
+
+// deviceRegistrationError means dialing cannot succeed until relay registration
+// state changes. Keeping it typed prevents callers from treating unrelated errors
+// that happen to contain similar prose as permanent.
+type deviceRegistrationError struct {
+	target string
+	reason string
+}
+
+func (e *deviceRegistrationError) Error() string {
+	return fmt.Sprintf("%s for %q", e.reason, e.target)
 }
 
 // errDeviceIdentityChanged marks the one console-dial failure a human can
