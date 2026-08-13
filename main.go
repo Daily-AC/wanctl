@@ -43,7 +43,7 @@ USAGE
   wanctl                                      log in (Feishu) if needed, then run the agent detached in the background
   wanctl start                                (re)start the background agent without re-login; records its pid
   wanctl stop                                 stop the background agent
-  wanctl status                               show whether the agent is running + credential state
+  wanctl status [-target NS/DEV]              show local agent/credential status, or remote agent mode + version
   wanctl logout                               stop the agent and forget the saved login
   wanctl service install [--name N] [--portal-fps FP[,FP]] [--mode M]
                                               install an OS-native always-on service (systemd/launchd/Scheduled Task);
@@ -163,7 +163,7 @@ func main() {
 	case "stop":
 		err = cmdStop()
 	case "status":
-		err = cmdStatus()
+		err = cmdStatus(ctx, os.Args[2:])
 	case "logout":
 		err = cmdLogout()
 	case "update":
@@ -339,7 +339,7 @@ func cmdAgent(ctx context.Context, args []string) error {
 	if *relayURL == "" || *token == "" {
 		return fmt.Errorf("provide --relay and --token (or WANCTL_RELAY/WANCTL_TOKEN)")
 	}
-	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFPs: parsedPortalFPs, LanRelay: *lanRelay})
+	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFPs: parsedPortalFPs, LanRelay: *lanRelay, Version: buildVersion})
 	if err != nil {
 		return err
 	}

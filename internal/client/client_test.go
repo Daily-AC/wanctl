@@ -43,7 +43,7 @@ func TestClientExecAndFileRoundTrip(t *testing.T) {
 
 	// Agent.
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
-	ag, err := agent.New(agent.Options{RelayURL: base, Token: "tok", Name: "home-pc", AutoYes: true, Mode: policy.ModeBypass})
+	ag, err := agent.New(agent.Options{RelayURL: base, Token: "tok", Name: "home-pc", AutoYes: true, Mode: policy.ModeBypass, Version: "v1.2.3-test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +62,13 @@ func TestClientExecAndFileRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	trustServer(t, c, "home-pc")
+	status, err := c.Status(context.Background(), "home-pc")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.Name != "home-pc" || status.Mode != policy.ModeBypass || status.Version != "v1.2.3-test" || !status.Detailed {
+		t.Fatalf("status = %+v", status)
+	}
 
 	code, err := c.Exec(context.Background(), "home-pc", "echo hi", true, "")
 	if err != nil || code != 0 {
