@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,6 +35,7 @@ import (
 	"wanctl/internal/portal"
 	"wanctl/internal/relay"
 	"wanctl/internal/script"
+	"wanctl/internal/serverlog"
 	"wanctl/internal/transport"
 )
 
@@ -88,6 +90,10 @@ USAGE
   wanctl pair  <device>                       check device trust state; if not yet paired print the URL the device owner clicks to approve
   wanctl trust [clients|servers]
   wanctl trust server --target NS/DEV --fingerprint SHA256:... [--replace]
+  wanctl logs [--target NS/DEV] [--type T] [--since RFC3339] [--grep STR] [--limit N]
+                                              read the existing local/remote device activity log
+  wanctl logs --service portal|relay [--since 15m] [--grep STR] [--limit N]
+                                              read recent server logs; --follow is not yet supported
   wanctl portal-admins [list|add|remove]        manage local portal root fingerprints
   wanctl agent [--name N] [--relay URL] [--token T] [--yes] [--shell S] [--portal-fps FP[,FP]]
   wanctl relay  [--addr :8080]                run the relay (thunderbox); DATABASE_URL or WANCTL_TOKENS
@@ -95,6 +101,7 @@ USAGE
 
 Defaults: relay=` + defaultRelay + `  transport=` + defaultTransport + ` (override with WANCTL_RELAY/WANCTL_TRANSPORT)
 ENV (controller): WANCTL_TOKEN=... (or run 'wanctl' to log in)  WANCTL_RELAY=...
+                  WANCTL_PORTAL=... WANCTL_ADMIN_SECRET=... (server logs only)
 ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"  WANCTL_ADMIN_SECRET=...  WANCTL_PORTAL_NS=...
 ENV (portal):     RELAY_ADMIN_URL=...  WANCTL_ADMIN_SECRET=...  PORTAL_USER_HEADER=...
               PORTAL_PUBLIC_ORIGIN=https://portal.example  PORTAL_DEBUG_WHOAMI=1 (diagnostics only)
@@ -205,6 +212,9 @@ func cmdRelay(args []string) error {
 	fs := flag.NewFlagSet("relay", flag.ExitOnError)
 	addr := fs.String("addr", ":8080", "listen address")
 	fs.Parse(args)
+	logs := serverlog.NewDefault()
+	log.SetOutput(io.MultiWriter(os.Stderr, logs))
+	log.SetFlags(log.LstdFlags)
 
 	var r *relay.Relay
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -217,7 +227,7 @@ func cmdRelay(args []string) error {
 		r.SetAuditor(pg)
 		r.SetAdmin(pg)
 		r.SetDocs(pg)
-		fmt.Println("wanctl relay: token store = postgres (hashed tokens + ACL + audit)")
+		log.Print("wanctl relay: token store = postgres (hashed tokens + ACL + audit)")
 	} else {
 		spec := os.Getenv("WANCTL_TOKENS")
 		upstream := os.Getenv("WANCTL_UPSTREAM_RELAY")
@@ -237,9 +247,9 @@ func cmdRelay(args []string) error {
 		}
 		r = relay.New(stores)
 		if upstream != "" {
-			fmt.Printf("wanctl relay: token store = env + upstream (%s)\n", upstream)
+			log.Printf("wanctl relay: token store = env + upstream (%s)", upstream)
 		} else {
-			fmt.Println("wanctl relay: token store = env (WANCTL_TOKENS)")
+			log.Print("wanctl relay: token store = env (WANCTL_TOKENS)")
 		}
 	}
 	// The admin secret gates /admin/* (portal access + satellite-relay token
@@ -248,8 +258,9 @@ func cmdRelay(args []string) error {
 	// endpoint only needs the token store.
 	if sec := os.Getenv("WANCTL_ADMIN_SECRET"); sec != "" {
 		r.SetAdminSecret(sec)
-		fmt.Println("wanctl relay: admin API enabled (secret-gated)")
+		log.Print("wanctl relay: admin API enabled (secret-gated)")
 	}
+	r.SetLogBuffer(logs)
 	if pns := os.Getenv("WANCTL_PORTAL_NS"); pns != "" {
 		r.SetPortalNS(pns)
 	}
@@ -263,9 +274,9 @@ func cmdRelay(args []string) error {
 			return fmt.Errorf("mcp handler: %w", err)
 		}
 		r.SetMCPHandler(h)
-		fmt.Println("wanctl relay: MCP server enabled at /wanctl-mcp (Streamable HTTP)")
+		log.Print("wanctl relay: MCP server enabled at /wanctl-mcp (Streamable HTTP)")
 	}
-	fmt.Printf("wanctl relay listening on %s\n", *addr)
+	log.Printf("wanctl relay listening on %s", *addr)
 	return limits.HTTPServer(*addr, r.Handler()).ListenAndServe()
 }
 
@@ -273,6 +284,9 @@ func cmdPortal(args []string) error {
 	fs := flag.NewFlagSet("portal", flag.ExitOnError)
 	addr := fs.String("addr", ":8080", "listen address")
 	fs.Parse(args)
+	logs := serverlog.NewDefault()
+	log.SetOutput(io.MultiWriter(os.Stderr, logs))
+	log.SetFlags(log.LstdFlags)
 	id, err := transport.LoadOrCreateIdentity()
 	if err != nil {
 		return err
@@ -293,11 +307,12 @@ func cmdPortal(args []string) error {
 		PublicOrigin:  os.Getenv("PORTAL_PUBLIC_ORIGIN"),
 		DebugWhoami:   os.Getenv("PORTAL_DEBUG_WHOAMI") == "1",
 	})
+	p.SetLogBuffer(logs)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	p.Start(ctx)
 	defer p.Close()
-	fmt.Printf("wanctl portal on %s\n  identity:      %s\n  identity hdr:  %q\n  relay(admin):  %q\n  relay(dial):   %q\n",
+	log.Printf("wanctl portal on %s\n  identity:      %s\n  identity hdr:  %q\n  relay(admin):  %q\n  relay(dial):   %q",
 		*addr, id.Fingerprint, envOr("PORTAL_USER_HEADER", "X-Auth-Request-Email"),
 		os.Getenv("RELAY_ADMIN_URL"), os.Getenv("WANCTL_RELAY"))
 	server := limits.HTTPServer(*addr, p.Handler())
@@ -656,7 +671,40 @@ func cmdLogs(ctx context.Context, args []string) error {
 	grep := fs.String("grep", "", "filter: substring of the detail field")
 	since := fs.String("since", "", "filter: RFC3339 timestamp lower bound")
 	limit := fs.Int("limit", 0, "keep only the last N matching events")
+	service := fs.String("service", "", "server service: portal or relay (omit for device logs)")
+	follow := fs.Bool("follow", false, "follow server logs (not yet supported)")
 	fs.Parse(args)
+	if *service != "" {
+		if *service != "portal" && *service != "relay" {
+			return fmt.Errorf("service must be portal or relay")
+		}
+		if *target != "" || *logType != "" || fs.NArg() != 0 {
+			return fmt.Errorf("--service cannot be combined with --target, --type, or positional arguments")
+		}
+		if *follow {
+			return fmt.Errorf("--follow is not yet supported for server logs")
+		}
+		duration := serverlog.DefaultSince
+		if *since != "" {
+			var err error
+			duration, err = time.ParseDuration(*since)
+			if err != nil || duration < 0 {
+				return fmt.Errorf("--since must be a non-negative duration for server logs")
+			}
+		}
+		n := *limit
+		if n == 0 {
+			n = serverlog.DefaultLimit
+		}
+		if n < 0 {
+			return fmt.Errorf("--limit must be positive")
+		}
+		q := serverlog.Query{Service: *service, Since: duration, Limit: min(n, serverlog.MaxLimit), Grep: *grep}
+		return fetchServerLogs(ctx, http.DefaultClient, config.EnvOr("WANCTL_PORTAL", defaultPortal), os.Getenv("WANCTL_ADMIN_SECRET"), q, os.Stdout)
+	}
+	if *follow {
+		return fmt.Errorf("--follow requires --service and is not yet supported")
+	}
 
 	if *target != "" {
 		c, err := client.New()
@@ -685,6 +733,14 @@ func cmdLogs(ctx context.Context, args []string) error {
 		fmt.Println(string(b))
 	}
 	return nil
+}
+
+func fetchServerLogs(ctx context.Context, hc *http.Client, adminURL, secret string, q serverlog.Query, out io.Writer) error {
+	resp, err := serverlog.Fetch(ctx, hc, adminURL, secret, q)
+	if err != nil {
+		return err
+	}
+	return serverlog.Format(out, resp)
 }
 
 func cmdRules(args []string) error {
