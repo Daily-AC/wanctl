@@ -206,6 +206,12 @@ wanctl exec --target home-pc --script ./netcheck.ps1     # interpreter from the 
 wanctl exec --target home-pc --script ./job --interp sh  # or state it
 ```
 
+For interactive use, `wanctl exec home-pc whoami` recognizes an online device
+name (or `owner/device`) in the first positional argument. Use an explicit
+`--target` when the command itself has the same name as an online device; with
+`--target`, positional target inference is disabled and every positional
+argument remains part of the command.
+
 `$`, backticks, nested quotes and non-ASCII text all arrive literally, with or
 without a BOM. (Pushing a BOM-less UTF-8 `.ps1` and running it by path is *not*
 equivalent: Windows PowerShell 5.1 reads BOM-less files as the ANSI code page,

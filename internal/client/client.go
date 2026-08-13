@@ -166,6 +166,20 @@ func (c *Client) Peers(ctx context.Context) ([]string, error) {
 	return info.Devices, nil
 }
 
+// PeerAliases lists every exact spelling accepted for an online target: the
+// short device name and its namespace-qualified form.
+func (c *Client) PeerAliases(ctx context.Context) ([]string, error) {
+	info, err := c.peerInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	aliases := make([]string, 0, len(info.Devices)*2)
+	for _, device := range info.Devices {
+		aliases = append(aliases, device, info.Namespace+"/"+device)
+	}
+	return aliases, nil
+}
+
 type peerInfo struct {
 	Namespace string   `json:"namespace"`
 	Devices   []string `json:"devices"`
