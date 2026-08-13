@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"wanctl/internal/client"
+	"wanctl/internal/serverlog"
 	"wanctl/internal/transport"
 )
 
@@ -74,6 +75,7 @@ type Server struct {
 	hc           *http.Client
 	publicOrigin string
 	debugWhoami  bool
+	logs         *serverlog.Buffer
 
 	dialer *client.Client   // controller used to open console sessions
 	known  *transport.Store // pinned device identities (shared with dialer)
@@ -113,6 +115,9 @@ func New(cfg Config) *Server {
 	return s
 }
 
+// SetLogBuffer installs the process-local service log buffer.
+func (s *Server) SetLogBuffer(logs *serverlog.Buffer) { s.logs = logs }
+
 // Handler returns the portal mux.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -141,6 +146,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices/lan", s.handleDeviceLan)
 	mux.HandleFunc("/api/devices/logs", s.handleDeviceLogs)
 	mux.HandleFunc("/api/devices/events", s.handleDeviceEvents)
+	mux.HandleFunc("/admin/logs", s.handleAdminLogs)
 	mux.HandleFunc("/api/docs/tree", s.handleDocsTree)
 	mux.HandleFunc("/api/docs/article/", s.handleDocsArticleGet)
 	mux.HandleFunc("/api/docs/articles", s.handleDocsArticleWrite)
@@ -148,6 +154,43 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/docs/groups", s.handleDocsGroupWrite)
 	mux.HandleFunc("/api/docs/groups/delete", s.handleDocsGroupDelete)
 	return s.securityMiddleware(mux)
+}
+
+func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
+	if s.adminSecret == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Secret")), []byte(s.adminSecret)) != 1 {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q, err := serverlog.ParseQuery(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	switch q.Service {
+	case "portal":
+		if s.logs == nil {
+			http.Error(w, "portal log buffer is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		serverlog.WriteJSON(w, s.logs.Read(q))
+	case "relay":
+		resp, err := s.adminReq(http.MethodGet, "/admin/logs", r.URL.Query(), nil)
+		if err != nil {
+			http.Error(w, "relay unreachable: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, io.LimitReader(resp.Body, serverlog.MaxResponseBytes))
+	default:
+		http.Error(w, "service must be portal or relay", http.StatusBadRequest)
+	}
 }
 
 var mutationPaths = map[string]bool{
