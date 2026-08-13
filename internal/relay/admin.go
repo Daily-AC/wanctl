@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"wanctl/internal/serverlog"
 	"wanctl/internal/sessionauth"
 )
 
@@ -50,11 +51,38 @@ func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/acl", r.adminACL)
 	mux.HandleFunc("/admin/acl/revoke", r.adminACLRevoke)
 	mux.HandleFunc("/admin/audit", r.adminAudit)
+	mux.HandleFunc("/admin/logs", r.adminLogs)
 	mux.HandleFunc("/admin/enroll/mint", r.handleEnrollMint)
 	mux.HandleFunc("/admin/docs/groups", r.adminDocsGroup)
 	mux.HandleFunc("/admin/docs/groups/delete", r.adminDocsGroupDelete)
 	mux.HandleFunc("/admin/docs/articles", r.adminDocsArticle)
 	mux.HandleFunc("/admin/docs/articles/delete", r.adminDocsArticleDelete)
+}
+
+func (r *Relay) adminLogs(w http.ResponseWriter, req *http.Request) {
+	if !r.secretOK(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if req.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q, err := serverlog.ParseQuery(req.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if q.Service != "relay" {
+		http.Error(w, "service must be relay", http.StatusBadRequest)
+		return
+	}
+	if r.logs == nil {
+		http.Error(w, "relay log buffer is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	serverlog.WriteJSON(w, r.logs.Read(q))
 }
 
 // adminDocsGroup is the admin-secret-gated mirror of POST /docs/groups. The

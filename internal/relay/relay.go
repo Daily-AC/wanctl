@@ -16,6 +16,7 @@ import (
 
 	"wanctl/internal/admission"
 	"wanctl/internal/limits"
+	"wanctl/internal/serverlog"
 	"wanctl/internal/sessionauth"
 	"wanctl/internal/wsconn"
 
@@ -61,6 +62,7 @@ type Relay struct {
 	mcpHandler  http.Handler // optional: HTTP/Streamable MCP at /mcp
 	adminSecret string
 	portalNS    string
+	logs        *serverlog.Buffer
 
 	mu      sync.Mutex
 	agents  map[string]*agentConn      // key "ns/device" (WebSocket transport)
@@ -123,6 +125,9 @@ func (r *Relay) SetMCPHandler(h http.Handler) { r.mcpHandler = h }
 
 // SetAdmin installs the admin store backing the /admin/* endpoints.
 func (r *Relay) SetAdmin(a AdminStore) { r.admin = a }
+
+// SetLogBuffer installs the process-local service log buffer.
+func (r *Relay) SetLogBuffer(logs *serverlog.Buffer) { r.logs = logs }
 
 func (r *Relay) auth(w http.ResponseWriter, req *http.Request) (ns string, ok bool) {
 	token, legacy, ok := admission.Token(req)

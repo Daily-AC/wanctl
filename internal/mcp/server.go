@@ -29,6 +29,7 @@ import (
 	"wanctl/internal/limits"
 	"wanctl/internal/policy"
 	"wanctl/internal/script"
+	"wanctl/internal/serverlog"
 	"wanctl/internal/transport"
 
 	mcpapi "github.com/mark3labs/mcp-go/mcp"
@@ -113,6 +114,8 @@ type sessionStore struct {
 }
 
 var sessions *sessionStore
+
+var serverLogsHTTPClient = http.DefaultClient
 
 func (s *sessionStore) get(ctx context.Context) sessionAPI {
 	if s.stdio != nil {
@@ -450,6 +453,14 @@ func registerMCPTools(s *server.MCPServer) {
 		mcpapi.WithString("since", mcpapi.Description("Filter: RFC3339 timestamp lower bound.")),
 		mcpapi.WithNumber("limit", mcpapi.Description("Return at most this many of the most recent matching events (0 = no cap).")),
 	), mcpLogs)
+
+	s.AddTool(mcpapi.NewTool("wanctl_server_logs",
+		mcpapi.WithDescription("Read recent portal or relay process logs through the secret-gated admin API. Output is redacted before filtering and bounded by the requested limit."),
+		mcpapi.WithString("service", mcpapi.Required(), mcpapi.Description("Server service: 'portal' or 'relay'.")),
+		mcpapi.WithString("since", mcpapi.Description("Lookback duration such as '30m' or '2h'. Default 15m.")),
+		mcpapi.WithNumber("limit", mcpapi.Description("Return at most this many recent lines. Default 200, maximum 2000.")),
+		mcpapi.WithString("grep", mcpapi.Description("Filter by substring after credential redaction.")),
+	), mcpServerLogs)
 
 	s.AddTool(mcpapi.NewTool("wanctl_id",
 		mcpapi.WithDescription("Show THIS MCP session's controller identity fingerprint. The fingerprint is what target devices pair against in the trust step."),
@@ -880,6 +891,46 @@ func mcpLogs(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return mcpapi.NewToolResultText("(no matching events)"), nil
 	}
 	return mcpapi.NewToolResultText(buf.String()), nil
+}
+
+func mcpServerLogs(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	service := reqStr(req, "service", "")
+	if service != "portal" && service != "relay" {
+		return mcpapi.NewToolResultError("service must be portal or relay"), nil
+	}
+	if _, hint := sessions.get(ctx).client(); hint != nil {
+		return hint, nil
+	}
+	since := serverlog.DefaultSince
+	if raw := reqStr(req, "since", ""); raw != "" {
+		var err error
+		since, err = time.ParseDuration(raw)
+		if err != nil || since < 0 {
+			return mcpapi.NewToolResultError("since must be a non-negative duration such as '30m'"), nil
+		}
+	}
+	limit := reqInt(req, "limit")
+	if limit == 0 {
+		limit = serverlog.DefaultLimit
+	}
+	if limit < 0 {
+		return mcpapi.NewToolResultError("limit must be positive"), nil
+	}
+	limit = min(limit, serverlog.MaxLimit)
+	q := serverlog.Query{Service: service, Since: since, Limit: limit, Grep: reqStr(req, "grep", "")}
+	resp, err := serverlog.Fetch(ctx, serverLogsHTTPClient,
+		config.EnvOr("WANCTL_PORTAL", config.DefaultPortal), os.Getenv("WANCTL_ADMIN_SECRET"), q)
+	if err != nil {
+		return mcpapi.NewToolResultError(err.Error()), nil
+	}
+	var out bytes.Buffer
+	if err := serverlog.Format(&out, resp); err != nil {
+		return mcpapi.NewToolResultError(err.Error()), nil
+	}
+	if out.Len() == 0 {
+		return mcpapi.NewToolResultText("(no matching server log lines)"), nil
+	}
+	return mcpapi.NewToolResultText(out.String()), nil
 }
 
 // --- info tools (use the session's identity if any) ---
