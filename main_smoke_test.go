@@ -49,6 +49,26 @@ func TestParseStatusArgs(t *testing.T) {
 	}
 }
 
+func TestInferExecTargetWithSingleOnlineDevice(t *testing.T) {
+	target, command := inferExecTarget("", []string{"zyldephone", "whoami"}, []string{"zyldephone", "alice/zyldephone"})
+	if target != "zyldephone" || strings.Join(command, " ") != "whoami" {
+		t.Fatalf("target = %q, command = %q", target, command)
+	}
+}
+
+func TestInferExecTargetQualifiedAndExplicitDisambiguation(t *testing.T) {
+	aliases := []string{"zyldephone", "alice/zyldephone"}
+	target, command := inferExecTarget("", []string{"alice/zyldephone", "id"}, aliases)
+	if target != "alice/zyldephone" || strings.Join(command, " ") != "id" {
+		t.Fatalf("qualified: target = %q, command = %q", target, command)
+	}
+
+	target, command = inferExecTarget("other", []string{"zyldephone", "whoami"}, aliases)
+	if target != "other" || strings.Join(command, " ") != "zyldephone whoami" {
+		t.Fatalf("explicit: target = %q, command = %q", target, command)
+	}
+}
+
 func TestCmdTrustServerPinsVerifiedIdentity(t *testing.T) {
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	t.Setenv("WANCTL_TOKEN", "tok")

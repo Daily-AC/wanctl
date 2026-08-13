@@ -72,7 +72,7 @@ USAGE
   wanctl docs groups                          list documentation groups
   wanctl docs group new --slug S --title T [--position N]
   wanctl docs group rm <slug>
-  wanctl exec  [--target NS/DEV] [--oneshot] <command...>
+  wanctl exec  [--target NS/DEV] [--oneshot] [NS/DEV|DEV] <command...>
   wanctl exec  [--target NS/DEV] --script <local-file> [--interp powershell|sh]
                                               run a LOCAL script on the device — no shell quoting or encoding hazards
   wanctl push  [--target NS/DEV] <local> <remote>
@@ -386,7 +386,22 @@ func cmdExec(ctx context.Context, args []string) error {
 		"\tInterpreter comes from the extension (.ps1 -> PowerShell, .sh/none -> sh)")
 	interp := fs.String("interp", "", "override the -script interpreter: powershell | sh")
 	fs.Parse(args)
-	command := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	commandArgs := fs.Args()
+
+	var c *client.Client
+	var err error
+	if *target == "" && len(commandArgs) > 0 {
+		c, err = client.New()
+		if err != nil {
+			return err
+		}
+		aliases, err := c.PeerAliases(ctx)
+		if err != nil {
+			return err
+		}
+		*target, commandArgs = inferExecTarget(*target, commandArgs, aliases)
+	}
+	command := strings.TrimSpace(strings.Join(commandArgs, " "))
 
 	if *scriptPath != "" {
 		if command != "" {
@@ -411,9 +426,11 @@ func cmdExec(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, "        Use single quotes for the inner script, or `wanctl exec -script <file.ps1>`.")
 	}
 
-	c, err := client.New()
-	if err != nil {
-		return err
+	if c == nil {
+		c, err = client.New()
+		if err != nil {
+			return err
+		}
 	}
 	code, err := c.Exec(ctx, *target, command, *oneShot, *cwd)
 	if err != nil {
@@ -421,6 +438,21 @@ func cmdExec(ctx context.Context, args []string) error {
 	}
 	os.Exit(code)
 	return nil
+}
+
+// inferExecTarget supports the conventional `exec DEVICE COMMAND` spelling.
+// An explicit -target is authoritative and disables positional inference, which
+// is also the escape hatch for a command whose name matches an online device.
+func inferExecTarget(target string, args, peerAliases []string) (string, []string) {
+	if target != "" || len(args) == 0 {
+		return target, args
+	}
+	for _, alias := range peerAliases {
+		if args[0] == alias {
+			return alias, args[1:]
+		}
+	}
+	return target, args
 }
 
 // buildScriptCommand turns a local script file into a command string that
