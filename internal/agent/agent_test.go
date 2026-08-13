@@ -132,6 +132,18 @@ func TestConsoleApproverUnblocksGate(t *testing.T) {
 	}
 }
 
+func TestAgentStatusReportsModeAndVersion(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	a, err := New(Options{Name: "phone", RelayURL: "ws://x", Token: "tok", Mode: policy.ModeBypass, Version: "v1.2.3-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := a.status()
+	if got.Kind != protocol.KindStatus || got.Name != "phone" || got.ConsoleMode != "bypass" || got.Version != "v1.2.3-test" {
+		t.Fatalf("status = %+v", got)
+	}
+}
+
 // TestAgentRunStopsOnContextCancel pins the fix for an agent that ignored
 // SIGTERM. The WebSocket control channel is deliberately not bound to any
 // context, so an idle Decode parked forever and cancellation went unnoticed —

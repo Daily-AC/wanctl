@@ -50,6 +50,7 @@ const (
 	KindFileMeta  = "file_meta"  // server -> client, download metadata
 	KindEOF       = "eof"        // end of a FrameData stream
 	KindLogs      = "logs"       // client -> server, request event-log lines
+	KindStatus    = "status"     // client -> server, request read-only agent status
 
 	// console session (portal <-> device control plane)
 	KindConsoleHello  = "console_hello"  // portal -> device, opens a control-plane session
