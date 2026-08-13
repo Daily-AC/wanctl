@@ -22,6 +22,7 @@ type fakeCardSend struct {
 	mu      sync.Mutex
 	sends   []fakeCardMessage
 	updates []fakeCardMessage
+	sendErr error
 }
 
 type fakeCardMessage struct {
@@ -33,9 +34,18 @@ type fakeCardMessage struct {
 func (f *fakeCardSend) SendCard(_ context.Context, email string, card any) (string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.sendErr != nil {
+		return "", "", f.sendErr
+	}
 	messageID := "om-" + string(rune('1'+len(f.sends)))
 	f.sends = append(f.sends, fakeCardMessage{email: email, messageID: messageID, card: card})
 	return messageID, "oc-owner", nil
+}
+
+func (f *fakeCardSend) setSendError(err error) {
+	f.mu.Lock()
+	f.sendErr = err
+	f.mu.Unlock()
 }
 
 func (f *fakeCardSend) UpdateCard(_ context.Context, messageID string, card any) error {
@@ -143,6 +153,83 @@ func enabledLarkConfig() deviceLarkApproval {
 	return deviceLarkApproval{
 		Namespace: "alice", Device: "legion", ApprovalEnabled: true,
 		PairingFromCard: true, NotifyEmail: "alice@example.com",
+	}
+}
+
+func TestLarkDeliveryHealthRecordsSendFailuresAndResetsAfterSuccess(t *testing.T) {
+	sender := &fakeCardSend{}
+	sender.setSendError(errors.New("upstream rejected recipient"))
+	sup, cancel := newTestLarkSupervisor(sender, nil)
+	defer cancel()
+	watcher := &larkWatcher{sup: sup, ns: "alice", device: "legion", config: enabledLarkConfig()}
+	pendingSeen := make(map[string]seenPending)
+	pairingSeen := make(map[string]seenPairing)
+	state := console.State{PendingPairings: []console.PendingPairing{{FP: "SHA256:new", Name: "new controller"}}}
+
+	watcher.reconcileState(context.Background(), state, pendingSeen, pairingSeen, time.Minute)
+	watcher.reconcileState(context.Background(), state, pendingSeen, pairingSeen, time.Minute)
+	health := sup.deliveryHealth("alice", "legion")
+	if health == nil || health.Result != "failure" || health.Kind != "pairing" ||
+		health.Error != "upstream rejected recipient" || health.ConsecutiveFailures != 2 || health.AttemptedAt.IsZero() {
+		t.Fatalf("health after failures = %+v", health)
+	}
+
+	sender.setSendError(nil)
+	watcher.reconcileState(context.Background(), state, pendingSeen, pairingSeen, time.Minute)
+	health = sup.deliveryHealth("alice", "legion")
+	if health == nil || health.Result != "success" || health.Kind != "pairing" ||
+		health.Error != "" || health.ConsecutiveFailures != 0 {
+		t.Fatalf("health after success = %+v", health)
+	}
+}
+
+func TestLarkDeliveryHealthIsConcurrentSafe(t *testing.T) {
+	sup, cancel := newTestLarkSupervisor(&fakeCardSend{}, nil)
+	defer cancel()
+	const failures = 64
+	var wg sync.WaitGroup
+	for i := 0; i < failures; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sup.recordHealth("alice", "legion", "approval", errors.New("send failed"))
+			_ = sup.deliveryHealth("alice", "legion")
+		}()
+	}
+	wg.Wait()
+	health := sup.deliveryHealth("alice", "legion")
+	if health == nil || health.ConsecutiveFailures != failures {
+		t.Fatalf("health after concurrent failures = %+v, want %d failures", health, failures)
+	}
+	sup.recordHealth("alice", "legion", "approval", nil)
+	if got := sup.deliveryHealth("alice", "legion"); got == nil || got.ConsecutiveFailures != 0 || got.Result != "success" {
+		t.Fatalf("health after reset = %+v", got)
+	}
+}
+
+func TestLarkDialSuccessDoesNotHideDeliveryFailure(t *testing.T) {
+	sup, cancel := newTestLarkSupervisor(&fakeCardSend{}, nil)
+	defer cancel()
+	sup.recordHealth("alice", "legion", "pairing", errors.New("send failed"))
+	sup.recordHealth("alice", "legion", "dial", nil)
+	health := sup.deliveryHealth("alice", "legion")
+	if health == nil || health.Kind != "pairing" || health.Result != "failure" || health.Error != "send failed" {
+		t.Fatalf("dial success hid delivery failure: %+v", health)
+	}
+
+	sup.recordHealth("bob", "tablet", "dial", errors.New("offline"))
+	sup.recordHealth("bob", "tablet", "dial", nil)
+	health = sup.deliveryHealth("bob", "tablet")
+	if health == nil || health.Kind != "dial" || health.Result != "success" || health.ConsecutiveFailures != 0 {
+		t.Fatalf("dial success did not clear dial failure: %+v", health)
+	}
+}
+
+func TestLarkDeliveryHealthTruncatesErrors(t *testing.T) {
+	message := strings.Repeat("错", larkHealthErrorRunes+20)
+	got := truncateLarkHealthError(message)
+	if !strings.HasSuffix(got, "...") || len([]rune(strings.TrimSuffix(got, "..."))) != larkHealthErrorRunes {
+		t.Fatalf("truncated error has %d runes and suffix %q", len([]rune(got)), got[len(got)-3:])
 	}
 }
 
@@ -258,8 +345,19 @@ func TestLarkWatcherLogsWhenItCannotReachTheDevice(t *testing.T) {
 	}
 
 	sup.applyConfigs([]deviceLarkApproval{enabledLarkConfig()})
-	waitFor(t, func() bool { return atomic.LoadInt64(&attempts) >= larkDialLogEvery+2 })
+	waitFor(t, func() bool {
+		health := sup.deliveryHealth("alice", "legion")
+		return health != nil && health.ConsecutiveFailures >= larkDialLogEvery+2
+	})
+	health := sup.deliveryHealth("alice", "legion")
+	if health == nil || health.Result != "failure" || health.Kind != "dial" ||
+		health.Error != dialError || health.ConsecutiveFailures < larkDialLogEvery+2 {
+		t.Fatalf("dial health = %+v", health)
+	}
 	sup.applyConfigs(nil)
+	if health := sup.deliveryHealth("alice", "legion"); health != nil {
+		t.Fatalf("disabled watcher retained health: %+v", health)
+	}
 
 	lines := snapshot()
 	if len(lines) == 0 {
