@@ -26,6 +26,7 @@ const (
 	larkPairingWait       = 5 * time.Minute
 	larkRetryMin          = time.Second
 	larkRetryMax          = 30 * time.Second
+	larkHealthErrorRunes  = 512
 	// larkDialLogEvery throttles the "cannot reach device" line after the first
 	// one: at the ceiling backoff that is roughly one line every five minutes.
 	larkDialLogEvery = 10
@@ -72,6 +73,9 @@ type larkSupervisor struct {
 	actions  map[string]larkActionRecord
 	closing  bool
 
+	healthMu sync.RWMutex
+	health   map[string]larkDeliveryHealth
+
 	wg sync.WaitGroup
 }
 
@@ -94,6 +98,14 @@ type larkActionRecord struct {
 	naturalClaimed bool
 	naturalDone    chan struct{}
 	waitNatural    <-chan struct{}
+}
+
+type larkDeliveryHealth struct {
+	AttemptedAt         time.Time `json:"attempted_at"`
+	Result              string    `json:"result"`
+	Kind                string    `json:"kind"`
+	Error               string    `json:"error,omitempty"`
+	ConsecutiveFailures int       `json:"consecutive_failures"`
 }
 
 type larkWatcher struct {
@@ -134,6 +146,7 @@ func newLarkSupervisor(s *Server, sender cardSender, grants *lark.Grants) *larkS
 		retryMax:       larkRetryMax,
 		watchers:       make(map[string]*larkWatcher),
 		actions:        make(map[string]larkActionRecord),
+		health:         make(map[string]larkDeliveryHealth),
 		wake:           make(chan struct{}, 1),
 	}
 }
@@ -322,6 +335,58 @@ func responseError(op string, resp *http.Response) error {
 
 func larkDeviceKey(ns, device string) string { return ns + "/" + device }
 
+func (s *larkSupervisor) recordHealth(ns, device, kind string, err error) {
+	key := larkDeviceKey(ns, device)
+	s.healthMu.Lock()
+	health := s.health[key]
+	// A successful reconnect only resolves a dial failure. It must not make a
+	// failed card delivery look healthy before another card is actually sent.
+	if kind == "dial" && err == nil && health.Kind != "" && health.Kind != "dial" {
+		s.healthMu.Unlock()
+		return
+	}
+	health.AttemptedAt = time.Now().UTC()
+	health.Kind = kind
+	if err == nil {
+		health.Result = "success"
+		health.Error = ""
+		health.ConsecutiveFailures = 0
+	} else {
+		health.Result = "failure"
+		health.Error = truncateLarkHealthError(err.Error())
+		health.ConsecutiveFailures++
+	}
+	if s.health == nil {
+		s.health = make(map[string]larkDeliveryHealth)
+	}
+	s.health[key] = health
+	s.healthMu.Unlock()
+}
+
+func (s *larkSupervisor) deliveryHealth(ns, device string) *larkDeliveryHealth {
+	s.healthMu.RLock()
+	health, ok := s.health[larkDeviceKey(ns, device)]
+	s.healthMu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return &health
+}
+
+func (s *larkSupervisor) clearHealth(key string) {
+	s.healthMu.Lock()
+	delete(s.health, key)
+	s.healthMu.Unlock()
+}
+
+func truncateLarkHealthError(message string) string {
+	runes := []rune(message)
+	if len(runes) <= larkHealthErrorRunes {
+		return message
+	}
+	return string(runes[:larkHealthErrorRunes]) + "..."
+}
+
 func (s *larkSupervisor) applyConfigs(configs []deviceLarkApproval) {
 	desired := make(map[string]deviceLarkApproval, len(configs))
 	for _, cfg := range configs {
@@ -332,11 +397,13 @@ func (s *larkSupervisor) applyConfigs(configs []deviceLarkApproval) {
 
 	s.mu.Lock()
 	var stopping []*larkWatcher
+	var stoppingKeys []string
 	for key, watcher := range s.watchers {
 		cfg, ok := desired[key]
 		if !ok {
 			delete(s.watchers, key)
 			stopping = append(stopping, watcher)
+			stoppingKeys = append(stoppingKeys, key)
 			continue
 		}
 		watcher.setConfig(cfg)
@@ -358,9 +425,10 @@ func (s *larkSupervisor) applyConfigs(configs []deviceLarkApproval) {
 	}
 	s.mu.Unlock()
 
-	for _, watcher := range stopping {
+	for i, watcher := range stopping {
 		watcher.cancel()
 		<-watcher.done
+		s.clearHealth(stoppingKeys[i])
 	}
 	s.pruneActions(time.Now())
 }
@@ -410,6 +478,7 @@ func (w *larkWatcher) run(ctx context.Context) {
 	for {
 		session, err := w.sup.sessionFor(ctx, w.ns, w.device)
 		if err != nil {
+			w.sup.recordHealth(w.ns, w.device, "dial", err)
 			// Say something. An agent started without the portal's admin
 			// fingerprint refuses the console dial, and this loop would then
 			// retry forever in complete silence: the switch reads "on", no card
@@ -429,6 +498,7 @@ func (w *larkWatcher) run(ctx context.Context) {
 			continue
 		}
 		dialFailures = 0
+		w.sup.recordHealth(w.ns, w.device, "dial", nil)
 		lastSession = session
 		// A device older than the timeout_set verb answers "unknown RPC kind".
 		// That must not stop us watching it: carrying on with whatever wait the
@@ -482,15 +552,18 @@ func (w *larkWatcher) reconcileState(ctx context.Context, state console.State, p
 		}
 		grant, err := w.sup.grants.Issue(w.ns, w.device, pending.ID, "", "", wait)
 		if err != nil {
+			w.sup.recordHealth(w.ns, w.device, "approval", err)
 			w.sup.logf("lark approval issue grant for %s/%s: %v", larkDeviceKey(w.ns, w.device), pending.ID, err)
 			continue
 		}
 		messageID, chatID, err := w.sup.sender.SendCard(ctx, cfg.NotifyEmail,
 			lark.ApprovalCard(w.device, pending, grant.Nonce, w.sup.deviceURL(w.device), wait))
 		if err != nil {
+			w.sup.recordHealth(w.ns, w.device, "approval", err)
 			w.sup.logf("lark approval send card for %s/%s: %v", larkDeviceKey(w.ns, w.device), pending.ID, err)
 			continue
 		}
+		w.sup.recordHealth(w.ns, w.device, "approval", nil)
 		pendingSeen[pending.ID] = seenPending{pending: pending, nonce: grant.Nonce, messageID: messageID}
 		if _, err := w.sup.grants.BindChat(grant.Nonce, chatID); err != nil {
 			w.sup.logf("lark approval bind card for %s/%s: %v", larkDeviceKey(w.ns, w.device), pending.ID, err)
@@ -526,15 +599,18 @@ func (w *larkWatcher) reconcileState(ctx context.Context, state console.State, p
 		}
 		grant, err := w.sup.grants.Issue(w.ns, w.device, "", pairing.FP, "", larkPairingWait)
 		if err != nil {
+			w.sup.recordHealth(w.ns, w.device, "pairing", err)
 			w.sup.logf("lark pairing issue grant for %s/%s: %v", larkDeviceKey(w.ns, w.device), pairing.FP, err)
 			continue
 		}
 		messageID, chatID, err := w.sup.sender.SendCard(ctx, cfg.NotifyEmail,
 			lark.PairingCard(w.device, pairing, grant.Nonce, w.sup.deviceURL(w.device), cfg.PairingFromCard))
 		if err != nil {
+			w.sup.recordHealth(w.ns, w.device, "pairing", err)
 			w.sup.logf("lark pairing send card for %s/%s: %v", larkDeviceKey(w.ns, w.device), pairing.FP, err)
 			continue
 		}
+		w.sup.recordHealth(w.ns, w.device, "pairing", nil)
 		pairingSeen[pairing.FP] = seenPairing{pairing: pairing, nonce: grant.Nonce, messageID: messageID}
 		if _, err := w.sup.grants.BindChat(grant.Nonce, chatID); err != nil {
 			w.sup.logf("lark pairing bind card for %s/%s: %v", larkDeviceKey(w.ns, w.device), pairing.FP, err)

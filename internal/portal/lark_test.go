@@ -2,10 +2,14 @@ package portal
 
 import (
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"wanctl/internal/policy"
 )
 
 func TestDeviceLarkGetReturnsPersistedConfig(t *testing.T) {
@@ -44,6 +48,87 @@ func TestDeviceLarkGetReturnsPersistedConfig(t *testing.T) {
 	}
 	if got.Device != "legion" || !got.ApprovalEnabled || !got.PairingFromCard || got.NotifyEmail != "alice@example.com" {
 		t.Fatalf("config = %+v", got)
+	}
+}
+
+func TestDeviceLarkGetIncludesDeliveryHealth(t *testing.T) {
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "alice"})
+		case "/admin/devices":
+			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{{"name": "legion"}}})
+		case "/admin/devices/lark":
+			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{{
+				"device": "legion", "approval_enabled": true, "notify_email": "alice@example.com",
+			}}})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	sup, cancel := newTestLarkSupervisor(&fakeCardSend{}, nil)
+	defer cancel()
+	sup.recordHealth("alice", "legion", "approval", errors.New("lark API unavailable"))
+	s.larkRuntime = &larkRuntime{supervisor: sup}
+	req := httptest.NewRequest(http.MethodGet, "/api/devices/lark?device=legion", nil)
+	req.Header.Set("X-User", "alice@example.com")
+	rr := httptest.NewRecorder()
+
+	s.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d; body = %s", rr.Code, rr.Body.String())
+	}
+	var got deviceLarkApproval
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.DeliveryHealth == nil || got.DeliveryHealth.Result != "failure" ||
+		got.DeliveryHealth.Kind != "approval" || got.DeliveryHealth.Error != "lark API unavailable" ||
+		got.DeliveryHealth.ConsecutiveFailures != 1 {
+		t.Fatalf("delivery health = %+v", got.DeliveryHealth)
+	}
+}
+
+func TestDeviceConsoleIncludesModeAndLarkDeliveryHealth(t *testing.T) {
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "alice"})
+		case "/admin/devices":
+			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{{"name": "legion"}}})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	clientConn, deviceConn := net.Pipe()
+	fakeDevice(t, deviceConn)
+	withDialer(t, s)
+	s.conns["alice/legion"] = newDeviceConn(clientConn)
+	defer s.conns["alice/legion"].close()
+	sup, cancel := newTestLarkSupervisor(&fakeCardSend{}, nil)
+	defer cancel()
+	sup.recordHealth("alice", "legion", "pairing", errors.New("lark API unavailable"))
+	s.larkRuntime = &larkRuntime{supervisor: sup}
+	req := httptest.NewRequest(http.MethodGet, "/api/devices/console?device=legion", nil)
+	req.Header.Set("X-User", "alice@example.com")
+	rr := httptest.NewRecorder()
+
+	s.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d; body = %s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Mode   policy.Mode        `json:"mode"`
+		Health larkDeliveryHealth `json:"lark_delivery_health"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode != policy.ModeNormal || got.Health.Result != "failure" ||
+		got.Health.Kind != "pairing" || got.Health.ConsecutiveFailures != 1 {
+		t.Fatalf("console observability response = %+v", got)
 	}
 }
 
