@@ -736,15 +736,15 @@ func TestLarkSupervisorLoadsEnabledDevicesAcrossNamespaces(t *testing.T) {
 		}
 		return true
 	})
-	if strings.Join(requested, ",") != "/admin/users?,/admin/devices?namespace=alice,/admin/devices/lark?namespace=alice,/admin/devices?namespace=bob,/admin/devices/lark?namespace=bob" {
+	if strings.Join(requested, ",") != "/admin/users?,/admin/devices/lark?namespace=alice,/admin/devices/lark?namespace=bob" {
 		t.Fatalf("relay requests = %v", requested)
 	}
 	sup.mu.Lock()
 	aliceFingerprint := sup.watchers["alice/legion"].getConfig().RegisteredFingerprint
 	bobFingerprint := sup.watchers["bob/build"].getConfig().RegisteredFingerprint
 	sup.mu.Unlock()
-	if aliceFingerprint != "SHA256:alice" || bobFingerprint != "SHA256:bob" {
-		t.Fatalf("registered fingerprints = %q, %q", aliceFingerprint, bobFingerprint)
+	if aliceFingerprint != "" || bobFingerprint != "" {
+		t.Fatalf("healthy watchers unexpectedly loaded registered fingerprints = %q, %q", aliceFingerprint, bobFingerprint)
 	}
 	sup.applyConfigs(nil)
 }

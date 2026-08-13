@@ -333,9 +333,12 @@ func (s *larkSupervisor) loadConfigs() ([]deviceLarkApproval, error) {
 
 	configs := make([]deviceLarkApproval, 0)
 	for _, ns := range users.Namespaces {
-		registered, err := s.loadRegisteredDevices(ns)
-		if err != nil {
-			return nil, err
+		var registered map[string]string
+		if s.hasStoppedWatcher(ns) {
+			registered, err = s.loadRegisteredDevices(ns)
+			if err != nil {
+				return nil, err
+			}
 		}
 		resp, err := s.adminReq(http.MethodGet, "/admin/devices/lark", url.Values{"namespace": {ns}}, nil)
 		if err != nil {
@@ -362,6 +365,18 @@ func (s *larkSupervisor) loadConfigs() ([]deviceLarkApproval, error) {
 		}
 	}
 	return configs, nil
+}
+
+func (s *larkSupervisor) hasStoppedWatcher(ns string) bool {
+	prefix := ns + "/"
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.health {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *larkSupervisor) loadRegisteredDevices(ns string) (map[string]string, error) {
