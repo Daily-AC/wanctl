@@ -352,6 +352,9 @@
   .warn{margin-top:18px;background:#fff0f0;border:2px dashed #ffb3b3;border-radius:18px;padding:13px 17px;
     font-size:12.5px;color:var(--straw-d);display:none}
   .warn.show{display:block}.warn b{font-family:var(--round);font-weight:700}
+  .larkmode{margin-top:14px;font-size:12.5px;color:var(--ink-2);line-height:1.6}
+  .larkhealth{margin-top:12px;border-radius:8px;padding:10px 12px;font-size:12.5px;line-height:1.6;background:#f5f5f2;color:var(--ink-2)}
+  .larkhealth.fail{background:#fff0f0;border:2px solid #ffb3b3;color:#9b3535;font-weight:600}
 
   .empty{font-family:var(--round);font-weight:500;color:var(--ink-3);text-align:center;padding:30px}
 
@@ -515,6 +518,8 @@
             <span class="txt" id="larkTxt"><b>飞书审批</b>：加载中…</span>
             <div class="toggle lanoff" id="larkToggle"><span class="k"></span></div>
           </div>
+          <div class="larkmode" id="larkMode">当前执行模式：加载中…</div>
+          <div class="larkhealth" id="larkHealth">还没有投递或连接尝试记录</div>
           <div class="warn" style="display:block;background:#fff5e9;border-color:#ffe2bd;color:#95642a" id="larkHint">
             开着的时候，这台设备遇到没命中规则的操作，会把上下文推一张卡到你的飞书私聊，你在卡上直接点允许或拒绝。<br>
             要知道代价：门户会一直挂着这台设备的连线，所以规则未命中<b>不再立刻拒绝</b>，而是<b>最多等你 3 分钟</b>。
@@ -843,6 +848,12 @@ function applyState(st){
   $('#mTag').className='mtag '+(by?'bypass':'normal');$('#mTag').textContent=tagTxt;
   $('#mTxt').innerHTML=by?'<b>放飞模式</b>：所有操作都自动放行，不再问你':'<b>乖乖模式</b>：没命中规则就来问你，逐条点头';
   $('#toggle').classList.toggle('bypass',by);$('#warnbox').classList.toggle('show',by);
+  $('#larkMode').innerHTML=by
+    ?'<b>当前执行模式：BYPASS</b>。操作会自动放行，不会产生 approval 卡片；新控制端配对卡片不受影响。'
+    :'<b>当前执行模式：NORMAL</b>。未命中规则的操作会产生 approval 卡片。';
+  if(Object.prototype.hasOwnProperty.call(st,'lark_delivery_health')){
+    curLark.delivery_health=st.lark_delivery_health;paintLarkHealth();
+  }
   // LAN fast-path uplink
   const lan=st.lan;curLanOn=!!(lan&&lan.enabled);
   $('#lancard').style.display=lan?'block':'none';
@@ -990,6 +1001,7 @@ $('#lanToggle').onclick=async()=>{
    所以只在打开设备和改动之后各拉一次，不跟着长轮询走。 */
 let curLark={approval_enabled:false,pairing_from_card:false,notify_email:''};
 async function loadLark(name){
+	curLark={approval_enabled:false,pairing_from_card:false,notify_email:''};
   $('#larkTxt').innerHTML='<b>飞书审批</b>：加载中…';
   try{
     const c=await jget('/api/devices/lark?device='+encodeURIComponent(name));
@@ -1012,6 +1024,20 @@ function paintLark(){
   $('#larkPairTxt').innerHTML=pair
     ?'<b>卡片里直接信任新控制端</b>：开着，卡片上会有信任按钮'
     :'<b>卡片里直接信任新控制端</b>：关着的话卡片只通知，要信任得回门户点';
+  paintLarkHealth();
+}
+function paintLarkHealth(){
+  const el=$('#larkHealth'),h=curLark.delivery_health;
+  if(!curLark.approval_enabled){el.className='larkhealth';el.textContent='飞书审批未开启，没有投递尝试';return}
+  if(!h){el.className='larkhealth';el.textContent='已开启，尚无投递或连接尝试记录';return}
+  const labels={dial:'设备连接',approval:'审批卡片',pairing:'配对卡片'};
+  const when=new Date(h.attempted_at).toLocaleString();
+  if(h.result==='failure'){
+    el.className='larkhealth fail';
+    el.textContent=(labels[h.kind]||h.kind)+'最近一次失败（连续 '+h.consecutive_failures+' 次，'+when+'）：'+(h.error||'未知错误');
+    return;
+  }
+  el.className='larkhealth';el.textContent=(labels[h.kind]||h.kind)+'最近一次成功（'+when+'）';
 }
 async function saveLark(field,value){
   if(roGuard())return;
@@ -1021,6 +1047,7 @@ async function saveLark(field,value){
     const r=await jpost('/api/devices/lark',body);
     const saved=await r.json();
     if(cur!==body.device)return;
+    saved.delivery_health=curLark.delivery_health;
     curLark=saved;paintLark();
   }catch(e){err('保存飞书审批设置失败：'+e.message)}
 }
