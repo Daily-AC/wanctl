@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"wanctl/internal/client"
+	"wanctl/internal/console"
 	"wanctl/internal/serverlog"
 	"wanctl/internal/transport"
 )
@@ -700,12 +701,23 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 type deviceLarkApproval struct {
-	Namespace       string `json:"-"`
-	Device          string `json:"device"`
-	ApprovalEnabled bool   `json:"approval_enabled"`
-	PairingFromCard bool   `json:"pairing_from_card"`
-	NotifyEmail     string `json:"notify_email"`
-	UpdatedAt       string `json:"updated_at,omitempty"`
+	Namespace       string              `json:"-"`
+	Device          string              `json:"device"`
+	ApprovalEnabled bool                `json:"approval_enabled"`
+	PairingFromCard bool                `json:"pairing_from_card"`
+	NotifyEmail     string              `json:"notify_email"`
+	UpdatedAt       string              `json:"updated_at,omitempty"`
+	DeliveryHealth  *larkDeliveryHealth `json:"delivery_health,omitempty"`
+}
+
+func (s *Server) larkDeliveryHealth(ns, device string) *larkDeliveryHealth {
+	s.larkMu.Lock()
+	runtime := s.larkRuntime
+	s.larkMu.Unlock()
+	if runtime == nil || runtime.supervisor == nil {
+		return nil
+	}
+	return runtime.supervisor.deliveryHealth(ns, device)
 }
 
 func (s *Server) handleDeviceLark(w http.ResponseWriter, r *http.Request) {
@@ -738,13 +750,14 @@ func (s *Server) handleDeviceLark(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, cfg := range out.Devices {
 		if cfg.Device == device {
+			cfg.DeliveryHealth = s.larkDeliveryHealth(ns, device)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(cfg)
 			return
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(deviceLarkApproval{Device: device})
+	json.NewEncoder(w).Encode(deviceLarkApproval{Device: device, DeliveryHealth: s.larkDeliveryHealth(ns, device)})
 }
 
 func (s *Server) handleDeviceLarkWrite(w http.ResponseWriter, r *http.Request) {
@@ -1076,7 +1089,10 @@ func (s *Server) handleDeviceConsole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	json.NewEncoder(w).Encode(st)
+	json.NewEncoder(w).Encode(struct {
+		console.State
+		LarkDeliveryHealth *larkDeliveryHealth `json:"lark_delivery_health,omitempty"`
+	}{State: st, LarkDeliveryHealth: s.larkDeliveryHealth(ns, device)})
 }
 
 func (s *Server) handleDeviceDecide(w http.ResponseWriter, r *http.Request) {
