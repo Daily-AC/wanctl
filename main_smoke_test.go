@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"os/exec"
@@ -66,6 +67,28 @@ func TestInferExecTargetQualifiedAndExplicitDisambiguation(t *testing.T) {
 	target, command = inferExecTarget("other", []string{"zyldephone", "whoami"}, aliases)
 	if target != "other" || strings.Join(command, " ") != "zyldephone whoami" {
 		t.Fatalf("explicit: target = %q, command = %q", target, command)
+	}
+}
+
+func TestBuildScriptCommandExplainsLocalFilePath(t *testing.T) {
+	_, err := buildScriptCommand("echo hello", "")
+	if err == nil || !strings.Contains(err.Error(), "-script expects a local file path") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPOSIXShellQuoteLossWarning(t *testing.T) {
+	args := []string{"sh", "-c", "echo x; cat a"}
+	var stderr bytes.Buffer
+	warnPOSIXShellQuoteLoss(&stderr, "", args)
+	if got := stderr.String(); !strings.Contains(got, "local shell already removed the quotes") || !strings.Contains(got, "exec -script <file.sh>") {
+		t.Fatalf("warning = %q", got)
+	}
+
+	stderr.Reset()
+	warnPOSIXShellQuoteLoss(&stderr, "job.sh", args)
+	if stderr.Len() != 0 {
+		t.Fatalf("-script warning = %q", stderr.String())
 	}
 }
 
