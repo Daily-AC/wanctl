@@ -49,6 +49,7 @@ type Options struct {
 	PortalFP  string      // deprecated single portal admin fingerprint
 	PortalFPs []string    // pre-trusted portal admin fingerprints, enrolled locally
 	LanRelay  string      // intranet fast-path relay (ws://...); "" disables the second uplink
+	Version   string      // immutable release version reported to controllers
 }
 
 // Agent is a running controlled node.
@@ -116,6 +117,9 @@ func New(opts Options) (*Agent, error) {
 	}
 	if opts.Shell == "" {
 		opts.Shell = server.DefaultShell()
+	}
+	if opts.Version == "" {
+		opts.Version = "dev"
 	}
 	// opts.Mode is deliberately left empty when no --mode was given: policy.Open
 	// reads an empty mode as "use the persisted one", which is what lets a
@@ -521,6 +525,8 @@ func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capa
 				continue
 			}
 			a.doLogs(conn, m)
+		case protocol.KindStatus:
+			protocol.WriteMessage(conn, a.status())
 		case protocol.KindFilePut:
 			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp})
 			a.log.Append(eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "PUT " + m.Path, Decision: decision})
@@ -541,6 +547,12 @@ func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capa
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "unknown request: " + m.Kind})
 			return
 		}
+	}
+}
+
+func (a *Agent) status() protocol.Message {
+	return protocol.Message{
+		Kind: protocol.KindStatus, Name: a.opts.Name, Version: a.opts.Version, ConsoleMode: string(a.engine.Mode()),
 	}
 }
 

@@ -21,6 +21,34 @@ func TestBuilds(t *testing.T) {
 	}
 }
 
+func TestParseStatusArgs(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantTarget string
+		wantErr    bool
+	}{
+		{name: "local"},
+		{name: "remote short flag", args: []string{"-target", "phone"}, wantTarget: "phone"},
+		{name: "remote long flag", args: []string{"--target", "alice/phone"}, wantTarget: "alice/phone"},
+		{name: "unknown flag", args: []string{"--bogus"}, wantErr: true},
+		{name: "positional argument", args: []string{"phone"}, wantErr: true},
+		{name: "argument after target", args: []string{"--target", "phone", "extra"}, wantErr: true},
+		{name: "empty target", args: []string{"--target="}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseStatusArgs(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseStatusArgs(%q) error = %v, wantErr %v", tt.args, err, tt.wantErr)
+			}
+			if got != tt.wantTarget {
+				t.Fatalf("parseStatusArgs(%q) target = %q, want %q", tt.args, got, tt.wantTarget)
+			}
+		})
+	}
+}
+
 func TestCmdTrustServerPinsVerifiedIdentity(t *testing.T) {
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	t.Setenv("WANCTL_TOKEN", "tok")
