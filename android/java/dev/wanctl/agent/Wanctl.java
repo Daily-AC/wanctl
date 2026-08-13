@@ -46,6 +46,10 @@ final class Wanctl {
         return new File(c.getFilesDir(), "agent.log");
     }
 
+    static File deviceStateFile(Context c) {
+        return new File(new File(c.getFilesDir(), "state"), "device.json");
+    }
+
     /**
      * Builds a command for the bundled binary with the environment wanctl needs.
      *
@@ -64,6 +68,7 @@ final class Wanctl {
         ProcessBuilder pb = new ProcessBuilder(argv);
         Map<String, String> env = pb.environment();
         env.put("WANCTL_CONFIG_DIR", configDir(c).getAbsolutePath());
+        env.put("WANCTL_DEVICE_STATE_FILE", deviceStateFile(c).getAbsolutePath());
         env.put("HOME", c.getFilesDir().getAbsolutePath());
         env.put("TMPDIR", c.getCacheDir().getAbsolutePath());
         // wanctl resolves the session shell to /system/bin/sh on Android by
