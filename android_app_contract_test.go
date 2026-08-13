@@ -57,6 +57,7 @@ var androidAppSources = []string{
 	"AgentService.java",
 	"AgentState.java",
 	"BootReceiver.java",
+	"DeviceState.java",
 	"Installer.java",
 	"KeeperJob.java",
 	"LogActivity.java",
