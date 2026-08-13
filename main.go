@@ -12,6 +12,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -72,8 +73,8 @@ USAGE
   wanctl docs groups                          list documentation groups
   wanctl docs group new --slug S --title T [--position N]
   wanctl docs group rm <slug>
-  wanctl exec  [--target NS/DEV] [--oneshot] <command...>
-  wanctl exec  [--target NS/DEV] --script <local-file> [--interp powershell|sh]
+  wanctl exec  [--target NS/DEV] [--oneshot] [NS/DEV|DEV] <command...>
+  wanctl exec  [--target NS/DEV] --script <local-file> [--interp powershell|sh] [NS/DEV|DEV]
                                               run a LOCAL script on the device — no shell quoting or encoding hazards
   wanctl push  [--target NS/DEV] <local> <remote>
   wanctl pull  [--target NS/DEV] <remote> <local>
@@ -386,7 +387,22 @@ func cmdExec(ctx context.Context, args []string) error {
 		"\tInterpreter comes from the extension (.ps1 -> PowerShell, .sh/none -> sh)")
 	interp := fs.String("interp", "", "override the -script interpreter: powershell | sh")
 	fs.Parse(args)
-	command := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	commandArgs := fs.Args()
+
+	var c *client.Client
+	var err error
+	if *target == "" && len(commandArgs) > 0 {
+		c, err = client.New()
+		if err != nil {
+			return err
+		}
+		aliases, err := c.PeerAliases(ctx)
+		if err != nil {
+			return err
+		}
+		*target, commandArgs = inferExecTarget(*target, commandArgs, aliases)
+	}
+	command := strings.TrimSpace(strings.Join(commandArgs, " "))
 
 	if *scriptPath != "" {
 		if command != "" {
@@ -410,10 +426,13 @@ func cmdExec(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, "        The device's shell expands those variables before the inner PowerShell sees them.")
 		fmt.Fprintln(os.Stderr, "        Use single quotes for the inner script, or `wanctl exec -script <file.ps1>`.")
 	}
+	warnPOSIXShellQuoteLoss(os.Stderr, *scriptPath, commandArgs)
 
-	c, err := client.New()
-	if err != nil {
-		return err
+	if c == nil {
+		c, err = client.New()
+		if err != nil {
+			return err
+		}
 	}
 	code, err := c.Exec(ctx, *target, command, *oneShot, *cwd)
 	if err != nil {
@@ -423,13 +442,37 @@ func cmdExec(ctx context.Context, args []string) error {
 	return nil
 }
 
+func warnPOSIXShellQuoteLoss(w io.Writer, scriptPath string, args []string) {
+	if scriptPath != "" || !script.POSIXShellQuoteLoss(args) {
+		return
+	}
+	fmt.Fprintln(w, "wanctl: warning: this looks like `sh -c '<script>'`, but your local shell already removed the quotes,")
+	fmt.Fprintln(w, "        so the device receives separate words and may run only the first one.")
+	fmt.Fprintln(w, "        Use `wanctl exec -script <file.sh>`; it is sent base64-encoded and cannot be re-split.")
+}
+
+// inferExecTarget supports the conventional `exec DEVICE COMMAND` spelling.
+// An explicit -target is authoritative and disables positional inference, which
+// is also the escape hatch for a command whose name matches an online device.
+func inferExecTarget(target string, args, peerAliases []string) (string, []string) {
+	if target != "" || len(args) == 0 {
+		return target, args
+	}
+	for _, alias := range peerAliases {
+		if args[0] == alias {
+			return alias, args[1:]
+		}
+	}
+	return target, args
+}
+
 // buildScriptCommand turns a local script file into a command string that
 // carries the script without exposing it to shell parsing. See execscript.go for
 // why this exists.
 func buildScriptCommand(path, interpFlag string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("-script expects a local file path; cannot read %q: %w", path, err)
 	}
 	var in script.Interp
 	if interpFlag != "" {
