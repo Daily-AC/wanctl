@@ -172,6 +172,39 @@ on elevation. (`shizuku` and `adb` land in later versions; naming one today
 reports that this build does not have it, which is deliberately distinct from
 "the device does not have it".)
 
+#### Pairing, for a phone with no root and no cable
+
+Android 11+ can hand out shell access over Wi-Fi without a computer, and the
+agent can take it. On the device: 设置 → 开发者选项 → **无线调试** → **使用配对码
+配对设备**. That screen shows a port and six digits. Then, from the controller:
+
+```sh
+wanctl exec --target phone -- adb-pair 37129 314159
+```
+
+The verb runs **on the device** — only it can reach the pairing port its own
+adbd opened — and it needs no elevation, because setting up the elevation
+channel with a command that itself requires elevation would be a loop with no
+entry point. All it does is connect to 127.0.0.1, which an app sandbox may
+already do.
+
+Two ports appear on that screen and they are not the same listener: use the one
+next to the pairing code, not the one on the wireless-debugging screen. A
+`connection refused` here is almost always that mix-up.
+
+What happens underneath, because it is not obvious: the pairing code alone is
+not the SPAKE2 password. AOSP appends 64 bytes of TLS exported keying material
+to it, binding the exchange to that specific TLS session so a relayed pairing
+cannot be stolen. wanctl does the same — including the detail that the exporter
+label is `"adb-label\0"` **with** its trailing NUL, because AOSP passes
+`sizeof()` as the label length. Dropping that byte produces perfectly valid
+keying material that simply never matches the device's.
+
+Pairing is persistent: the key lands in `/data/misc/adb/adb_keys` and survives
+reboots. Wireless debugging itself does not — Android turns it off on boot —
+so after a restart the switch has to be flipped again, but the code does not
+have to be re-entered.
+
 #### The adb channel needs a human once, and cannot be automated past that
 
 The first time the agent connects to its own adbd, the device raises **允许 USB

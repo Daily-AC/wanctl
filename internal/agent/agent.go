@@ -642,7 +642,11 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 			return
 		}
 	default:
-		if handled, builtinCode, builtinErr := server.RunBuiltin(m.Command, out); handled {
+		// adb-pair is unelevated on purpose: it is how the elevation channel
+		// gets set up in the first place (see runADBPair).
+		if handled, pairCode, pairErr := a.runADBPair(m.Command, out); handled {
+			code, err = pairCode, pairErr
+		} else if handled, builtinCode, builtinErr := server.RunBuiltin(m.Command, out); handled {
 			code, err = builtinCode, builtinErr
 		} else if m.OneShot {
 			code, err = server.RunOneShot(a.opts.Shell, m.Command, m.Cwd, out)
