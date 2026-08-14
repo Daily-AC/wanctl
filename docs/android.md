@@ -172,6 +172,34 @@ on elevation. (`shizuku` and `adb` land in later versions; naming one today
 reports that this build does not have it, which is deliberately distinct from
 "the device does not have it".)
 
+#### The adb channel needs a human once, and cannot be automated past that
+
+The first time the agent connects to its own adbd, the device raises **允许 USB
+调试吗？** showing wanctl's key fingerprint. Until someone accepts it, the
+channel reports:
+
+```
+elevation channel "adb" is not available: adbd on port 5555 is waiting for
+someone to allow wanctl's key on the device screen
+```
+
+That prompt cannot be answered from software. Measured on a Xiaomi Mi 10 Ultra
+(Android 11) on 2026-08-14, `input tap` against it fails with
+
+```
+java.lang.SecurityException: Injecting to another application requires INJECT_EVENTS permission
+```
+
+which is the platform working as designed: if a program could tap that button,
+any program could grant itself shell access. So enabling this channel always
+costs one deliberate action by whoever is holding the phone — worth knowing
+before planning an unattended rollout.
+
+Note also what adbd does while it waits: **nothing**. It does not re-issue a
+token and does not close the socket. A client that simply waits sees a bare
+`i/o timeout` and no hint that a dialog is open, which is why the agent gives
+up after a short grace period and reports the dialog instead.
+
 **Elevated commands are their own policy class.** 自动放行所有命令 does not
 cover them: that switch says "this device is unattended", not "hand out root",
 so an elevated command on a bypass-mode device is still refused until it has a

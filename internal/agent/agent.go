@@ -149,7 +149,7 @@ func New(opts Options) (*Agent, error) {
 		id: id, known: known, portalAdmins: portalAdmins, opts: opts, engine: engine, log: logger,
 		inst:     inst,
 		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(), stdin: bufio.NewReader(os.Stdin),
-		elevator: elevate.ConfigureDefault(os.Getenv),
+		elevator: elevate.ConfigureDefault(configDirOrEmpty(), os.Getenv),
 	}
 	a.console = console.New(engine, logger, console.Info{
 		Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL,
@@ -170,6 +170,18 @@ func New(opts Options) (*Agent, error) {
 	// everything while the audit log claimed a human said "approved".
 	a.appr = a.console
 	return a, nil
+}
+
+// configDirOrEmpty is where the adb channel keeps its key. An error here is
+// not fatal to the agent: it only means the adb channel cannot store a key and
+// will report itself unavailable, which is the right outcome for a device whose
+// config dir is unreadable anyway.
+func configDirOrEmpty() string {
+	dir, err := transport.ConfigDir()
+	if err != nil {
+		return ""
+	}
+	return dir
 }
 
 func newInstanceID() (string, error) {
