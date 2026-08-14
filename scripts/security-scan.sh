@@ -35,7 +35,7 @@ run_govulncheck() {
   # this line wins inside the job, so bumping only the CI variable leaves the
   # scan reporting vulnerabilities in a toolchain the pipeline thinks it left
   # behind (measured 2026-08-14, pipeline 9859).
-  GOTOOLCHAIN=go1.25.13 go run "golang.org/x/vuln/cmd/govulncheck@$govuln_version" ./...
+  GOTOOLCHAIN=go1.26.6 go run "golang.org/x/vuln/cmd/govulncheck@$govuln_version" ./...
 }
 
 run_sbom() {
