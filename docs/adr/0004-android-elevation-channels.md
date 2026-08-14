@@ -116,3 +116,35 @@ receive mDNS and that is a framework call.
 - Elevation being a separate policy class means an existing bypass-mode device
   gains nothing on upgrade. Deliberate: no device becomes more powerful because
   someone updated it.
+
+## Amendment, 2026-08-14: the Shizuku channel is cut
+
+Decided by the owner the same day this ADR was accepted, after phase 4 (the adb
+channel) worked on an unrooted PGBM10.
+
+Shizuku was in the original three because it looked like a *different* way to
+reach uid 2000. Once the adb channel ran, it turned out not to be a different
+way — it is the same destination reached by a longer road:
+
+- It lands on **the same uid 2000 in the same `shell` domain** the adb channel
+  already reaches. Nothing is reachable through it that is not reachable
+  without it.
+- On an unrooted phone, **Shizuku is started by wireless debugging** — the very
+  thing the adb channel needs. So it cannot be the fallback for a device where
+  wireless debugging is unavailable; it is strictly wireless debugging plus a
+  dependency.
+- That dependency is **a second app the device's owner installs**, keeps
+  updated, and re-starts after every reboot.
+- It dies on reboot exactly like the adb channel does, so it does not improve
+  the unattended story either. `su` remains the only channel that does.
+
+The argument that survives from the original decision is the one about Google's
+proposal to restrict local adb connections. If that lands, Shizuku does not save
+us: it needs the same local connection to start. What saves us there is `su`,
+which is why the channel *interface* stays — the cost of the abstraction was
+paid, a third implementation was not.
+
+`--via shizuku` reports that the channel was dropped, rather than "unknown
+channel". The name appears in this ADR, in the plan, and in earlier drafts of
+`docs/android.md`; someone typing it read something real, and the error should
+tell them what happened.

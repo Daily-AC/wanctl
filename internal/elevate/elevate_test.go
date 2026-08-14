@@ -73,15 +73,15 @@ func TestSelectPrefersProbeOrderNotArgumentOrder(t *testing.T) {
 
 func TestSelectFallsThroughToTheNextAvailableChannel(t *testing.T) {
 	su := &fakeChannel{kind: KindSu, ok: false, reason: "not rooted"}
-	shizuku := &fakeChannel{kind: KindShizuku, ok: true}
-	m := NewManager(true, "", su, shizuku)
+	adb := &fakeChannel{kind: KindADB, ok: true}
+	m := NewManager(true, "", su, adb)
 
 	c, st, err := m.Select(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Kind() != KindShizuku {
-		t.Fatalf("selected %s, want shizuku", c.Kind())
+	if c.Kind() != KindADB {
+		t.Fatalf("selected %s, want adb", c.Kind())
 	}
 	if !st.Available {
 		t.Fatal("status reports unavailable for the selected channel")
@@ -92,8 +92,8 @@ func TestPinnedChannelNeverSilentlyDowngrades(t *testing.T) {
 	// The point of --via: asking for root and getting uid 2000 instead would be
 	// a wrong answer that looks like a right one.
 	su := &fakeChannel{kind: KindSu, ok: false, reason: "no su binary found"}
-	shizuku := &fakeChannel{kind: KindShizuku, ok: true}
-	m := NewManager(true, "", su, shizuku)
+	adb := &fakeChannel{kind: KindADB, ok: true}
+	m := NewManager(true, "", su, adb)
 
 	_, _, err := m.Select(context.Background(), KindSu)
 	if err == nil {
@@ -102,8 +102,8 @@ func TestPinnedChannelNeverSilentlyDowngrades(t *testing.T) {
 	if !strings.Contains(err.Error(), "no su binary found") {
 		t.Fatalf("error = %q, want the pinned channel's own reason", err)
 	}
-	if len(shizuku.ran) != 0 {
-		t.Fatal("a pinned su request reached the shizuku channel")
+	if len(adb.ran) != 0 {
+		t.Fatal("a pinned su request reached the adb channel")
 	}
 }
 
@@ -123,13 +123,13 @@ func TestPinningAChannelThisBuildLacksIsDistinctFromItBeingUnavailable(t *testin
 func TestSelectReportsEveryReasonWhenNothingIsAvailable(t *testing.T) {
 	m := NewManager(true, "",
 		&fakeChannel{kind: KindSu, ok: false, reason: "not rooted"},
-		&fakeChannel{kind: KindShizuku, ok: false, reason: "Shizuku is not running"},
+		&fakeChannel{kind: KindADB, ok: false, reason: "wireless debugging is off"},
 	)
 	_, _, err := m.Select(context.Background(), "")
 	if err == nil {
 		t.Fatal("Select succeeded with no channel available")
 	}
-	for _, want := range []string{"not rooted", "Shizuku is not running"} {
+	for _, want := range []string{"not rooted", "wireless debugging is off"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %q, want it to include %q", err, want)
 		}
@@ -162,21 +162,21 @@ func TestProbeResultIsCachedThenExpires(t *testing.T) {
 
 func TestRunReportsTheChannelThatActuallyRan(t *testing.T) {
 	su := &fakeChannel{kind: KindSu, ok: false, reason: "not rooted"}
-	shizuku := &fakeChannel{kind: KindShizuku, ok: true, runCode: 7}
-	m := NewManager(true, "", su, shizuku)
+	adb := &fakeChannel{kind: KindADB, ok: true, runCode: 7}
+	m := NewManager(true, "", su, adb)
 
 	var sb strings.Builder
 	via, code, err := m.Run(context.Background(), "", "id", "", &sb)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if via != KindShizuku {
-		t.Fatalf("Run reported %s, want the channel that ran (shizuku)", via)
+	if via != KindADB {
+		t.Fatalf("Run reported %s, want the channel that ran (adb)", via)
 	}
 	if code != 7 {
 		t.Fatalf("exit = %d, want the channel's own code 7", code)
 	}
-	if sb.String() != "ran on shizuku" {
+	if sb.String() != "ran on adb" {
 		t.Fatalf("output = %q", sb.String())
 	}
 }
@@ -201,7 +201,7 @@ func TestSetEnabledFalseClearsTheProbeCache(t *testing.T) {
 
 func TestStatusesExplainRatherThanErrorWhenNothingWorks(t *testing.T) {
 	m := NewManager(true, "",
-		&fakeChannel{kind: KindShizuku, ok: false, reason: "Shizuku is not running"},
+		&fakeChannel{kind: KindADB, ok: false, reason: "wireless debugging is off"},
 		&fakeChannel{kind: KindSu, ok: false, reason: "not rooted"},
 	)
 	got := m.Statuses(context.Background())
@@ -234,7 +234,7 @@ func TestStatusesSayWhenElevationIsOffRatherThanProbing(t *testing.T) {
 }
 
 func TestParseKind(t *testing.T) {
-	for _, in := range []string{"su", "SU", " shizuku ", "adb"} {
+	for _, in := range []string{"su", "SU", "adb"} {
 		if _, err := ParseKind(in); err != nil {
 			t.Fatalf("ParseKind(%q) = %v", in, err)
 		}

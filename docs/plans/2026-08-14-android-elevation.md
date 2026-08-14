@@ -30,25 +30,23 @@ signature checks, with no app-visible equivalent.
 So the unit of work is not "more verbs". It is **one elevation channel**, after
 which the entire adb surface follows for free.
 
-## Three channels, probed in order
+## The channels, probed in order
 
-Decided by the owner on 2026-08-14: build all three and degrade at runtime.
+Decided by the owner on 2026-08-14: build them all and degrade at runtime. Three
+were planned; Shizuku was cut the same day, once the adb channel worked.
 
 | channel | how it gets uid 2000/0 | needs | cost to the user |
 |---|---|---|---|
 | `su` | `su -c` | rooted device | none, if already rooted |
-| `shizuku` | Java binder → `IShizukuService.newProcess()` | Shizuku installed **and started** | must install Shizuku; must restart it after each reboot |
 | `adb` | in-process adb client → `127.0.0.1:<adbd port>` | Developer options → Wireless debugging | pairing code once; re-enable wireless debugging after each reboot |
 | `none` | current app-sandbox shell | — | (fallback, not an elevation) |
 
-Probe order is `su` → `shizuku` → `adb` → `none`; the first available one wins.
-A controller may pin one with `--via`, and pinning an unavailable channel is an
+Probe order is `su` → `adb` → `none`; the first available one wins. A controller may pin one with `--via`, and pinning an unavailable channel is an
 error rather than a silent downgrade — a command that quietly ran unprivileged
 after you asked for root is a wrong answer dressed as a right one.
 
-**None of the three is free of a reboot story, and the docs must say so.**
-`su` survives reboots. Shizuku and wireless debugging both do not: Android
-clears wireless debugging on boot, and Shizuku's own service dies with it. That
+**Neither is free of a reboot story, and the docs must say so.**
+`su` survives reboots; wireless debugging does not — Android clears it on boot. That
 is a platform fact, not something wanctl can engineer around, and a device that
 must be reachable unattended after a power cut should be rooted or should not
 depend on elevation.
@@ -138,9 +136,12 @@ is refused; the event log names the channel.
 Done when: `wanctl exec --target <dev> --elevate -- screenshot -o /tmp/s.png`
 writes a PNG that opens, and `logcat -f` streams rather than buffering.
 
-**Phase 3 — the Shizuku channel.**
-Done when: on PGBM10 with Shizuku running, `--via shizuku -- id` returns
-`uid=2000` and the probe picks it with no `--via`.
+**Phase 3 — the Shizuku channel. Cut (owner's decision, 2026-08-14).**
+Once phase 4 worked, Shizuku had no scenario left to itself: it lands on the
+same uid 2000, it is *started* by wireless debugging (so it needs everything the
+adb channel needs and then a second app on top), and it dies with each reboot
+just the same. `--via shizuku` reports that it was dropped rather than that it
+is unknown, because the name is in earlier docs. See ADR 0004's amendment.
 
 **Phase 4 — the adb self-connect channel.**
 Done when: on PGBM10 with only *Developer options → Wireless debugging* on and
@@ -150,7 +151,7 @@ and it still connects after the app is restarted without re-pairing.
 ## Verification devices
 
 - `zyldephone` — OPPO PGBM10, Android 14, **not rooted**. The target for
-  phases 3 and 4. Currently online, agent healthy.
+  phase 4. Currently online, agent healthy.
 - A rooted device is needed for phase 1's acceptance (`su`). The Xiaomi Mi 10
   Ultra rooted on 2026-08-06 is the candidate; it does not yet run wanctl.
 

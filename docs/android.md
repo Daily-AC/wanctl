@@ -163,15 +163,16 @@ root is a wrong answer wearing a right answer's clothes.
 | channel | needs | survives a reboot |
 |---|---|---|
 | `su` | a rooted device | **yes** |
-| `shizuku` | Shizuku installed *and started* | no — Shizuku must be restarted |
 | `adb` | Developer options → Wireless debugging | no — Android clears it on boot |
 
 Only `su` keeps working with nobody touching the device. A phone that must stay
 controllable unattended after a power cut should be rooted, or should not depend
-on elevation. (`shizuku` is not built yet; naming it reports that this build
-does not have it, which is deliberately distinct from "the device does not have
-it". `adb` works, but until it discovers its own port over mDNS it needs
-`WANCTL_ADB_PORT` set by hand — see below.)
+on elevation.
+
+A third channel, Shizuku, was planned and cut on 2026-08-14: it reaches the same
+uid 2000 the `adb` channel already reaches, it is itself started by wireless
+debugging, and it asks the device's owner to install and re-start a second app.
+`--via shizuku` says so rather than reporting an unknown channel.
 
 #### Pairing, for a phone with no root and no cable
 

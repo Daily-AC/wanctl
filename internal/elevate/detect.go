@@ -23,9 +23,6 @@ func Configure(goos, configDir string, getenv func(string) string) *Manager {
 	if goos != "android" {
 		return NewManager(false, "elevation channels exist only on Android; this device is "+goos)
 	}
-	// Shizuku joins this list in phase 3. Until then, naming it with --via
-	// reports "not built into this agent", which is the truth and is
-	// distinguishable from "built in but unavailable".
 	channels := []Channel{NewSu(), NewADB(configDir, adbKeyName(getenv))}
 	if !truthy(getenv(SwitchEnv)) {
 		// Registered even while switched off, so `status` can answer "which

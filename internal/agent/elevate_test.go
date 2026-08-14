@@ -194,8 +194,8 @@ func TestUnknownViaIsRejectedBeforeTheApprovalPrompt(t *testing.T) {
 func TestPinnedUnavailableChannelDoesNotFallBack(t *testing.T) {
 	base := relayBase(t)
 	ag := startAgent(t, base, policy.AllowApprover{}, policy.ModeNormal)
-	shizuku := &fakeChannel{kind: elevate.KindShizuku}
-	ag.elevator = elevate.NewManager(true, "", unavailable{elevate.KindSu, "no su binary found"}, shizuku)
+	adb := &fakeChannel{kind: elevate.KindADB}
+	ag.elevator = elevate.NewManager(true, "", unavailable{elevate.KindSu, "no su binary found"}, adb)
 	dr := connectController(t, base)
 	defer dr.Conn.Close()
 
@@ -206,8 +206,8 @@ func TestPinnedUnavailableChannelDoesNotFallBack(t *testing.T) {
 	if !strings.Contains(reason, "no su binary found") {
 		t.Fatalf("reason = %q, want the channel's own explanation", reason)
 	}
-	if len(shizuku.ran) != 0 {
-		t.Fatal("a command pinned to su ran through shizuku instead")
+	if len(adb.ran) != 0 {
+		t.Fatal("a command pinned to su ran through adb instead")
 	}
 }
 
