@@ -71,6 +71,7 @@ type Config struct {
 // Server is the portal web app.
 type Server struct {
 	relayURL     string
+	downloads    downloadsCache
 	adminSecret  string
 	userHeader   string
 	hc           *http.Client
@@ -133,6 +134,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices/lark", s.handleDeviceLark)
 	mux.HandleFunc("/api/namespaces", s.handleNamespaces)
 	mux.HandleFunc("/api/releases", s.handleReleases)
+	mux.HandleFunc("/api/downloads", s.handleDownloads)
 	mux.HandleFunc("/api/acl", s.handleACL)
 	mux.HandleFunc("/api/acl/revoke", s.handleACLRevoke)
 	mux.HandleFunc("/api/audit", s.handleAudit)
