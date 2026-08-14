@@ -9,15 +9,19 @@
 // app sandbox reaches it; v0.1.12's battery verb had to route around it through
 // Java, which answers one question and does not generalize.
 //
-// Three mechanisms cross the line, and this package treats them as peers rather
+// Two mechanisms cross the line, and this package treats them as peers rather
 // than as a preference list with a "real" one at the bottom, because each is
 // unavailable on some devices and one of them (local adb) has an open proposal
 // at Google to remove it. See ADR 0004.
 //
-//   - su       — a rooted device. Survives reboots.
-//   - shizuku  — Shizuku's binder, when the user installed and started it.
-//   - adb      — an adb client connecting to the device's own adbd over
-//     loopback, after the user turned on wireless debugging.
+//   - su   — a rooted device. Survives reboots.
+//   - adb  — an adb client connecting to the device's own adbd over loopback,
+//     after the user turned on wireless debugging.
+//
+// A third, Shizuku's binder, was planned and then cut on 2026-08-14: it reaches
+// the same uid 2000 the adb channel already reaches, it is started by wireless
+// debugging (so it needs everything the adb channel needs, plus itself), and it
+// asks the device's owner to install and re-start a second app. See ADR 0004.
 //
 // Availability is probed, not assumed, and a caller that names a channel gets
 // an error rather than a downgrade when that channel is missing: a command that
@@ -39,26 +43,28 @@ import (
 type Kind string
 
 const (
-	KindSu      Kind = "su"
-	KindShizuku Kind = "shizuku"
-	KindADB     Kind = "adb"
+	KindSu  Kind = "su"
+	KindADB Kind = "adb"
 )
 
 // ProbeOrder is the order channels are tried when the caller does not name one.
-// su first because it is the only one that survives a reboot unattended;
-// shizuku before adb because when Shizuku is running it is already connected,
-// while the adb channel may still have to pair.
-var ProbeOrder = []Kind{KindSu, KindShizuku, KindADB}
+// su first because it is the only one that survives a reboot unattended.
+var ProbeOrder = []Kind{KindSu, KindADB}
 
 // ParseKind validates a channel name from the wire or a command line.
 func ParseKind(s string) (Kind, error) {
 	switch k := Kind(strings.TrimSpace(strings.ToLower(s))); k {
-	case KindSu, KindShizuku, KindADB:
+	case KindSu, KindADB:
 		return k, nil
+	case "shizuku":
+		// Named in earlier plans and docs, so say what happened rather than
+		// "unknown channel": someone typing this read something real.
+		return "", fmt.Errorf("wanctl has no Shizuku channel (dropped 2026-08-14 — " +
+			"it needs wireless debugging too, and then a second app on top; use --via adb)")
 	case "":
 		return "", fmt.Errorf("empty elevation channel")
 	default:
-		return "", fmt.Errorf("unknown elevation channel %q (want su, shizuku or adb)", s)
+		return "", fmt.Errorf("unknown elevation channel %q (want su or adb)", s)
 	}
 }
 

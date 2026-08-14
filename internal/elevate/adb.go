@@ -36,7 +36,7 @@ const adbProbeTimeout = 5 * time.Second
 
 // ADB runs commands through the device's own adbd, reached over loopback.
 //
-// This is the channel for a phone that is neither rooted nor running Shizuku:
+// This is the channel for a phone that is not rooted:
 // its owner turns on Developer options → Wireless debugging, and the agent
 // connects to the adbd already running on the same device. What it gets is
 // uid 2000 in the shell domain — the same identity `adb shell` has, which is

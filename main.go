@@ -85,12 +85,12 @@ USAGE
                                               on a phone that is not rooted. PORT and CODE come from the device's
                                               开发者选项 → 无线调试 → 使用配对码配对设备 screen (that screen's
                                               port, not the one on the wireless-debugging screen)
-  wanctl exec  --target ANDROID-DEV --elevate [--via su|shizuku|adb] <command...>
+  wanctl exec  --target ANDROID-DEV --elevate [--via su|adb] <command...>
                                               run with elevated privilege on Android, which is what pm / am /
                                               input / screencap / dumpsys / settings need. Off by default on the
                                               device, and elevated commands need their own policy rule —
                                               bypass mode does not cover them.
-  wanctl screenshot [DEVICE] [-o file.png] [--via su|shizuku|adb]
+  wanctl screenshot [DEVICE] [-o file.png] [--via su|adb]
                                               capture an Android screen to a local PNG (implies --elevate;
                                               "-o -" writes the image to stdout instead)
   wanctl push  [--target NS/DEV] <local> <remote>
@@ -418,10 +418,10 @@ func cmdExec(ctx context.Context, args []string) error {
 		"\tno shell quoting or encoding hazards — the file is sent base64-encoded.\n"+
 		"\tInterpreter comes from the extension (.ps1 -> PowerShell, .sh/none -> sh)")
 	interp := fs.String("interp", "", "override the -script interpreter: powershell | sh")
-	elevateFlag := fs.Bool("elevate", false, "run with elevated privilege on the device (Android: root, Shizuku,\n"+
-		"\tor the device's own adbd — whichever is available). Needs its own policy\n"+
+	elevateFlag := fs.Bool("elevate", false, "run with elevated privilege on the device (Android: root or the\n"+
+		"\tdevice's own adbd — whichever is available). Needs its own policy\n"+
 		"\trule: bypass mode does not cover elevated commands.")
-	via := fs.String("via", "", "pin the elevation channel: su | shizuku | adb.\n"+
+	via := fs.String("via", "", "pin the elevation channel: su | adb.\n"+
 		"\tFails if that channel is unavailable rather than falling back.")
 	fs.Parse(args)
 	if *via != "" && !*elevateFlag {
@@ -498,7 +498,7 @@ func cmdScreenshot(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("screenshot", flag.ExitOnError)
 	target := fs.String("target", "", "device (NS/DEV or DEV)")
 	out := fs.String("o", "", "local file to write (default screenshot-<device>-<time>.png; \"-\" writes to stdout)")
-	via := fs.String("via", "", "pin the elevation channel: su | shizuku | adb")
+	via := fs.String("via", "", "pin the elevation channel: su | adb")
 	fs.Parse(args)
 	rest := fs.Args()
 	// Go's flag package stops at the first non-flag argument, so

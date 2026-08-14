@@ -83,7 +83,7 @@ type Message struct {
 	Cwd     string `json:"cwd,omitempty"` // working directory for the command (policy scope)
 
 	// exec: run through an elevation channel (Android; see internal/elevate).
-	// Elevate is the request; Via optionally pins one channel ("su", "shizuku",
+	// Elevate is the request; Via optionally pins one channel ("su",
 	// "adb") instead of letting the device pick. Both are omitted by every
 	// controller that does not ask for elevation, so an older device rejects
 	// the command it cannot honour rather than silently running it unelevated:

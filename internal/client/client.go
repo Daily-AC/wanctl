@@ -430,7 +430,7 @@ type ExecRequest struct {
 	OneShot bool
 	Cwd     string
 	// Elevate asks the device to run this through an elevation channel
-	// (Android: root, Shizuku, or its own adbd). Via optionally pins one.
+	// (Android: root, or its own adbd). Via optionally pins one.
 	Elevate bool
 	Via     string
 }

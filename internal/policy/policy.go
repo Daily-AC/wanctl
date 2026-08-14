@@ -43,7 +43,7 @@ const (
 	KindLogs  Kind = "logs"
 
 	// KindExecElevated is a command run through an elevation channel (root,
-	// Shizuku, or the device's own adbd — see internal/elevate). It is a class
+	// or the device's own adbd — see internal/elevate). It is a class
 	// of its own, not a flag on KindExec, for two reasons:
 	//
 	//   - An `exec` rule must not authorize the elevated form of the same
