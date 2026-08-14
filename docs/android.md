@@ -138,6 +138,209 @@ as unavailable instead of being returned as current data. The verb is available
 only when the agent is launched by the wanctl APK; other platforms return a
 clear Android-only error. Normal exec policy still applies before the verb runs.
 
+### Elevation: making the rest of adb work
+
+Everything above happens inside the app sandbox, and most of `adb`'s surface is
+not reachable from there. `pm`, `am`, `input`, `screencap`, `dumpsys`,
+`settings`, `wm` and `svc` need uid 2000 (`shell`) or uid 0; the agent is an
+ordinary app uid in `untrusted_app`. This is not a wanctl limitation to be
+worked around one verb at a time — it is the platform's, and it is why the
+built-in `battery` verb had to collect its data in Java.
+
+**提权通道** in the app opens a channel that crosses that line. It is off by
+default and it is a separate decision from every other switch here:
+
+```sh
+wanctl exec --target phone --elevate -- pm list packages -3
+wanctl exec --target phone --elevate --via su -- dumpsys battery
+```
+
+Three channels exist; the agent probes them in order and uses the first
+available one. `--via` pins one, and pinning an unavailable channel is an error
+rather than a downgrade — a command that ran unprivileged after you asked for
+root is a wrong answer wearing a right answer's clothes.
+
+| channel | needs | survives a reboot |
+|---|---|---|
+| `su` | a rooted device | **yes** |
+| `adb` | Developer options → Wireless debugging | no — Android clears it on boot |
+
+Only `su` keeps working with nobody touching the device. A phone that must stay
+controllable unattended after a power cut should be rooted, or should not depend
+on elevation.
+
+A third channel, Shizuku, was planned and cut on 2026-08-14: it reaches the same
+uid 2000 the `adb` channel already reaches, it is itself started by wireless
+debugging, and it asks the device's owner to install and re-start a second app.
+`--via shizuku` says so rather than reporting an unknown channel.
+
+#### Pairing, for a phone with no root and no cable
+
+Android 11+ can hand out shell access over Wi-Fi without a computer, and the
+agent can take it. On the device: 设置 → 开发者选项 → **无线调试** → **使用配对码
+配对设备**. That screen shows a port and six digits. Then, from the controller:
+
+```sh
+wanctl exec --target phone -- adb-pair 37129 314159
+```
+
+The verb runs **on the device** — only it can reach the pairing port its own
+adbd opened — and it needs no elevation, because setting up the elevation
+channel with a command that itself requires elevation would be a loop with no
+entry point. All it does is connect to 127.0.0.1, which an app sandbox may
+already do.
+
+Two ports appear on that screen and they are not the same listener: use the one
+next to the pairing code, not the one on the wireless-debugging screen. A
+`connection refused` here is almost always that mix-up.
+
+What happens underneath, because it is not obvious: the pairing code alone is
+not the SPAKE2 password. AOSP appends 64 bytes of TLS exported keying material
+to it, binding the exchange to that specific TLS session so a relayed pairing
+cannot be stolen. wanctl does the same — including the detail that the exporter
+label is `"adb-label\0"` **with** its trailing NUL, because AOSP passes
+`sizeof()` as the label length. Dropping that byte produces perfectly valid
+keying material that simply never matches the device's.
+
+Pairing is persistent: the key lands in `/data/misc/adb/adb_keys` and survives
+reboots. Wireless debugging itself does not — Android turns it off on boot —
+so after a restart the switch has to be flipped again, but the code does not
+have to be re-entered.
+
+The **connect** port is not stable either, and it is not the pairing port: the
+number under IP 地址和端口 changes when wireless debugging is re-enabled and
+after a re-pair (measured on a PGBM10: 37819 → 41031). The app does not ask you
+for it — it watches mDNS for `_adb-tls-connect._tcp` and hands what it finds to
+the agent through the same state file the battery verb uses. Only its own
+device's advertisement counts: every phone on the same Wi-Fi with wireless
+debugging on publishes that service, so the resolved address is checked against
+this device's own addresses before the port is believed.
+
+That discovery is Java (`NsdManager`) because mDNS on Android is a framework
+service, and the app holds a `MulticastLock` while it watches — Wi-Fi filters
+multicast in hardware when nothing does. Watching starts and stops with the
+**提权通道** switch: a device whose owner has not turned elevation on is not
+listening for the port that would enable it.
+
+`WANCTL_ADB_PORT` still overrides everything, which is what the Termux and
+adb-shell routes need: they have no framework to ask.
+
+#### The adb channel needs a human once, and cannot be automated past that
+
+The first time the agent connects to its own adbd, the device raises **允许 USB
+调试吗？** showing wanctl's key fingerprint. Until someone accepts it, the
+channel reports:
+
+```
+elevation channel "adb" is not available: adbd on port 5555 is waiting for
+someone to allow wanctl's key on the device screen
+```
+
+That prompt cannot be answered from software. Measured on a Xiaomi Mi 10 Ultra
+(Android 11) on 2026-08-14, `input tap` against it fails with
+
+```
+java.lang.SecurityException: Injecting to another application requires INJECT_EVENTS permission
+```
+
+which is the platform working as designed: if a program could tap that button,
+any program could grant itself shell access. So enabling this channel always
+costs one deliberate action by whoever is holding the phone — worth knowing
+before planning an unattended rollout.
+
+Note also what adbd does while it waits: **nothing**. It does not re-issue a
+token and does not close the socket. A client that simply waits sees a bare
+`i/o timeout` and no hint that a dialog is open, which is why the agent gives
+up after a short grace period and reports the dialog instead.
+
+**Elevated commands are their own policy class.** 自动放行所有命令 does not
+cover them: that switch says "this device is unattended", not "hand out root",
+so an elevated command on a bypass-mode device is still refused until it has a
+rule of its own or a human approves it in the portal. An `exec` rule never
+authorizes the elevated form of the same command either. The event log records
+which channel ran each one, so `wanctl logs` can answer *what has run as root on
+this phone*.
+
+With the switch off, the channels are not even probed — a rooted device raises
+no root-manager consent dialog for a feature nobody turned on.
+
+### Verbs
+
+The elevation channel is the whole feature; these are shorthand for the parts of
+the adb surface that are awkward over a pipe. Each is one shell command, run
+through the same channel, gated by the same elevated policy class, recorded in
+the same audit log — nothing here does anything you could not type by hand.
+
+```sh
+wanctl screenshot phone -o shot.png       # implies --elevate; "-o -" writes stdout
+wanctl exec --target phone --elevate -- input tap 540 1200
+wanctl exec --target phone --elevate -- input text 'hello world'
+wanctl exec --target phone --elevate -- app list -3
+wanctl exec --target phone --elevate -- app uninstall com.example
+wanctl exec --target phone --elevate -- settings get global adb_wifi_enabled
+wanctl exec --target phone --elevate -- prop get ro.product.model
+wanctl exec --target phone --elevate -- logcat
+```
+
+| verb | becomes | why it is a verb |
+|---|---|---|
+| `screenshot` | `screencap -p` | PNG on stdout; the controller writes the file |
+| `input tap/swipe/text/key` | `input …` | arguments validated, and `text` stays one word |
+| `app list/info/install/uninstall/start/stop/clear` | `pm`, `am`, `monkey`, `dumpsys` | one noun over four tools |
+| `settings get/put` | `settings …` | the namespace is a closed set of three |
+| `prop get/set` | `getprop`/`setprop` | — |
+| `logcat` | `logcat -d -v time -t 200` | defaults to a dump: a follow never returns over exec |
+
+Every argument is quoted before it becomes shell source that runs as root, so a
+package name containing `; rm -rf /` arrives as a package name. A command
+containing an unquoted expansion (`$(…)`, `$VAR`, a pipe) is not treated as a
+verb at all and goes through as an ordinary elevated command — guessing at it
+would be worse than letting the shell do what the shell does.
+
+`wanctl screenshot` buffers the image and checks the PNG magic before writing,
+so a failed capture leaves no truncated file that looks real.
+
+**su is not one program.** Magisk, KernelSU and APatch take `su -c CMD`; AOSP's
+own su, on userdebug builds and emulator images, rejects that outright and wants
+`su root sh -c CMD`. The probe tries both and keeps whichever answered as root,
+so neither family has to be detected by name. Measured on an android-29
+`google_apis` emulator image, 2026-08-14:
+
+```
+su -c id            → su: invalid uid/gid '-c'
+su root sh -c id    → uid=0(root) … context=u:r:su:s0
+```
+
+Verified on that image the same day: with the switch off the channel is listed
+and refused with the switch as the reason; with it on, `su` probes to `uid=0`
+and `settings get global adb_wifi_enabled` — the command that throws for an app
+uid on the PGBM10 — returns normally.
+
+### Verified, and on what
+
+On a **Xiaomi Mi 10 Ultra** (M2007J1SC, Android 11, Magisk) and an **android-29
+emulator**, both driven from a Mac over a live relay, 2026-08-14:
+
+| | Mi 10 Ultra (Magisk) | emulator (AOSP su) |
+|---|---|---|
+| `exec -- id` | `uid=2000(shell)` | `uid=2000(shell)` |
+| `exec --elevate -- id` (auto) | `uid=0(root)` `u:r:magisk:s0` | `uid=0(root)` `u:r:su:s0` |
+| `exec --elevate --via adb -- id` | `uid=2000(shell)` `u:r:shell:s0` | — |
+| exit code through the adb channel | 42 → 42 | — |
+| `screenshot` | 1080×2340 PNG | 1080×2280 PNG |
+| `settings` / `prop` / `app list` | all return real data | all return real data |
+| event log | `"via":"su"`, `"via":"adb"` | `"via":"su"` |
+
+Both su invocation forms were exercised for real: Magisk's `su` took `-c`, the
+emulator's AOSP `su` refused it and needed `su root sh -c`. A build that guessed
+one form would have reported "not rooted" on one of these two devices.
+
+The agent under test ran from an adb shell, so its *unelevated* uid is 2000
+there rather than the app uid an installed APK has. That does not affect what
+the elevated channels prove — `su` reaching uid 0 and the adb channel reaching
+the shell domain are the same operations either way — but the app-sandbox
+starting point still needs a signed-APK run to confirm end to end.
+
 ### Coming back after a reboot
 
 Two mechanisms, because one is not reliable enough.

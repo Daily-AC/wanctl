@@ -129,6 +129,11 @@ public final class AgentService extends Service {
             supervisor.interrupt();
             return START_STICKY;
         }
+        if (deviceState != null) {
+            // The elevation switch may have flipped since the service started,
+            // and it decides whether the wireless-debugging port is watched.
+            deviceState.refreshAdbPortWatch();
+        }
         if (supervisor == null) {
             stopping = false;
             acquireWakeLock();

@@ -145,7 +145,7 @@ func TestRemoteConsoleApprovalOverRelay(t *testing.T) {
 	}
 	execDone := make(chan execResult, 1)
 	go func() {
-		code, err := ctrl.Exec(ctx, "lab", "echo approved-via-portal", true, "")
+		code, err := ctrl.Exec(ctx, ExecRequest{Target: "lab", Command: "echo approved-via-portal", OneShot: true, Cwd: ""})
 		execDone <- execResult{code, err}
 	}()
 

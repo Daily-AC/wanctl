@@ -58,6 +58,13 @@ final class Wanctl {
      * {@code /data/local/tmp/.wanctl}, which is shared with every other app and
      * with the adb shell user — correct for a binary someone pushed over adb,
      * wrong for an installed app that has a private directory of its own.
+     *
+     * <p>{@code WANCTL_ELEVATION} carries the app's elevation switch to the Go
+     * side. It is passed as an environment variable rather than a flag because
+     * the agent is a long-lived child: flipping the switch restarts the service
+     * (see MainActivity), which is the point at which the new value takes
+     * effect. Absent means off, so a build of the app that never learned about
+     * this cannot accidentally enable it.
      */
     static ProcessBuilder command(Context c, String... args) {
         List<String> argv = new ArrayList<>();
@@ -69,6 +76,9 @@ final class Wanctl {
         Map<String, String> env = pb.environment();
         env.put("WANCTL_CONFIG_DIR", configDir(c).getAbsolutePath());
         env.put("WANCTL_DEVICE_STATE_FILE", deviceStateFile(c).getAbsolutePath());
+        if (new Prefs(c).elevation()) {
+            env.put("WANCTL_ELEVATION", "1");
+        }
         env.put("HOME", c.getFilesDir().getAbsolutePath());
         env.put("TMPDIR", c.getCacheDir().getAbsolutePath());
         // wanctl resolves the session shell to /system/bin/sh on Android by

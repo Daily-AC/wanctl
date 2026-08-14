@@ -146,6 +146,22 @@
         android:textSize="12sp"
         android:visibility="gone" />
 
+    <Switch
+        android:id="@+id/elevation"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:text="@string/switch_elevation"
+        android:textSize="16sp" />
+
+    <TextView
+        android:id="@+id/elevation_warn"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/switch_elevation_warn"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
     <Button
         android:id="@+id/battery"
         android:layout_width="match_parent"

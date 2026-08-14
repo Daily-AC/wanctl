@@ -30,6 +30,11 @@
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
   <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <!-- The adb elevation channel needs the port adbd picked for wireless
+       debugging, which Android publishes only over mDNS. Wi-Fi filters
+       multicast in hardware while the device is idle; this lifts that filter
+       while the channel is enabled. Normal permission, no runtime prompt. -->
+  <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
   <!-- Only to *offer* the exemption dialog; the user still decides. -->
   <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
   <!-- In-app update: the APK is fetched and signature-verified by the wanctl
