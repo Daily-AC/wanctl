@@ -19,14 +19,14 @@ const SwitchEnv = "WANCTL_ELEVATION"
 // service managers and real shells; adding a privilege-escalation path there
 // would widen the attack surface of every existing deployment to solve a
 // problem only Android has. See ADR 0004.
-func Configure(goos string, getenv func(string) string) *Manager {
+func Configure(goos, configDir string, getenv func(string) string) *Manager {
 	if goos != "android" {
 		return NewManager(false, "elevation channels exist only on Android; this device is "+goos)
 	}
-	// Shizuku and adb join this list in phases 3 and 4. Until then, naming
-	// either with --via reports "not built into this agent", which is the
-	// truth and is distinguishable from "built in but unavailable".
-	channels := []Channel{NewSu()}
+	// Shizuku joins this list in phase 3. Until then, naming it with --via
+	// reports "not built into this agent", which is the truth and is
+	// distinguishable from "built in but unavailable".
+	channels := []Channel{NewSu(), NewADB(configDir, adbKeyName(getenv))}
 	if !truthy(getenv(SwitchEnv)) {
 		// Registered even while switched off, so `status` can answer "which
 		// channels does this build have, and why is none of them usable" with
@@ -39,8 +39,19 @@ func Configure(goos string, getenv func(string) string) *Manager {
 }
 
 // ConfigureDefault builds the manager for the running process.
-func ConfigureDefault(getenv func(string) string) *Manager {
-	return Configure(runtime.GOOS, getenv)
+func ConfigureDefault(configDir string, getenv func(string) string) *Manager {
+	return Configure(runtime.GOOS, configDir, getenv)
+}
+
+// adbKeyName is what the device's "Allow debugging?" prompt shows and what ends
+// up in its adb_keys file, so it has to identify wanctl rather than look like
+// any other host that ever connected.
+func adbKeyName(getenv func(string) string) string {
+	name := strings.TrimSpace(getenv("WANCTL_DEVICE_NAME"))
+	if name == "" {
+		return "wanctl-agent"
+	}
+	return "wanctl@" + name
 }
 
 func truthy(v string) bool {

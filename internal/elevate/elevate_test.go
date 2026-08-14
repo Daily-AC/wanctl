@@ -251,7 +251,7 @@ func TestConfigureIsOffByDefaultAndAndroidOnly(t *testing.T) {
 		return func(k string) string { return m[k] }
 	}
 	// Android with the switch off: disabled, and the message names the switch.
-	m := Configure("android", env(nil))
+	m := Configure("android", t.TempDir(), env(nil))
 	if m.Enabled() {
 		t.Fatal("elevation is on by default; it must not be")
 	}
@@ -260,13 +260,13 @@ func TestConfigureIsOffByDefaultAndAndroidOnly(t *testing.T) {
 		t.Fatalf("error = %v, want it to name %s", err, SwitchEnv)
 	}
 	// Android with the switch on: enabled, su present.
-	m = Configure("android", env(map[string]string{SwitchEnv: "1"}))
+	m = Configure("android", t.TempDir(), env(map[string]string{SwitchEnv: "1"}))
 	if !m.Enabled() {
 		t.Fatal("switch on did not enable elevation")
 	}
 	// Every other platform: off regardless of the switch (ADR 0004).
 	for _, goos := range []string{"linux", "darwin", "windows"} {
-		m := Configure(goos, env(map[string]string{SwitchEnv: "1"}))
+		m := Configure(goos, t.TempDir(), env(map[string]string{SwitchEnv: "1"}))
 		if m.Enabled() {
 			t.Fatalf("%s: elevation enabled off-Android", goos)
 		}
