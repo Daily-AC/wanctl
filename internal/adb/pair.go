@@ -72,8 +72,25 @@ const (
 // pairing fails.
 const exportLabel = "adb-label\x00"
 
-// hkdfInfo is the context string AOSP derives its AES key under.
+// hkdfInfo is the context string AOSP derives its AES key under. Note that
+// here AOSP passes `sizeof(info) - 1`, so this one does NOT carry a NUL — the
+// same file is inconsistent about it, which is why each string is pinned
+// against the source rather than assumed.
 const hkdfInfo = "adb pairing_auth aes-128-gcm key"
+
+// The SPAKE2 identity strings, WITH their trailing NULs.
+//
+// AOSP declares them as `static const uint8_t kClientName[] = "adb pair
+// client"` and passes `sizeof(kClientName)` as the length, which counts the
+// terminator. The names go into the SPAKE2 transcript along with their
+// lengths, so dropping the NUL yields a different key on every pairing attempt
+// — and the only symptom is the final decrypt failing, with the pairing code
+// as the obvious-but-wrong suspect. Verified against a real device on
+// 2026-08-14: without the NUL, pairing reached the last step and failed.
+const (
+	spakeClientName = "adb pair client\x00"
+	spakeServerName = "adb pair server\x00"
+)
 
 // Pair performs the pairing exchange against addr and, on success, leaves this
 // agent's key registered on the device.
@@ -114,7 +131,7 @@ func Pair(ctx context.Context, addr string, key *Key, code string) error {
 	}
 	password := append([]byte(code), material...)
 
-	s := newSPAKE2(spake2Alice, "adb pair client", "adb pair server")
+	s := newSPAKE2(spake2Alice, spakeClientName, spakeServerName)
 	myMsg, err := s.generateMsg(password)
 	if err != nil {
 		return err

@@ -154,6 +154,46 @@ and it still connects after the app is restarted without re-pairing.
 - A rooted device is needed for phase 1's acceptance (`su`). The Xiaomi Mi 10
   Ultra rooted on 2026-08-06 is the candidate; it does not yet run wanctl.
 
+## Status as of 2026-08-14 10:30 (handover)
+
+Branch `feat/android-elevation`, MR !54. `go test ./...` green; APK builds.
+
+**Done and verified on real hardware**
+
+- Phases 1 and 2 complete. On a Xiaomi Mi 10 Ultra (Android 11, Magisk) over a
+  live relay: plain exec `uid=2000`, `--elevate` `uid=0 u:r:magisk:s0`,
+  `screenshot` returns a real PNG, verbs work, event log records the channel.
+- The adb wire protocol works end to end against a real adbd (android-29
+  emulator): banner/feature parsing, `id` as uid 2000, exit code 42 intact.
+- **SPAKE2 pairing interoperates with AOSP.** On the OPPO Reno8 (PGBM10,
+  Android 14, NOT rooted), `adb-pair 43631 046087` succeeded and the device's
+  own 无线调试 → 已配对的设备 list now shows `wanctl@pgbmtest`. The device UI
+  confirming it is the strongest evidence available.
+- On that same phone the adb channel now completes TLS: the paired key is
+  accepted, CNXN succeeds, and the full device banner comes back.
+
+**The one thing that does not work yet**
+
+On the Reno8, after a successful TLS connect and CNXN, `A_OPEN` for a shell
+service gets no reply at all and the command times out. The same code works
+against the emulator's adbd over plaintext. Ruled out, each by measurement:
+
+| hypothesis | result |
+|---|---|
+| header+payload split across two writes (two TLS records) | changed to one write; no effect (kept anyway — it is better) |
+| wrong TLS client certificate | fixed and confirmed: Go silently drops `Certificates` that do not match the server's CertificateRequest; `GetClientCertificate` was required. TLS now succeeds |
+| `delayed_ack` window in `A_OPEN.arg1` (device advertises the feature) | tried 32 MB; no effect; **reverted** rather than leave a guess in the code |
+| pairing not actually registered | disproved — the device lists the key |
+| a stale/wrong port | disproved — the banner comes back from 37819 |
+
+Not yet tried: comparing our byte stream against the real `adb` client's with a
+capture on the loopback interface. That is the obvious next move and would
+settle it — every remaining hypothesis is about what AOSP sends that we do not.
+
+Note the port had to be given by hand (`WANCTL_ADB_PORT=37819`, read off the
+device's wireless-debugging screen). mDNS discovery — the Java `NsdManager`
+side that fills the state file — is not built yet.
+
 ## Open items
 
 - Whether an OEM ROM (ColorOS 14 here) permits an app to reach loopback adbd at

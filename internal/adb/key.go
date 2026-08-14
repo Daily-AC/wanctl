@@ -4,7 +4,9 @@ import (
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/pem"
@@ -12,6 +14,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // keyBits is fixed at 2048 because adb's public-key encoding is: the struct it
@@ -123,4 +126,60 @@ func littleEndianPadded(v *big.Int, size int) []byte {
 		out[len(be)-1-i] = b
 	}
 	return out
+}
+
+// TLSCertificate builds the client certificate for an STLS connection.
+//
+// adbd authenticates a wireless-debugging client by the PUBLIC KEY in its
+// certificate: the key must be one that pairing put into adb_keys. So this
+// certificate has to carry the same RSA key the pairing exchange registered —
+// a freshly generated one would produce a valid TLS handshake attempt that
+// adbd rejects, which looks like a pairing problem and is not.
+//
+// The certificate is otherwise unremarkable and self-signed; nothing verifies
+// its subject or its chain.
+func (k *Key) TLSCertificate() (tls.Certificate, error) {
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: k.name},
+		NotBefore:    time.Now().Add(-time.Hour),
+		// adbd does not check validity windows, but a certificate that has
+		// already expired is the kind of thing a future TLS stack starts
+		// refusing, so give it a real one.
+		NotAfter:    time.Now().AddDate(10, 0, 0),
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.priv.PublicKey, k.priv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: k.priv}, nil
+}
+
+// TLSConfig returns the STLS client configuration for this key.
+func (k *Key) TLSConfig() (*tls.Config, error) {
+	cert, err := k.TLSCertificate()
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{
+		// GetClientCertificate rather than Certificates, and that is not a
+		// style choice. Go filters Certificates against the server's
+		// CertificateRequest — its acceptable-CA list and signature algorithms
+		// — and silently sends nothing when a certificate does not match. This
+		// certificate is self-signed by an issuer adbd has never heard of, so
+		// that filter drops it and the handshake dies with the server's
+		// "certificate required", which reads like the certificate was
+		// rejected rather than never sent. Measured against a real adbd on
+		// 2026-08-14. The callback bypasses the matching entirely.
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			return &cert, nil
+		},
+		// adbd presents a self-signed certificate to a client on the same
+		// device over loopback. There is no third party to authenticate; what
+		// gates access is adbd checking OUR key against its adb_keys.
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS12,
+	}, nil
 }

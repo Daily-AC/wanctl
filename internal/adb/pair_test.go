@@ -63,7 +63,7 @@ func (s *fakePairingServer) serve(conn *tls.Conn) error {
 	}
 	password := append([]byte(s.code), material...)
 
-	sp := newSPAKE2(spake2Bob, "adb pair server", "adb pair client")
+	sp := newSPAKE2(spake2Bob, spakeServerName, spakeClientName)
 	myMsg, err := sp.generateMsg(password)
 	if err != nil {
 		return err
