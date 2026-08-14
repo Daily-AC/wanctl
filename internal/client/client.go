@@ -421,22 +421,67 @@ func (c *Client) LogsTo(ctx context.Context, target, logType, grep, since string
 	}
 }
 
+// ExecRequest is one command to run on a device. It replaced a five-argument
+// signature when elevation added two more; the fields are named at every call
+// site, which is worth more here than brevity.
+type ExecRequest struct {
+	Target  string
+	Command string
+	OneShot bool
+	Cwd     string
+	// Elevate asks the device to run this through an elevation channel
+	// (Android: root, Shizuku, or its own adbd). Via optionally pins one.
+	Elevate bool
+	Via     string
+}
+
+// elevationHonoured checks that a device which reported an exit actually ran
+// the command elevated, when that is what was asked.
+//
+// The hazard is specific and silent. An agent built before elevation existed
+// decodes the request's `elevate` field into nothing — encoding/json discards
+// unknown fields — runs the command with the app sandbox's own privileges, and
+// answers with an ordinary exit. Every visible signal says success. The only
+// evidence available is negative: such an agent cannot echo back the channel
+// that ran, because it has no concept of one.
+//
+// The command has already run by the time this is detectable, so the message
+// says so. Reporting "elevation not supported" alone would suggest nothing
+// happened, and a caller who then re-ran the command elsewhere would be acting
+// on a false belief about what this device just did.
+func elevationHonoured(req ExecRequest, m protocol.Message) error {
+	if !req.Elevate || m.ElevatedVia != "" {
+		return nil
+	}
+	target := req.Target
+	if target == "" {
+		target = "<device>"
+	}
+	return fmt.Errorf(
+		"device did not elevate this command: it ran with the agent's own privileges (exit %d).\n"+
+			"That agent predates elevation support — update the device, then retry.\n"+
+			"  wanctl status --target %s", m.Code, target)
+}
+
 // Exec runs a command on target, streaming output to os.Stdout/Stderr and
-// returning the remote exit code. cwd (optional) sets the working directory
-// (and is the policy scope) on the device. Convenience wrapper around ExecTo.
-func (c *Client) Exec(ctx context.Context, target, command string, oneShot bool, cwd string) (int, error) {
-	return c.ExecTo(ctx, target, command, oneShot, cwd, os.Stdout, os.Stderr)
+// returning the remote exit code. Convenience wrapper around ExecTo.
+func (c *Client) Exec(ctx context.Context, req ExecRequest) (int, error) {
+	return c.ExecTo(ctx, req, os.Stdout, os.Stderr)
 }
 
 // ExecTo is the same as Exec but lets callers (the MCP server) supply their own
 // writers to capture stdout/stderr into buffers.
-func (c *Client) ExecTo(ctx context.Context, target, command string, oneShot bool, cwd string, stdout, stderr io.Writer) (int, error) {
-	conn, err := c.connect(ctx, target)
+func (c *Client) ExecTo(ctx context.Context, req ExecRequest, stdout, stderr io.Writer) (int, error) {
+	conn, err := c.connect(ctx, req.Target)
 	if err != nil {
 		return -1, err
 	}
 	defer conn.Close()
-	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExec, Command: command, OneShot: oneShot, Cwd: cwd}); err != nil {
+	msg := protocol.Message{
+		Kind: protocol.KindExec, Command: req.Command, OneShot: req.OneShot, Cwd: req.Cwd,
+		Elevate: req.Elevate, Via: req.Via,
+	}
+	if err := protocol.WriteMessage(conn, msg); err != nil {
 		return -1, err
 	}
 	for {
@@ -456,7 +501,7 @@ func (c *Client) ExecTo(ctx context.Context, target, command string, oneShot boo
 			}
 			switch m.Kind {
 			case protocol.KindExit:
-				return m.Code, nil
+				return m.Code, elevationHonoured(req, m)
 			case protocol.KindError:
 				return -1, fmt.Errorf("remote error: %s", m.Reason)
 			case protocol.KindReject:

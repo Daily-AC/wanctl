@@ -73,7 +73,7 @@ func TestWebSocketTransportUsesBearerHeaderWithoutTokenURL(t *testing.T) {
 	if _, err := c.Peers(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if code, err := c.Exec(ctx, "home-pc", "true", true, ""); err != nil || code != 0 {
+	if code, err := c.Exec(ctx, ExecRequest{Target: "home-pc", Command: "true", OneShot: true, Cwd: ""}); err != nil || code != 0 {
 		t.Fatalf("exec: code=%d err=%v", code, err)
 	}
 	capture.assertBearerOnly(t, "/agent", "/peers", "/dial", "/session/")
@@ -87,7 +87,7 @@ func TestHTTPTransportUsesBearerHeaderWithoutTokenURL(t *testing.T) {
 	if _, err := c.Peers(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if code, err := c.Exec(ctx, "home-pc", "true", true, ""); err != nil || code != 0 {
+	if code, err := c.Exec(ctx, ExecRequest{Target: "home-pc", Command: "true", OneShot: true, Cwd: ""}); err != nil || code != 0 {
 		t.Fatalf("exec: code=%d err=%v", code, err)
 	}
 	capture.assertBearerOnly(t, "/h/poll", "/h/peers", "/h/dial", "/h/up", "/h/down", "/h/close")

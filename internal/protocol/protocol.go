@@ -82,6 +82,21 @@ type Message struct {
 	OneShot bool   `json:"oneshot,omitempty"`
 	Cwd     string `json:"cwd,omitempty"` // working directory for the command (policy scope)
 
+	// exec: run through an elevation channel (Android; see internal/elevate).
+	// Elevate is the request; Via optionally pins one channel ("su", "shizuku",
+	// "adb") instead of letting the device pick. Both are omitted by every
+	// controller that does not ask for elevation, so an older device rejects
+	// the command it cannot honour rather than silently running it unelevated:
+	// Elevate arrives as an unknown field there, and the exit path below treats
+	// a device that never echoes ElevatedVia as one that did not elevate.
+	Elevate bool   `json:"elevate,omitempty"`
+	Via     string `json:"via,omitempty"`
+
+	// exit: which channel actually ran an elevated command. The controller
+	// prints it, and its absence on an elevated request is an error rather
+	// than a shrug.
+	ElevatedVia string `json:"elevated_via,omitempty"`
+
 	// exit
 	Code int `json:"code,omitempty"`
 

@@ -42,7 +42,7 @@ func TestExecDeniedReturnsError(t *testing.T) {
 	var code int
 	var execErr error
 	go func() {
-		code, execErr = c.Exec(context.Background(), "home-pc", "whoami", true, "")
+		code, execErr = c.Exec(context.Background(), ExecRequest{Target: "home-pc", Command: "whoami", OneShot: true, Cwd: ""})
 		close(done)
 	}()
 	select {

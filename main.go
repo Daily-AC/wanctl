@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -79,6 +80,14 @@ USAGE
   wanctl exec  [--target NS/DEV] --script <local-file> [--interp powershell|sh] [NS/DEV|DEV]
                                               run a LOCAL script on the device — no shell quoting or encoding hazards
   wanctl exec  --target ANDROID-DEV -- battery report fresh battery state from an Android APK agent as JSON
+  wanctl exec  --target ANDROID-DEV --elevate [--via su|shizuku|adb] <command...>
+                                              run with elevated privilege on Android, which is what pm / am /
+                                              input / screencap / dumpsys / settings need. Off by default on the
+                                              device, and elevated commands need their own policy rule —
+                                              bypass mode does not cover them.
+  wanctl screenshot [DEVICE] [-o file.png] [--via su|shizuku|adb]
+                                              capture an Android screen to a local PNG (implies --elevate;
+                                              "-o -" writes the image to stdout instead)
   wanctl push  [--target NS/DEV] <local> <remote>
   wanctl pull  [--target NS/DEV] <remote> <local>
   wanctl peers
@@ -139,6 +148,8 @@ func main() {
 		err = cmdAgent(ctx, os.Args[2:])
 	case "exec":
 		err = cmdExec(ctx, os.Args[2:])
+	case "screenshot":
+		err = cmdScreenshot(ctx, os.Args[2:])
 	case "push":
 		err = cmdPush(ctx, os.Args[2:])
 	case "pull":
@@ -402,7 +413,17 @@ func cmdExec(ctx context.Context, args []string) error {
 		"\tno shell quoting or encoding hazards — the file is sent base64-encoded.\n"+
 		"\tInterpreter comes from the extension (.ps1 -> PowerShell, .sh/none -> sh)")
 	interp := fs.String("interp", "", "override the -script interpreter: powershell | sh")
+	elevateFlag := fs.Bool("elevate", false, "run with elevated privilege on the device (Android: root, Shizuku,\n"+
+		"\tor the device's own adbd — whichever is available). Needs its own policy\n"+
+		"\trule: bypass mode does not cover elevated commands.")
+	via := fs.String("via", "", "pin the elevation channel: su | shizuku | adb.\n"+
+		"\tFails if that channel is unavailable rather than falling back.")
 	fs.Parse(args)
+	if *via != "" && !*elevateFlag {
+		// -via without -elevate would otherwise be silently ignored, and the
+		// command would run unprivileged while looking like it asked not to.
+		*elevateFlag = true
+	}
 	commandArgs := fs.Args()
 
 	var c *client.Client
@@ -450,12 +471,96 @@ func cmdExec(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	code, err := c.Exec(ctx, *target, command, *oneShot, *cwd)
+	code, err := c.Exec(ctx, client.ExecRequest{
+		Target: *target, Command: command, OneShot: *oneShot, Cwd: *cwd,
+		Elevate: *elevateFlag, Via: *via,
+	})
 	if err != nil {
 		return err
 	}
 	os.Exit(code)
 	return nil
+}
+
+// cmdScreenshot captures the device's screen to a local PNG.
+//
+// This is `exec --elevate -- screenshot` with the one piece a shell pipeline
+// gets wrong: `screencap -p` writes a PNG to stdout, and stdout here is a
+// terminal. Writing to a file by default — and only writing to the terminal
+// when explicitly asked with `-o -` — is the difference between a usable
+// command and a screenful of binary.
+func cmdScreenshot(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("screenshot", flag.ExitOnError)
+	target := fs.String("target", "", "device (NS/DEV or DEV)")
+	out := fs.String("o", "", "local file to write (default screenshot-<device>-<time>.png; \"-\" writes to stdout)")
+	via := fs.String("via", "", "pin the elevation channel: su | shizuku | adb")
+	fs.Parse(args)
+	rest := fs.Args()
+	// Go's flag package stops at the first non-flag argument, so
+	// `screenshot emu -o out.png` would otherwise leave -o unparsed and reject
+	// it as a stray argument. Take the device name and resume parsing.
+	if *target == "" && len(rest) > 0 {
+		*target = rest[0]
+		fs.Parse(rest[1:])
+		rest = fs.Args()
+	}
+	if len(rest) > 0 {
+		return fmt.Errorf("unexpected argument %q (usage: wanctl screenshot [DEVICE] [-o file.png])", rest[0])
+	}
+
+	c, err := client.New()
+	if err != nil {
+		return err
+	}
+
+	// Buffer rather than stream: a failed capture must not leave a truncated
+	// PNG on disk that looks like a real one. The device's stderr and any
+	// policy rejection travel on separate frames, so they still reach the user.
+	var png bytes.Buffer
+	code, err := c.ExecTo(ctx, client.ExecRequest{
+		Target: *target, Command: "screenshot", OneShot: true, Elevate: true, Via: *via,
+	}, &png, os.Stderr)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("screencap failed on the device (exit %d)", code)
+	}
+	if png.Len() == 0 {
+		return fmt.Errorf("device returned an empty screenshot")
+	}
+	// `screencap -p` emits a PNG; anything else means the verb did not run
+	// (an older agent, say) and the bytes are some tool's error text.
+	if !bytes.HasPrefix(png.Bytes(), []byte("\x89PNG\r\n\x1a\n")) {
+		return fmt.Errorf("device did not return a PNG (%d bytes, starting %q)",
+			png.Len(), firstBytes(png.Bytes(), 40))
+	}
+
+	if *out == "-" {
+		_, err := os.Stdout.Write(png.Bytes())
+		return err
+	}
+	path := *out
+	if path == "" {
+		name := *target
+		if name == "" {
+			name = "device"
+		}
+		name = strings.NewReplacer("/", "-", string(os.PathSeparator), "-").Replace(name)
+		path = fmt.Sprintf("screenshot-%s-%s.png", name, time.Now().Format("20060102-150405"))
+	}
+	if err := os.WriteFile(path, png.Bytes(), 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "%s (%d bytes)\n", path, png.Len())
+	return nil
+}
+
+func firstBytes(b []byte, n int) string {
+	if len(b) > n {
+		b = b[:n]
+	}
+	return strings.ToValidUTF8(string(b), "?")
 }
 
 func warnPOSIXShellQuoteLoss(w io.Writer, scriptPath string, args []string) {
