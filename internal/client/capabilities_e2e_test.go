@@ -48,7 +48,7 @@ func TestSharedSessionCapabilities(t *testing.T) {
 		t.Run(transportName+"/exec", func(t *testing.T) {
 			c, ctx := startCapabilityFixture(t, transportName, "exec")
 			var stdout bytes.Buffer
-			code, err := c.ExecTo(ctx, "owner/home-pc", "echo allowed", true, "", &stdout, &bytes.Buffer{})
+			code, err := c.ExecTo(ctx, ExecRequest{Target: "owner/home-pc", Command: "echo allowed", OneShot: true, Cwd: ""}, &stdout, &bytes.Buffer{})
 			if err != nil || code != 0 || strings.TrimSpace(stdout.String()) != "allowed" {
 				t.Fatalf("exec grant result: code=%d err=%v stdout=%q", code, err, stdout.String())
 			}
@@ -110,7 +110,7 @@ func startCapabilityFixture(t *testing.T, transportName, grant string) (*Client,
 }
 
 func execError(ctx context.Context, c *Client) error {
-	_, err := c.ExecTo(ctx, "owner/home-pc", "echo denied", true, "", &bytes.Buffer{}, &bytes.Buffer{})
+	_, err := c.ExecTo(ctx, ExecRequest{Target: "owner/home-pc", Command: "echo denied", OneShot: true, Cwd: ""}, &bytes.Buffer{}, &bytes.Buffer{})
 	return err
 }
 

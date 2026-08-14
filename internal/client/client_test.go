@@ -70,7 +70,7 @@ func TestClientExecAndFileRoundTrip(t *testing.T) {
 		t.Fatalf("status = %+v", status)
 	}
 
-	code, err := c.Exec(context.Background(), "home-pc", "echo hi", true, "")
+	code, err := c.Exec(context.Background(), ExecRequest{Target: "home-pc", Command: "echo hi", OneShot: true, Cwd: ""})
 	if err != nil || code != 0 {
 		t.Fatalf("exec: code=%d err=%v", code, err)
 	}

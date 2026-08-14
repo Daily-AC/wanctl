@@ -138,6 +138,106 @@ as unavailable instead of being returned as current data. The verb is available
 only when the agent is launched by the wanctl APK; other platforms return a
 clear Android-only error. Normal exec policy still applies before the verb runs.
 
+### Elevation: making the rest of adb work
+
+Everything above happens inside the app sandbox, and most of `adb`'s surface is
+not reachable from there. `pm`, `am`, `input`, `screencap`, `dumpsys`,
+`settings`, `wm` and `svc` need uid 2000 (`shell`) or uid 0; the agent is an
+ordinary app uid in `untrusted_app`. This is not a wanctl limitation to be
+worked around one verb at a time — it is the platform's, and it is why the
+built-in `battery` verb had to collect its data in Java.
+
+**提权通道** in the app opens a channel that crosses that line. It is off by
+default and it is a separate decision from every other switch here:
+
+```sh
+wanctl exec --target phone --elevate -- pm list packages -3
+wanctl exec --target phone --elevate --via su -- dumpsys battery
+```
+
+Three channels exist; the agent probes them in order and uses the first
+available one. `--via` pins one, and pinning an unavailable channel is an error
+rather than a downgrade — a command that ran unprivileged after you asked for
+root is a wrong answer wearing a right answer's clothes.
+
+| channel | needs | survives a reboot |
+|---|---|---|
+| `su` | a rooted device | **yes** |
+| `shizuku` | Shizuku installed *and started* | no — Shizuku must be restarted |
+| `adb` | Developer options → Wireless debugging | no — Android clears it on boot |
+
+Only `su` keeps working with nobody touching the device. A phone that must stay
+controllable unattended after a power cut should be rooted, or should not depend
+on elevation. (`shizuku` and `adb` land in later versions; naming one today
+reports that this build does not have it, which is deliberately distinct from
+"the device does not have it".)
+
+**Elevated commands are their own policy class.** 自动放行所有命令 does not
+cover them: that switch says "this device is unattended", not "hand out root",
+so an elevated command on a bypass-mode device is still refused until it has a
+rule of its own or a human approves it in the portal. An `exec` rule never
+authorizes the elevated form of the same command either. The event log records
+which channel ran each one, so `wanctl logs` can answer *what has run as root on
+this phone*.
+
+With the switch off, the channels are not even probed — a rooted device raises
+no root-manager consent dialog for a feature nobody turned on.
+
+### Verbs
+
+The elevation channel is the whole feature; these are shorthand for the parts of
+the adb surface that are awkward over a pipe. Each is one shell command, run
+through the same channel, gated by the same elevated policy class, recorded in
+the same audit log — nothing here does anything you could not type by hand.
+
+```sh
+wanctl screenshot phone -o shot.png       # implies --elevate; "-o -" writes stdout
+wanctl exec --target phone --elevate -- input tap 540 1200
+wanctl exec --target phone --elevate -- input text 'hello world'
+wanctl exec --target phone --elevate -- app list -3
+wanctl exec --target phone --elevate -- app uninstall com.example
+wanctl exec --target phone --elevate -- settings get global adb_wifi_enabled
+wanctl exec --target phone --elevate -- prop get ro.product.model
+wanctl exec --target phone --elevate -- logcat
+```
+
+| verb | becomes | why it is a verb |
+|---|---|---|
+| `screenshot` | `screencap -p` | PNG on stdout; the controller writes the file |
+| `input tap/swipe/text/key` | `input …` | arguments validated, and `text` stays one word |
+| `app list/info/install/uninstall/start/stop/clear` | `pm`, `am`, `monkey`, `dumpsys` | one noun over four tools |
+| `settings get/put` | `settings …` | the namespace is a closed set of three |
+| `prop get/set` | `getprop`/`setprop` | — |
+| `logcat` | `logcat -d -v time -t 200` | defaults to a dump: a follow never returns over exec |
+
+Every argument is quoted before it becomes shell source that runs as root, so a
+package name containing `; rm -rf /` arrives as a package name. A command
+containing an unquoted expansion (`$(…)`, `$VAR`, a pipe) is not treated as a
+verb at all and goes through as an ordinary elevated command — guessing at it
+would be worse than letting the shell do what the shell does.
+
+`wanctl screenshot` buffers the image and checks the PNG magic before writing,
+so a failed capture leaves no truncated file that looks real.
+
+**su is not one program.** Magisk, KernelSU and APatch take `su -c CMD`; AOSP's
+own su, on userdebug builds and emulator images, rejects that outright and wants
+`su root sh -c CMD`. The probe tries both and keeps whichever answered as root,
+so neither family has to be detected by name. Measured on an android-29
+`google_apis` emulator image, 2026-08-14:
+
+```
+su -c id            → su: invalid uid/gid '-c'
+su root sh -c id    → uid=0(root) … context=u:r:su:s0
+```
+
+Verified on that image the same day: with the switch off the channel is listed
+and refused with the switch as the reason; with it on, `su` probes to `uid=0`
+and `settings get global adb_wifi_enabled` — the command that throws for an app
+uid on the PGBM10 — returns normally. That emulator's su is `-rwsr-x--- root
+shell`, so it is reachable from an adb shell and **not** from an app uid; it
+proves the channel's contract and the invocation forms, not the Magisk-from-an-
+app path, which needs a rooted phone.
+
 ### Coming back after a reboot
 
 Two mechanisms, because one is not reliable enough.

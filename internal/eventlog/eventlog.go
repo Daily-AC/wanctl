@@ -29,6 +29,10 @@ type Event struct {
 	Decision string    `json:"decision,omitempty"` // bypass | pre-approved | approved | remembered:* | denied
 	Exit     *int      `json:"exit,omitempty"`     // exec exit code
 	Bytes    int64     `json:"bytes,omitempty"`
+	// Via names the elevation channel that ran an elevated command (su,
+	// shizuku, adb). Present only on elevated execs, which is what makes
+	// "what has run as root on this phone" a greppable question.
+	Via string `json:"via,omitempty"`
 }
 
 // Filter narrows a Read.
