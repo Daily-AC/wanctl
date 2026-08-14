@@ -261,10 +261,32 @@ su root sh -c id    → uid=0(root) … context=u:r:su:s0
 Verified on that image the same day: with the switch off the channel is listed
 and refused with the switch as the reason; with it on, `su` probes to `uid=0`
 and `settings get global adb_wifi_enabled` — the command that throws for an app
-uid on the PGBM10 — returns normally. That emulator's su is `-rwsr-x--- root
-shell`, so it is reachable from an adb shell and **not** from an app uid; it
-proves the channel's contract and the invocation forms, not the Magisk-from-an-
-app path, which needs a rooted phone.
+uid on the PGBM10 — returns normally.
+
+### Verified, and on what
+
+On a **Xiaomi Mi 10 Ultra** (M2007J1SC, Android 11, Magisk) and an **android-29
+emulator**, both driven from a Mac over a live relay, 2026-08-14:
+
+| | Mi 10 Ultra (Magisk) | emulator (AOSP su) |
+|---|---|---|
+| `exec -- id` | `uid=2000(shell)` | `uid=2000(shell)` |
+| `exec --elevate -- id` (auto) | `uid=0(root)` `u:r:magisk:s0` | `uid=0(root)` `u:r:su:s0` |
+| `exec --elevate --via adb -- id` | `uid=2000(shell)` `u:r:shell:s0` | — |
+| exit code through the adb channel | 42 → 42 | — |
+| `screenshot` | 1080×2340 PNG | 1080×2280 PNG |
+| `settings` / `prop` / `app list` | all return real data | all return real data |
+| event log | `"via":"su"`, `"via":"adb"` | `"via":"su"` |
+
+Both su invocation forms were exercised for real: Magisk's `su` took `-c`, the
+emulator's AOSP `su` refused it and needed `su root sh -c`. A build that guessed
+one form would have reported "not rooted" on one of these two devices.
+
+The agent under test ran from an adb shell, so its *unelevated* uid is 2000
+there rather than the app uid an installed APK has. That does not affect what
+the elevated channels prove — `su` reaching uid 0 and the adb channel reaching
+the shell domain are the same operations either way — but the app-sandbox
+starting point still needs a signed-APK run to confirm end to end.
 
 ### Coming back after a reboot
 
