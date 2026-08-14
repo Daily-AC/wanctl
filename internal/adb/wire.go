@@ -104,13 +104,18 @@ func (m message) write(w io.Writer) error {
 	// magic is the command's ones' complement. A receiver that finds otherwise
 	// is not looking at a message boundary.
 	binary.LittleEndian.PutUint32(hdr[20:], uint32(m.Command)^0xffffffff)
-	if _, err := w.Write(hdr[:]); err != nil {
+	if len(m.Data) == 0 {
+		_, err := w.Write(hdr[:])
 		return err
 	}
-	if len(m.Data) == 0 {
-		return nil
-	}
-	_, err := w.Write(m.Data)
+	// Header and payload go out in ONE write. Over a plain socket splitting
+	// them is harmless — TCP is a stream — but over TLS each Write becomes its
+	// own record, and that is a different thing on the wire than what adbd's
+	// own client produces. Keeping it to one write also saves a round trip.
+	buf := make([]byte, 0, headerSize+len(m.Data))
+	buf = append(buf, hdr[:]...)
+	buf = append(buf, m.Data...)
+	_, err := w.Write(buf)
 	return err
 }
 

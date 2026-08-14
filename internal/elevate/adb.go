@@ -80,8 +80,13 @@ func (a *ADB) candidatePorts() ([]int, string) {
 		return a.ports()
 	}
 	var ports []int
-	if v := strings.TrimSpace(os.Getenv(PortEnv)); v != "" {
-		if p, err := strconv.Atoi(v); err == nil && p > 0 && p < 65536 {
+	// Comma-separated, because Android assigns the wireless-debugging port at
+	// random and there is no way to ask for it from the app sandbox without
+	// mDNS. Listing candidates is how a device gets configured before that
+	// discovery exists; each is dialed in turn and a wrong one simply fails to
+	// speak the protocol.
+	for _, field := range strings.Split(os.Getenv(PortEnv), ",") {
+		if p, err := strconv.Atoi(strings.TrimSpace(field)); err == nil && p > 0 && p < 65536 {
 			ports = append(ports, p)
 		}
 	}
@@ -105,8 +110,10 @@ func (a *ADB) Probe(ctx context.Context) Status {
 	out := firstLine(strings.TrimSpace(sb.String()))
 	switch {
 	case err != nil && !adb.ErrNoExitCode(err):
+		detail := describeConn(conn)
 		a.reset()
-		return Status{Available: false, Reason: fmt.Sprintf("connected to adbd on port %d but `id` failed: %v", port, err)}
+		return Status{Available: false, Reason: fmt.Sprintf(
+			"connected to adbd on port %d but `id` failed: %v%s", port, err, detail)}
 	case code != 0 && !adb.ErrNoExitCode(err):
 		a.reset()
 		return Status{Available: false, Reason: fmt.Sprintf("adbd ran `id` with exit %d: %s", code, out)}
@@ -162,11 +169,16 @@ func (a *ADB) connect(ctx context.Context) (shellConn, int, error) {
 	dial := a.dial
 	if dial == nil {
 		dial = func(ctx context.Context, addr string, key *adb.Key) (shellConn, error) {
-			return adb.Dial(ctx, addr, key, nil)
+			// The TLS config is built lazily: a plain `adb tcpip` port never
+			// asks for it, and an Android 11+ wireless-debugging port always
+			// does. It must carry the key pairing registered — see
+			// Key.TLSCertificate.
+			return adb.Dial(ctx, addr, key, key.TLSConfig)
 		}
 	}
 	ports, hint := a.candidatePorts()
 	var last error
+	var failures []string
 	for _, p := range ports {
 		conn, err := dial(ctx, fmt.Sprintf("127.0.0.1:%d", p), key)
 		if err == nil {
@@ -178,12 +190,17 @@ func (a *ADB) connect(ctx context.Context) (shellConn, int, error) {
 			// the device, and trying other ports would bury that.
 			return nil, 0, fmt.Errorf("adbd on port %d is waiting for someone to allow wanctl's key on the device screen", p)
 		}
+		// Every port's failure is kept. Reporting only the last one hid the
+		// real diagnosis behind the fallback port's timeout — the useful error
+		// came from the port that actually had adbd on it.
+		failures = append(failures, fmt.Sprintf("%d: %v", p, err))
 		last = err
 	}
 	if last == nil {
-		last = errors.New("no adbd port to try")
+		return nil, 0, errors.New("no adbd port to try")
 	}
-	return nil, 0, fmt.Errorf("could not reach adbd on this device (%v); %s", last, hint)
+	return nil, 0, fmt.Errorf("could not reach adbd on this device (%s); %s",
+		strings.Join(failures, "; "), hint)
 }
 
 func (a *ADB) reset() {
@@ -203,4 +220,20 @@ func (a *ADB) Close() error {
 
 func quotePOSIX(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// describeConn adds what the device said about itself to a failure, so a
+// connection that completes and then goes quiet is diagnosable without a
+// rebuild. adbd's banner names its protocol features, and a missing shell_v2
+// changes which service is opened.
+func describeConn(c shellConn) string {
+	type describer interface {
+		Banner() string
+		HasFeature(string) bool
+	}
+	d, ok := c.(describer)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf(" [device banner: %q; shell_v2=%v]", d.Banner(), d.HasFeature("shell_v2"))
 }
