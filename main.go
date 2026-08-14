@@ -80,6 +80,11 @@ USAGE
   wanctl exec  [--target NS/DEV] --script <local-file> [--interp powershell|sh] [NS/DEV|DEV]
                                               run a LOCAL script on the device — no shell quoting or encoding hazards
   wanctl exec  --target ANDROID-DEV -- battery report fresh battery state from an Android APK agent as JSON
+  wanctl exec  --target ANDROID-DEV -- adb-pair <PORT> <CODE>
+                                              pair with the device's own adbd so the adb elevation channel works
+                                              on a phone that is not rooted. PORT and CODE come from the device's
+                                              开发者选项 → 无线调试 → 使用配对码配对设备 screen (that screen's
+                                              port, not the one on the wireless-debugging screen)
   wanctl exec  --target ANDROID-DEV --elevate [--via su|shizuku|adb] <command...>
                                               run with elevated privilege on Android, which is what pm / am /
                                               input / screencap / dumpsys / settings need. Off by default on the
