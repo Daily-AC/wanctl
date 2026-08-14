@@ -213,19 +213,41 @@ Regression test: `TestShellOverTLSSendsNoSecondCnxn`, against a fake adbd that
 models the online/offline rule rather than asserting on bytes. It was confirmed
 to fail — with the right message — when the extra CNXN is put back.
 
-**Still hand-fed: the port.** `WANCTL_ADB_PORT` had to be read off the device's
-wireless-debugging screen, and it changes: 37819 became 41031 after re-pairing.
-mDNS discovery — the Java `NsdManager` side that fills the state file — is not
-built yet, and until it is, the channel cannot come up unattended.
+**Port discovery is built.** `AdbPortWatcher` watches mDNS for
+`_adb-tls-connect._tcp` through `NsdManager`, keeps a `MulticastLock` while it
+does, ignores every advertisement whose address this device does not hold — a
+Wi-Fi full of phones with wireless debugging on all publish that service — and
+writes the port into the same state file the battery verb uses.
+`WANCTL_ADB_PORT` still overrides it, which is what the Termux and adb-shell
+routes need.
+
+**Phase 4 closed in the APK, in `untrusted_app`.** A test build (package
+`com.***REMOVED***.wanctl.test`, so the production agent was never touched) on the same
+Reno8, with 提权通道 on and no `WANCTL_ADB_PORT` anywhere:
+
+```
+exec            → uid=10606(u0_a606) … context=u:r:untrusted_app:s0:c94,…
+exec --elevate  → uid=2000(shell)    … context=u:r:shell:s0
+```
+
+Same agent process, same command, two channels. The app's state file carried
+`"adb":{"port":41031}` — the number on the device's own wireless-debugging
+screen — beside the battery fields. `pm list users`, `screenshot` (a real
+1080×2400 PNG) and the no-`--via` probe all work from there, and the event log
+records `"via":"adb"`.
+
+That answers the open item this plan has carried since it was written: **ColorOS
+14 does let an app uid reach its own adbd over loopback.**
 
 ## Open items
 
-- **Whether an app uid can reach loopback adbd on this ROM is still unmeasured.**
-  Everything above ran as uid 2000 in `u:r:shell:s0`, because the test agent is
-  launched over adb; the APK agent runs in `untrusted_app`. Shizuku and LADB do
-  this on stock and on several OEM ROMs, so it is likely, but likely is not
-  measured. Closing it needs a test APK on the phone (no Termux or Shizuku is
-  installed there to borrow an app uid from).
+- `AdbPortWatcher.onServiceLost` — the path that clears a port when wireless
+  debugging goes off — is **not** exercised yet. Toggling wireless debugging
+  needs the Settings UI on this ROM (`settings put global adb_wifi_enabled`
+  is refused for uid 2000 on ColorOS: `must have one of:
+  [android.permission.WRITE_SECURE_SETTINGS]`, and the wireless-debugging
+  activity is not at its AOSP name). Worst case if it is wrong: a stale port
+  that the Go side ages out after 30 minutes and reports as unavailable.
 - Google has an open proposal to restrict local (on-device) adb connections. It
   is a comment on an open issue with no implementation date as of 2026-08-14 —
   worth knowing, not worth designing around, and an argument for keeping `su`
