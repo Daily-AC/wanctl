@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -13,6 +16,7 @@ import (
 	"math/big"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -32,6 +36,14 @@ type fakeAdbd struct {
 	// neverAccept models a device whose user has not tapped Allow: it keeps
 	// issuing tokens after being handed a public key.
 	neverAccept bool
+	// useTLS models Android 11+ wireless debugging: CNXN is answered with STLS
+	// rather than a banner, and the transport's online/offline state follows
+	// adbd's rules (see serve).
+	useTLS    bool
+	tlsConfig *tls.Config
+	// lateCnxn records a CNXN that arrived after the TLS handshake — the
+	// mistake this fake exists to catch.
+	lateCnxn atomic.Bool
 
 	script func(command string) (stdout string, exit byte)
 }
@@ -63,6 +75,10 @@ func (f *fakeAdbd) serve(c net.Conn) {
 	defer c.Close()
 	authed := !f.requireAuth
 	gotKey := false
+	// online mirrors adbd's transport state, which A_OPEN is gated on. A
+	// plaintext transport is online from the start; a TLS one only after its
+	// handshake.
+	online, upgraded := !f.useTLS, false
 	for {
 		m, err := readMessage(c, maxPayload, false)
 		if err != nil {
@@ -70,10 +86,33 @@ func (f *fakeAdbd) serve(c net.Conn) {
 		}
 		switch m.Command {
 		case cmdCnxn:
+			if f.useTLS {
+				// adb.cpp handle_new_connection(): every CNXN starts with
+				// handle_offline(), and a use_tls transport is answered with
+				// another STLS request rather than a banner. A client that
+				// sends CNXN again after the handshake therefore knocks the
+				// transport it just established back offline.
+				if upgraded {
+					f.lateCnxn.Store(true)
+				}
+				online = false
+				_ = message{Command: cmdStls, Arg0: stlsVersion}.write(c)
+				continue
+			}
 			if !authed {
 				_ = message{Command: cmdAuth, Arg0: authToken, Data: make([]byte, 20)}.write(c)
 				continue
 			}
+			f.sendConnected(c)
+		case cmdStls:
+			tc := tls.Server(c, f.tlsConfig)
+			if err := tc.Handshake(); err != nil {
+				return
+			}
+			c = tc
+			upgraded, online = true, true
+			// adbd_wifi_secure_connect(): handle_online() then send_connect().
+			// The banner is sent by the device, unprompted.
 			f.sendConnected(c)
 		case cmdAuth:
 			switch m.Arg0 {
@@ -100,6 +139,11 @@ func (f *fakeAdbd) serve(c net.Conn) {
 			}
 			_ = gotKey
 		case cmdOpen:
+			if !online || m.Arg0 == 0 {
+				// adb.cpp: `if (!t->online || p->msg.arg0 == 0) break;` — no
+				// CLSE, no error, nothing. The client is left waiting.
+				continue
+			}
 			service := strings.TrimRight(string(m.Data), "\x00")
 			remote := uint32(7)
 			_ = message{Command: cmdOkay, Arg0: remote, Arg1: m.Arg0}.write(c)
@@ -297,6 +341,76 @@ func TestPendingAuthorizationIsItsOwnError(t *testing.T) {
 	if !errors.Is(err, ErrPublicKeyPending) {
 		t.Fatalf("err = %v, want ErrPublicKeyPending", err)
 	}
+}
+
+// TestShellOverTLSSendsNoSecondCnxn pins the rule that cost a day on an OPPO
+// PGBM10 (Android 14): once the TLS handshake succeeds, adbd has already
+// brought its transport online and sent the banner itself, so the client must
+// say nothing. Repeating CNXN inside the session — the intuitive reading of
+// "the handshake restarts inside TLS" — takes the transport back offline, and
+// from there every A_OPEN is dropped with no CLSE, no error and no log line.
+// The connection looks healthy right up until the first command times out,
+// which is exactly why this needs a test rather than a comment.
+func TestShellOverTLSSendsNoSecondCnxn(t *testing.T) {
+	f := &fakeAdbd{
+		useTLS:    true,
+		tlsConfig: selfSignedTLSConfig(t),
+		script: func(command string) (string, byte) {
+			if command != "id" {
+				t.Errorf("device received %q, want %q", command, "id")
+			}
+			return "uid=2000(shell)\n", 0
+		},
+	}
+	addr := newFakeAdbd(t, f)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := Dial(ctx, addr, testKey(t), func() (*tls.Config, error) {
+		return &tls.Config{InsecureSkipVerify: true}, nil
+	})
+	if err != nil {
+		t.Fatalf("dial over TLS: %v", err)
+	}
+	defer c.Close()
+
+	var out bytes.Buffer
+	code, shellErr := c.Shell(ctx, "id", &out)
+	if f.lateCnxn.Load() {
+		t.Fatal("client sent CNXN again after the TLS handshake; adbd answers that " +
+			"by taking the transport offline, and then ignores every A_OPEN")
+	}
+	if shellErr != nil {
+		t.Fatalf("shell over TLS: %v", shellErr)
+	}
+	if code != 0 || out.String() != "uid=2000(shell)\n" {
+		t.Fatalf("exit=%d out=%q, want 0 and the device's stdout", code, out.String())
+	}
+}
+
+// selfSignedTLSConfig is a throwaway server certificate for the fake device.
+// The client does not verify it (adbd's is self-signed too; see startTLS), so
+// only the handshake completing matters here.
+func selfSignedTLSConfig(t *testing.T) *tls.Config {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "fake-adbd"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{{
+		Certificate: [][]byte{der},
+		PrivateKey:  key,
+	}}}
 }
 
 func TestTLSRequiredWithoutPairingIsExplained(t *testing.T) {

@@ -154,7 +154,7 @@ and it still connects after the app is restarted without re-pairing.
 - A rooted device is needed for phase 1's acceptance (`su`). The Xiaomi Mi 10
   Ultra rooted on 2026-08-06 is the candidate; it does not yet run wanctl.
 
-## Status as of 2026-08-14 10:30 (handover)
+## Status as of 2026-08-14 11:10
 
 Branch `feat/android-elevation`, MR !54. `go test ./...` green; APK builds.
 
@@ -166,39 +166,65 @@ Branch `feat/android-elevation`, MR !54. `go test ./...` green; APK builds.
 - The adb wire protocol works end to end against a real adbd (android-29
   emulator): banner/feature parsing, `id` as uid 2000, exit code 42 intact.
 - **SPAKE2 pairing interoperates with AOSP.** On the OPPO Reno8 (PGBM10,
-  Android 14, NOT rooted), `adb-pair 43631 046087` succeeded and the device's
-  own 无线调试 → 已配对的设备 list now shows `wanctl@pgbmtest`. The device UI
-  confirming it is the strongest evidence available.
-- On that same phone the adb channel now completes TLS: the paired key is
-  accepted, CNXN succeeds, and the full device banner comes back.
+  Android 14, NOT rooted), `adb-pair` succeeded twice with codes typed off the
+  device's own screen, and 无线调试 → 已配对的设备 lists `wanctl@pgbmtest`.
+- **Phase 4's protocol half is done.** On that same Reno8, over the wireless
+  debugging port with no root and no cable:
+  - `--elevate --via adb -- id` returns in 0.3s where it used to time out;
+  - the shell it opens is a child of `/apex/com.android.adbd/bin/adbd`, not of
+    the agent — checked by reading `/proc/$PPID/cmdline` through both channels,
+    which is what separates "the adb channel worked" from "the sandbox answered";
+  - `pm list users` works, exit code 42 survives the round trip,
+    `wanctl screenshot -via adb` returns a real 1080×2400 PNG;
+  - the device's own 无线调试 screen shows `wanctl@pgbmtest — 当前已连接`;
+  - it reconnects after the agent restarts, with no re-pairing;
+  - the event log records `"via":"adb"` per command.
 
-**The one thing that does not work yet**
+**The A_OPEN silence: root cause found**
 
-On the Reno8, after a successful TLS connect and CNXN, `A_OPEN` for a shell
-service gets no reply at all and the command times out. The same code works
-against the emulator's adbd over plaintext. Ruled out, each by measurement:
+A client must **not** send `A_CNXN` again after the TLS handshake. adbd brings
+the transport online and sends its banner itself the moment the handshake
+succeeds (`daemon/adb_wifi.cpp`, `adbd_wifi_secure_connect` → `handle_online()`
++ `send_connect()`). A second CNXN is read as a brand-new connection:
+`handle_new_connection()` opens with `handle_offline()`, and for a `use_tls`
+transport it replies with another STLS request instead of coming back online.
+Then `adb.cpp`'s `A_OPEN` case begins
 
-| hypothesis | result |
-|---|---|
-| header+payload split across two writes (two TLS records) | changed to one write; no effect (kept anyway — it is better) |
-| wrong TLS client certificate | fixed and confirmed: Go silently drops `Certificates` that do not match the server's CertificateRequest; `GetClientCertificate` was required. TLS now succeeds |
-| `delayed_ack` window in `A_OPEN.arg1` (device advertises the feature) | tried 32 MB; no effect; **reverted** rather than leave a guess in the code |
-| pairing not actually registered | disproved — the device lists the key |
-| a stale/wrong port | disproved — the banner comes back from 37819 |
+```c
+if (!t->online || p->msg.arg0 == 0) break;   // no CLSE, no log line
+```
 
-Not yet tried: comparing our byte stream against the real `adb` client's with a
-capture on the loopback interface. That is the obvious next move and would
-settle it — every remaining hypothesis is about what AOSP sends that we do not.
+so every stream request is discarded in silence while the connection still looks
+healthy — banner parsed, features negotiated, socket open.
 
-Note the port had to be given by hand (`WANCTL_ADB_PORT=37819`, read off the
-device's wireless-debugging screen). mDNS discovery — the Java `NsdManager`
-side that fills the state file — is not built yet.
+The evidence, in the order it landed: `adb logcat` showed `host-32: offline` and
+`ADB wifi device disconnected` **one millisecond after**
+`adbd_wifi_secure_connect: connected host-32`, which is a transport going
+offline right after coming online; the android14-release source then named the
+exact `break` that eats the packet.
+
+That also retires the `delayed_ack` hypothesis for good, and it is worth
+knowing why: the mismatch branch is the *next* one down, it calls
+`send_close()` and it `LOG(ERROR)`s. A delayed-ack mismatch would have produced
+a CLSE and a logcat line. We had neither.
+
+Regression test: `TestShellOverTLSSendsNoSecondCnxn`, against a fake adbd that
+models the online/offline rule rather than asserting on bytes. It was confirmed
+to fail — with the right message — when the extra CNXN is put back.
+
+**Still hand-fed: the port.** `WANCTL_ADB_PORT` had to be read off the device's
+wireless-debugging screen, and it changes: 37819 became 41031 after re-pairing.
+mDNS discovery — the Java `NsdManager` side that fills the state file — is not
+built yet, and until it is, the channel cannot come up unattended.
 
 ## Open items
 
-- Whether an OEM ROM (ColorOS 14 here) permits an app to reach loopback adbd at
-  all is unverified. Shizuku and LADB do this on stock and on several OEM ROMs,
-  but this specific ROM has not been tried; phase 4 starts with that probe.
+- **Whether an app uid can reach loopback adbd on this ROM is still unmeasured.**
+  Everything above ran as uid 2000 in `u:r:shell:s0`, because the test agent is
+  launched over adb; the APK agent runs in `untrusted_app`. Shizuku and LADB do
+  this on stock and on several OEM ROMs, so it is likely, but likely is not
+  measured. Closing it needs a test APK on the phone (no Termux or Shizuku is
+  installed there to borrow an app uid from).
 - Google has an open proposal to restrict local (on-device) adb connections. It
   is a comment on an open issue with no implementation date as of 2026-08-14 —
   worth knowing, not worth designing around, and an argument for keeping `su`
