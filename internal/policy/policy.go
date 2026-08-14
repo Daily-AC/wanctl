@@ -41,6 +41,18 @@ const (
 	KindRead  Kind = "read"
 	KindWrite Kind = "write"
 	KindLogs  Kind = "logs"
+
+	// KindExecElevated is a command run through an elevation channel (root,
+	// or the device's own adbd — see internal/elevate). It is a class
+	// of its own, not a flag on KindExec, for two reasons:
+	//
+	//   - An `exec` rule must not authorize the elevated form of the same
+	//     command. "You may run `pm list packages`" and "you may run it as uid
+	//     2000" are different grants and a device owner approved only one.
+	//   - Bypass mode does not cover it (see Engine.Bypasses). The 自动放行
+	//     switch exists so an unattended device is usable at all; handing out
+	//     root as a side effect of that would be a decision nobody made.
+	KindExecElevated Kind = "exec-elevated"
 )
 
 // Request is an operation awaiting an authorization decision.
@@ -50,6 +62,11 @@ type Request struct {
 	Path string // file ops: target path
 	Cwd  string // exec: working directory (may be "")
 	Peer string // peer fingerprint/name (for logging)
+	// Via is the elevation channel the controller asked for, or "" for
+	// whichever one the device picks. It is shown to whoever approves the
+	// command and is never part of rule matching: a rule authorizes a command,
+	// not a route to running it.
+	Via string
 }
 
 // Rule is one persisted allow-list entry.
@@ -183,10 +200,20 @@ func (e *Engine) AllowedFileRoot(req Request) (string, bool) {
 	return "", false
 }
 
+// Bypasses reports whether bypass mode alone authorizes this kind of request.
+// Everything does except elevation: a device left in bypass so it can work
+// unattended has not thereby agreed to run commands as root.
+func (e *Engine) Bypasses(kind Kind) bool {
+	return e.Mode() == ModeBypass && kind != KindExecElevated
+}
+
 func ruleMatches(r Rule, req Request) bool {
 	switch req.Kind {
-	case KindExec:
-		if r.Kind != KindExec || !MatchCommand(r.Pattern, req.Cmd) {
+	case KindExec, KindExecElevated:
+		// The rule's kind must equal the request's: an exec rule never covers
+		// an elevated command, and an elevated rule never covers a plain one
+		// (it would be a wider grant than the command needs).
+		if r.Kind != req.Kind || !MatchCommand(r.Pattern, req.Cmd) {
 			return false
 		}
 		return r.Scope == ScopeGlobal || (r.Scope == ScopeDir && r.Dir == req.Cwd && req.Cwd != "")
@@ -262,7 +289,7 @@ func Within(dir, path string) bool {
 func RuleFor(req Request, scope Scope) Rule {
 	r := Rule{Kind: req.Kind, Scope: scope, Added: time.Now()}
 	switch req.Kind {
-	case KindExec:
+	case KindExec, KindExecElevated:
 		r.Pattern = strings.TrimSpace(req.Cmd)
 		if scope == ScopeDir && req.Cwd != "" {
 			r.Dir = req.Cwd

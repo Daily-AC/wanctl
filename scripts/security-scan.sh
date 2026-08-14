@@ -31,7 +31,11 @@ build_image() {
 
 run_govulncheck() {
   cd "$root"
-  GOTOOLCHAIN=go1.25.12 go run "golang.org/x/vuln/cmd/govulncheck@$govuln_version" ./...
+  # Pinned here as well as in .gitlab-ci.yml, and both have to move together:
+  # this line wins inside the job, so bumping only the CI variable leaves the
+  # scan reporting vulnerabilities in a toolchain the pipeline thinks it left
+  # behind (measured 2026-08-14, pipeline 9859).
+  GOTOOLCHAIN=go1.26.6 go run "golang.org/x/vuln/cmd/govulncheck@$govuln_version" ./...
 }
 
 run_sbom() {

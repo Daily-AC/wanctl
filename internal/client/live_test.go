@@ -128,7 +128,7 @@ func TestLiveRemoteConsole(t *testing.T) {
 	}
 	done := make(chan res, 1)
 	go func() {
-		code, err := ctrl.Exec(ctx, devName, "echo hello-from-portal-live", true, "")
+		code, err := ctrl.Exec(ctx, ExecRequest{Target: devName, Command: "echo hello-from-portal-live", OneShot: true, Cwd: ""})
 		done <- res{code, err}
 	}()
 

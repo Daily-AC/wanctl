@@ -407,6 +407,8 @@ func registerMCPTools(s *server.MCPServer) {
 		mcpapi.WithString("interp", mcpapi.Description("Interpreter for 'script': 'powershell' for Windows devices, 'sh' for Unix/macOS/Android. Required when 'script' is set.")),
 		mcpapi.WithString("cwd", mcpapi.Description("Working directory on the device for this command (also the policy scope).")),
 		mcpapi.WithBoolean("oneshot", mcpapi.Description("Run in a fresh shell with no persistent session state. Default false — successive exec calls share cwd/env like a real terminal.")),
+		mcpapi.WithBoolean("elevate", mcpapi.Description("Android only. Run with elevated privilege (uid 0 or the adb shell uid 2000) instead of the app sandbox the agent normally lives in. This is what makes `pm`, `am`, `input`, `screencap`, `dumpsys`, `settings`, `wm` and `svc` work at all — without it they fail with permission errors or empty output. Elevated commands need their OWN policy rule on the device; a device in bypass mode still refuses them until a human approves, so expect a 'PAIRING/approval' style rejection the first time.")),
+		mcpapi.WithString("via", mcpapi.Description("Pin the elevation channel: 'su' (rooted device) or 'adb' (device's own wireless debugging). Default empty = let the device pick whichever is available. Naming an unavailable channel fails instead of quietly running unprivileged.")),
 	), mcpExec)
 
 	s.AddTool(mcpapi.NewTool("wanctl_exec_async",
@@ -709,7 +711,14 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return hint, nil
 	}
 	var stdout, stderr bytes.Buffer
-	code, err := c.ExecTo(ctx, target, command, reqBool(req, "oneshot"), reqStr(req, "cwd", ""), &stdout, &stderr)
+	code, err := c.ExecTo(ctx, client.ExecRequest{
+		Target:  target,
+		Command: command,
+		OneShot: reqBool(req, "oneshot"),
+		Cwd:     reqStr(req, "cwd", ""),
+		Elevate: reqBool(req, "elevate"),
+		Via:     reqStr(req, "via", ""),
+	}, &stdout, &stderr)
 	if rej := asPairing(err); rej != nil {
 		return pairingResult(rej), nil
 	}

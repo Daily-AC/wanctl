@@ -44,6 +44,18 @@ func (c *ConsoleApprover) Ask(req Request) Decision {
 		if req.Cwd != "" {
 			fmt.Fprintf(c.out, "    cwd: %s\n", req.Cwd)
 		}
+	case KindExecElevated:
+		// Named differently on purpose. Someone skimming this prompt must not
+		// mistake it for the ordinary one; the whole point of the separate
+		// policy class is that this decision is a bigger one.
+		fmt.Fprintf(c.out, "  Approve ELEVATED COMMAND from %s\n", short(req.Peer))
+		fmt.Fprintf(c.out, "    cmd: %s\n", req.Cmd)
+		if req.Via != "" {
+			fmt.Fprintf(c.out, "    via: %s\n", req.Via)
+		}
+		if req.Cwd != "" {
+			fmt.Fprintf(c.out, "    cwd: %s\n", req.Cwd)
+		}
 	case KindRead:
 		fmt.Fprintf(c.out, "  Approve READ from %s\n    path: %s\n", short(req.Peer), req.Path)
 	case KindWrite:

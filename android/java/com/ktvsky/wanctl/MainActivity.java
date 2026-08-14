@@ -47,9 +47,9 @@ public final class MainActivity extends Activity {
     private Prefs prefs;
     private Installer installer;
 
-    private TextView version, status, relay, fingerprint, credential, autoTrustWarn, bypassWarn;
+    private TextView version, status, relay, fingerprint, credential, autoTrustWarn, bypassWarn, elevationWarn;
     private EditText name;
-    private Switch enabled, boot, autoTrust, bypass;
+    private Switch enabled, boot, autoTrust, bypass, elevation;
     private Button battery, login, logs, update;
 
     private boolean binding;
@@ -68,11 +68,13 @@ public final class MainActivity extends Activity {
         credential = findViewById(R.id.credential);
         autoTrustWarn = findViewById(R.id.autotrust_warn);
         bypassWarn = findViewById(R.id.bypass_warn);
+        elevationWarn = findViewById(R.id.elevation_warn);
         name = findViewById(R.id.name);
         enabled = findViewById(R.id.enabled);
         boot = findViewById(R.id.boot);
         autoTrust = findViewById(R.id.autotrust);
         bypass = findViewById(R.id.bypass);
+        elevation = findViewById(R.id.elevation);
         battery = findViewById(R.id.battery);
         login = findViewById(R.id.login);
         logs = findViewById(R.id.logs);
@@ -111,6 +113,16 @@ public final class MainActivity extends Activity {
             }
             prefs.setBypass(checked);
             bypassWarn.setVisibility(checked ? View.VISIBLE : View.GONE);
+            restartIfRunning();
+        });
+        elevation.setOnCheckedChangeListener((v, checked) -> {
+            if (binding) {
+                return;
+            }
+            prefs.setElevation(checked);
+            elevationWarn.setVisibility(checked ? View.VISIBLE : View.GONE);
+            // The agent reads WANCTL_ELEVATION from its environment at startup,
+            // so the running child has to be replaced for this to mean anything.
             restartIfRunning();
         });
         name.addTextChangedListener(new TextWatcher() {
@@ -193,6 +205,8 @@ public final class MainActivity extends Activity {
         autoTrustWarn.setVisibility(prefs.autoTrust() ? View.VISIBLE : View.GONE);
         bypass.setChecked(prefs.bypass());
         bypassWarn.setVisibility(prefs.bypass() ? View.VISIBLE : View.GONE);
+        elevation.setChecked(prefs.elevation());
+        elevationWarn.setVisibility(prefs.elevation() ? View.VISIBLE : View.GONE);
         String n = prefs.deviceName();
         if (!n.equals(name.getText().toString())) {
             name.setText(n);

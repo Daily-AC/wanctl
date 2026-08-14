@@ -23,8 +23,10 @@ import (
 	"time"
 
 	"wanctl/internal/admission"
+	"wanctl/internal/androidverb"
 	"wanctl/internal/config"
 	"wanctl/internal/console"
+	"wanctl/internal/elevate"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/httpconn"
 	"wanctl/internal/policy"
@@ -69,6 +71,7 @@ type Agent struct {
 	sessions map[string]*server.ShellSession
 	jobs     *jobStore
 	stdin    *bufio.Reader
+	elevator *elevate.Manager
 
 	lanMu        sync.Mutex
 	lanEnabled   bool
@@ -146,6 +149,7 @@ func New(opts Options) (*Agent, error) {
 		id: id, known: known, portalAdmins: portalAdmins, opts: opts, engine: engine, log: logger,
 		inst:     inst,
 		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(), stdin: bufio.NewReader(os.Stdin),
+		elevator: elevate.ConfigureDefault(configDirOrEmpty(), os.Getenv),
 	}
 	a.console = console.New(engine, logger, console.Info{
 		Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL,
@@ -166,6 +170,18 @@ func New(opts Options) (*Agent, error) {
 	// everything while the audit log claimed a human said "approved".
 	a.appr = a.console
 	return a, nil
+}
+
+// configDirOrEmpty is where the adb channel keeps its key. An error here is
+// not fatal to the agent: it only means the adb channel cannot store a key and
+// will report itself unavailable, which is the right outcome for a device whose
+// config dir is unreadable anyway.
+func configDirOrEmpty() string {
+	dir, err := transport.ConfigDir()
+	if err != nil {
+		return ""
+	}
+	return dir
 }
 
 func newInstanceID() (string, error) {
@@ -203,7 +219,9 @@ func (a *Agent) gateDataCapability(cap dataCapability, peerFP string) (bool, str
 // approver and optionally remember a rule. Returns whether the op may proceed
 // and a short decision string for the audit log.
 func (a *Agent) gate(req policy.Request) (bool, string) {
-	if a.engine.Mode() == policy.ModeBypass {
+	// Bypasses, not Mode()==bypass: elevated commands are excluded from the
+	// blanket allow on purpose (policy.KindExecElevated).
+	if a.engine.Bypasses(req.Kind) {
 		return true, "bypass"
 	}
 	if a.engine.Allowed(req) {
@@ -572,34 +590,82 @@ func requiredCapability(kind string) sessionauth.Capabilities {
 }
 
 func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) {
-	ok, decision := a.gate(policy.Request{Kind: policy.KindExec, Cmd: m.Command, Cwd: m.Cwd, Peer: fp})
+	kind := policy.KindExec
+	if m.Elevate {
+		kind = policy.KindExecElevated
+	}
+	// An unparseable --via is rejected before the approval prompt, not after:
+	// nobody should be asked to approve a command that cannot run anyway.
+	var via elevate.Kind
+	if m.Elevate && m.Via != "" {
+		parsed, err := elevate.ParseKind(m.Via)
+		if err != nil {
+			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
+			return
+		}
+		via = parsed
+	}
+
+	ok, decision := a.gate(policy.Request{Kind: kind, Cmd: m.Command, Cwd: m.Cwd, Peer: fp, Via: string(via)})
 	if !ok {
-		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision})
-		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "command denied by device policy: " + m.Command})
+		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
+		reason := "command denied by device policy: " + m.Command
+		if m.Elevate {
+			reason = "elevated command denied by device policy: " + m.Command +
+				" (elevated commands need their own rule; bypass mode does not cover them)"
+		}
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: reason})
 		return
 	}
+
 	out := server.FrameWriter(conn, protocol.FrameStdout)
 	var code int
 	var err error
-	if handled, builtinCode, builtinErr := server.RunBuiltin(m.Command, out); handled {
-		code, err = builtinCode, builtinErr
-	} else if m.OneShot {
-		code, err = server.RunOneShot(a.opts.Shell, m.Command, m.Cwd, out)
-	} else {
-		sess, serr := a.session(fp)
-		if serr != nil {
-			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: serr.Error()})
+	var ranVia elevate.Kind
+	switch {
+	case m.Elevate:
+		// Structured verbs first: they are elevated commands with a nicer
+		// spelling, so they go through the same channel and the same gate that
+		// already ran above.
+		handled, vVia, vCode, vErr := androidverb.Dispatch(context.Background(), m.Command, via, a.elevator, out)
+		if handled {
+			ranVia, code, err = vVia, vCode, vErr
+		} else {
+			ranVia, code, err = a.elevator.Run(context.Background(), via, m.Command, m.Cwd, out)
+		}
+		if err != nil {
+			// A channel that could not be selected has not run anything, so
+			// this is a refusal to act rather than a failed command. Say which
+			// it is: the caller must not read it as "ran, and failed".
+			a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
+			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 			return
 		}
-		code, err = sess.ExecInDir(m.Command, m.Cwd, out)
+	default:
+		// adb-pair is unelevated on purpose: it is how the elevation channel
+		// gets set up in the first place (see runADBPair).
+		if handled, pairCode, pairErr := a.runADBPair(m.Command, out); handled {
+			code, err = pairCode, pairErr
+		} else if handled, builtinCode, builtinErr := server.RunBuiltin(m.Command, out); handled {
+			code, err = builtinCode, builtinErr
+		} else if m.OneShot {
+			code, err = server.RunOneShot(a.opts.Shell, m.Command, m.Cwd, out)
+		} else {
+			sess, serr := a.session(fp)
+			if serr != nil {
+				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: serr.Error()})
+				return
+			}
+			code, err = sess.ExecInDir(m.Command, m.Cwd, out)
+		}
 	}
 	if err != nil {
-		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision})
+		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(ranVia)})
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return
 	}
-	a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code})
-	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExit, Code: code})
+	a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code, Via: string(ranVia)})
+	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExit, Code: code, ElevatedVia: string(ranVia)})
 }
 
 // doExecAsync starts a command as a background job and returns its id at once,

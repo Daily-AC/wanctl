@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
+import java.util.Iterator;
 
 /** Collects Android framework state for the non-JVM wanctl child process. */
 final class DeviceState {
@@ -27,6 +28,17 @@ final class DeviceState {
 
     private final Context context;
     private boolean registered;
+
+    /**
+     * The state file is one JSON document with two independent writers, so each
+     * source keeps its last value here and the whole document is rewritten
+     * whenever either changes. Writing only the part that changed would drop
+     * the other one — they are minutes apart and neither can reconstruct it.
+     */
+    private JSONObject battery;
+    private JSONObject adb;
+
+    private AdbPortWatcher adbPorts;
 
     private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
         @Override
@@ -41,6 +53,7 @@ final class DeviceState {
 
     /** Registers for changes and writes the current sticky state before returning. */
     void start() {
+        refreshAdbPortWatch();
         if (registered) {
             return;
         }
@@ -59,11 +72,55 @@ final class DeviceState {
     }
 
     void stop() {
+        if (adbPorts != null) {
+            adbPorts.stop();
+            adbPorts = null;
+        }
         if (!registered) {
             return;
         }
         context.unregisterReceiver(batteryReceiver);
         registered = false;
+    }
+
+    /**
+     * Starts or stops the wireless-debugging port watch to match the app's
+     * 提权通道 switch. Called on every service start, because flipping that
+     * switch restarts the agent child rather than the service — see
+     * MainActivity — so onCreate() alone would miss the change.
+     *
+     * <p>Nothing is watched while the switch is off. Discovery is cheap but it
+     * is not free, and a device whose owner has not turned elevation on should
+     * not be listening for the port that would enable it.
+     */
+    void refreshAdbPortWatch() {
+        boolean want = new Prefs(context).elevation();
+        if (want && adbPorts == null) {
+            adbPorts = new AdbPortWatcher(context, this::writeADBPort);
+            adbPorts.start();
+        } else if (!want && adbPorts != null) {
+            adbPorts.stop();
+            adbPorts = null;
+            writeADBPort(0);
+        }
+    }
+
+    /** Records the port mDNS found, or clears it when the service goes away. */
+    private void writeADBPort(int port) {
+        try {
+            JSONObject next = null;
+            if (port > 0) {
+                next = new JSONObject();
+                next.put("port", port);
+                next.put("updated_at", Instant.now().toString());
+            }
+            synchronized (this) {
+                adb = next;
+            }
+            publish();
+        } catch (JSONException | IOException e) {
+            Log.w(TAG, "could not persist the adb port", e);
+        }
     }
 
     private void writeBattery(Intent intent) {
@@ -86,10 +143,39 @@ final class DeviceState {
             battery.put("health", healthName(
                     intent.getIntExtra(BatteryManager.EXTRA_HEALTH, BatteryManager.BATTERY_HEALTH_UNKNOWN)));
             battery.put("updated_at", Instant.now().toString());
-            atomicWrite(Wanctl.deviceStateFile(context), battery.toString() + "\n");
+            synchronized (this) {
+                this.battery = battery;
+            }
+            publish();
         } catch (JSONException | IOException e) {
             Log.w(TAG, "could not persist device state", e);
         }
+    }
+
+    /**
+     * Writes both sources as one document: the battery fields at the top level,
+     * where v0.1.12's reader already looks for them, and the adb port beside
+     * them under its own key. Each reader ignores what it does not know, in
+     * both directions, so neither has to learn about the other.
+     */
+    private void publish() throws JSONException, IOException {
+        JSONObject doc = new JSONObject();
+        JSONObject battery;
+        JSONObject adb;
+        synchronized (this) {
+            battery = this.battery;
+            adb = this.adb;
+        }
+        if (battery != null) {
+            for (Iterator<String> keys = battery.keys(); keys.hasNext(); ) {
+                String key = keys.next();
+                doc.put(key, battery.get(key));
+            }
+        }
+        if (adb != null) {
+            doc.put("adb", adb);
+        }
+        atomicWrite(Wanctl.deviceStateFile(context), doc.toString() + "\n");
     }
 
     private static void atomicWrite(File target, String value) throws IOException {
