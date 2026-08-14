@@ -168,9 +168,10 @@ root is a wrong answer wearing a right answer's clothes.
 
 Only `su` keeps working with nobody touching the device. A phone that must stay
 controllable unattended after a power cut should be rooted, or should not depend
-on elevation. (`shizuku` and `adb` land in later versions; naming one today
-reports that this build does not have it, which is deliberately distinct from
-"the device does not have it".)
+on elevation. (`shizuku` is not built yet; naming it reports that this build
+does not have it, which is deliberately distinct from "the device does not have
+it". `adb` works, but until it discovers its own port over mDNS it needs
+`WANCTL_ADB_PORT` set by hand — see below.)
 
 #### Pairing, for a phone with no root and no cable
 
@@ -204,6 +205,12 @@ Pairing is persistent: the key lands in `/data/misc/adb/adb_keys` and survives
 reboots. Wireless debugging itself does not — Android turns it off on boot —
 so after a restart the switch has to be flipped again, but the code does not
 have to be re-entered.
+
+The **connect** port is not stable either, and it is not the pairing port: the
+number under IP 地址和端口 changes when wireless debugging is re-enabled and
+after a re-pair (measured on a PGBM10: 37819 → 41031). Anything that pins it by
+hand through `WANCTL_ADB_PORT` will eventually be pinning a closed port; the
+lasting answer is mDNS discovery (`_adb-tls-connect._tcp`).
 
 #### The adb channel needs a human once, and cannot be automated past that
 

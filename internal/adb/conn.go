@@ -98,11 +98,25 @@ func (c *Conn) handshake(key *Key, tlsConfig TLSConfigFunc) error {
 			if err := c.startTLS(tlsConfig); err != nil {
 				return err
 			}
-			// The whole handshake restarts inside the TLS session.
-			if err := c.send(message{Command: cmdCnxn, Arg0: protocolVersion, Arg1: maxPayload,
-				Data: []byte(hostBanner + "\x00")}); err != nil {
-				return err
-			}
+			// Nothing is sent here, and that silence is load-bearing. adbd
+			// calls handle_online() and send_connect() itself the instant the
+			// handshake succeeds (daemon/adb_wifi.cpp,
+			// adbd_wifi_secure_connect), so its CNXN is already on the way and
+			// the loop only has to keep reading.
+			//
+			// A second CNXN from this side reads as a brand-new connection:
+			// handle_new_connection() opens with handle_offline(), and for a
+			// use_tls transport it answers with another STLS request instead of
+			// coming back online. Everything still looks perfect — the banner
+			// parses, the features negotiate — and then every stream is dropped
+			// without a reply, because adb.cpp's A_OPEN case begins
+			// `if (!t->online || p->msg.arg0 == 0) break;`, a bare break with
+			// no CLSE and no log line.
+			//
+			// Measured on an OPPO PGBM10 (Android 14) on 2026-08-14: the extra
+			// CNXN put "host-32: offline" in logcat one millisecond after
+			// "adbd_wifi_secure_connect: connected host-32", and shell opens
+			// timed out from there on.
 		case cmdAuth:
 			if m.Arg0 != authToken {
 				return fmt.Errorf("adb: unexpected AUTH subtype %d", m.Arg0)
