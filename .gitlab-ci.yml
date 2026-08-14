@@ -9,7 +9,7 @@ stages:
   - deploy
 
 variables:
-  GOTOOLCHAIN: go1.25.12
+  GOTOOLCHAIN: go1.25.13
 
 # Two runners used to accept this project's untagged jobs: a shell runner on a
 # home machine, and the group's Docker-executor runner whose default image is
@@ -32,7 +32,7 @@ variables:
 # home. Giving another runner `run_untagged` is the fix if that matters; the
 # pin is what makes doing so safe.
 .go:
-  image: golang:1.25.12
+  image: golang:1.25.13
   variables:
     # `supply-chain` and `package:apk` have overridden this for their runner
     # since the day it was set up; `test` and `release` never did, and paid for
