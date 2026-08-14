@@ -300,6 +300,11 @@
   .mdbody a:hover{color:var(--berry-d,#ff5f86)}
   .mdbody code{background:var(--cream-2,#ffeede);border-radius:6px;padding:1px 6px;font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--caramel,#c98f5d)}
   .mdbody pre{background:#2c2a26;color:#f3ede2;border-radius:12px;padding:14px 16px;margin:14px 0;font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:13px;line-height:1.7;overflow-x:auto;cursor:pointer;position:relative;white-space:pre}
+  #dlbody pre{background:#2c2a26;color:#f3ede2;border-radius:12px;padding:14px 16px;margin:8px 0;font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.7;overflow-x:auto;cursor:pointer;position:relative;white-space:pre-wrap;word-break:break-all}
+  #dlbody pre:hover::after{content:'点击复制';position:absolute;top:8px;right:12px;font-size:11px;color:#b7ad9c;background:rgba(0,0,0,.35);padding:2px 6px;border-radius:6px}
+  #dlbody table a{color:#c4682a;font-weight:700;text-decoration:none;border-bottom:1.5px solid #ffd9a8;padding-bottom:1px}
+  #dlbody table a:hover{border-bottom-color:#c4682a}
+  #dlbody h2{font-family:var(--round)}
   .mdbody pre code{background:none;color:inherit;padding:0;font-size:inherit}
   .mdbody pre:hover::after{content:'点击复制';position:absolute;top:8px;right:12px;font-size:11px;color:#b7ad9c;background:rgba(0,0,0,.35);padding:2px 6px;border-radius:6px}
   .mdbody table{width:100%;border-collapse:separate;border-spacing:0;margin:14px 0;font-size:13.5px;background:#fff;border:1px solid var(--line,#f3e4d3);border-radius:12px;overflow:hidden}
@@ -432,6 +437,7 @@
     <button data-sec="acl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11l2 2 4-4"/></svg>共享授权</button>
     <button data-sec="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Relay 审计</button>
     <button data-sec="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M14 3v5h5M8 13h8M8 17h6" stroke-linecap="round"/></svg>使用文档</button>
+    <button data-sec="downloads"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12" stroke-linecap="round"/><path d="m7 11 5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20h16" stroke-linecap="round"/></svg>下载安装</button>
     <button data-sec="changelog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 9 9" stroke-linecap="round"/><path d="M12 7v5l3.5 2" stroke-linecap="round"/><path d="M21 3v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>更新日志</button>
   </nav>
 
@@ -593,6 +599,13 @@
     </section>
 
     <!-- changelog -->
+    <!-- downloads -->
+    <section class="view" data-view="downloads">
+      <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><path d="M12 3v12" stroke-linecap="round"/><path d="m7 11 5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20h16" stroke-linecap="round"/></svg>下载安装</h1>
+      <p class="sub">这里列的就是中继此刻正在服务的那一版，不是手写的清单——发版之后它自己会变～</p>
+      <div id="dlbody"><div class="empty">加载中…</div></div>
+    </section>
+
     <section class="view" data-view="changelog">
       <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><path d="M12 3a9 9 0 1 0 9 9" stroke-linecap="round"/><path d="M12 7v5l3.5 2" stroke-linecap="round"/><path d="M21 3v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>更新日志</h1>
       <p class="sub">每次发版做了什么、对你有什么影响。最新的那版默认展开，往下都是过去的～</p>
@@ -701,6 +714,7 @@ function applyView(s){
   else if(s==='acl')loadACL();
   else if(s==='audit')loadAudit();
   else if(s==='docs')loadDocs();
+  else if(s==='downloads')loadDownloads();
   else if(s==='changelog')loadChangelog();
 }
 
@@ -1064,6 +1078,61 @@ $('#toggle').onclick=async()=>{
 };
 
 /* ---- changelog ---- */
+/* Downloads come from the relay's live manifest rather than a list written
+   here: a hand-kept list drifts on exactly the release where being right
+   matters. The Android card is first and largest because it is the only
+   platform with no other way in — you cannot curl an installer on a phone. */
+let dlLoaded=false;
+function human(n){if(!n)return'';const m=n/1048576;return m>=1?m.toFixed(1)+' MB':Math.round(n/1024)+' KB'}
+function osLabel(a){
+  const os={darwin:'macOS',linux:'Linux',windows:'Windows',android:'Android'}[a.os]||a.os;
+  const arch={amd64:'Intel / x86_64',arm64:a.os==='darwin'?'Apple 芯片':'ARM64','arm64.apk':'手机 App'}[a.arch]||a.arch;
+  return os+' · '+arch;
+}
+async function loadDownloads(){
+  if(dlLoaded)return;
+  try{
+    const d=await jget('/api/downloads');
+    const arts=d.artifacts||[];
+    const apk=arts.find(a=>a.name.endsWith('.apk'));
+    const rest=arts.filter(a=>a!==apk);
+    const sh='curl -fsSL '+d.install_sh+' | sh';
+    const ps='irm '+d.install_ps1+' | iex';
+    $('#dlbody').innerHTML=`
+      <div class="tablecard" style="margin-top:18px;padding:18px 20px">
+        <div style="font-size:13px;color:var(--ink-2)">当前发布 <b>${esc(d.version)}</b></div>
+      </div>
+      ${apk?`
+      <div class="tablecard" style="margin-top:14px;padding:20px">
+        <h2 style="margin:0 0 6px;font-size:17px">安卓手机 / 平板</h2>
+        <p class="sub" style="margin:0 0 14px">装这个 App 就行，不需要终端、不需要 Termux。安装后打开它，点登录，再打开「启用 wanctl」。</p>
+        <a class="btn primary" href="${esc(apk.url)}" download style="text-decoration:none;display:inline-block">下载 APK（${human(apk.size)}）</a>
+        <p class="sub" style="margin:12px 0 0">手机上打不开这个页面的话，直接在手机浏览器里访问下面这行，或者把它发到手机上：</p>
+        <pre data-copy style="margin-top:8px;cursor:pointer">${esc(apk.url)}</pre>
+      </div>`:''}
+      <div class="tablecard" style="margin-top:14px;padding:20px">
+        <h2 style="margin:0 0 6px;font-size:17px">电脑：一行装好</h2>
+        <p class="sub" style="margin:0 0 12px">安装脚本自带发布公钥，装之前会核对签名、大小和 SHA-256，核不上就不装。点一下命令可以复制～</p>
+        <div style="font-size:13px;color:var(--ink-2);margin-bottom:4px">macOS / Linux</div>
+        <pre data-copy style="cursor:pointer">${esc(sh)}</pre>
+        <div style="font-size:13px;color:var(--ink-2);margin:12px 0 4px">Windows（PowerShell）</div>
+        <pre data-copy style="cursor:pointer">${esc(ps)}</pre>
+      </div>
+      <div class="tablecard" style="margin-top:14px"><table>
+        <thead><tr><th>平台</th><th>文件</th><th>大小</th><th></th></tr></thead>
+        <tbody>${rest.map(a=>`<tr>
+          <td>${esc(osLabel(a))}</td>
+          <td style="font-family:ui-monospace,monospace;font-size:12.5px">${esc(a.name)}</td>
+          <td>${human(a.size)}</td>
+          <td><a href="${esc(a.url)}" download>下载</a></td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      <p class="sub" style="margin-top:14px">要给重要的机器装，更稳的是从 GitLab Releases 页拿——从中继下载的安装脚本没法为这个中继自己背书。</p>`;
+    $$('#dlbody pre[data-copy]').forEach(p=>p.onclick=()=>{if(navigator.clipboard)navigator.clipboard.writeText(p.textContent.trim());toast('ok','已复制到剪贴板')});
+    dlLoaded=true;
+  }catch(e){$('#dlbody').innerHTML='<div class="empty">读不到下载清单（'+esc(e.message)+'）</div>'}
+}
+
 /* Release notes are embedded in the running binary, so this page always
    describes the version actually deployed. Newest is expanded; the rest are
    collapsed history. */
@@ -1445,7 +1514,7 @@ function route(){
     return;
   }
   if(h.startsWith('#docs'))return applyView('docs');
-  const m={'#tokens':'tokens','#acl':'acl','#audit':'audit','#devices':'devices','#changelog':'changelog'};
+  const m={'#tokens':'tokens','#acl':'acl','#audit':'audit','#devices':'devices','#downloads':'downloads','#changelog':'changelog'};
   applyView(m[h]||'devices');
 }
 window.addEventListener('hashchange',route);
