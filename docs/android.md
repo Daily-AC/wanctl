@@ -209,9 +209,21 @@ have to be re-entered.
 
 The **connect** port is not stable either, and it is not the pairing port: the
 number under IP 地址和端口 changes when wireless debugging is re-enabled and
-after a re-pair (measured on a PGBM10: 37819 → 41031). Anything that pins it by
-hand through `WANCTL_ADB_PORT` will eventually be pinning a closed port; the
-lasting answer is mDNS discovery (`_adb-tls-connect._tcp`).
+after a re-pair (measured on a PGBM10: 37819 → 41031). The app does not ask you
+for it — it watches mDNS for `_adb-tls-connect._tcp` and hands what it finds to
+the agent through the same state file the battery verb uses. Only its own
+device's advertisement counts: every phone on the same Wi-Fi with wireless
+debugging on publishes that service, so the resolved address is checked against
+this device's own addresses before the port is believed.
+
+That discovery is Java (`NsdManager`) because mDNS on Android is a framework
+service, and the app holds a `MulticastLock` while it watches — Wi-Fi filters
+multicast in hardware when nothing does. Watching starts and stops with the
+**提权通道** switch: a device whose owner has not turned elevation on is not
+listening for the port that would enable it.
+
+`WANCTL_ADB_PORT` still overrides everything, which is what the Termux and
+adb-shell routes need: they have no framework to ask.
 
 #### The adb channel needs a human once, and cannot be automated past that
 
