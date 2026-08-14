@@ -64,8 +64,8 @@ func ParseKind(s string) (Kind, error) {
 
 // Status is what a probe learned about one channel.
 type Status struct {
-	Kind      Kind   `json:"kind"`
-	Available bool   `json:"available"`
+	Kind      Kind `json:"kind"`
+	Available bool `json:"available"`
 	// Detail identifies what the channel actually got when available — the
 	// output of `id`, so the audit trail records the uid that ran rather than
 	// the uid we expected to run.
