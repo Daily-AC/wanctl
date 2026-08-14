@@ -13,7 +13,7 @@ func TestContainerRuntimeIsPinnedAndNonRoot(t *testing.T) {
 	}
 	dockerfile := string(b)
 	for _, want := range []string{
-		"golang:1.25.13-alpine3.24@sha256:844b27705f54e73773e0f9bc3c780633b9d7f4b4831bf35cdad02a81a4c80bd0",
+		"golang:1.26.6-alpine3.24@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df",
 		"alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b",
 		"adduser -S -D -H -u 10001",
 		"mkdir -p /data /dist",
