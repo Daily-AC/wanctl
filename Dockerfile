@@ -2,9 +2,19 @@
 FROM golang:1.26.6-alpine3.24@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS build
 WORKDIR /src
 COPY go.mod go.sum ./
-# Overridable so builders behind a slow or blocked route to proxy.golang.org can
-# point at a reachable mirror; unset, this is exactly Go's own default.
-ARG GOPROXY=https://proxy.golang.org,direct
+# A fallback chain rather than Go's own default, because the default is what
+# fails here. The production build runs on the thunderbox server, where
+# proxy.golang.org is not reliably reachable: on 2026-08-14 the portal deploy
+# died at `go mod download` with a TLS handshake timeout to it, while the relay
+# deploy in the same pipeline happened to get through — the difference was luck,
+# not configuration, and neither app sets a GOPROXY of its own.
+#
+# goproxy.cn is a public mirror that answers from inside and outside China, and
+# it is already what every job in .gitlab-ci.yml uses for the same reason. It
+# cannot substitute module content undetected: go.sum still pins every hash, so
+# a mirror that lied would fail the build rather than poison it. Upstream stays
+# in the chain behind it, and `direct` behind that. Still overridable.
+ARG GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
 RUN go mod download
 COPY . .
