@@ -8,7 +8,7 @@ handful of things an app sandbox permits.
 ## The wall this is about
 
 The APK agent runs in the strictest domain Android has for third-party code.
-Measured on the target device (`zyldephone`, OPPO PGBM10, Android 14 / SDK 34)
+Measured on the target device (`my-phone`, OPPO PGBM10, Android 14 / SDK 34)
 on 2026-08-14:
 
 ```
@@ -150,14 +150,14 @@ and it still connects after the app is restarted without re-pairing.
 
 ## Verification devices
 
-- `zyldephone` — OPPO PGBM10, Android 14, **not rooted**. The target for
+- `my-phone` — OPPO PGBM10, Android 14, **not rooted**. The target for
   phase 4. Currently online, agent healthy.
 - A rooted device is needed for phase 1's acceptance (`su`). The Xiaomi Mi 10
   Ultra rooted on 2026-08-06 is the candidate; it does not yet run wanctl.
 
 ## Status as of 2026-08-14 11:10
 
-Branch `feat/android-elevation`, MR !54. `go test ./...` green; APK builds.
+Branch `feat/android-elevation`, PR #54. `go test ./...` green; APK builds.
 
 **Done and verified on real hardware**
 
@@ -222,7 +222,7 @@ writes the port into the same state file the battery verb uses.
 routes need.
 
 **Phase 4 closed in the APK, in `untrusted_app`.** A test build (package
-`com.***REMOVED***.wanctl.test`, so the production agent was never touched) on the same
+`dev.wanctl.agent.test`, so the production agent was never touched) on the same
 Reno8, with 提权通道 on and no `WANCTL_ADB_PORT` anywhere:
 
 ```

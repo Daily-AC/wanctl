@@ -16,7 +16,7 @@ listening. Measured on a vivo PA2353 (Android 13) and an Android 16 emulator on
 2026-08-05:
 
 ```
-lookup wanctl-relay.***REMOVED***.***REMOVED***.com on [::1]:53: read udp [::1]:38720->[::1]:53:
+lookup relay.example.com on [::1]:53: read udp [::1]:38720->[::1]:53:
 read: connection refused
 ```
 

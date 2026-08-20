@@ -49,7 +49,7 @@ An APK's `lib/<abi>/` directory is labelled `apk_data_file`, which
 on 2026-08-06, on an APK built and signed by this repo:
 
 ```
-/data/app/~~…/com.***REMOVED***.wanctl-…/lib/arm64/libwanctl.so
+/data/app/~~…/dev.wanctl.agent-…/lib/arm64/libwanctl.so
   -rwxr-xr-x system system u:object_r:apk_data_file:s0
 ```
 
@@ -81,7 +81,7 @@ because it cannot survive a reboot.
 this repository rather than a general opinion about build systems. This
 project's CI already runs jobs on a runner that cannot reach
 `proxy.golang.org` — hence the `GOPROXY` and `TRIVY_DB_REPOSITORY` overrides in
-`.gitlab-ci.yml`. A build system whose first act is to resolve a dependency
+the CI config. A build system whose first act is to resolve a dependency
 graph from Maven Central would put the Android artifact behind the least
 reliable link in the pipeline, and the app it would be resolving dependencies
 for is a few hundred lines of framework Java with no third-party code at all.
