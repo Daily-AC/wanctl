@@ -1,7 +1,7 @@
 在 PowerShell 里跑这一行：
 
 ```powershell
-irm https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.ps1 | iex
+irm https://relay.example.com/install.ps1 | iex
 ```
 
 不需要装 OpenSSL，也不需要设任何环境变量——安装器用 PowerShell 自带的加密接口验证发布签名，验过了才落盘。Windows 7 之后的每个版本都自带够用的 PowerShell。
@@ -22,9 +22,9 @@ wanctl service install
 
 ## 装到重要的机器上
 
-`irm | iex` 是把远端代码直接执行。脚本会验证它下载的二进制，但**验证脚本本身来自同一个地方**——真出了事，能换二进制的人通常也能换这个脚本。给一台你特别在意的机器装的时候，从 [GitLab release 页面](https://g.***REMOVED***.com/ai-native/wanctl/-/releases) 下载 `install.ps1` 再运行那个文件，那是独立于 relay 的信任起点。
+`irm | iex` 是把远端代码直接执行。脚本会验证它下载的二进制，但**验证脚本本身来自同一个地方**——真出了事，能换二进制的人通常也能换这个脚本。给一台你特别在意的机器装的时候，从 [GitHub release 页面](https://github.com/OWNER/wanctl/releases) 下载 `install.ps1` 再运行那个文件，那是独立于 relay 的信任起点。
 
-relay 直接分发这条路是给没有 GitLab 账号的同事准备的。
+relay 直接分发这条路是给图省事、不想手动下载再运行的人准备的。
 
 ## Windows 上的两个已知坑
 

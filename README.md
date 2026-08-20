@@ -2,12 +2,12 @@
 
 Control a device **across the public internet** from your terminal (or an AI
 agent's shell tool) over an **end-to-end encrypted, relayed** channel. The WAN
-counterpart of [`lanctl`](../lanctl): instead of LAN multicast discovery, both
-endpoints dial a relay deployed on thunderbox; the relay byte-pipes them and
+counterpart of `lanctl`: instead of LAN multicast discovery, both
+endpoints dial a relay deployed on a hosting PaaS; the relay byte-pipes them and
 **never sees plaintext** — the two ends run mutual TLS 1.3 over the pipe.
 
 ```
-controller (you)          relay (public, thunderbox)        device (agent)
+controller (you)          relay (public, hosted)             device (agent)
   wanctl exec/push ──http─►  byte-pipe + registry  ◄─http──  wanctl agent
        └──────── mutual-TLS E2E tunnel over the pipe ──────────┘
 ```
@@ -21,9 +21,9 @@ for production LAN relays whenever certificates are available.
 
 > **Status:** M1 (cross-internet transport, relay, exec/file) + M2 (policy &
 > approval) + M4 (Feishu-SSO portal + Postgres + sharing ACL) + M5 (JSONL logging)
-> + M6 (skill) done and verified over the public thunderbox relay. The
-> proxy-agnostic HTTP transport works through thunderbox's nginx (which strips WS
-> upgrades). The device console (approvals/rules/mode/activity) is driven from the
+> + M6 (skill) done and verified over the public relay. The
+> proxy-agnostic HTTP transport works through the hosting platform's nginx edge
+> (which strips WS upgrades). The device console (approvals/rules/mode/activity) is driven from the
 > team portal over the E2E tunnel — there is no device-local web UI. See
 > `docs/superpowers/plans/`.
 
@@ -80,20 +80,20 @@ is needed: verification uses the `openssl` already present on macOS and Linux
 
 ```bash
 # macOS / Linux
-curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh
+curl -fsSL https://relay.example.com/install.sh | sh
 ```
 
 ```powershell
 # Windows (PowerShell — no bash needed)
-irm https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.ps1 | iex
+irm https://relay.example.com/install.ps1 | iex
 ```
 
 For a machine that matters, prefer the independently authenticated
-[public GitLab Releases](https://g.***REMOVED***.com/ai-native/wanctl/-/releases) and
+[public GitHub Releases](https://github.com/OWNER/wanctl/releases) and
 run the downloaded file: an installer fetched from the relay cannot bootstrap
 trust in that same relay, since whoever can replace the binaries can usually
-replace the script that checks them. The relay-hosted path exists because
-colleagues without GitLab accounts have no other way in.
+replace the script that checks them. The relay-hosted one-liner exists because
+most people run the convenient path, not the hardened one.
 
 Both installers default to the relay they were built for; set `WANCTL_RELAY` to
 install from a different one.
@@ -104,24 +104,24 @@ then enroll and install the native service separately:
 
 ```bash
 wanctl portal-admins add --fingerprints SHA256:<verified-portal-fingerprint>
-wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token <token> \
+wanctl agent --relay https://relay.example.com --token <token> \
       --transport http --name "$(hostname)"
 wanctl service install
 ```
 
 ```powershell
 wanctl portal-admins add --fingerprints SHA256:<verified-portal-fingerprint>
-wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token <token> `
+wanctl agent --relay https://relay.example.com --token <token> `
              --transport http --name $env:COMPUTERNAME
 wanctl service install
 ```
 
 > **For AI agents:** how to *drive* a device (run commands, transfer files, read
 > logs, and interpret approval/denial) is in
-> [`internal/portal/skill.md`](internal/portal/skill.md) — read it first.
-> The portal serves the canonical copy at https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills ,
+> [`internal/relay/skill.md`](internal/relay/skill.md) — read it first.
+> The portal serves the canonical copy at https://relay.example.com/skills ,
 > so users install it by simply saying to their AI:
-> **「安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills」**
+> **「安装 https://relay.example.com/skills」**
 > (the agent WebFetches that URL and writes it to `~/.claude/skills/wanctl/SKILL.md`).
 
 ## Self-update
@@ -149,14 +149,14 @@ differences (DNS, config location, keeping the agent alive) covered in
 ## Roles (one binary)
 
 ```bash
-# Relay (on thunderbox; see docs/deploy.md):
+# Relay (on the hosting PaaS; see docs/deploy.md):
 WANCTL_TOKENS="tok:teamA" wanctl relay --addr :8080
 
 # Device to be controlled:
-wanctl agent --relay https://wanctl-relay.***REMOVED***.***REMOVED***.com --token tok --name home-pc --transport http
+wanctl agent --relay https://relay.example.com --token tok --name home-pc --transport http
 
 # Controller:
-export WANCTL_RELAY=https://wanctl-relay.***REMOVED***.***REMOVED***.com WANCTL_TRANSPORT=http WANCTL_TOKEN=tok
+export WANCTL_RELAY=https://relay.example.com WANCTL_TRANSPORT=http WANCTL_TOKEN=tok
 wanctl peers                         # list reachable devices
 wanctl exec --target home-pc "..."   # run a command (streams output, real exit code)
 wanctl exec --target home-pc --script ./job.ps1   # run a local script — no shell quoting/encoding traps
@@ -239,19 +239,19 @@ so there is no quoting layer at all.
 
 ## Driving it from an agent (the skill)
 
-`internal/portal/skill.md` is a Claude Code skill that teaches an agent to drive
+`internal/relay/skill.md` is a Claude Code skill that teaches an agent to drive
 the controller CLI: setup env, run/transfer/log commands, and correctly read
 "denied by policy" / "blocked on approval" / TOFU-pairing outcomes. The portal
-serves the canonical copy at <https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills>. Users
+serves the canonical copy at <https://relay.example.com/skills>. Users
 install it by saying to their AI:
 
-> 安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills
+> 安装 https://relay.example.com/skills
 
 The agent fetches that URL and writes it to `~/.claude/skills/wanctl/SKILL.md`.
 
 ## Documentation
 
-`https://wanctl.***REMOVED***.***REMOVED***.com` 的「使用文档」是一个由 Postgres 支撑的小博客
+`https://portal.example.com` 的「使用文档」是一个由 Postgres 支撑的小博客
 （不再硬编码在 SPA 里）。任何登录用户可在浏览器里编辑；CLI 通过命名空间 token
 读写：
 

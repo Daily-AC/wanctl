@@ -34,17 +34,16 @@ the Ed25519 key compiled into it and never looks at the RSA signature.
 ## Trust bootstrap
 
 The strongest bootstrap is to obtain `install.sh` or `install.ps1` from the
-independently authenticated GitLab release, or to build it from a reviewed Git
+independently authenticated GitHub release, or to build it from a reviewed Git
 commit. Keep the installer with the release notes so its embedded public key is
 auditable. If the relay is compromised, an attacker can replace both a script
 served from it and the public key embedded in that copy — signature verification
 cannot save a script the attacker also controls.
 
-The relay serves the installers anyway, because colleagues without GitLab
-accounts have no other way to install, and a one-line install they actually run
-beats a hardened one they skip. Treat that path as "verified against a
-compromised relay's own key" and prefer the GitLab release when the machine
-matters. Verification still fails closed either way: an attacker who can replace
+The relay serves the installers anyway, because a one-line install is what most
+people actually run, and a hardened path they skip protects no one. Treat that
+path as "verified against a compromised relay's own key" and prefer the GitHub
+release when the machine matters. Verification still fails closed either way: an attacker who can replace
 `/dist` binaries but not the served script gets nothing.
 
 Both installers bake in the relay they were built for, so `WANCTL_RELAY` is only
@@ -67,9 +66,10 @@ openssl rand 32 | base64
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -outform DER | base64 | tr -d '\n'
 ```
 
-Store both as masked, protected, environment-scoped (`release`) GitLab CI
-variables. Base64 keeps them single-line, which is what masking requires; the
-RSA value is ~2.4 KB, within GitLab's limit. Losing the RSA key is not fatal to
+Store both as environment-scoped (`release`) GitHub Actions secrets, restricted
+to the protected release tags. Base64 keeps them single-line, which keeps
+secret-masking reliable; the RSA value is ~2.4 KB, comfortably within GitHub's
+secret size limit. Losing the RSA key is not fatal to
 existing installs — it only signs for new ones — but it does force a public-key
 rotation in the next release. Do not store it in the repository, a Docker
 build argument, an image layer, the relay filesystem, or a general-purpose app
@@ -100,7 +100,7 @@ export WANCTL_RELEASE_SIGNING_KEY='<base64 32-byte seed>'
 go run ./cmd/release-manifest verify release release/release-public.pem
 ```
 
-To publish an immutable GitLab Release after its protected tag pipeline passes,
+To publish an immutable GitHub Release after its protected tag pipeline passes,
 download the `release/` job artifact, check out that exact tag, then run:
 
 ```sh
@@ -134,7 +134,7 @@ supplies both key and signature only proves internal consistency.
 If the old private key is compromised, skip overlap: remove its public key and
 publish a higher version signed by an already trusted recovery key. Devices that
 never received that recovery key require an installer obtained through the
-independent GitLab/source trust path. Record the revoked key fingerprint and
+independent GitHub/source trust path. Record the revoked key fingerprint and
 affected version range in the release notes.
 
 ## Failure behavior

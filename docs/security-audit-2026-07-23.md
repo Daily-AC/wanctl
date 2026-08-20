@@ -1,7 +1,7 @@
 # Security issue audit, 2026-07-23
 
-This audit covers every issue that was open in GitLab at the start of the
-review (`#3` through `#19`). Each security claim was checked against the code
+This audit covers every issue that was open in the issue tracker at the start
+of the review (`#3` through `#19`). Each security claim was checked against the code
 and, where practical, reproduced with an executable regression test before the
 fix was written.
 
@@ -49,12 +49,11 @@ larger device-bound refresh-session design from `#19` remain explicit follow-up
 work rather than hidden claims of completion.
 
 The repository fails closed when a release trust key or signed directory is
-missing. A production signing seed is configured as a masked, protected,
-release-environment-scoped GitLab variable, and release tags matching `v*` are
-protected. The protected `v0.1.0` tag exercised the complete signing path in
-[pipeline 8768](https://g.***REMOVED***.com/ai-native/wanctl/-/pipelines/8768). Its
-release job published the exact signed artifacts to the
-[public v0.1.0 GitLab Release](https://g.***REMOVED***.com/***REMOVED***/wanctl-releases/-/releases/v0.1.0),
+missing. A production signing seed is configured as an environment-scoped
+(`release`) GitHub Actions secret, restricted to the protected tags matching
+`v*`. The protected `v0.1.0` tag exercised the complete signing path in the CI
+run for that tag. Its release job published the exact signed artifacts to the
+[public v0.1.0 GitHub Release](https://github.com/OWNER/wanctl/releases/tag/v0.1.0),
 and an anonymous, separately downloaded copy was verified against
 `release-public.pem`.
 
@@ -63,15 +62,12 @@ against a temporary signed release served from WSL. It upgraded a historical
 binary without a `version` command, installed `v9.8.7` with the manifest-bound
 SHA-256, rejected a truncated artifact, and rejected a same-version reinstall.
 
-Post-merge pipeline
-[8760](https://g.***REMOVED***.com/ai-native/wanctl/-/pipelines/8760) ran on the
-project-locked, protected Home WSL runner. The test job passed Go tests, vet,
-and the Windows cross-build. The supply-chain job built the digest-pinned image,
-passed relay, portal, and MCP container smoke tests as UID 10001, found no
-reachable Go vulnerabilities, produced a 77,046-byte CycloneDX SBOM with 116
-components, and found no HIGH or CRITICAL vulnerabilities in either the Alpine
-packages or Go binary. The post-merge Linux process-tree timeout regression and
-scanner temporary-storage regression discovered while commissioning this
-runner were fixed in merge requests
-[!2](https://g.***REMOVED***.com/ai-native/wanctl/-/merge_requests/2) and
-[!3](https://g.***REMOVED***.com/ai-native/wanctl/-/merge_requests/3).
+The post-merge CI run on the project-locked, protected self-hosted WSL runner
+passed Go tests, vet, and the Windows cross-build. The supply-chain job built
+the digest-pinned image, passed relay, portal, and MCP container smoke tests as
+UID 10001, found no reachable Go vulnerabilities, produced a 77,046-byte
+CycloneDX SBOM with 116 components, and found no HIGH or CRITICAL
+vulnerabilities in either the Alpine packages or Go binary. The post-merge
+Linux process-tree timeout regression and scanner temporary-storage regression
+discovered while commissioning this runner were fixed in two follow-up pull
+requests.

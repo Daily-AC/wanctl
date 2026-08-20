@@ -4,7 +4,7 @@ Status: accepted (2026-08-06)
 
 ## Context
 
-On 2026-08-06 `***REMOVED***/DESKTOP-HN85TOG` was reinstalled. It reported **online**
+On 2026-08-06 `alice/DESKTOP-AB12CD3` was reinstalled. It reported **online**
 in the portal device list and stayed unreachable from the portal for hours. No
 action available in any UI could recover it. The cause was three mechanisms that
 are individually defensible and jointly a dead end:

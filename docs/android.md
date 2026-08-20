@@ -23,7 +23,7 @@ is arm64.
 
 ```sh
 # from the relay, on the device itself
-https://wanctl-relay.***REMOVED***.***REMOVED***.com/dl/wanctl-android-arm64.apk
+https://relay.example.com/dl/wanctl-android-arm64.apk
 ```
 
 Install it, open it, tap **登录**, and follow the Feishu enrollment the same way
@@ -103,7 +103,7 @@ The gates fire one at a time and each has a different fix, so the first three
 ### Where files go
 
 `wanctl push` and `pull` must target a directory the *app* can write, which
-means somewhere under `/data/user/0/com.***REMOVED***.wanctl/`. `/data/local/tmp` is
+means somewhere under `/data/user/0/dev.wanctl.agent/`. `/data/local/tmp` is
 writable by the adb shell user and **not** by an app — pushing there fails with
 `permission denied` even though the same path works for an adb-pushed binary.
 Exec sessions start in the app's own files directory, so a relative path lands
@@ -350,7 +350,7 @@ completes. But the broadcast is best-effort. Across four reboots of the same
 build on the PA2353, one was dropped outright —
 
 ```
-am_broadcast_discard_app: [0,…,BOOT_COMPLETED,187,ResolveInfo{com.***REMOVED***.wanctl/.BootReceiver}]
+am_broadcast_discard_app: [0,…,BOOT_COMPLETED,187,ResolveInfo{dev.wanctl.agent/.BootReceiver}]
 ```
 
 — while the same broadcast reached other apps in the same second. Android
@@ -376,7 +376,7 @@ files named `lib*.so`. So wanctl ships as `lib/arm64-v8a/libwanctl.so`, and on
 the installed device it is:
 
 ```
-/data/app/~~…/com.***REMOVED***.wanctl-…/lib/arm64/libwanctl.so
+/data/app/~~…/dev.wanctl.agent-…/lib/arm64/libwanctl.so
   -rwxr-xr-x system system u:object_r:apk_data_file:s0
 ```
 
@@ -408,7 +408,7 @@ unchanged and was verified on 2026-08-06.
 
 ```sh
 pkg install openssl-tool          # the installer verifies a signature with it
-curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh
+curl -fsSL https://relay.example.com/install.sh | sh
 wanctl                            # Feishu login, then run detached
 ```
 
@@ -585,7 +585,7 @@ the new build, from the app's own UI. Checked afterwards from the controller
 rather than taken on the app's word:
 
 - the installed `base.apk` hashes to the published artifact byte for byte
-  (`sha256sum $(pm path com.***REMOVED***.wanctl)` against `/dl`'s manifest entry)
+  (`sha256sum $(pm path dev.wanctl.agent)` against `/dl`'s manifest entry)
 - the binary the app execs reports `v0.1.11`, still under `id -Z` →
   `u:r:untrusted_app:s0`
 - **the device's identity fingerprint is unchanged.** That is the part worth

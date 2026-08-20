@@ -1,7 +1,7 @@
 在**要被控制的那台机器**上跑下面两行。第一行装好工具，第二行用飞书登录把它绑到你的空间：
 
 ```
-curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh
+curl -fsSL https://relay.example.com/install.sh | sh
 wanctl
 ```
 
