@@ -4,6 +4,11 @@ x-wanctl-image: &wanctl-image
   image: wanctl:local
   build:
     context: ..
+    args:
+      # Hosts that cannot reach proxy.golang.org set GOPROXY in selfhost/.env
+      # (e.g. https://goproxy.cn,direct); the image build fails on module
+      # download timeouts without it.
+      GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
 
 services:
   postgres:
@@ -62,6 +67,11 @@ services:
     depends_on:
       relay:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
 volumes:
   postgres-data:

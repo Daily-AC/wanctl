@@ -1,8 +1,11 @@
 # Self-hosting wanctl
 
 This guide runs Postgres, the relay, and the portal on one host. The host needs
-two DNS names, inbound HTTPS, Docker Engine, and Docker Compose. The examples
-use `relay.example.com` and `portal.example.com`; replace both everywhere.
+two DNS names, inbound HTTPS, Docker Engine, and Docker Compose, plus roughly
+1.5 GB of disk for images: the first start builds wanctl from source inside
+Docker, which pulls the Go and Postgres base images and compiles for a few
+minutes. The examples use `relay.example.com` and `portal.example.com`; replace
+both everywhere.
 
 ## 1. Create a GitHub OAuth App
 
@@ -16,27 +19,42 @@ use `relay.example.com` and `portal.example.com`; replace both everywhere.
 
 ## 2. Configure and start the services
 
-From the repository root:
+All compose commands in this guide run from the `selfhost/` directory, where
+Compose picks up `.env` and `docker-compose.yml` on its own:
 
 ```bash
-cp selfhost/.env.example selfhost/.env
+cd selfhost
+cp .env.example .env
+chmod 600 .env
 ```
 
-Edit `selfhost/.env`, replace the two public origins and GitHub credentials,
-and generate every local secret as described in its comment. Then start the
+Edit `.env`: set `RELAY_PUBLIC_ORIGIN` and `PORTAL_PUBLIC_ORIGIN` to your two
+public origins, set `WANCTL_GITHUB_CLIENT_ID` and `WANCTL_GITHUB_CLIENT_SECRET`
+from step 1, and generate each local secret as described in its comment. The
+file holds all of the deployment's secrets, hence the `chmod`. Then start the
 stack:
 
 ```bash
-docker compose --env-file selfhost/.env -f selfhost/docker-compose.yml up -d
+docker compose up -d
 ```
+
+The first start compiles wanctl inside Docker before anything comes up. If the
+host cannot reach `proxy.golang.org`, the build fails on module download
+timeouts — set `GOPROXY` in `.env` to a mirror you can reach (for example
+`GOPROXY=https://goproxy.cn,direct`) and run `docker compose build` again.
 
 The relay waits for Postgres, runs its embedded migrations, and then reports
 healthy. The portal starts only after that. Inspect startup with:
 
 ```bash
-docker compose --env-file selfhost/.env -f selfhost/docker-compose.yml ps
-docker compose --env-file selfhost/.env -f selfhost/docker-compose.yml logs relay portal
+docker compose ps
+docker compose logs relay portal
 ```
+
+Two log lines on a fresh deployment read like failures but are expected:
+`release distribution disabled: read manifest: ...` (no signed release
+directory is mounted) and `lark approval disabled: ...` (the optional Lark
+integration is not configured). Neither affects anything in this guide.
 
 Postgres and the portal identity live in named volumes. `docker compose down`
 keeps them; `docker compose down -v` permanently removes them.
@@ -82,21 +100,32 @@ wanctl uses finite HTTP long-poll requests by default, so WebSocket upgrade
 support and streaming-specific timeouts are not required. Disabling nginx
 response buffering is sufficient; no other special proxy behavior is needed.
 
+Before moving on, confirm each leg of the chain:
+
+```bash
+curl -s http://127.0.0.1:8080/healthz             # relay, direct: prints "ok"
+curl -s https://relay.example.com/healthz          # relay, through the proxy: "ok"
+curl -s https://portal.example.com/healthz         # portal, through the proxy: "ok"
+curl -s -o /dev/null -w '%{http_code}\n' https://portal.example.com/   # 303 (redirect to login)
+```
+
+The two `/healthz` endpoints are also the right targets for uptime monitoring;
+note that the applications answer GET, not HEAD.
+
 ## 4. Sign in and enroll devices
 
 Open `https://portal.example.com`. On a new database, the first GitHub account
 to complete login becomes the administrator. Later accounts remain on the
 pending page until invited.
 
-Create an invite code for a second user from the repository checkout:
+Create an invite code for a second user with the admin CLI already inside the
+relay container (nothing beyond Docker is needed on the host):
 
 ```bash
-WANCTL_RELAY=https://relay.example.com \
-WANCTL_ADMIN_SECRET='<value from selfhost/.env>' \
-go run . admin invite
+docker compose exec -e WANCTL_RELAY=http://127.0.0.1:8080 relay wanctl admin invite
 ```
 
-Alternatively, pre-approve a specific GitHub login with `admin invite --github
+Alternatively, pre-approve a specific GitHub login by appending `--github
 LOGIN`. Give the one-time code to the user; the pending page accepts it.
 
 After installing or building the `wanctl` binary on a device, enroll and start
@@ -128,7 +157,7 @@ Set the returned `wanctl_...` value as `WANCTL_PORTAL_TOKEN` in
 `selfhost/.env`, then apply it with:
 
 ```bash
-docker compose --env-file selfhost/.env -f selfhost/docker-compose.yml up -d portal
+docker compose up -d portal
 ```
 
 ## Troubleshooting

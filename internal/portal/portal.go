@@ -141,6 +141,10 @@ func (s *Server) SetLogBuffer(logs *serverlog.Buffer) { s.logs = logs }
 // Handler returns the portal mux.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// Unauthenticated liveness for container healthchecks and uptime probes;
+	// everything else on the portal redirects anonymous requests to login,
+	// which makes those probes read as failures.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/whoami", s.handleWhoami)
 	mux.HandleFunc("/enroll", s.handleEnroll)
