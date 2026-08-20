@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # `go vet` says nothing about formatting. This check deliberately prints
+      # offenders because `gofmt -l` alone exits successfully even when files
+      # need formatting; that once let an unformatted test stay in green builds.
+      - name: Check formatting
+        run: |
+          test -z "$(gofmt -l .)" || {
+            echo 'not gofmt-clean:'
+            gofmt -l .
+            exit 1
+          }
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # The `lark` tag guards the Feishu SDK so it stays out of signed release
+      # binaries. CI exercises the tagged path so it cannot rot unnoticed.
+      - name: Build with lark tag
+        run: go build -tags lark ./...
+
+      - name: Test with lark tag
+        run: go test -tags lark ./...
+
+      - name: Vet with lark tag
+        run: go vet -tags lark ./...
+
+      - name: Cross-compile for Windows
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...
+
+      # Android's build-tagged DNS implementation is invisible to every other
+      # target, so compile it here instead of discovering breakage at release.
+      - name: Cross-compile for Android
+        run: CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build ./...
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # GitHub-hosted Ubuntu runners provide the Docker daemon needed to build,
+      # smoke-test, inventory, and scan the production image.
+      - name: Run supply-chain scans
+        run: ./scripts/security-scan.sh all
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wanctl-sbom
+          path: artifacts/wanctl.sbom.cdx.json
+          retention-days: 30
+          if-no-files-found: warn

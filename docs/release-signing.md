@@ -66,8 +66,8 @@ openssl rand 32 | base64
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -outform DER | base64 | tr -d '\n'
 ```
 
-Store both as environment-scoped (`release`) GitHub Actions secrets, restricted
-to the protected release tags. Base64 keeps them single-line, which keeps
+Store both as secrets on the protected `release` GitHub environment, with its
+deployment tag policy restricted to release tags. Base64 keeps them single-line, which keeps
 secret-masking reliable; the RSA value is ~2.4 KB, comfortably within GitHub's
 secret size limit. Losing the RSA key is not fatal to
 existing installs — it only signs for new ones — but it does force a public-key
@@ -76,11 +76,11 @@ build argument, an image layer, the relay filesystem, or a general-purpose app
 environment. Restrict the `release` environment and protected version tags to
 release maintainers. The release job aborts if the key is absent.
 
-The job builds each platform binary with the matching public key, creates
-`manifest.json`, signs its exact bytes as `manifest.json.sig`, and publishes the
-release directory as a CI artifact. The directory also contains
+The workflow builds each platform binary with the matching public key, creates
+`manifest.json`, signs its exact bytes as `manifest.json.sig`, and uploads the
+release directory as assets on the immutable GitHub Release. The directory also contains
 `release-public.pem`, which lets a maintainer independently verify the downloaded
-CI artifact without access to the private signing key. Deploy that directory
+release assets without access to the private signing key. Deploy that directory
 read-only at
 `WANCTL_DIST_DIR`. The relay verifies the manifest and every file before serving
 anything. A bad or incomplete directory returns HTTP 503 for all `/dl/*` paths.
@@ -100,8 +100,13 @@ export WANCTL_RELEASE_SIGNING_KEY='<base64 32-byte seed>'
 go run ./cmd/release-manifest verify release release/release-public.pem
 ```
 
-To publish an immutable GitHub Release after its protected tag pipeline passes,
-download the `release/` job artifact, check out that exact tag, then run:
+Pushing a protected `vMAJOR.MINOR.PATCH` tag starts `.github/workflows/release.yml`.
+The workflow requires both signing secrets. If both optional Android secrets,
+`WANCTL_ANDROID_KEYSTORE_B64` and `WANCTL_ANDROID_KEYSTORE_PASS`, are present, it
+also builds and uploads the signed APK; otherwise it explicitly omits the APK.
+
+To publish the same release manually, build or download the complete `release/`
+directory, check out that exact tag, authenticate `gh`, then run:
 
 ```sh
 ./scripts/publish-release.sh v1.2.3 release docs/releases/v1.2.3.md

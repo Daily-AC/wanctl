@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    env:
+      WANCTL_RELEASE_SIGNING_KEY: ${{ secrets.WANCTL_RELEASE_SIGNING_KEY }}
+      WANCTL_RELEASE_RSA_KEY: ${{ secrets.WANCTL_RELEASE_RSA_KEY }}
+      WANCTL_ANDROID_KEYSTORE_B64: ${{ secrets.WANCTL_ANDROID_KEYSTORE_B64 }}
+      WANCTL_ANDROID_KEYSTORE_PASS: ${{ secrets.WANCTL_ANDROID_KEYSTORE_PASS }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Validate release secrets
+        run: |
+          test -n "$WANCTL_RELEASE_SIGNING_KEY" || {
+            echo 'WANCTL_RELEASE_SIGNING_KEY is required in the release environment' >&2
+            exit 1
+          }
+          test -n "$WANCTL_RELEASE_RSA_KEY" || {
+            echo 'WANCTL_RELEASE_RSA_KEY is required in the release environment' >&2
+            exit 1
+          }
+
+          if [ -n "$WANCTL_ANDROID_KEYSTORE_B64" ] && [ -n "$WANCTL_ANDROID_KEYSTORE_PASS" ]; then
+            echo 'Android release keystore found; the signed APK will be included.'
+          else
+            echo 'Android keystore or password is missing; skipping the APK.' >&2
+            echo 'WANCTL_SKIP_APK=1' >> "$GITHUB_ENV"
+          fi
+
+      # The manifest hashes the APK, so build-release.sh creates or stages it
+      # before signing the complete release directory.
+      - name: Build signed release
+        run: ./scripts/build-release.sh "$GITHUB_REF_NAME"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/*
