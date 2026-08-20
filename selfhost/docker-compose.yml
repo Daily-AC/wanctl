@@ -1,0 +1,68 @@
+name: wanctl
+
+x-wanctl-image: &wanctl-image
+  image: wanctl:local
+  build:
+    context: ..
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wanctl}
+      POSTGRES_USER: ${POSTGRES_USER:-wanctl}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in selfhost/.env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  relay:
+    <<: *wanctl-image
+    restart: unless-stopped
+    environment:
+      WANCTL_ROLE: relay
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wanctl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-wanctl}?sslmode=disable
+      WANCTL_ADMIN_SECRET: ${WANCTL_ADMIN_SECRET:?set WANCTL_ADMIN_SECRET in selfhost/.env}
+      WANCTL_PORTAL_NS: portal
+      WANCTL_PUBLIC_ORIGIN: ${RELAY_PUBLIC_ORIGIN:?set RELAY_PUBLIC_ORIGIN in selfhost/.env}
+    ports:
+      - "127.0.0.1:${RELAY_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  portal:
+    <<: *wanctl-image
+    restart: unless-stopped
+    environment:
+      WANCTL_ROLE: portal
+      RELAY_ADMIN_URL: http://relay:8080
+      WANCTL_ADMIN_SECRET: ${WANCTL_ADMIN_SECRET:?set WANCTL_ADMIN_SECRET in selfhost/.env}
+      WANCTL_GITHUB_CLIENT_ID: ${WANCTL_GITHUB_CLIENT_ID:?set WANCTL_GITHUB_CLIENT_ID in selfhost/.env}
+      WANCTL_GITHUB_CLIENT_SECRET: ${WANCTL_GITHUB_CLIENT_SECRET:?set WANCTL_GITHUB_CLIENT_SECRET in selfhost/.env}
+      WANCTL_SESSION_SECRET: ${WANCTL_SESSION_SECRET:?set WANCTL_SESSION_SECRET in selfhost/.env}
+      WANCTL_RELAY: ${RELAY_PUBLIC_ORIGIN:?set RELAY_PUBLIC_ORIGIN in selfhost/.env}
+      PORTAL_PUBLIC_ORIGIN: ${PORTAL_PUBLIC_ORIGIN:?set PORTAL_PUBLIC_ORIGIN in selfhost/.env}
+      WANCTL_TRANSPORT: http
+      WANCTL_PORTAL_TOKEN: ${WANCTL_PORTAL_TOKEN:-}
+    ports:
+      - "127.0.0.1:${PORTAL_PORT:-8081}:8080"
+    volumes:
+      - portal-data:/data
+    depends_on:
+      relay:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  portal-data:
