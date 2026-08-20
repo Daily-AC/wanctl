@@ -107,6 +107,7 @@ func (r *Relay) Handler() http.Handler {
 	mux.HandleFunc("/enroll/exchange", r.handleEnrollExchange)
 	r.registerDocs(mux)
 	r.registerAdmin(mux)
+	r.registerUser(mux)
 	r.registerDist(mux)
 	if r.mcpHandler != nil {
 		// AI hosts register https://<relay>/wanctl-mcp as their MCP server URL.

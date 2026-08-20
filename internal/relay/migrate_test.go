@@ -171,3 +171,16 @@ func TestRunMigrationsRollsBackFailedVersion(t *testing.T) {
 		t.Fatalf("committed migrations = %q, want first", got)
 	}
 }
+
+func TestEmbeddedMigrationsIncludeFriendsAsVersionThree(t *testing.T) {
+	state := &migrationState{applied: map[int]bool{1: true, 2: true}}
+	if err := runMigrations(newMigrationTestDB(t, state), migrationFiles); err != nil {
+		t.Fatal(err)
+	}
+	if !state.applied[3] {
+		t.Fatalf("applied versions = %#v, want version 3", state.applied)
+	}
+	if len(state.committedBodies) != 1 || !strings.Contains(state.committedBodies[0], "CREATE TABLE IF NOT EXISTS friends") {
+		t.Fatalf("version 3 body = %#v", state.committedBodies)
+	}
+}
