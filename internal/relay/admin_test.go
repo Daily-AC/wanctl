@@ -129,10 +129,24 @@ func newAdminTestPGStore(t *testing.T) *PGStore {
 var resolveUserDriverID uint64
 
 type resolveUserState struct {
-	byIdentity  map[string]string
+	byIdentity  map[string]identityRecord
 	byNamespace map[string]string
+	invites     map[int]*inviteRecord
 	inserts     int
 }
+
+type identityRecord struct {
+	namespace string
+	role      string
+}
+
+type inviteRecord struct {
+	codeHash string
+	login    string
+	usedBy   string
+}
+
+func identityKey(provider, subject string) string { return provider + "\x00" + subject }
 
 type resolveUserDriver struct{ state *resolveUserState }
 
@@ -145,8 +159,15 @@ type resolveUserConn struct{ state *resolveUserState }
 func (c resolveUserConn) Prepare(query string) (driver.Stmt, error) {
 	return resolveUserStmt{state: c.state, query: query}, nil
 }
-func (resolveUserConn) Close() error              { return nil }
-func (resolveUserConn) Begin() (driver.Tx, error) { return nil, errors.New("transactions unsupported") }
+func (resolveUserConn) Close() error { return nil }
+func (c resolveUserConn) Begin() (driver.Tx, error) {
+	return resolveUserTx{}, nil
+}
+
+type resolveUserTx struct{}
+
+func (resolveUserTx) Commit() error   { return nil }
+func (resolveUserTx) Rollback() error { return nil }
 
 type resolveUserStmt struct {
 	state *resolveUserState
@@ -155,35 +176,74 @@ type resolveUserStmt struct {
 
 func (resolveUserStmt) Close() error  { return nil }
 func (resolveUserStmt) NumInput() int { return -1 }
-func (resolveUserStmt) Exec([]driver.Value) (driver.Result, error) {
-	return nil, errors.New("exec unsupported")
+func (s resolveUserStmt) Exec(args []driver.Value) (driver.Result, error) {
+	if strings.Contains(s.query, "pg_advisory_xact_lock") {
+		return driver.RowsAffected(0), nil
+	}
+	if strings.Contains(s.query, "UPDATE invites SET used_at") {
+		id, namespace := int(args[0].(int64)), args[1].(string)
+		invite := s.state.invites[id]
+		if invite == nil || invite.usedBy != "" {
+			return driver.RowsAffected(0), nil
+		}
+		invite.usedBy = namespace
+		return driver.RowsAffected(1), nil
+	}
+	return nil, fmt.Errorf("unexpected exec: %s", s.query)
 }
 func (s resolveUserStmt) Query(args []driver.Value) (driver.Rows, error) {
-	if strings.Contains(s.query, "SELECT namespace FROM users WHERE feishu_open_id") {
-		identity := args[0].(string)
-		if ns, ok := s.state.byIdentity[identity]; ok {
-			return &adminRows{columns: []string{"namespace"}, values: [][]driver.Value{{ns}}}, nil
+	if strings.Contains(s.query, "SELECT namespace, role FROM users") {
+		key := identityKey(args[0].(string), args[1].(string))
+		if record, ok := s.state.byIdentity[key]; ok {
+			return &adminRows{
+				columns: []string{"namespace", "role"},
+				values:  [][]driver.Value{{record.namespace, record.role}},
+			}, nil
 		}
-		return &adminRows{columns: []string{"namespace"}}, nil
+		return &adminRows{columns: []string{"namespace", "role"}}, nil
 	}
 	if strings.Contains(s.query, "INSERT INTO users") {
 		s.state.inserts++
-		identity, ns := args[0].(string), args[1].(string)
-		if owner, exists := s.state.byNamespace[ns]; exists {
-			if strings.Contains(s.query, "DO UPDATE") {
-				delete(s.state.byIdentity, owner)
-				s.state.byIdentity[identity] = ns
-				s.state.byNamespace[ns] = identity
-				return &adminRows{columns: []string{"namespace"}, values: [][]driver.Value{{ns}}}, nil
-			}
-			if strings.Contains(s.query, "DO NOTHING") {
-				return &adminRows{columns: []string{"namespace"}}, nil
-			}
-			return nil, errors.New("unhandled namespace conflict")
+		provider, subject := args[0].(string), args[1].(string)
+		ns, role := args[2].(string), args[4].(string)
+		key := identityKey(provider, subject)
+		if _, exists := s.state.byNamespace[ns]; exists {
+			return &adminRows{columns: []string{"namespace", "role"}}, nil
 		}
-		s.state.byIdentity[identity] = ns
-		s.state.byNamespace[ns] = identity
-		return &adminRows{columns: []string{"namespace"}, values: [][]driver.Value{{ns}}}, nil
+		s.state.byIdentity[key] = identityRecord{namespace: ns, role: role}
+		s.state.byNamespace[ns] = key
+		return &adminRows{
+			columns: []string{"namespace", "role"},
+			values:  [][]driver.Value{{ns, role}},
+		}, nil
+	}
+	if strings.Contains(s.query, "SELECT EXISTS") {
+		hasAdmin := false
+		for _, record := range s.state.byIdentity {
+			if record.role == "admin" {
+				hasAdmin = true
+				break
+			}
+		}
+		return &adminRows{columns: []string{"exists"}, values: [][]driver.Value{{hasAdmin}}}, nil
+	}
+	if strings.Contains(s.query, "WHERE code_hash") {
+		hash := args[0].(string)
+		for id, invite := range s.state.invites {
+			if invite.codeHash == hash && invite.usedBy == "" {
+				return &adminRows{columns: []string{"id"}, values: [][]driver.Value{{int64(id)}}}, nil
+			}
+		}
+		return &adminRows{columns: []string{"id"}}, nil
+	}
+	if strings.Contains(s.query, "lower(github_login)") {
+		login := strings.ToLower(args[0].(string))
+		for id, invite := range s.state.invites {
+			if strings.ToLower(invite.login) == login && invite.usedBy == "" {
+				return &adminRows{columns: []string{"id"}, values: [][]driver.Value{{int64(id)}}}, nil
+			}
+		}
+		return &adminRows{columns: []string{"id"}}, nil
 	}
 	return nil, fmt.Errorf("unexpected query: %s", s.query)
 }
@@ -201,24 +261,26 @@ func newResolveUserTestPGStore(t *testing.T, state *resolveUserState) *PGStore {
 }
 
 func TestPGStoreResolveUserDoesNotReassignNamespace(t *testing.T) {
+	owner := identityKey("header", "alice@old.example")
 	state := &resolveUserState{
-		byIdentity:  map[string]string{"alice@old.example": "alice"},
-		byNamespace: map[string]string{"alice": "alice@old.example"},
+		byIdentity:  map[string]identityRecord{owner: {namespace: "alice", role: "user"}},
+		byNamespace: map[string]string{"alice": owner},
+		invites:     map[int]*inviteRecord{},
 	}
 	p := newResolveUserTestPGStore(t, state)
 
 	if ns, err := p.ResolveUser("alice@new.example"); !errors.Is(err, ErrNamespaceConflict) {
 		t.Fatalf("ResolveUser = %q, %v; want ErrNamespaceConflict", ns, err)
 	}
-	if got := state.byNamespace["alice"]; got != "alice@old.example" {
+	if got := state.byNamespace["alice"]; got != owner {
 		t.Fatalf("namespace owner changed to %q", got)
 	}
 }
 
 type namespaceConflictAdmin struct{ noopAdmin }
 
-func (*namespaceConflictAdmin) ResolveUser(string) (string, error) {
-	return "", fmt.Errorf("%w: %q", ErrNamespaceConflict, "alice")
+func (*namespaceConflictAdmin) ResolveIdentity(string, string, string, string, string, string) (string, string, error) {
+	return "", "", fmt.Errorf("%w: %q", ErrNamespaceConflict, "alice")
 }
 
 func TestAdminResolveUserReturnsConflict(t *testing.T) {
@@ -239,10 +301,154 @@ func TestAdminResolveUserReturnsConflict(t *testing.T) {
 	}
 }
 
+type resolveIdentityAdmin struct {
+	noopAdmin
+	provider, subject, reservedNS string
+	err                           error
+}
+
+func (a *resolveIdentityAdmin) ResolveIdentity(provider, subject, _, _, _, reservedNS string) (string, string, error) {
+	a.provider, a.subject, a.reservedNS = provider, subject, reservedNS
+	if a.err != nil {
+		return "", "", a.err
+	}
+	return "legacy", "user", nil
+}
+
+func TestAdminResolveUserLegacyRequestIncludesRole(t *testing.T) {
+	admin := &resolveIdentityAdmin{}
+	r := New(envTokens{})
+	r.SetAdminSecret("secret")
+	r.SetAdmin(admin)
+	r.SetPortalNS("portal")
+	req := httptest.NewRequest("POST", "/admin/resolve-user", strings.NewReader(`{"identity":"legacy@example.com"}`))
+	req.Header.Set("X-Admin-Secret", "secret")
+	rr := httptest.NewRecorder()
+
+	r.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if admin.provider != "header" || admin.subject != "legacy@example.com" {
+		t.Fatalf("resolved provider/subject = %q/%q", admin.provider, admin.subject)
+	}
+	if admin.reservedNS != "portal" {
+		t.Fatalf("reserved namespace = %q, want portal", admin.reservedNS)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["namespace"] != "legacy" || body["role"] != "user" {
+		t.Fatalf("response = %#v", body)
+	}
+}
+
+func TestAdminResolveUserPendingInviteBodyIsExact(t *testing.T) {
+	r := New(envTokens{})
+	r.SetAdminSecret("secret")
+	r.SetAdmin(&resolveIdentityAdmin{err: ErrPendingInvite})
+	req := httptest.NewRequest("POST", "/admin/resolve-user", strings.NewReader(
+		`{"provider":"github","subject":"123","login":"octocat"}`,
+	))
+	req.Header.Set("X-Admin-Secret", "secret")
+	rr := httptest.NewRecorder()
+
+	r.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden || rr.Body.String() != "pending-invite" {
+		t.Fatalf("response = %d %q; want 403 pending-invite", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAdminResolveUserWithoutStoreReturnsServiceUnavailable(t *testing.T) {
+	r := New(envTokens{})
+	r.SetAdminSecret("secret")
+	req := httptest.NewRequest("POST", "/admin/resolve-user", strings.NewReader(`{"identity":"legacy@example.com"}`))
+	req.Header.Set("X-Admin-Secret", "secret")
+	rr := httptest.NewRecorder()
+
+	r.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rr.Code)
+	}
+}
+
+type invitesAdmin struct {
+	noopAdmin
+	invites   []Invite
+	revokedID int
+}
+
+func (a *invitesAdmin) CreateInvite(login string) (Invite, string, error) {
+	if login == "" {
+		return Invite{ID: 3, HasCode: true}, "winv_secret", nil
+	}
+	return Invite{ID: 4, GitHubLogin: login}, "", nil
+}
+
+func (a *invitesAdmin) ListInvites() ([]Invite, error) { return a.invites, nil }
+
+func (a *invitesAdmin) RevokeInvite(id int) (bool, error) {
+	a.revokedID = id
+	return id == 3, nil
+}
+
+func TestAdminInvitesContractAndNoHashLeak(t *testing.T) {
+	created := time.Date(2026, 8, 20, 1, 2, 3, 0, time.UTC)
+	admin := &invitesAdmin{invites: []Invite{{
+		ID: 3, CreatedAt: created, UsedByNamespace: "", HasCode: true,
+	}}}
+	r := New(envTokens{})
+	r.SetAdminSecret("secret")
+	r.SetAdmin(admin)
+	h := r.Handler()
+
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("X-Admin-Secret", "secret")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+
+	if rr := request("POST", "/admin/invites", `{}`); rr.Code != http.StatusOK || rr.Body.String() != "{\"code\":\"winv_secret\",\"id\":3}\n" {
+		t.Fatalf("code invite response = %d %q", rr.Code, rr.Body.String())
+	}
+	if rr := request("POST", "/admin/invites", `{"github_login":"monalisa"}`); rr.Code != http.StatusOK || rr.Body.String() != "{\"github_login\":\"monalisa\",\"id\":4}\n" {
+		t.Fatalf("login invite response = %d %q", rr.Code, rr.Body.String())
+	}
+	rr := request("GET", "/admin/invites", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list response = %d %q", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "hash") || strings.Contains(rr.Body.String(), "winv_secret") {
+		t.Fatalf("invite list leaked secret material: %s", rr.Body.String())
+	}
+	var listed []map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0]["has_code"] != true || listed[0]["used_at"] != nil {
+		t.Fatalf("invite list = %#v", listed)
+	}
+
+	if rr := request("POST", "/admin/invites/revoke", `{"id":3}`); rr.Code != http.StatusOK || admin.revokedID != 3 {
+		t.Fatalf("revoke response = %d, id = %d", rr.Code, admin.revokedID)
+	}
+	if rr := request("POST", "/admin/invites/revoke", `{"id":99}`); rr.Code != http.StatusNotFound {
+		t.Fatalf("missing revoke response = %d, want 404", rr.Code)
+	}
+}
+
 func TestPGStoreResolveUserIsStableForImmutableIdentity(t *testing.T) {
 	state := &resolveUserState{
-		byIdentity:  map[string]string{},
+		byIdentity:  map[string]identityRecord{},
 		byNamespace: map[string]string{},
+		invites:     map[int]*inviteRecord{},
 	}
 	p := newResolveUserTestPGStore(t, state)
 
@@ -259,6 +465,66 @@ func TestPGStoreResolveUserIsStableForImmutableIdentity(t *testing.T) {
 	}
 	if state.inserts != 1 {
 		t.Fatalf("insert count = %d, want 1", state.inserts)
+	}
+}
+
+func TestPGStoreGitHubAdmission(t *testing.T) {
+	state := &resolveUserState{
+		byIdentity:  map[string]identityRecord{},
+		byNamespace: map[string]string{},
+		invites: map[int]*inviteRecord{
+			1: {codeHash: HashToken("winv_once")},
+			2: {login: "PreRecorded"},
+		},
+	}
+	p := newResolveUserTestPGStore(t, state)
+
+	ns, role, err := p.ResolveIdentity("github", "100", "FirstUser", "First User", "", "portal")
+	if err != nil || ns != "firstuser" || role != "admin" {
+		t.Fatalf("first GitHub identity = %q, %q, %v; want firstuser, admin", ns, role, err)
+	}
+	if _, _, err := p.ResolveIdentity("github", "101", "uninvited", "", "", "portal"); !errors.Is(err, ErrPendingInvite) {
+		t.Fatalf("second GitHub identity error = %v, want ErrPendingInvite", err)
+	}
+
+	ns, role, err = p.ResolveIdentity("github", "102", "code-user", "", "winv_once", "portal")
+	if err != nil || ns != "code-user" || role != "user" {
+		t.Fatalf("code invite identity = %q, %q, %v", ns, role, err)
+	}
+	if got := state.invites[1].usedBy; got != "code-user" {
+		t.Fatalf("code invite used_by = %q", got)
+	}
+	if _, _, err := p.ResolveIdentity("github", "103", "reuse", "", "winv_once", "portal"); !errors.Is(err, ErrPendingInvite) {
+		t.Fatalf("reused code error = %v, want ErrPendingInvite", err)
+	}
+
+	ns, role, err = p.ResolveIdentity("github", "104", "prerecorded", "", "", "portal")
+	if err != nil || ns != "prerecorded" || role != "user" {
+		t.Fatalf("login invite identity = %q, %q, %v", ns, role, err)
+	}
+	if got := state.invites[2].usedBy; got != "prerecorded" {
+		t.Fatalf("login invite used_by = %q", got)
+	}
+}
+
+func TestPGStoreResolveIdentityRejectsReservedNamespace(t *testing.T) {
+	state := &resolveUserState{
+		byIdentity:  map[string]identityRecord{},
+		byNamespace: map[string]string{},
+		invites:     map[int]*inviteRecord{},
+	}
+	p := newResolveUserTestPGStore(t, state)
+	for _, tc := range []struct {
+		provider string
+		subject  string
+		login    string
+	}{
+		{provider: "header", subject: "portal@example.com"},
+		{provider: "github", subject: "200", login: "Portal"},
+	} {
+		if _, _, err := p.ResolveIdentity(tc.provider, tc.subject, tc.login, "", "", "portal"); !errors.Is(err, ErrNamespaceConflict) {
+			t.Fatalf("ResolveIdentity(%q) error = %v, want ErrNamespaceConflict", tc.provider, err)
+		}
 	}
 }
 
