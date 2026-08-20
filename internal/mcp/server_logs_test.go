@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"wanctl/internal/config"
 	"wanctl/internal/serverlog"
 )
 
@@ -87,5 +88,25 @@ func TestMCPServerLogsRequiresLogin(t *testing.T) {
 	}
 	if got := resultText(res); !strings.Contains(got, "LOGIN REQUIRED") {
 		t.Fatalf("result = %q", got)
+	}
+}
+
+func TestMCPToolReportsMissingRelay(t *testing.T) {
+	oldSessions := sessions
+	sessions = &sessionStore{stdio: &localFsSession{}}
+	t.Cleanup(func() { sessions = oldSessions })
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	t.Setenv("WANCTL_TOKEN", "controller-token")
+	t.Setenv("WANCTL_RELAY", "")
+	oldDefault := config.DefaultRelay
+	config.DefaultRelay = ""
+	t.Cleanup(func() { config.DefaultRelay = oldDefault })
+
+	res, err := mcpPeers(context.Background(), execReq(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.Contains(resultText(res), "set WANCTL_RELAY=https://your-relay") {
+		t.Fatalf("result = %+v", res)
 	}
 }

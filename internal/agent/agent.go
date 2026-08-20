@@ -421,10 +421,15 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	// console sessions BEFORE serving — the controller/portal blocks on this OK,
 	// and a console session must be gated by the same trust check as an exec one.
 	if !a.authorize(fp, hello.Name, hello.Label) {
+		pairingURL := a.pairingURL(fp, hello.Name, hello.Label)
+		reason := "device has not paired this controller — ask the user to approve"
+		if pairingURL == "" {
+			reason = "device owner must approve on the device console (or set WANCTL_PORTAL on the agent to get a clickable pairing link)"
+		}
 		a.refuse(conn, fp, hello.Name, "rejected:unpaired", protocol.Message{
 			Kind:       protocol.KindReject,
-			Reason:     "device has not paired this controller — ask the user to approve",
-			PairingURL: a.pairingURL(fp, hello.Name, hello.Label),
+			Reason:     reason,
+			PairingURL: pairingURL,
 		})
 		return
 	}
@@ -488,6 +493,10 @@ func (a *Agent) authorize(fp, name, label string) bool {
 // AI surfaces it verbatim in its reply ("ask the user to click this link"); the
 // SPA's #pair route reads device/fp/label and shows a confirmation card.
 func (a *Agent) pairingURL(fp, name, label string) string {
+	portal := config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)
+	if portal == "" {
+		return ""
+	}
 	q := url.Values{}
 	q.Set("device", a.opts.Name)
 	q.Set("fp", fp)
@@ -497,7 +506,7 @@ func (a *Agent) pairingURL(fp, name, label string) string {
 	if label != "" {
 		q.Set("label", label)
 	}
-	return config.DefaultPortal + "/#pair?" + q.Encode()
+	return strings.TrimRight(portal, "/") + "/#pair?" + q.Encode()
 }
 
 // trustedControllers lists currently trusted controllers for the console revoke UI.

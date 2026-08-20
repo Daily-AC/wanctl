@@ -73,10 +73,13 @@ RSA_PUB_PEM_FILE="$DIST/release-public-rsa.pem"
 (cd "$ROOT" && go run ./cmd/release-manifest rsa-public-key-pem) > "$RSA_PUB_PEM_FILE"
 RSA_PUB_XML=$(cd "$ROOT" && go run ./cmd/release-manifest rsa-public-key-xml)
 
-# Baking the relay in is what lets `curl … | sh` and `irm … | iex` work without
-# the caller exporting WANCTL_RELAY first. It narrows nothing: the script is
-# fetched from that same relay.
+# When configured, baking the relay into the installers lets `curl … | sh` and
+# `irm … | iex` work without the caller exporting WANCTL_RELAY first. It narrows
+# nothing: the script is fetched from that same relay.
 DEFAULT_RELAY=$(cd "$ROOT" && go run ./cmd/release-manifest default-relay)
+if [ -z "$DEFAULT_RELAY" ]; then
+  echo "WARNING: no default relay configured; install scripts will require WANCTL_RELAY to be set explicitly" >&2
+fi
 
 render_installer() {
   awk -v pem="$RSA_PUB_PEM_FILE" -v xml="$RSA_PUB_XML" -v relay="$DEFAULT_RELAY" '

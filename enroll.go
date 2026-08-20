@@ -19,7 +19,10 @@ import (
 // the user pastes back, and exchange it at the relay for a namespace-scoped
 // token. Returns the token; the caller persists it. Claude-code-style.
 func enroll(ctx context.Context) (string, error) {
-	portal := config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)
+	portal, err := config.Portal()
+	if err != nil {
+		return "", err
+	}
 	enrollURL := strings.TrimRight(portal, "/") + "/enroll"
 
 	fmt.Println("正在将本设备授权到 wanctl 空间…")
@@ -44,7 +47,11 @@ func enroll(ctx context.Context) (string, error) {
 // the portal fingerprint seeding in applyEnrollment is easy to forget and
 // invisible until the web console cannot reach the device.
 func exchange(ctx context.Context, code string) (string, error) {
-	relay := strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
+	relay, err := config.Relay()
+	if err != nil {
+		return "", err
+	}
+	relay = strings.TrimRight(relay, "/")
 	fmt.Println("正在验证…")
 	en, err := client.ExchangeCode(ctx, relay, code)
 	if err != nil {

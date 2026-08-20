@@ -18,7 +18,7 @@ import (
 // steady exec stream costs one upstream round-trip per token per few minutes
 // and a token revocation propagates within hitTTL.
 type UpstreamTokenStore struct {
-	url    string // upstream relay base URL, e.g. https://wanctl-relay.***REMOVED***.***REMOVED***.com
+	url    string // upstream relay base URL, e.g. https://relay.example
 	secret string
 	hc     *http.Client
 

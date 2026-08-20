@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -12,11 +13,49 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	wanrelease "wanctl/internal/release"
 )
+
+func TestSkillsUsesForwardedOrigin(t *testing.T) {
+	t.Setenv("WANCTL_PUBLIC_ORIGIN", "")
+	req := httptest.NewRequest(http.MethodGet, "http://relay.internal/skills", nil)
+	req.Host = "relay.example"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+
+	New(EnvTokenStore("")).handleSkills(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "@WANCTL_RELAY@") {
+		t.Fatal("response still contains relay placeholder")
+	}
+	if !strings.Contains(rec.Body.String(), "https://relay.example/skills") {
+		t.Fatalf("response does not use forwarded origin: %s", rec.Body.String())
+	}
+}
+
+func TestSkillsUsesDirectTLSOrigin(t *testing.T) {
+	t.Setenv("WANCTL_PUBLIC_ORIGIN", "")
+	req := httptest.NewRequest(http.MethodGet, "https://relay.direct/skills", nil)
+	req.Host = "relay.direct:8443"
+	req.TLS = &tls.ConnectionState{}
+	rec := httptest.NewRecorder()
+
+	New(EnvTokenStore("")).handleSkills(rec, req)
+
+	if strings.Contains(rec.Body.String(), "@WANCTL_RELAY@") {
+		t.Fatal("response still contains relay placeholder")
+	}
+	if !strings.Contains(rec.Body.String(), "https://relay.direct:8443/skills") {
+		t.Fatalf("response does not use direct TLS origin: %s", rec.Body.String())
+	}
+}
 
 func signedDist(t *testing.T) string {
 	t.Helper()

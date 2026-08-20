@@ -75,7 +75,7 @@ func TestChainTokenStore(t *testing.T) {
 // TestAdminTokenResolveEndpoint verifies the relay-side endpoint that satellite
 // relays call: secret-gated, resolves via the relay's own token store.
 func TestAdminTokenResolveEndpoint(t *testing.T) {
-	r := New(EnvTokenStore("tok-x:***REMOVED***"))
+	r := New(EnvTokenStore("tok-x:alice"))
 	r.SetAdminSecret("s3")
 	srv := httptest.NewServer(r.Handler())
 	defer srv.Close()
@@ -96,8 +96,8 @@ func TestAdminTokenResolveEndpoint(t *testing.T) {
 	var out struct{ Namespace string }
 	json.NewDecoder(resp.Body).Decode(&out)
 	resp.Body.Close()
-	if out.Namespace != "***REMOVED***" {
-		t.Fatalf("want ***REMOVED***, got %q", out.Namespace)
+	if out.Namespace != "alice" {
+		t.Fatalf("want alice, got %q", out.Namespace)
 	}
 	if resp := post("s3", "nope"); resp.StatusCode != 404 {
 		t.Fatalf("unknown token: want 404, got %d", resp.StatusCode)

@@ -39,11 +39,11 @@ func TestLiveSendAndResolveCard(t *testing.T) {
 		Kind:    "exec",
 		Cmd:     "cd /srv/app && ./deploy.sh --token=abcd1234efgh5678",
 		Cwd:     "/srv/app",
-		Peer:    "***REMOVED***@macbook (SHA256:kP9x)",
+		Peer:    "alice@macbook (SHA256:kP9x)",
 		Created: time.Now(),
 	}
 	card := ApprovalCard("macbox", pending, "live-probe-nonce",
-		"https://wanctl.***REMOVED***.***REMOVED***.com/#/devices/macbox", 3*time.Minute)
+		"https://portal.example/#/devices/macbox", 3*time.Minute)
 
 	messageID, chatID, err := c.SendCard(ctx, to, card)
 	if err != nil {

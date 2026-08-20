@@ -42,12 +42,6 @@ var assets embed.FS
 //go:embed changelog/*.md
 var changelogFS embed.FS
 
-// skillURL is the canonical public install URL for the wanctl SKILL. The portal
-// is SSO-gated, so AI clients (which have no session) cannot fetch directly
-// from this domain — the skill lives on the relay (public) and the portal /skills
-// path 302's to it for discoverability from the browser.
-const skillURL = "https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills"
-
 const (
 	csrfCookieName     = "wanctl_csrf"
 	csrfHeaderName     = "X-CSRF-Token"
@@ -77,6 +71,7 @@ type Server struct {
 	hc           *http.Client
 	publicOrigin string
 	debugWhoami  bool
+	skillURL     string
 	logs         *serverlog.Buffer
 
 	dialer *client.Client   // controller used to open console sessions
@@ -105,6 +100,7 @@ func New(cfg Config) *Server {
 		hc:           &http.Client{Timeout: 15 * time.Second},
 		publicOrigin: strings.TrimRight(cfg.PublicOrigin, "/"),
 		debugWhoami:  cfg.DebugWhoami,
+		skillURL:     relaySkillsURL(cfg.RelayDialURL),
 		conns:        map[string]*deviceConn{},
 		known:        cfg.Known,
 	}
@@ -462,7 +458,31 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 // SKILL.md). The portal can't host it directly because its thunderbox app is
 // SSO-gated and AI clients have no session.
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, skillURL, http.StatusFound)
+	if s.skillURL == "" {
+		http.Error(w, "relay is not configured; set WANCTL_RELAY so /skills can redirect to the public relay", http.StatusServiceUnavailable)
+		return
+	}
+	http.Redirect(w, r, s.skillURL, http.StatusFound)
+}
+
+func relaySkillsURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	switch u.Scheme {
+	case "ws":
+		u.Scheme = "http"
+	case "wss":
+		u.Scheme = "https"
+	case "http", "https":
+	default:
+		return ""
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/skills"
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 // handleWhoami is an explicitly enabled diagnostic for SSO-header discovery.

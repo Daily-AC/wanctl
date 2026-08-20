@@ -68,7 +68,11 @@ func cmdUpdate(ctx context.Context, args []string) error {
 		return splitUpdateViaSudo(ctx, self)
 	}
 
-	relay := strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
+	relay, err := config.Relay()
+	if err != nil {
+		return err
+	}
+	relay = strings.TrimRight(relay, "/")
 	fmt.Printf("正在验证 %s 的签名发布清单 …\n", relay)
 	tmp, version, err := downloadSignedUpdate(ctx, relay, dir, runtime.GOOS, runtime.GOARCH, buildVersion)
 	if err != nil {
@@ -148,7 +152,11 @@ func fetchAndroidAPK(ctx context.Context, dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("prepare %s: %w", dir, err)
 	}
-	relay := strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
+	relay, err := config.Relay()
+	if err != nil {
+		return err
+	}
+	relay = strings.TrimRight(relay, "/")
 	fmt.Fprintf(os.Stderr, "正在验证 %s 的签名发布清单 …\n", relay)
 	tmp, version, err := downloadSignedUpdate(ctx, relay, dir, "android", wanrelease.AndroidAPKArch, buildVersion)
 	if err != nil {

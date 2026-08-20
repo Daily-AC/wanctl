@@ -10,7 +10,7 @@ import (
 // that console state snapshots expose it.
 func TestLanSetRPC(t *testing.T) {
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
-	a, err := New(Options{RelayURL: "ws://wan.example", Token: "t", Name: "dev1", LanRelay: "ws://***REMOVED-IP***:8080"})
+	a, err := New(Options{RelayURL: "ws://wan.example", Token: "t", Name: "dev1", LanRelay: "ws://192.0.2.1:8080"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -18,7 +18,7 @@ func TestLanSetRPC(t *testing.T) {
 	if st.Lan == nil || !st.Lan.Enabled || st.Lan.Connected {
 		t.Fatalf("initial lan state wrong: %+v", st.Lan)
 	}
-	if st.Lan.Relay != "ws://***REMOVED-IP***:8080" {
+	if st.Lan.Relay != "ws://192.0.2.1:8080" {
 		t.Fatalf("lan relay not exposed: %+v", st.Lan)
 	}
 
@@ -31,7 +31,7 @@ func TestLanSetRPC(t *testing.T) {
 	}
 
 	// Persistence: a fresh agent in the same config dir starts with the switch off.
-	b, err := New(Options{RelayURL: "ws://wan.example", Token: "t", Name: "dev1", LanRelay: "ws://***REMOVED-IP***:8080"})
+	b, err := New(Options{RelayURL: "ws://wan.example", Token: "t", Name: "dev1", LanRelay: "ws://192.0.2.1:8080"})
 	if err != nil {
 		t.Fatal(err)
 	}

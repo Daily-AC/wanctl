@@ -51,21 +51,21 @@ func TestParseStatusArgs(t *testing.T) {
 }
 
 func TestInferExecTargetWithSingleOnlineDevice(t *testing.T) {
-	target, command := inferExecTarget("", []string{"zyldephone", "whoami"}, []string{"zyldephone", "alice/zyldephone"})
-	if target != "zyldephone" || strings.Join(command, " ") != "whoami" {
+	target, command := inferExecTarget("", []string{"my-phone", "whoami"}, []string{"my-phone", "alice/my-phone"})
+	if target != "my-phone" || strings.Join(command, " ") != "whoami" {
 		t.Fatalf("target = %q, command = %q", target, command)
 	}
 }
 
 func TestInferExecTargetQualifiedAndExplicitDisambiguation(t *testing.T) {
-	aliases := []string{"zyldephone", "alice/zyldephone"}
-	target, command := inferExecTarget("", []string{"alice/zyldephone", "id"}, aliases)
-	if target != "alice/zyldephone" || strings.Join(command, " ") != "id" {
+	aliases := []string{"my-phone", "alice/my-phone"}
+	target, command := inferExecTarget("", []string{"alice/my-phone", "id"}, aliases)
+	if target != "alice/my-phone" || strings.Join(command, " ") != "id" {
 		t.Fatalf("qualified: target = %q, command = %q", target, command)
 	}
 
-	target, command = inferExecTarget("other", []string{"zyldephone", "whoami"}, aliases)
-	if target != "other" || strings.Join(command, " ") != "zyldephone whoami" {
+	target, command = inferExecTarget("other", []string{"my-phone", "whoami"}, aliases)
+	if target != "other" || strings.Join(command, " ") != "my-phone whoami" {
 		t.Fatalf("explicit: target = %q, command = %q", target, command)
 	}
 }

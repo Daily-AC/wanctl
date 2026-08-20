@@ -92,7 +92,7 @@ func main() {
 		if len(os.Args) != 2 {
 			fatalf("usage: release-manifest default-relay")
 		}
-		fmt.Println(config.DefaultRelay)
+		fmt.Println(config.EnvOr("WANCTL_RELAY", config.DefaultRelay))
 	case "rsa-public-key-xml":
 		// With a public key file, this renders the XML the Windows installer must
 		// carry without needing the private key — that is how the publisher
