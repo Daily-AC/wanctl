@@ -40,7 +40,7 @@ import (
 	"wanctl/internal/transport"
 )
 
-const usage = `wanctl — control a device across the internet over an encrypted, relayed channel
+var usage = `wanctl — control a device across the internet over an encrypted, relayed channel
 
 USAGE
  DEVICE LIFECYCLE (run on the box you want to control)
@@ -113,7 +113,7 @@ USAGE
   wanctl relay  [--addr :8080]                run the relay (thunderbox); DATABASE_URL or WANCTL_TOKENS
   wanctl portal [--addr :8080]                run the team portal (thunderbox, internal SSO)
 
-Defaults: relay=` + defaultRelay + `  transport=` + defaultTransport + ` (override with WANCTL_RELAY/WANCTL_TRANSPORT)
+Defaults: relay=` + configuredDisplay(defaultRelay, "(not set)") + `  portal=` + configuredDisplay(defaultPortal, "(not set)") + `  transport=` + defaultTransport + ` (override with WANCTL_RELAY/WANCTL_PORTAL/WANCTL_TRANSPORT)
 ENV (controller): WANCTL_TOKEN=... (or run 'wanctl' to log in)  WANCTL_RELAY=...
                   WANCTL_PORTAL=... WANCTL_ADMIN_SECRET=... (server logs only)
 ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"  WANCTL_ADMIN_SECRET=...  WANCTL_PORTAL_NS=...
@@ -124,13 +124,21 @@ ENV (portal):     RELAY_ADMIN_URL=...  WANCTL_ADMIN_SECRET=...  PORTAL_USER_HEAD
 ENV (agent):      WANCTL_PORTAL_FPS=SHA256:...[,SHA256:...]  (WANCTL_PORTAL_FP is a legacy alias)
 `
 
-// Compile-time defaults live in internal/config so the controller package shares
-// them. Aliased here for terse use in flag definitions.
-const (
-	defaultRelay     = config.DefaultRelay
-	defaultTransport = config.DefaultTransport
-	defaultPortal    = config.DefaultPortal
+// Deployment defaults live in internal/config so they can be injected with
+// -ldflags while environment variables still take precedence at runtime.
+var (
+	defaultRelay  = config.EnvOr("WANCTL_RELAY", config.DefaultRelay)
+	defaultPortal = config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)
 )
+
+const defaultTransport = config.DefaultTransport
+
+func configuredDisplay(value, empty string) string {
+	if value == "" {
+		return empty
+	}
+	return value
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -315,7 +323,7 @@ func cmdPortal(args []string) error {
 		RelayAdminURL: os.Getenv("RELAY_ADMIN_URL"),
 		AdminSecret:   os.Getenv("WANCTL_ADMIN_SECRET"),
 		UserHeader:    os.Getenv("PORTAL_USER_HEADER"),
-		RelayDialURL:  os.Getenv("WANCTL_RELAY"),
+		RelayDialURL:  config.EnvOr("WANCTL_RELAY", config.DefaultRelay),
 		PortalToken:   os.Getenv("WANCTL_PORTAL_TOKEN"),
 		Transport:     envOr("WANCTL_TRANSPORT", "http"),
 		Identity:      id,
@@ -369,8 +377,12 @@ func cmdAgent(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("portal fingerprints: %w", err)
 	}
-	if *relayURL == "" || *token == "" {
-		return fmt.Errorf("provide --relay and --token (or WANCTL_RELAY/WANCTL_TOKEN)")
+	if *token == "" {
+		return fmt.Errorf("provide --token (or WANCTL_TOKEN)")
+	}
+	if *relayURL == "" {
+		_, err := config.Relay()
+		return err
 	}
 	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFPs: parsedPortalFPs, LanRelay: *lanRelay, Version: buildVersion})
 	if err != nil {
@@ -733,28 +745,33 @@ func cmdNet(args []string) error {
 	}
 	switch sub {
 	case "wan", "lan", "auto":
+		if sub == "lan" && config.LanRelay() == "" {
+			return fmt.Errorf("no LAN relay configured (set WANCTL_LAN_RELAY)")
+		}
 		if err := config.SaveNetMode(sub); err != nil {
 			return err
 		}
 		fmt.Printf("network mode: %s\n", sub)
 		if sub != "wan" {
+			lanRelay := configuredDisplay(config.LanRelay(), "(not configured)")
 			if client.LanReachable(800 * time.Millisecond) {
-				fmt.Printf("intranet relay %s: reachable ✓\n", config.LanRelay())
+				fmt.Printf("intranet relay %s: reachable ✓\n", lanRelay)
+			} else if sub == "auto" {
+				fmt.Printf("intranet relay %s: NOT reachable (auto will use the public relay)\n", lanRelay)
 			} else {
-				fmt.Printf("intranet relay %s: NOT reachable — lan exec will fail%s\n",
-					config.LanRelay(), map[bool]string{true: " (auto will fall back to wan)", false: ""}[sub == "auto"])
+				fmt.Printf("intranet relay %s: NOT reachable — lan exec will fail\n", lanRelay)
 			}
 		}
 		return nil
 	case "status":
 		mode := config.StoredNetMode()
 		fmt.Printf("network mode:   %s\n", mode)
-		fmt.Printf("public relay:   %s\n", config.EnvOr("WANCTL_RELAY", config.DefaultRelay))
+		fmt.Printf("public relay:   %s\n", configuredDisplay(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "(not configured)"))
 		reach := "not reachable"
 		if client.LanReachable(800 * time.Millisecond) {
 			reach = "reachable ✓"
 		}
-		fmt.Printf("intranet relay: %s (%s)\n", config.LanRelay(), reach)
+		fmt.Printf("intranet relay: %s (%s)\n", configuredDisplay(config.LanRelay(), "(not configured)"), reach)
 		if os.Getenv("WANCTL_RELAY") != "" {
 			fmt.Println("note: WANCTL_RELAY is set and overrides the network mode")
 		}
@@ -810,7 +827,11 @@ func cmdLogs(ctx context.Context, args []string) error {
 			return fmt.Errorf("--limit must be positive")
 		}
 		q := serverlog.Query{Service: *service, Since: duration, Limit: min(n, serverlog.MaxLimit), Grep: *grep}
-		return fetchServerLogs(ctx, http.DefaultClient, config.EnvOr("WANCTL_PORTAL", defaultPortal), os.Getenv("WANCTL_ADMIN_SECRET"), q, os.Stdout)
+		portalURL, err := config.Portal()
+		if err != nil {
+			return err
+		}
+		return fetchServerLogs(ctx, http.DefaultClient, portalURL, os.Getenv("WANCTL_ADMIN_SECRET"), q, os.Stdout)
 	}
 	if *follow {
 		return fmt.Errorf("--follow requires --service and is not yet supported")

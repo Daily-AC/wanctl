@@ -12,8 +12,8 @@ Claude-Code-style permission policy, so some commands/files need a human on the
 device to approve them.
 
 > **How this SKILL is distributed.** The user installs this skill by saying
-> to you: **「安装 https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills」**. When you see that,
-> WebFetch `https://wanctl-relay.***REMOVED***.***REMOVED***.com/skills` (returns the canonical
+> to you: **「安装 @WANCTL_RELAY@/skills」**. When you see that,
+> WebFetch `@WANCTL_RELAY@/skills` (returns the canonical
 > SKILL.md), save it to `~/.claude/skills/wanctl/SKILL.md` (creating the dir),
 > and tell the user to restart Claude Code so the skill loads.
 >
@@ -25,10 +25,9 @@ device to approve them.
 
 ## Setup (controller — first run)
 
-Current builds default to the production relay URL and proxy-compatible HTTP
-transport (`https://wanctl-relay.***REMOVED***.***REMOVED***.com`, `http`). The signed v0.1.0
-binary predates that default change, so set both variables explicitly when
-using v0.1.0.
+Use the relay that served this skill with the proxy-compatible HTTP transport
+(`@WANCTL_RELAY@`, `http`). Set `WANCTL_RELAY` explicitly when the binary was
+built without a deployment default.
 What you do need is a **token bound to a namespace** — get it via OAuth:
 
 ```bash
@@ -41,10 +40,10 @@ If a token is already provided in `WANCTL_TOKEN` (CI / pre-provisioned), skip
 `wanctl login`. To re-authorize later, run `wanctl login` again. To clear the
 saved credential, `wanctl logout`.
 
-Production v0.1.0 setup:
+Controller setup:
 
 ```bash
-export WANCTL_RELAY=https://wanctl-relay.***REMOVED***.***REMOVED***.com
+export WANCTL_RELAY=@WANCTL_RELAY@
 export WANCTL_TRANSPORT=http
 # Optional for CI/pre-provisioned controllers:
 export WANCTL_TOKEN=<token>
@@ -141,8 +140,8 @@ than one statement. It is not a heavier option — it is one call either way.
   - *Reactive*: any `wanctl exec/push/pull` against an unpaired device exits
     non-zero with the same URL embedded in the error message.
 
-  Either way, `wanctl` surfaces a **clickable URL** like
-  `https://wanctl.***REMOVED***.***REMOVED***.com/#pair?device=...&fp=...&label=...`.
+  Either way, `wanctl` surfaces a **clickable URL** from the portal configured on
+  the agent, with `device`, `fp`, and `label` query parameters.
   **Do NOT paraphrase, shorten, or describe the URL** — copy it verbatim into
   your reply and ask the user to click it. The portal opens a confirmation card;
   one click trusts you and the next dial goes through. Then retry the original
@@ -184,7 +183,7 @@ on any platform:
 
 ```bash
 # macOS / Linux (any POSIX shell)
-curl -fsSL https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.sh | sh
+curl -fsSL @WANCTL_RELAY@/install.sh | sh
 wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
 wanctl                          # then run this on that machine — opens the
                                 # browser for Feishu login, takes a code, and
@@ -193,7 +192,7 @@ wanctl                          # then run this on that machine — opens the
 
 ```powershell
 # Windows — PowerShell only, no bash / curl needed
-irm https://wanctl-relay.***REMOVED***.***REMOVED***.com/install.ps1 | iex
+irm @WANCTL_RELAY@/install.ps1 | iex
 wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
 wanctl                          # same flow: browser → Feishu → agent runs.
 ```
@@ -215,6 +214,6 @@ install the native service. On that machine, `wanctl stop` stops it and
 - To upgrade `wanctl` itself (controller or device side): run `wanctl update`.
   It fetches the latest binary from the relay and atomically replaces the
   current one; if a background daemon is running it is restarted automatically.
-- The user can also edit the team's documentation via `wanctl docs ...` (see
-  `wanctl docs --help`) and browse it at https://wanctl.***REMOVED***.***REMOVED***.com .
-- Source / design: `~/projects/wanctl` (mainline branch `main`).
+- The user can also edit the deployment's documentation via `wanctl docs ...`
+  (see `wanctl docs --help`) and browse it in the configured portal.
+- Source / design: the wanctl project repository.

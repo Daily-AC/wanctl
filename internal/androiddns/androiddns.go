@@ -8,7 +8,7 @@
 // every lookup dies with "connection refused" before a single byte reaches the
 // relay. Measured on an Android 16 arm64 device, 2026-08-05:
 //
-//	lookup wanctl-relay.***REMOVED***.***REMOVED***.com on [::1]:53: read: connection refused
+//	lookup relay.example on [::1]:53: read: connection refused
 //
 // The alternatives were an NDK/cgo release toolchain (drags a C cross-compiler
 // into the release pipeline for one platform, and gives up static linking) or

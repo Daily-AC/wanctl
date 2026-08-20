@@ -812,8 +812,8 @@ func (w *larkWatcher) reconcileState(ctx context.Context, state console.State, p
 // carries. It must be absolute: the card is rendered inside someone's Lark
 // client, which has no origin to resolve a path against, so a relative URL makes
 // the button silently do nothing when tapped. PORTAL_PUBLIC_ORIGIN is optional
-// (it only matters when TLS terminates upstream), so fall back to the compiled-in
-// portal address rather than emitting a path that cannot work.
+// (it only matters when TLS terminates upstream), so fall back to the optional
+// build-time portal address. With neither configured, retain the path-only form.
 func (s *larkSupervisor) deviceURL(device string) string {
 	origin := s.portalOrigin
 	if origin == "" {

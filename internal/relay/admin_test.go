@@ -68,7 +68,7 @@ func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
 	if strings.Contains(s.query, "FROM users") {
 		return &adminRows{
 			columns: []string{"namespace"},
-			values:  [][]driver.Value{{"renjinxi"}, {"***REMOVED***"}},
+			values:  [][]driver.Value{{"alice"}, {"bob"}},
 		}, nil
 	}
 	if strings.Contains(s.query, "SELECT perms FROM acl") {
@@ -87,11 +87,11 @@ func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
 	seen := time.Date(2026, 7, 14, 9, 0, 0, 0, time.UTC)
 	rows := [][]driver.Value{}
 	switch ns {
-	case "***REMOVED***":
-		rows = append(rows, []driver.Value{"zyl", "fp-zyl", seen, "***REMOVED***", false, ""})
-	case "renjinxi":
-		rows = append(rows, []driver.Value{"book", "fp-book", seen, "renjinxi", false, ""})
-		rows = append(rows, []driver.Value{"zyl", "fp-zyl", seen, "***REMOVED***", true, "exec"})
+	case "bob":
+		rows = append(rows, []driver.Value{"devbox", "fp-devbox", seen, "bob", false, ""})
+	case "alice":
+		rows = append(rows, []driver.Value{"book", "fp-book", seen, "alice", false, ""})
+		rows = append(rows, []driver.Value{"devbox", "fp-devbox", seen, "bob", true, "exec"})
 	}
 	return &adminRows{
 		columns: []string{"name", "fingerprint", "last_seen", "owner", "shared", "perms"},
@@ -265,18 +265,18 @@ func TestPGStoreResolveUserIsStableForImmutableIdentity(t *testing.T) {
 func TestPGStoreListDevicesIncludesOwnedAndSharedACLDevices(t *testing.T) {
 	p := newAdminTestPGStore(t)
 
-	ownerView, err := p.ListDevices("***REMOVED***")
+	ownerView, err := p.ListDevices("bob")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ownerView) != 1 {
 		t.Fatalf("owner view should only contain owned devices, got %+v", ownerView)
 	}
-	if ownerView[0]["name"] != "zyl" || ownerView[0]["owner"] != "***REMOVED***" || ownerView[0]["shared"] != false {
+	if ownerView[0]["name"] != "devbox" || ownerView[0]["owner"] != "bob" || ownerView[0]["shared"] != false {
 		t.Fatalf("owner row missing owner/shared fields: %+v", ownerView[0])
 	}
 
-	granteeView, err := p.ListDevices("renjinxi")
+	granteeView, err := p.ListDevices("alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestPGStoreListDevicesIncludesOwnedAndSharedACLDevices(t *testing.T) {
 		t.Fatalf("grantee view should contain own + granted devices, got %+v", granteeView)
 	}
 	shared := granteeView[1]
-	if shared["name"] != "zyl" || shared["owner"] != "***REMOVED***" || shared["shared"] != true || shared["perms"] != "exec" {
+	if shared["name"] != "devbox" || shared["owner"] != "bob" || shared["shared"] != true || shared["perms"] != "exec" {
 		t.Fatalf("shared row missing expected fields: %+v", shared)
 	}
 }
@@ -296,7 +296,7 @@ func TestPGStoreListUsersReturnsNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"renjinxi", "***REMOVED***"}
+	want := []string{"alice", "bob"}
 	if !reflect.DeepEqual(namespaces, want) {
 		t.Fatalf("namespaces = %+v, want %+v", namespaces, want)
 	}
@@ -343,7 +343,7 @@ func (a *adminUsersStore) ListUsers() ([]string, error) { return a.users, nil }
 func TestAdminUsersSecretGated(t *testing.T) {
 	r := New(envTokens{})
 	r.SetAdminSecret("secret")
-	r.SetAdmin(&adminUsersStore{users: []string{"renjinxi", "***REMOVED***"}})
+	r.SetAdmin(&adminUsersStore{users: []string{"alice", "bob"}})
 	h := r.Handler()
 
 	rr := httptest.NewRecorder()
@@ -363,7 +363,7 @@ func TestAdminUsersSecretGated(t *testing.T) {
 		Namespaces []string `json:"namespaces"`
 	}
 	json.NewDecoder(rr.Body).Decode(&out)
-	want := []string{"renjinxi", "***REMOVED***"}
+	want := []string{"alice", "bob"}
 	if !reflect.DeepEqual(out.Namespaces, want) {
 		t.Fatalf("namespaces = %+v, want %+v", out.Namespaces, want)
 	}
@@ -373,14 +373,14 @@ func TestAdminDevicesUsesOwnerNamespaceForSharedLiveness(t *testing.T) {
 	r := New(envTokens{})
 	r.SetAdminSecret("secret")
 	r.SetAdmin(&adminUsersStore{devices: []map[string]any{
-		{"name": "zyl", "owner": "***REMOVED***", "shared": true, "perms": "exec"},
+		{"name": "devbox", "owner": "bob", "shared": true, "perms": "exec"},
 	}})
 	r.mu.Lock()
-	r.agents["***REMOVED***/zyl"] = &agentConn{}
+	r.agents["bob/devbox"] = &agentConn{}
 	r.mu.Unlock()
 	h := r.Handler()
 
-	req := httptest.NewRequest("GET", "/admin/devices?namespace=renjinxi", nil)
+	req := httptest.NewRequest("GET", "/admin/devices?namespace=alice", nil)
 	req.Header.Set("X-Admin-Secret", "secret")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)

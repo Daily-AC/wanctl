@@ -103,6 +103,9 @@ func New() (*Client, error) {
 	if relayURL == "" {
 		switch config.StoredNetMode() {
 		case "lan":
+			if config.LanRelay() == "" {
+				return nil, fmt.Errorf("no LAN relay configured (set WANCTL_LAN_RELAY)")
+			}
 			lan = true
 		case "auto":
 			lan = LanReachable(600 * time.Millisecond)
@@ -110,7 +113,10 @@ func New() (*Client, error) {
 		if lan {
 			relayURL, tr = config.LanRelay(), "ws"
 		} else {
-			relayURL = config.DefaultRelay
+			relayURL, err = config.Relay()
+			if err != nil {
+				return nil, err
+			}
 			if tr == "" {
 				tr = config.DefaultTransport
 			}
@@ -129,7 +135,11 @@ func New() (*Client, error) {
 
 // LanReachable probes the intranet relay /healthz, bypassing proxy env vars.
 func LanReachable(timeout time.Duration) bool {
-	base := strings.Replace(strings.TrimRight(config.LanRelay(), "/"), "ws", "http", 1)
+	lanRelay := config.LanRelay()
+	if lanRelay == "" {
+		return false
+	}
+	base := strings.Replace(strings.TrimRight(lanRelay, "/"), "ws", "http", 1)
 	hc := &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: nil}}
 	resp, err := hc.Get(base + "/healthz")
 	if err != nil {

@@ -14,6 +14,9 @@ import (
 // TestNetModeResolution verifies how New() picks the relay: persisted mode,
 // auto probing, and the WANCTL_RELAY override.
 func TestNetModeResolution(t *testing.T) {
+	oldDefaultRelay := config.DefaultRelay
+	config.DefaultRelay = "https://relay.example"
+	t.Cleanup(func() { config.DefaultRelay = oldDefaultRelay })
 	dir := t.TempDir()
 	t.Setenv("WANCTL_CONFIG_DIR", dir)
 	t.Setenv("WANCTL_TOKEN", "tok")
@@ -98,5 +101,38 @@ func TestLanReachableTimeout(t *testing.T) {
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Fatalf("probe exceeded budget: %v", time.Since(start))
+	}
+}
+
+func TestNetModeWithoutLanConfiguration(t *testing.T) {
+	oldDefaultRelay := config.DefaultRelay
+	oldDefaultLanRelay := config.DefaultLanRelay
+	config.DefaultRelay = "https://relay.example"
+	config.DefaultLanRelay = ""
+	t.Cleanup(func() {
+		config.DefaultRelay = oldDefaultRelay
+		config.DefaultLanRelay = oldDefaultLanRelay
+	})
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	t.Setenv("WANCTL_TOKEN", "tok")
+	t.Setenv("WANCTL_RELAY", "")
+	t.Setenv("WANCTL_LAN_RELAY", "")
+
+	if err := config.SaveNetMode("auto"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Lan() || c.RelayURL() != "https://relay.example" {
+		t.Fatalf("auto without LAN config: lan=%v relay=%q", c.Lan(), c.RelayURL())
+	}
+
+	if err := config.SaveNetMode("lan"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(); err == nil || !strings.Contains(err.Error(), "no LAN relay configured") {
+		t.Fatalf("lan without configuration error = %v", err)
 	}
 }

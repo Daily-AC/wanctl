@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	wanrelease "wanctl/internal/release"
@@ -179,9 +180,20 @@ func installerHandler(dir, name, contentType string) http.HandlerFunc {
 	}
 }
 
-func (r *Relay) handleSkills(w http.ResponseWriter, _ *http.Request) {
+func (r *Relay) handleSkills(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.Header().Set("Content-Disposition", `inline; filename="SKILL.md"`)
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	w.Write(skillMD)
+	origin := strings.TrimRight(os.Getenv("WANCTL_PUBLIC_ORIGIN"), "/")
+	if origin == "" {
+		scheme := strings.TrimSpace(strings.Split(req.Header.Get("X-Forwarded-Proto"), ",")[0])
+		if scheme == "" {
+			scheme = "http"
+			if req.TLS != nil {
+				scheme = "https"
+			}
+		}
+		origin = scheme + "://" + req.Host
+	}
+	w.Write(bytes.ReplaceAll(skillMD, []byte("@WANCTL_RELAY@"), []byte(origin)))
 }

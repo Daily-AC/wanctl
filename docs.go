@@ -64,8 +64,12 @@ func docsUsage() error { fmt.Println(docsHelp); return nil }
 
 // --- relay endpoint helpers ---
 
-func relayBase() string {
-	return strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
+func relayBase() (string, error) {
+	relay, err := config.Relay()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(relay, "/"), nil
 }
 
 func relayToken() (string, error) {
@@ -77,7 +81,11 @@ func relayToken() (string, error) {
 }
 
 func relayGET(ctx context.Context, path string, out any) error {
-	req, _ := http.NewRequestWithContext(ctx, "GET", relayBase()+path, nil)
+	base, err := relayBase()
+	if err != nil {
+		return err
+	}
+	req, _ := http.NewRequestWithContext(ctx, "GET", base+path, nil)
 	cl := &http.Client{Timeout: 30 * time.Second}
 	resp, err := cl.Do(req)
 	if err != nil {
@@ -92,12 +100,16 @@ func relayGET(ctx context.Context, path string, out any) error {
 }
 
 func relayPOST(ctx context.Context, path string, body any) error {
+	base, err := relayBase()
+	if err != nil {
+		return err
+	}
 	tok, err := relayToken()
 	if err != nil {
 		return err
 	}
 	b, _ := json.Marshal(body)
-	req, _ := http.NewRequestWithContext(ctx, "POST", relayBase()+path, bytes.NewReader(b))
+	req, _ := http.NewRequestWithContext(ctx, "POST", base+path, bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	admission.SetBearer(req, tok)
 	cl := &http.Client{Timeout: 30 * time.Second}

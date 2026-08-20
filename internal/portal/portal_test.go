@@ -61,6 +61,33 @@ func TestRequireNSNotWired503(t *testing.T) {
 	}
 }
 
+func TestSkillsRedirectUsesRelayDialURL(t *testing.T) {
+	s := New(Config{RelayDialURL: "wss://relay.example/base/"})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/skills", nil)
+
+	s.handleSkills(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "https://relay.example/base/skills" {
+		t.Fatalf("Location = %q", got)
+	}
+}
+
+func TestSkillsRedirectWithoutRelayReturns503(t *testing.T) {
+	s := New(Config{})
+	rec := httptest.NewRecorder()
+	s.handleSkills(rec, httptest.NewRequest(http.MethodGet, "/skills", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "WANCTL_RELAY") {
+		t.Fatalf("body = %q", rec.Body.String())
+	}
+}
+
 func TestNoIdentity401(t *testing.T) {
 	s := New(Config{RelayAdminURL: "https://relay.example", AdminSecret: "secret", UserHeader: ""})
 	rec := httptest.NewRecorder()
@@ -163,22 +190,22 @@ func TestRequireDeviceReturnsSharedOwnerNamespace(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]string{"namespace": "bob"})
 		case "/admin/devices":
 			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{
-				{"name": "zyl", "owner": "***REMOVED***", "shared": true, "perms": "exec"},
+				{"name": "devbox", "owner": "alice", "shared": true, "perms": "exec"},
 			}})
 		default:
 			w.WriteHeader(404)
 		}
 	})
 
-	req := httptest.NewRequest("GET", "/api/devices/console?device=zyl", nil)
+	req := httptest.NewRequest("GET", "/api/devices/console?device=devbox", nil)
 	req.Header.Set("X-User", "bob@corp")
 	w := httptest.NewRecorder()
-	ns, shared, ok := s.requireDevice(w, req, "zyl")
+	ns, shared, ok := s.requireDevice(w, req, "devbox")
 	if !ok {
 		t.Fatalf("expected shared device to be allowed, got ok=false (status %d body %s)", w.Code, w.Body.String())
 	}
-	if ns != "***REMOVED***" {
-		t.Fatalf("expected owner namespace ***REMOVED***, got %q", ns)
+	if ns != "alice" {
+		t.Fatalf("expected owner namespace alice, got %q", ns)
 	}
 	if !shared {
 		t.Fatalf("expected shared=true")
@@ -219,7 +246,7 @@ func TestHandleDeviceRemoveRejectsSharedDevice(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]string{"namespace": "bob"})
 		case "/admin/devices":
 			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{
-				{"name": "zyl", "owner": "***REMOVED***", "shared": true},
+				{"name": "devbox", "owner": "alice", "shared": true},
 			}})
 		case "/admin/devices/remove":
 			removeCalled = true
@@ -229,7 +256,7 @@ func TestHandleDeviceRemoveRejectsSharedDevice(t *testing.T) {
 		}
 	})
 
-	req := httptest.NewRequest("POST", "/api/devices/remove", strings.NewReader(`{"device":"zyl"}`))
+	req := httptest.NewRequest("POST", "/api/devices/remove", strings.NewReader(`{"device":"devbox"}`))
 	req.Header.Set("X-User", "bob@corp")
 	w := httptest.NewRecorder()
 	s.handleDeviceRemove(w, req)
@@ -280,7 +307,7 @@ func TestConsoleWriteEndpointsRejectSharedDevice(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]string{"namespace": "bob"})
 		case "/admin/devices":
 			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{
-				{"name": "zyl", "owner": "***REMOVED***", "shared": true, "perms": "exec"},
+				{"name": "devbox", "owner": "alice", "shared": true, "perms": "exec"},
 			}})
 		default:
 			w.WriteHeader(404)
@@ -292,12 +319,12 @@ func TestConsoleWriteEndpointsRejectSharedDevice(t *testing.T) {
 		h    http.HandlerFunc
 		body string
 	}{
-		{"decide", s.handleDeviceDecide, `{"device":"zyl","id":"req1","verdict":"y"}`},
-		{"pair", s.handleDevicePair, `{"device":"zyl","fp":"fp1","verdict":"y"}`},
-		{"untrust", s.handleDeviceUntrust, `{"device":"zyl","fp":"fp1"}`},
-		{"rules", s.handleDeviceRules, `{"device":"zyl","op":"add","kind":"exec","pattern":"echo *"}`},
-		{"mode", s.handleDeviceMode, `{"device":"zyl","mode":"bypass"}`},
-		{"lan", s.handleDeviceLan, `{"device":"zyl","on":true}`},
+		{"decide", s.handleDeviceDecide, `{"device":"devbox","id":"req1","verdict":"y"}`},
+		{"pair", s.handleDevicePair, `{"device":"devbox","fp":"fp1","verdict":"y"}`},
+		{"untrust", s.handleDeviceUntrust, `{"device":"devbox","fp":"fp1"}`},
+		{"rules", s.handleDeviceRules, `{"device":"devbox","op":"add","kind":"exec","pattern":"echo *"}`},
+		{"mode", s.handleDeviceMode, `{"device":"devbox","mode":"bypass"}`},
+		{"lan", s.handleDeviceLan, `{"device":"devbox","on":true}`},
 	}
 	for _, e := range endpoints {
 		req := httptest.NewRequest("POST", "/api/devices/"+e.name, strings.NewReader(e.body))

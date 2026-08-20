@@ -98,7 +98,7 @@ type sessionAPI interface {
 	saveLogin(token, namespace string) error
 	clearLogin() error
 	info() string // for wanctl_status
-	relayURL() string
+	relayURL() (string, error)
 }
 
 type sessionStore struct {
@@ -174,8 +174,12 @@ func (l *localFsSession) client() (*client.Client, *mcpapi.CallToolResult) {
 
 func (l *localFsSession) saveLogin(token, _ string) error { return config.SaveToken(token) }
 func (l *localFsSession) clearLogin() error               { return config.ClearToken() }
-func (l *localFsSession) relayURL() string {
-	return strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
+func (l *localFsSession) relayURL() (string, error) {
+	relay, err := config.Relay()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(relay, "/"), nil
 }
 
 func (l *localFsSession) info() string {
@@ -197,8 +201,8 @@ func (l *localFsSession) info() string {
 	if id != nil {
 		out += "controller fingerprint: " + id.Fingerprint + "\n"
 	}
-	out += "relay:                 " + l.relayURL() + "\n"
-	out += "portal:                " + config.EnvOr("WANCTL_PORTAL", config.DefaultPortal) + "\n"
+	out += "relay:                 " + configuredValue(config.EnvOr("WANCTL_RELAY", config.DefaultRelay)) + "\n"
+	out += "portal:                " + configuredValue(config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)) + "\n"
 	out += "config dir:            " + dir + "  (override with WANCTL_CONFIG_DIR for per-AI-user isolation)\n"
 	return out
 }
@@ -247,7 +251,11 @@ func (r *remoteSession) client() (*client.Client, *mcpapi.CallToolResult) {
 	if err := r.ensureIdentity(); err != nil {
 		return nil, mcpapi.NewToolResultError("derive identity: " + err.Error())
 	}
-	relay := strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
+	relay, err := config.Relay()
+	if err != nil {
+		return nil, mcpapi.NewToolResultError(err.Error())
+	}
+	relay = strings.TrimRight(relay, "/")
 	tr := config.EnvOr("WANCTL_TRANSPORT", config.DefaultTransport)
 	c := client.NewWith(r.identity, r.known, relay, r.token, tr)
 	// Devices refuse a pairing request from a controller that will not say who it
@@ -350,8 +358,12 @@ func (r *remoteSession) clearLogin() error {
 	return nil
 }
 
-func (r *remoteSession) relayURL() string {
-	return strings.TrimRight(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "/")
+func (r *remoteSession) relayURL() (string, error) {
+	relay, err := config.Relay()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(relay, "/"), nil
 }
 
 func (r *remoteSession) info() string {
@@ -367,10 +379,17 @@ func (r *remoteSession) info() string {
 			out += "controller fingerprint: " + r.identity.Fingerprint + "\n"
 		}
 	}
-	out += "relay:                 " + r.relayURL() + "\n"
-	out += "portal:                " + config.EnvOr("WANCTL_PORTAL", config.DefaultPortal) + "\n"
+	out += "relay:                 " + configuredValue(config.EnvOr("WANCTL_RELAY", config.DefaultRelay)) + "\n"
+	out += "portal:                " + configuredValue(config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)) + "\n"
 	out += "note:                  identity is derived per-namespace, so the same person reconnecting keeps the same fingerprint (no re-pairing).\n"
 	return out
+}
+
+func configuredValue(value string) string {
+	if value == "" {
+		return "(not configured)"
+	}
+	return value
 }
 
 // --- tool registration (shared between stdio and http modes) ---
@@ -542,7 +561,6 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 	s := sessions.get(ctx)
 	code := reqStr(req, "code", "")
 	rebind := reqStr(req, "rebind", "")
-	portal := config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)
 	if rebind != "" {
 		r, ok := s.(*remoteSession)
 		if !ok {
@@ -553,7 +571,11 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 			return mcpapi.NewToolResultError("rebind credential is invalid, expired, revoked, or from the legacy format; run wanctl_login() again to re-authenticate via the portal."), nil
 		}
 		tr := config.EnvOr("WANCTL_TRANSPORT", config.DefaultTransport)
-		realNS, err := client.ResolveTokenNamespace(ctx, s.relayURL(), claim.Token, tr)
+		relayURL, err := s.relayURL()
+		if err != nil {
+			return mcpapi.NewToolResultError(err.Error()), nil
+		}
+		realNS, err := client.ResolveTokenNamespace(ctx, relayURL, claim.Token, tr)
 		if err != nil {
 			return mcpapi.NewToolResultError("rebind token was rejected by the Relay; run wanctl_login() again to re-authenticate."), nil
 		}
@@ -568,6 +590,10 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 		}
 		return mcpapi.NewToolResultText(fmt.Sprintf("✓ 已用 rebind 凭证恢复到 namespace %q，并经 Relay 复核。可以继续之前的工具调用了。", realNS)), nil
 	}
+	portal, err := config.Portal()
+	if err != nil {
+		return mcpapi.NewToolResultError(err.Error()), nil
+	}
 	if code == "" {
 		return mcpapi.NewToolResultText(fmt.Sprintf(
 			"OK — drive the user through Feishu SSO to mint a session token. Show them these instructions VERBATIM:\n\n"+
@@ -581,7 +607,11 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 	}
 	// An MCP session is a controller, not a device: it never runs an agent, so
 	// the enrollment's portal fingerprint has nothing to seed here.
-	en, err := client.ExchangeCode(ctx, s.relayURL(), code)
+	relayURL, err := s.relayURL()
+	if err != nil {
+		return mcpapi.NewToolResultError(err.Error()), nil
+	}
+	en, err := client.ExchangeCode(ctx, relayURL, code)
 	token, ns := en.Token, en.Namespace
 	if err != nil {
 		return mcpapi.NewToolResultError(fmt.Sprintf("授权失败: %s\n请让用户回到 %s/enroll 拿一个新 code（旧的可能用过或过期了），然后再调一次 wanctl_login(code=\"…\")。", err, portal)), nil
@@ -927,8 +957,12 @@ func mcpServerLogs(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Cal
 	}
 	limit = min(limit, serverlog.MaxLimit)
 	q := serverlog.Query{Service: service, Since: since, Limit: limit, Grep: reqStr(req, "grep", "")}
+	portalURL, err := config.Portal()
+	if err != nil {
+		return mcpapi.NewToolResultError(err.Error()), nil
+	}
 	resp, err := serverlog.Fetch(ctx, serverLogsHTTPClient,
-		config.EnvOr("WANCTL_PORTAL", config.DefaultPortal), os.Getenv("WANCTL_ADMIN_SECRET"), q)
+		portalURL, os.Getenv("WANCTL_ADMIN_SECRET"), q)
 	if err != nil {
 		return mcpapi.NewToolResultError(err.Error()), nil
 	}

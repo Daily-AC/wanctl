@@ -63,6 +63,9 @@ func TestPairRequiresApproval(t *testing.T) {
 	base := "ws" + strings.TrimPrefix(srv.URL, "http")
 
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	// The reject-with-URL path exists only when the agent knows a portal; with
+	// no compiled-in default, the test provides one the way a deployment would.
+	t.Setenv("WANCTL_PORTAL", "https://portal.example.com")
 	// AutoYes false + no console subscriber => agent rejects with PairingURL.
 	ag, err := agent.New(agent.Options{RelayURL: base, Token: "tok", Name: "home-pc"})
 	if err != nil {

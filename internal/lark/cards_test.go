@@ -18,7 +18,7 @@ func TestApprovalAndResolvedCardsAreSafeV2Cards(t *testing.T) {
 		Cmd:  "deploy.sh --token=abcd1234efgh5678",
 		Path: "/srv?access_token=pathsecret",
 		Cwd:  "/srv/API_KEY=cwdsecret",
-		Peer: "***REMOVED***@macbook (SHA256:kP9x)",
+		Peer: "alice@macbook (SHA256:kP9x)",
 	}
 	cards := []map[string]any{
 		ApprovalCard("macbox", pending, "nonce", "https://wanctl.example/#/devices/macbox", 3*time.Minute),
