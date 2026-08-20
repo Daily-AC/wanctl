@@ -136,7 +136,13 @@ func newTestRelay(t *testing.T) (*Relay, *memDocs) {
 
 type noopAdmin struct{}
 
-func (n *noopAdmin) ResolveUser(string) (string, error)             { return "", nil }
+func (n *noopAdmin) ResolveUser(string) (string, error) { return "", nil }
+func (n *noopAdmin) ResolveIdentity(string, string, string, string, string, string) (string, string, error) {
+	return "", "", nil
+}
+func (n *noopAdmin) CreateInvite(string) (Invite, string, error)    { return Invite{}, "", nil }
+func (n *noopAdmin) ListInvites() ([]Invite, error)                 { return nil, nil }
+func (n *noopAdmin) RevokeInvite(int) (bool, error)                 { return false, nil }
 func (n *noopAdmin) UpsertDevice(string, string, string)            {}
 func (n *noopAdmin) IssueToken(string, string, int) (string, error) { return "", nil }
 func (n *noopAdmin) ListTokens(string) ([]map[string]any, error)    { return nil, nil }

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -25,7 +27,14 @@ func OpenPG(dsn string) (*PGStore, error) {
 	db.SetMaxOpenConns(8)
 	db.SetConnMaxIdleTime(5 * time.Minute)
 	if err := db.Ping(); err != nil {
+		db.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
+	if os.Getenv("WANCTL_AUTO_MIGRATE") == "0" {
+		log.Printf("relay: automatic database migrations disabled by WANCTL_AUTO_MIGRATE=0")
+	} else if err := runMigrations(db, migrationFiles); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate postgres: %w", err)
 	}
 	return &PGStore{db: db}, nil
 }

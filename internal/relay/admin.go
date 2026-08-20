@@ -40,6 +40,8 @@ func (r *Relay) secretOK(req *http.Request) bool {
 
 func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/resolve-user", r.adminResolveUser)
+	mux.HandleFunc("/admin/invites", r.adminInvites)
+	mux.HandleFunc("/admin/invites/revoke", r.adminInviteRevoke)
 	mux.HandleFunc("/admin/users", r.adminUsers)
 	mux.HandleFunc("/admin/tokens/resolve", r.adminTokenResolve)
 	mux.HandleFunc("/admin/tokens", r.adminTokens)
@@ -168,14 +170,39 @@ func (r *Relay) adminTokenResolve(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) adminResolveUser(w http.ResponseWriter, req *http.Request) {
-	if !r.adminOK(req) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if !r.requireAdminStore(w, req) {
 		return
 	}
-	var body struct{ Identity string }
-	json.NewDecoder(req.Body).Decode(&body)
-	ns, err := r.admin.ResolveUser(body.Identity)
+	if req.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Identity   string `json:"identity"`
+		Provider   string `json:"provider"`
+		Subject    string `json:"subject"`
+		Login      string `json:"login"`
+		Name       string `json:"name"`
+		InviteCode string `json:"invite_code"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if body.Identity != "" {
+		body.Provider = "header"
+		body.Subject = body.Identity
+	}
+	ns, role, err := r.admin.ResolveIdentity(
+		body.Provider, body.Subject, body.Login, body.Name, body.InviteCode, r.portalNS,
+	)
 	if err != nil {
+		if errors.Is(err, ErrPendingInvite) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, "pending-invite")
+			return
+		}
 		if errors.Is(err, ErrNamespaceConflict) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -183,7 +210,83 @@ func (r *Relay) adminResolveUser(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]string{"namespace": ns})
+	writeJSON(w, map[string]string{"namespace": ns, "role": role})
+}
+
+func (r *Relay) requireAdminStore(w http.ResponseWriter, req *http.Request) bool {
+	if !r.secretOK(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	if r.admin == nil {
+		http.Error(w, "Postgres admin store is not configured", http.StatusServiceUnavailable)
+		return false
+	}
+	return true
+}
+
+func (r *Relay) adminInvites(w http.ResponseWriter, req *http.Request) {
+	if !r.requireAdminStore(w, req) {
+		return
+	}
+	switch req.Method {
+	case http.MethodPost:
+		var body struct {
+			GitHubLogin string `json:"github_login"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		invite, code, err := r.admin.CreateInvite(body.GitHubLogin)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if code != "" {
+			writeJSON(w, map[string]any{"id": invite.ID, "code": code})
+			return
+		}
+		writeJSON(w, map[string]any{"id": invite.ID, "github_login": invite.GitHubLogin})
+	case http.MethodGet:
+		invites, err := r.admin.ListInvites()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, invites)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (r *Relay) adminInviteRevoke(w http.ResponseWriter, req *http.Request) {
+	if !r.requireAdminStore(w, req) {
+		return
+	}
+	if req.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		ID int `json:"id"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	revoked, err := r.admin.RevokeInvite(body.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !revoked {
+		http.Error(w, "invite not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (r *Relay) adminUsers(w http.ResponseWriter, req *http.Request) {
@@ -411,6 +514,10 @@ func (r *Relay) adminAudit(w http.ResponseWriter, req *http.Request) {
 // AdminStore is the DB surface the admin endpoints need.
 type AdminStore interface {
 	ResolveUser(identity string) (string, error)
+	ResolveIdentity(provider, subject, login, name, inviteCode, reservedNS string) (ns, role string, err error)
+	CreateInvite(githubLogin string) (Invite, string, error)
+	ListInvites() ([]Invite, error)
+	RevokeInvite(id int) (bool, error)
 	UpsertDevice(namespace, name, fingerprint string)
 	IssueToken(namespace, label string, days int) (string, error)
 	ListTokens(namespace string) ([]map[string]any, error)
@@ -443,48 +550,298 @@ func deriveNS(identity string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// ErrNamespaceConflict means an SSO identity derives to a namespace already
+// ErrNamespaceConflict means an identity derives to a namespace already
 // owned by a different immutable identity. Callers should surface this as a
 // conflict, never relink the existing namespace.
-var ErrNamespaceConflict = errors.New("derived namespace is already owned by another SSO identity")
+var ErrNamespaceConflict = errors.New("derived namespace is already owned by another identity")
+
+// ErrPendingInvite means a GitHub identity has not been admitted yet.
+var ErrPendingInvite = errors.New("pending-invite")
+
+// Invite is the public representation of an admission invitation. It never
+// contains the stored code hash or a raw invite code.
+type Invite struct {
+	ID              int        `json:"id"`
+	GitHubLogin     string     `json:"github_login"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UsedAt          *time.Time `json:"used_at"`
+	UsedByNamespace string     `json:"used_by_namespace"`
+	HasCode         bool       `json:"has_code"`
+}
+
+type identityQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
 
 // ResolveUser maps an SSO identity to a namespace, creating/linking the row.
 func (p *PGStore) ResolveUser(identity string) (string, error) {
-	identity = strings.TrimSpace(identity)
-	if identity == "" {
-		return "", sql.ErrNoRows
+	ns, _, err := p.ResolveIdentity("header", identity, "", "", "", "")
+	return ns, err
+}
+
+// ResolveIdentity maps an immutable provider identity to a namespace, creating
+// the user when the provider's admission policy permits it.
+func (p *PGStore) ResolveIdentity(provider, subject, login, name, inviteCode, reservedNS string) (string, string, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	subject = strings.TrimSpace(subject)
+	login = strings.TrimSpace(login)
+	name = strings.TrimSpace(name)
+	if subject == "" {
+		return "", "", sql.ErrNoRows
 	}
-	var ns string
-	err := p.db.QueryRow(`SELECT namespace FROM users WHERE feishu_open_id = $1`, identity).Scan(&ns)
-	if err == nil {
-		return ns, nil
+
+	if ns, role, err := lookupIdentity(p.db, provider, subject); err == nil {
+		return ns, role, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
 	}
-	if err != sql.ErrNoRows {
-		return "", err
+
+	switch provider {
+	case "header":
+		preferredNS := deriveNS(subject)
+		if err := guardNamespace(preferredNS, reservedNS); err != nil {
+			return "", "", err
+		}
+		return insertIdentity(p.db, provider, subject, preferredNS, subject, "user")
+	case "github":
+		if !decimalString(subject) {
+			return "", "", fmt.Errorf("invalid GitHub subject %q", subject)
+		}
+		preferredNS := strings.ToLower(login)
+		if !validGitHubLogin(preferredNS) {
+			return "", "", fmt.Errorf("invalid GitHub login %q", login)
+		}
+		if err := guardNamespace(preferredNS, reservedNS); err != nil {
+			return "", "", err
+		}
+		return p.resolveGitHubIdentity(subject, preferredNS, name, inviteCode)
+	default:
+		return "", "", fmt.Errorf("unsupported identity provider %q", provider)
 	}
-	derivedNS := deriveNS(identity)
-	var insertedNS string
-	err = p.db.QueryRow(
-		`INSERT INTO users (feishu_open_id, namespace, name) VALUES ($1,$2,$3)
-		   ON CONFLICT (namespace) DO NOTHING
-		   RETURNING namespace`,
-		identity, derivedNS, identity,
-	).Scan(&insertedNS)
+}
+
+func lookupIdentity(q identityQuerier, provider, subject string) (string, string, error) {
+	var ns, role string
+	err := q.QueryRow(
+		`SELECT namespace, role FROM users WHERE provider = $1 AND provider_subject = $2`,
+		provider, subject,
+	).Scan(&ns, &role)
+	return ns, role, err
+}
+
+func insertIdentity(q identityQuerier, provider, subject, namespace, name, role string) (string, string, error) {
+	var insertedNS, insertedRole string
+	err := q.QueryRow(
+		`INSERT INTO users (provider, provider_subject, namespace, name, role)
+		 VALUES ($1,$2,$3,NULLIF($4,''),$5)
+		 ON CONFLICT (namespace) DO NOTHING
+		 RETURNING namespace, role`,
+		provider, subject, namespace, name, role,
+	).Scan(&insertedNS, &insertedRole)
 	if errors.Is(err, sql.ErrNoRows) {
 		// A concurrent request for the same immutable identity is idempotent:
 		// the winner inserted the row after our initial lookup. A different
 		// identity deriving to the same namespace is a hard conflict.
-		var existingNS string
-		lookupErr := p.db.QueryRow(`SELECT namespace FROM users WHERE feishu_open_id = $1`, identity).Scan(&existingNS)
+		existingNS, existingRole, lookupErr := lookupIdentity(q, provider, subject)
 		if lookupErr == nil {
-			return existingNS, nil
+			return existingNS, existingRole, nil
 		}
 		if !errors.Is(lookupErr, sql.ErrNoRows) {
-			return "", fmt.Errorf("recheck SSO identity after namespace conflict: %w", lookupErr)
+			return "", "", fmt.Errorf("recheck identity after namespace conflict: %w", lookupErr)
 		}
-		return "", fmt.Errorf("%w: %q", ErrNamespaceConflict, derivedNS)
+		return "", "", fmt.Errorf("%w: %q", ErrNamespaceConflict, namespace)
 	}
-	return insertedNS, err
+	return insertedNS, insertedRole, err
+}
+
+func (p *PGStore) resolveGitHubIdentity(subject, namespace, name, inviteCode string) (ns, role string, err error) {
+	tx, err := p.db.Begin()
+	if err != nil {
+		return "", "", err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('wanctl_admission'))`); err != nil {
+		return "", "", err
+	}
+	if ns, role, err = lookupIdentity(tx, "github", subject); err == nil {
+		if err = tx.Commit(); err != nil {
+			return "", "", err
+		}
+		return ns, role, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
+	}
+
+	var hasAdmin bool
+	if err = tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM users WHERE role = 'admin')`).Scan(&hasAdmin); err != nil {
+		return "", "", err
+	}
+	inviteID := 0
+	role = "admin"
+	if hasAdmin {
+		role = "user"
+		if inviteCode != "" {
+			err = tx.QueryRow(
+				`SELECT id FROM invites WHERE code_hash = $1 AND used_at IS NULL FOR UPDATE`,
+				HashToken(inviteCode),
+			).Scan(&inviteID)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return "", "", err
+			}
+		}
+		if inviteID == 0 {
+			err = tx.QueryRow(
+				`SELECT id FROM invites
+				  WHERE lower(github_login) = lower($1) AND used_at IS NULL
+				  FOR UPDATE`, namespace,
+			).Scan(&inviteID)
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", ErrPendingInvite
+		}
+		if err != nil {
+			return "", "", err
+		}
+		if inviteID == 0 {
+			return "", "", ErrPendingInvite
+		}
+	}
+
+	profileName := name
+	if profileName == "" {
+		profileName = namespace
+	}
+	if ns, role, err = insertIdentity(tx, "github", subject, namespace, profileName, role); err != nil {
+		return "", "", err
+	}
+	if inviteID != 0 {
+		result, updateErr := tx.Exec(
+			`UPDATE invites SET used_at = now(), used_by_namespace = $2
+			  WHERE id = $1 AND used_at IS NULL`, inviteID, ns,
+		)
+		if updateErr != nil {
+			return "", "", updateErr
+		}
+		updated, updateErr := result.RowsAffected()
+		if updateErr != nil {
+			return "", "", updateErr
+		}
+		if updated != 1 {
+			return "", "", ErrPendingInvite
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return "", "", err
+	}
+	return ns, role, nil
+}
+
+func guardNamespace(namespace, reservedNS string) error {
+	if namespace == "" {
+		return fmt.Errorf("%w: namespace is empty", ErrNamespaceConflict)
+	}
+	if reservedNS != "" && strings.EqualFold(namespace, strings.TrimSpace(reservedNS)) {
+		return fmt.Errorf("%w: %q is reserved", ErrNamespaceConflict, namespace)
+	}
+	// "portal" is the conventional privileged namespace (WANCTL_PORTAL_NS): a
+	// token resolving to it may dial any device. Reserve the literal even when
+	// the relay has not configured it yet, so a deployment that opens
+	// registration first and wires the portal second cannot have the name
+	// squatted into a super-user account in between.
+	if strings.EqualFold(namespace, "portal") {
+		return fmt.Errorf("%w: %q is reserved", ErrNamespaceConflict, namespace)
+	}
+	return nil
+}
+
+func validGitHubLogin(login string) bool {
+	if login == "" {
+		return false
+	}
+	for _, c := range login {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func decimalString(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, c := range value {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *PGStore) CreateInvite(githubLogin string) (Invite, string, error) {
+	githubLogin = strings.ToLower(strings.TrimSpace(githubLogin))
+	var invite Invite
+	var code string
+	if githubLogin != "" {
+		if !validGitHubLogin(githubLogin) {
+			return invite, "", fmt.Errorf("invalid GitHub login %q", githubLogin)
+		}
+		err := p.db.QueryRow(
+			`INSERT INTO invites (github_login) VALUES ($1)
+			 RETURNING id, github_login, created_at`, githubLogin,
+		).Scan(&invite.ID, &invite.GitHubLogin, &invite.CreatedAt)
+		return invite, "", err
+	}
+	code = "winv_" + randHex(12)
+	err := p.db.QueryRow(
+		`INSERT INTO invites (code_hash) VALUES ($1)
+		 RETURNING id, created_at`, HashToken(code),
+	).Scan(&invite.ID, &invite.CreatedAt)
+	if err != nil {
+		return Invite{}, "", err
+	}
+	invite.HasCode = true
+	return invite, code, nil
+}
+
+func (p *PGStore) ListInvites() ([]Invite, error) {
+	rows, err := p.db.Query(
+		`SELECT id, COALESCE(github_login,''), created_at, used_at,
+		        COALESCE(used_by_namespace,''), code_hash IS NOT NULL
+		   FROM invites ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	invites := []Invite{}
+	for rows.Next() {
+		var invite Invite
+		var usedAt sql.NullTime
+		if err := rows.Scan(
+			&invite.ID, &invite.GitHubLogin, &invite.CreatedAt, &usedAt,
+			&invite.UsedByNamespace, &invite.HasCode,
+		); err != nil {
+			return nil, err
+		}
+		if usedAt.Valid {
+			invite.UsedAt = &usedAt.Time
+		}
+		invites = append(invites, invite)
+	}
+	return invites, rows.Err()
+}
+
+func (p *PGStore) RevokeInvite(id int) (bool, error) {
+	result, err := p.db.Exec(`DELETE FROM invites WHERE id = $1 AND used_at IS NULL`, id)
+	if err != nil {
+		return false, err
+	}
+	deleted, err := result.RowsAffected()
+	return deleted == 1, err
 }
 
 // UpsertDevice records (or refreshes last_seen for) an online device.
