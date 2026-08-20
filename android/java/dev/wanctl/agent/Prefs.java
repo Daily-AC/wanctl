@@ -12,11 +12,25 @@ final class Prefs {
     private static final String BYPASS = "bypass";
     private static final String ELEVATION = "elevation";
     private static final String NAME = "name";
+    private static final String PORTAL = "portal";
 
     private final SharedPreferences sp;
 
     Prefs(Context c) {
         sp = c.getApplicationContext().getSharedPreferences(FILE, Context.MODE_PRIVATE);
+    }
+
+    /**
+     * Portal origin the user typed in the enroll dialog. Empty in a build that
+     * bakes one in (BuildInfo.PORTAL); this exists because the open-source APK
+     * ships with no portal at all, so it has to come from the person enrolling.
+     */
+    String portal() {
+        return sp.getString(PORTAL, "");
+    }
+
+    void setPortal(String v) {
+        sp.edit().putString(PORTAL, v).apply();
     }
 
     /** Whether the user wants the agent running. The service reflects this, it does not define it. */

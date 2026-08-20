@@ -76,8 +76,14 @@ final class Wanctl {
         Map<String, String> env = pb.environment();
         env.put("WANCTL_CONFIG_DIR", configDir(c).getAbsolutePath());
         env.put("WANCTL_DEVICE_STATE_FILE", deviceStateFile(c).getAbsolutePath());
-        if (new Prefs(c).elevation()) {
+        Prefs prefs = new Prefs(c);
+        if (prefs.elevation()) {
             env.put("WANCTL_ELEVATION", "1");
+        }
+        // A user-typed portal (open-source builds ship none) reaches the binary
+        // here; a baked-in one is already the binary's own default.
+        if (!prefs.portal().isEmpty()) {
+            env.put("WANCTL_PORTAL", prefs.portal());
         }
         env.put("HOME", c.getFilesDir().getAbsolutePath());
         env.put("TMPDIR", c.getCacheDir().getAbsolutePath());

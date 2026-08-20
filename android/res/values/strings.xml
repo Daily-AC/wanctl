@@ -42,9 +42,11 @@
   <string name="cred_no">未登录</string>
 
   <string name="enroll_title">授权本设备</string>
-  <string name="enroll_body">在浏览器里用飞书登录，页面会显示一次性授权 code，粘贴到下面。</string>
+  <string name="enroll_body">在浏览器里登录门户，页面会显示一次性授权 code，粘贴到下面。</string>
   <string name="enroll_open">打开授权页</string>
   <string name="enroll_hint">授权 code</string>
+  <string name="enroll_portal_hint">门户地址，如 https://portal.example.com</string>
+  <string name="enroll_portal_missing">先填门户地址</string>
   <string name="enroll_ok">确定</string>
   <string name="cancel">取消</string>
 
