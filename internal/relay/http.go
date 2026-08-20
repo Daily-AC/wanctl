@@ -90,6 +90,11 @@ type httpSession struct {
 	toAgent  *sideQueue // bytes the agent will read
 }
 
+func (s *httpSession) close() {
+	s.toClient.close()
+	s.toAgent.close()
+}
+
 const (
 	httpAgentTTL = 40 * time.Second
 	downPollWait = 20 * time.Second
@@ -193,7 +198,7 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 	a := r.hagents[targetKey]
 	if a == nil || time.Since(a.lastSeen) > httpAgentTTL {
 		r.hmu.Unlock()
-		http.Error(w, "device offline", http.StatusNotFound)
+		r.handleHDialToWS(w, targetKey, auth)
 		return
 	}
 	sid := newID()
@@ -266,15 +271,7 @@ func (r *Relay) handleHPeers(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	devices := []string{}
-	r.hmu.Lock()
-	for _, a := range r.hagents {
-		if a.ns == ns && time.Since(a.lastSeen) <= httpAgentTTL {
-			devices = append(devices, a.device)
-		}
-	}
-	r.hmu.Unlock()
-	writeJSON(w, map[string]any{"namespace": ns, "devices": devices})
+	writeJSON(w, map[string]any{"namespace": ns, "devices": r.liveDevices(ns)})
 }
 
 func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
@@ -348,8 +345,7 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 	delete(r.hsess, sid)
 	r.hmu.Unlock()
 	if s != nil {
-		s.toClient.close()
-		s.toAgent.close()
+		s.close()
 	}
 	w.WriteHeader(http.StatusOK)
 }

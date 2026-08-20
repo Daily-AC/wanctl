@@ -245,7 +245,7 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 	ac := r.agents[targetKey]
 	r.mu.Unlock()
 	if ac == nil {
-		http.Error(w, "device offline", http.StatusNotFound)
+		r.handleWSDialToHTTP(w, req, targetKey, auth)
 		return
 	}
 	if r.audit != nil {
@@ -280,7 +280,7 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 	select {
 	case agentNC := <-ps.agentSide:
 		pipe(clientNC, agentNC)
-	case <-time.After(15 * time.Second):
+	case <-time.After(agentSessionOpenTimeout):
 		c.Close(websocket.StatusBadGateway, "agent did not open session")
 	}
 }
@@ -304,6 +304,7 @@ func (r *Relay) handleSession(w http.ResponseWriter, req *http.Request) {
 	}
 	limits.ClearHijackedDeadline(req.Context())
 	agentNC := wsconn.FromAccepted(req.Context(), c)
+	defer agentNC.Close()
 	select {
 	case ps.agentSide <- agentNC:
 		<-ps.done
@@ -318,16 +319,8 @@ func (r *Relay) handlePeers(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	devices := []string{}
-	r.mu.Lock()
-	for key, ac := range r.agents {
-		if ac.ns == ns {
-			devices = append(devices, strings.TrimPrefix(key, ns+"/"))
-		}
-	}
-	r.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"namespace": ns, "devices": devices})
+	json.NewEncoder(w).Encode(map[string]any{"namespace": ns, "devices": r.liveDevices(ns)})
 }
 
 // pipe copies bytes both directions until either side closes, then tears down.
