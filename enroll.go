@@ -15,7 +15,7 @@ import (
 )
 
 // enroll runs the OAuth device-enrollment flow: open the portal in a browser
-// (Feishu SSO authenticates the human and shows a one-time code), read the code
+// (the portal authenticates the human and shows a one-time code), read the code
 // the user pastes back, and exchange it at the relay for a namespace-scoped
 // token. Returns the token; the caller persists it. Claude-code-style.
 func enroll(ctx context.Context) (string, error) {
@@ -26,7 +26,7 @@ func enroll(ctx context.Context) (string, error) {
 	enrollURL := strings.TrimRight(portal, "/") + "/enroll"
 
 	fmt.Println("正在将本设备授权到 wanctl 空间…")
-	fmt.Printf("→ 浏览器打开: %s （飞书登录后会显示一次性授权 code）\n", enrollURL)
+	fmt.Printf("→ 浏览器打开: %s （浏览器登录后会显示一次性授权 code）\n", enrollURL)
 	openBrowser(enrollURL)
 
 	fmt.Print("输入授权 code: ")
