@@ -9,6 +9,11 @@ x-wanctl-image: &wanctl-image
       # (e.g. https://goproxy.cn,direct); the image build fails on module
       # download timeouts without it.
       GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+      # Trust anchor for serving signed releases from ./dist (optional; see
+      # "Serve signed releases to devices" in docs/self-hosting.md). It is a
+      # build argument, not runtime config, so a compromised host cannot
+      # quietly swap the key a running relay trusts.
+      WANCTL_RELEASE_PUBLIC_KEYS: ${WANCTL_RELEASE_PUBLIC_KEYS:-}
 
 services:
   postgres:
@@ -37,6 +42,10 @@ services:
       WANCTL_PUBLIC_ORIGIN: ${RELAY_PUBLIC_ORIGIN:?set RELAY_PUBLIC_ORIGIN in selfhost/.env}
     ports:
       - "127.0.0.1:${RELAY_PORT:-8080}:8080"
+    volumes:
+      # Signed release artifacts for /dl and /install.sh; empty means the
+      # feature stays off (the relay logs "release distribution disabled").
+      - ./dist:/dist:ro
     depends_on:
       postgres:
         condition: service_healthy

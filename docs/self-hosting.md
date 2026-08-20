@@ -160,6 +160,34 @@ Set the returned `wanctl_...` value as `WANCTL_PORTAL_TOKEN` in
 docker compose up -d portal
 ```
 
+### Optional: serve signed releases to devices
+
+With release distribution enabled, devices install with one line and later
+upgrade with `wanctl update`, both verified against the project's release
+signature. Download a release's assets from GitHub Releases into
+`selfhost/dist/`, then tell the relay which signing key to trust — the trust
+anchor is compiled in at build time, deliberately not runtime config:
+
+```bash
+gh release download v0.2.0 --repo Daily-AC/wanctl --dir dist   # or curl each asset
+# Derive the raw base64 key the relay build expects from the release's PEM:
+openssl pkey -pubin -in dist/release-public.pem -outform DER | tail -c 32 | base64
+```
+
+Set that value as `WANCTL_RELEASE_PUBLIC_KEYS` in `.env`, then rebuild and
+restart the relay:
+
+```bash
+docker compose build relay && docker compose up -d relay
+```
+
+The relay log switches from `release distribution disabled` to serving `/dl/*`,
+and a device installs with:
+
+```bash
+curl -fsSL https://relay.example.com/install.sh | WANCTL_RELAY=https://relay.example.com sh
+```
+
 ## Troubleshooting
 
 **GitHub reports a callback URL error.** The OAuth App callback must exactly
