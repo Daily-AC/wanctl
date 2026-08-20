@@ -317,3 +317,61 @@ func TestLogoutClearsSession(t *testing.T) {
 		t.Fatal("logout did not clear the session cookie")
 	}
 }
+
+func TestNamespacesReturnsOnlyAcceptedFriends(t *testing.T) {
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "alice", "role": "user"})
+		case "/admin/friends":
+			if r.URL.Query().Get("namespace") != "alice" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"friends": []map[string]any{
+				{"namespace": "bob", "status": "accepted"},
+				{"namespace": "eve", "status": "pending", "direction": "incoming"},
+				{"namespace": "mallory", "status": "pending", "direction": "outgoing"},
+			}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	req := httptest.NewRequest("GET", "/api/namespaces", nil)
+	req.Header.Set("X-User", "alice@example.com")
+	rec := httptest.NewRecorder()
+	s.handleNamespaces(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("namespaces: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct{ Namespaces []string }
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Namespaces) != 1 || out.Namespaces[0] != "bob" {
+		t.Fatalf("only accepted friends may be listed, got %v", out.Namespaces)
+	}
+}
+
+func TestFriendActionForwardsSubjectAndPeer(t *testing.T) {
+	var saw map[string]string
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "alice", "role": "user"})
+		case "/admin/friends/request":
+			json.NewDecoder(r.Body).Decode(&saw)
+			json.NewEncoder(w).Encode(map[string]string{"status": "pending"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	req := httptest.NewRequest("POST", "/api/friends/request", strings.NewReader(`{"namespace":"bob"}`))
+	req.Header.Set("X-User", "alice@example.com")
+	rec := httptest.NewRecorder()
+	s.friendAction("request")(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request: %d %s", rec.Code, rec.Body.String())
+	}
+	if saw["namespace"] != "alice" || saw["peer"] != "bob" {
+		t.Fatalf("relay saw %v; the subject must be the session identity, never client input", saw)
+	}
+}
