@@ -1627,7 +1627,7 @@ function route(){
     return;
   }
   if(h.startsWith('#docs'))return applyView('docs');
-  const m={'#tokens':'tokens','#acl':'acl','#audit':'audit','#devices':'devices','#downloads':'downloads','#changelog':'changelog'};
+  const m={'#tokens':'tokens','#friends':'friends','#invites':'invites','#acl':'acl','#audit':'audit','#devices':'devices','#downloads':'downloads','#changelog':'changelog'};
   applyView(m[h]||'devices');
 }
 window.addEventListener('hashchange',route);
