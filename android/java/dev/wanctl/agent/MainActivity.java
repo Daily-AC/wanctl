@@ -33,12 +33,15 @@ import java.util.concurrent.Executors;
  */
 public final class MainActivity extends Activity {
     /**
-     * The same page wanctl's own enroll flow opens. The portal origin is not
-     * written down here — scripts/build-apk.sh reads it out of
-     * internal/config/config.go and generates BuildInfo, so the app and the
-     * binary inside it can never disagree about where to enroll.
+     * The portal this device enrolls against. A branded build bakes one into
+     * BuildInfo (scripts/build-apk.sh injects the same value into the Go
+     * binary, so the two can never disagree); the open-source build ships
+     * none, and the value is whatever the user typed in the enroll dialog.
      */
-    private static final String ENROLL_URL = BuildInfo.PORTAL + "/enroll";
+    private String portalOrigin() {
+        String typed = prefs.portal();
+        return typed.isEmpty() ? BuildInfo.PORTAL : typed;
+    }
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -317,9 +320,30 @@ public final class MainActivity extends Activity {
         body.setText(R.string.enroll_body);
         box.addView(body);
 
+        // Builds without a baked-in portal (the open-source APK) ask for one
+        // here. It persists, feeds the binary as WANCTL_PORTAL, and the open
+        // button below reads the field live so "type, then tap" just works.
+        final EditText portal;
+        if (BuildInfo.PORTAL.isEmpty()) {
+            portal = new EditText(this);
+            portal.setHint(R.string.enroll_portal_hint);
+            portal.setSingleLine(true);
+            portal.setText(prefs.portal());
+            box.addView(portal);
+        } else {
+            portal = null;
+        }
+
         Button open = new Button(this);
         open.setText(R.string.enroll_open);
-        open.setOnClickListener(v -> openUrl(ENROLL_URL));
+        open.setOnClickListener(v -> {
+            String origin = savePortal(portal);
+            if (origin.isEmpty()) {
+                Toast.makeText(this, R.string.enroll_portal_missing, Toast.LENGTH_SHORT).show();
+                return;
+            }
+            openUrl(origin + "/enroll");
+        });
         box.addView(open);
 
         EditText code = new EditText(this);
@@ -331,8 +355,29 @@ public final class MainActivity extends Activity {
                 .setTitle(R.string.enroll_title)
                 .setView(box)
                 .setNegativeButton(R.string.cancel, null)
-                .setPositiveButton(R.string.enroll_ok, (d, w) -> submitEnroll(code.getText().toString().trim()))
+                .setPositiveButton(R.string.enroll_ok, (d, w) -> {
+                    savePortal(portal);
+                    submitEnroll(code.getText().toString().trim());
+                })
                 .show();
+    }
+
+    /**
+     * Persists the enroll dialog's portal field and returns the effective
+     * origin. A trailing slash is dropped because the value is joined with
+     * paths like {@code /enroll} and handed to the binary, which expects a
+     * bare origin.
+     */
+    private String savePortal(EditText field) {
+        if (field == null) {
+            return portalOrigin();
+        }
+        String typed = field.getText().toString().trim();
+        while (typed.endsWith("/")) {
+            typed = typed.substring(0, typed.length() - 1);
+        }
+        prefs.setPortal(typed);
+        return typed.isEmpty() ? BuildInfo.PORTAL : typed;
     }
 
     private void submitEnroll(String code) {

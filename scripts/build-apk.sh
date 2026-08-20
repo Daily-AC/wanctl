@@ -113,22 +113,26 @@ if [ "$VERSION" != dev ] && [ -z "$TRUSTED" ]; then
   exit 1
 fi
 
+# The portal origin is optional: the open-source build ships without one, and
+# the app then asks the user for their portal in the enroll dialog. When it is
+# set, it is baked into both the Go binary and BuildInfo from this one value,
+# which is what keeps the app's "log in" button pointed at the same place the
+# binary enrolls against.
+PORTAL=${WANCTL_DEFAULT_PORTAL:-}
+echo "  portal     ${PORTAL:-(not set; the app will ask)}"
+
 LDFLAGS="-s -w -X main.buildVersion=$VERSION_NAME"
 if [ -n "$TRUSTED" ]; then
   LDFLAGS="$LDFLAGS -X wanctl/internal/release.TrustedPublicKeys=$TRUSTED"
+fi
+if [ -n "$PORTAL" ]; then
+  LDFLAGS="$LDFLAGS -X wanctl/internal/config.DefaultPortal=$PORTAL"
 fi
 echo "  building wanctl android/arm64 …"
 (cd "$ROOT" && env -u WANCTL_RELEASE_SIGNING_KEY CGO_ENABLED=0 GOOS=android GOARCH=arm64 \
     go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/lib/arm64-v8a/libwanctl.so" .)
 
 # ---------------------------------------------------------------- generated source
-
-# The portal origin is compiled into the Go binary. Reading it out of the same
-# constant, rather than repeating it in Java, is what keeps the app's "log in"
-# button pointed at the same place the binary enrolls against.
-PORTAL=$(sed -n 's/.*DefaultPortal *= *"\([^"]*\)".*/\1/p' "$ROOT/internal/config/config.go" | head -1)
-[ -n "$PORTAL" ] || { echo "could not read DefaultPortal from internal/config/config.go" >&2; exit 1; }
-echo "  portal     $PORTAL"
 
 mkdir -p "$OUT/gen/dev/wanctl/agent"
 cat > "$OUT/gen/dev/wanctl/agent/BuildInfo.java" <<EOF
