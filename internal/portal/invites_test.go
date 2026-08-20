@@ -31,35 +31,55 @@ func invitesPortal(t *testing.T, role string, relayCalls *[]string) *Server {
 			case req.URL.Path == "/admin/invites/revoke":
 				rr.WriteHeader(http.StatusOK)
 			}
-			resp := rr.Result()
-			return resp, nil
+			return rr.Result(), nil
 		}
 		return inner.RoundTrip(req)
 	})}
 	return s
 }
 
-func inviteReq(s *Server, method, path, body string, login *httptest.ResponseRecorder) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	if login != nil {
-		for _, c := range login.Result().Cookies() {
-			req.AddCookie(c)
+// inviteSession logs in through the OAuth callback and collects the session
+// cookie plus a CSRF cookie minted by the security middleware on a GET.
+func inviteSession(t *testing.T, s *Server, h http.Handler) []*http.Cookie {
+	t.Helper()
+	login := loginThroughCallback(t, s, "")
+	cookies := login.Result().Cookies()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "https://portal.test/api/me", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	h.ServeHTTP(rec, req)
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == csrfCookieName {
+			cookies = append(cookies, c)
+		}
+	}
+	return cookies
+}
+
+// inviteReq drives the full handler chain — security middleware included, the
+// same path the SPA takes — with same-origin and double-submit headers set.
+func inviteReq(h http.Handler, method, path, body string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, "https://portal.test"+path, strings.NewReader(body))
+	req.Header.Set("Origin", "https://portal.test")
+	req.Header.Set("Content-Type", "application/json")
+	for _, c := range cookies {
+		req.AddCookie(c)
+		if c.Name == csrfCookieName {
+			req.Header.Set("X-CSRF-Token", c.Value)
 		}
 	}
 	rec := httptest.NewRecorder()
-	switch path {
-	case "/api/invites/revoke":
-		s.handleInviteRevoke(rec, req)
-	default:
-		s.handleInvites(rec, req)
-	}
+	h.ServeHTTP(rec, req)
 	return rec
 }
 
 func TestInvitesRequireSignIn(t *testing.T) {
 	var calls []string
 	s := invitesPortal(t, "admin", &calls)
-	if rec := inviteReq(s, "GET", "/api/invites", "", nil); rec.Code != http.StatusUnauthorized {
+	h := s.Handler()
+	if rec := inviteReq(h, "GET", "/api/invites", "", nil); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous list: status %d", rec.Code)
 	}
 	if len(calls) != 0 {
@@ -70,10 +90,11 @@ func TestInvitesRequireSignIn(t *testing.T) {
 func TestInvitesRejectNonAdmin(t *testing.T) {
 	var calls []string
 	s := invitesPortal(t, "user", &calls)
-	login := loginThroughCallback(t, s, "")
+	h := s.Handler()
+	cookies := inviteSession(t, s, h)
 	for _, c := range [][2]string{{"GET", "/api/invites"}, {"POST", "/api/invites"}, {"POST", "/api/invites/revoke"}} {
-		if rec := inviteReq(s, c[0], c[1], "{}", login); rec.Code != http.StatusForbidden {
-			t.Fatalf("%s %s as plain user: status %d", c[0], c[1], rec.Code)
+		if rec := inviteReq(h, c[0], c[1], "{}", cookies); rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s as plain user: status %d body %q", c[0], c[1], rec.Code, rec.Body.String())
 		}
 	}
 	if len(calls) != 0 {
@@ -84,19 +105,20 @@ func TestInvitesRejectNonAdmin(t *testing.T) {
 func TestInvitesAdminPassThrough(t *testing.T) {
 	var calls []string
 	s := invitesPortal(t, "admin", &calls)
-	login := loginThroughCallback(t, s, "")
+	h := s.Handler()
+	cookies := inviteSession(t, s, h)
 
-	rec := inviteReq(s, "POST", "/api/invites", `{"github_login":""}`, login)
+	rec := inviteReq(h, "POST", "/api/invites", `{"github_login":""}`, cookies)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "winv_testcode") {
 		t.Fatalf("create: status %d body %q", rec.Code, rec.Body.String())
 	}
-	rec = inviteReq(s, "GET", "/api/invites", "", login)
+	rec = inviteReq(h, "GET", "/api/invites", "", cookies)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"id":7`) {
 		t.Fatalf("list: status %d body %q", rec.Code, rec.Body.String())
 	}
-	rec = inviteReq(s, "POST", "/api/invites/revoke", `{"id":7}`, login)
+	rec = inviteReq(h, "POST", "/api/invites/revoke", `{"id":7}`, cookies)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("revoke: status %d", rec.Code)
+		t.Fatalf("revoke: status %d body %q", rec.Code, rec.Body.String())
 	}
 	want := []string{
 		`POST /admin/invites {"github_login":""}`,

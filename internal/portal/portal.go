@@ -255,12 +255,15 @@ var mutationPaths = map[string]bool{
 	"/api/friends/accept":          true,
 	"/api/friends/decline":         true,
 	"/api/friends/remove":          true,
+	"/api/invites":                 true,
+	"/api/invites/revoke":          true,
 }
 
 var readWritePaths = map[string]bool{
 	"/api/tokens":       true,
 	"/api/acl":          true,
 	"/api/devices/lark": true,
+	"/api/invites":      true,
 }
 
 func (s *Server) securityMiddleware(next http.Handler) http.Handler {
