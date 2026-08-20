@@ -441,6 +441,7 @@
     <button data-sec="tokens"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="M11 12 21 2M17 6l2 2"/></svg>访问令牌</button>
     <button data-sec="friends"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="8.5" r="3.5"/><path d="M2.5 20a6 6 0 0 1 12 0"/><circle cx="17" cy="10" r="2.6"/><path d="M14.8 20a4.8 4.8 0 0 1 6.7-4.4"/></svg>好友</button>
     <button data-sec="acl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11l2 2 4-4"/></svg>共享授权</button>
+    <button data-sec="invites" id="navInvites" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2.5 2.5 0 0 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2.5 2.5 0 0 0 0-4z"/><path d="M13 6v2M13 11v2M13 16v2" stroke-dasharray="1 3" stroke-linecap="round"/></svg>邀请</button>
     <button data-sec="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Relay 审计</button>
     <button data-sec="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M14 3v5h5M8 13h8M8 17h6" stroke-linecap="round"/></svg>使用文档</button>
     <button data-sec="downloads"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12" stroke-linecap="round"/><path d="m7 11 5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20h16" stroke-linecap="round"/></svg>下载安装</button>
@@ -584,6 +585,26 @@
         <thead><tr><th>命名空间</th><th>状态</th><th>自</th><th style="text-align:right"></th></tr></thead>
         <tbody id="friendsBody"></tbody>
       </table></div>
+    </section>
+
+    <!-- invites (admin only) -->
+    <section class="view" data-view="invites">
+      <div class="vhead">
+        <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2.5 2.5 0 0 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2.5 2.5 0 0 0 0-4z"/><path d="M13 6v2M13 11v2M13 16v2" stroke-dasharray="1 3" stroke-linecap="round"/></svg>邀请</h1>
+        <button class="addbtn" id="iAdd"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>新建邀请</button>
+      </div>
+      <p class="sub">这个部署是邀请制的：新用户 GitHub 登录后会停在「待邀请」页，凭一次性邀请码进来；也可以直接预录对方的 GitHub 用户名，对方登录即自动获准。只有管理员看得到这一页。</p>
+      <div class="tablecard" style="margin-top:18px"><table>
+        <thead><tr><th>id</th><th>方式</th><th>创建</th><th>状态</th><th style="text-align:right"></th></tr></thead>
+        <tbody id="invitesBody"></tbody>
+      </table></div>
+      <div class="slip" id="islip">
+        <span class="tag">只出现这一次</span>
+        <div class="cap">邀请码来啦，发给你的朋友～</div>
+        <code id="ival"></code>
+        <div class="once">对方 GitHub 登录后在「待邀请」页粘贴。一码一人，离开这页就再也看不到咯。</div>
+        <div class="row"><button class="btn soft" id="icopy">复制收好</button></div>
+      </div>
     </section>
 
     <!-- acl -->
@@ -731,6 +752,7 @@ function applyView(s){
   if(s==='devices')loadOverview();
   else if(s==='tokens')loadTokens();
   else if(s==='friends')loadFriends();
+  else if(s==='invites')loadInvites();
   else if(s==='acl')loadACL();
   else if(s==='audit')loadAudit();
   else if(s==='docs')loadDocs();
@@ -1304,6 +1326,34 @@ $('#fAdd').onclick=async()=>{
   }catch(e){err('加好友失败：'+e.message)}
 };
 
+/* ---- invites (admin only) ---- */
+async function loadInvites(){
+  try{const xs=await jget('/api/invites')||[];
+    $('#invitesBody').innerHTML=xs.length?xs.map(i=>{
+      const kind=i.has_code?'邀请码':'预录 '+esc(i.github_login||'');
+      const state=i.used_at?'<span class="pill ok">已用 · '+esc(i.used_by_namespace||'')+'</span>':'<span class="pill ask">待使用</span>';
+      const rm=i.used_at?'':`<button class="rmx" data-i="${i.id}">撤销</button>`;
+      return `<tr><td>${i.id}</td><td>${kind}</td><td>${fmt(i.created_at)}</td><td>${state}</td><td style="text-align:right">${rm}</td></tr>`;
+    }).join(''):'<tr><td colspan="5" class="empty">还没有邀请～点右上角建一个，发给朋友</td></tr>';
+    $$('#invitesBody .rmx').forEach(b=>b.onclick=()=>askConfirm('撤销邀请','撤销后这个邀请就不能再用了，确定吗？','撤销',async()=>{
+      try{await jpost('/api/invites/revoke',{id:parseInt(b.dataset.i,10)});loadInvites()}catch(e){err('撤销失败：'+e.message)}
+    }));
+  }catch(e){err('邀请列表加载失败：'+e.message)}
+}
+$('#iAdd').onclick=async()=>{
+  const v=await openForm({title:'新建邀请',okText:'创建',fields:[
+    {key:'login',label:'GitHub 用户名（可选）',type:'text',placeholder:'填了就预录对方，登录即获准；留空则生成一次性邀请码'}]});
+  if(!v)return;
+  try{
+    const r=await jpost('/api/invites',{github_login:(v.login||'').trim()});
+    const j=await r.json();
+    if(j.code){$('#ival').textContent=j.code;$('#islip').classList.add('show')}
+    else toast('ok','已预录 '+(j.github_login||'')+'，对方登录即自动获准');
+    loadInvites();
+  }catch(e){err('创建失败：'+e.message)}
+};
+$('#icopy').onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText($('#ival').textContent);$('#icopy').textContent='收好啦～';setTimeout(()=>$('#icopy').textContent='复制收好',1400)};
+
 /* ---- audit ---- */
 async function loadAudit(){
   try{const d=await jget('/api/audit');const xs=d.audit||[];
@@ -1583,7 +1633,7 @@ function route(){
 window.addEventListener('hashchange',route);
 
 /* ---- me + boot ---- */
-async function loadMe(){try{const m=await jget('/api/me');currentNS=m.namespace||'';$('#ns').textContent=currentNS||'—';$('#fp').textContent=m.identity||'';docMe=m}catch(e){$('#fp').textContent='未登录';err('未登录或会话失效：'+e.message)}}
+async function loadMe(){try{const m=await jget('/api/me');currentNS=m.namespace||'';$('#ns').textContent=currentNS||'—';$('#fp').textContent=m.identity||'';docMe=m;if(m.role==='admin')$('#navInvites').hidden=false}catch(e){$('#fp').textContent='未登录';err('未登录或会话失效：'+e.message)}}
 loadMe();
 /* The version badge is part of the shell, not of the changelog page, so it has
    to be filled at boot rather than when that page is first opened. */
