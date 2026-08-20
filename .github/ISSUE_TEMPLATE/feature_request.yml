@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose new behavior or an improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do that wanctl currently cannot, or makes harder than it should be. Concrete scenarios beat abstract capabilities.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What you would like to happen. If it widens what a controller can do on a device, say how the device side stays in control.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, or why existing features (policy rules, sharing capabilities, `--script`, MCP tools) do not cover it.

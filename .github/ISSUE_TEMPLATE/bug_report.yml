@@ -1,0 +1,52 @@
+name: Bug report
+description: Something behaves wrongly or fails
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this looks like a security problem (policy or approval bypass,
+        authentication flaw, plaintext exposure), do NOT file it here —
+        see SECURITY.md for private reporting.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `wanctl --help | head -1`, or the release tag. For the Android app, the version shown on its screen.
+      placeholder: v0.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - agent (device side)
+        - controller CLI
+        - relay
+        - portal (web)
+        - MCP server
+        - Android app
+        - install / update
+        - docs
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what you got. Paste real output where possible; redact tokens and hostnames.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Smallest setup that shows it. Mention transport (HTTP long-poll vs WebSocket), OS on both ends, and whether the device runs in normal or bypass mode if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from `wanctl logs`, the agent's event log, or relay/portal service logs.
