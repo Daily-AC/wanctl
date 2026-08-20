@@ -165,6 +165,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/friends/accept", s.friendAction("accept"))
 	mux.HandleFunc("/api/friends/decline", s.friendAction("decline"))
 	mux.HandleFunc("/api/friends/remove", s.friendAction("remove"))
+	mux.HandleFunc("/api/invites", s.handleInvites)
+	mux.HandleFunc("/api/invites/revoke", s.handleInviteRevoke)
 	mux.HandleFunc("/api/users/lookup", s.handleUserLookup)
 	mux.HandleFunc("/api/releases", s.handleReleases)
 	mux.HandleFunc("/api/downloads", s.handleDownloads)
@@ -774,6 +776,79 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"identity": p.Login, "namespace": ns, "provider": p.Provider, "role": role,
 	})
+}
+
+// requireAdmin admits only a signed-in user whose resolved role is "admin".
+// Admission invites gate who may join this deployment, so unlike the other
+// /api handlers the namespace alone is not enough.
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.relayURL == "" || s.adminSecret == "" {
+		http.Error(w, "portal not wired yet (set RELAY_ADMIN_URL and WANCTL_ADMIN_SECRET)", http.StatusServiceUnavailable)
+		return false
+	}
+	p := s.principalFrom(r)
+	if p == nil {
+		http.Error(w, "not signed in", http.StatusUnauthorized)
+		return false
+	}
+	_, role, status, detail := s.resolveNamespace(p, "")
+	if status != resolveOK {
+		http.Error(w, detail, http.StatusBadGateway)
+		return false
+	}
+	if role != "admin" {
+		http.Error(w, "admin only", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleInvites(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if r.Method == "POST" {
+		var body struct {
+			GitHubLogin string `json:"github_login"`
+		}
+		if r.Body != nil {
+			json.NewDecoder(r.Body).Decode(&body)
+		}
+		resp, err := s.adminReq("POST", "/admin/invites", nil, body)
+		if err != nil {
+			http.Error(w, "relay unreachable", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		copyResp(w, resp)
+		return
+	}
+	resp, err := s.adminReq("GET", "/admin/invites", nil, nil)
+	if err != nil {
+		http.Error(w, "relay unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	copyResp(w, resp)
+}
+
+func (s *Server) handleInviteRevoke(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	var body struct {
+		ID int `json:"id"`
+	}
+	if r.Body != nil {
+		json.NewDecoder(r.Body).Decode(&body)
+	}
+	resp, err := s.adminReq("POST", "/admin/invites/revoke", nil, body)
+	if err != nil {
+		http.Error(w, "relay unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	copyResp(w, resp)
 }
 
 func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
