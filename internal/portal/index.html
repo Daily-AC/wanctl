@@ -96,6 +96,11 @@
   .pill .d{width:7px;height:7px;border-radius:50%}
   .pill.on{background:#e0f6ec;color:var(--mint-d)}.pill.on .d{background:var(--mint);box-shadow:0 0 0 3px rgba(116,207,166,.3)}
   .pill.off{background:#f3eae3;color:var(--ink-2)}.pill.off .d{background:var(--ink-3)}
+  /* friends: relationship states share the pill vocabulary */
+  .pill.ok{background:#e0f6ec;color:var(--mint-d)}
+  .pill.ask{background:#ffeede;color:#c9722a}
+  .pill.wait{background:#f3eae3;color:var(--ink-2)}
+  .rmx[data-act="accept"]{color:var(--mint-d)}
   .shareline{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:9px}
   .sharetag{font-family:var(--round);font-weight:700;font-size:11.5px;color:#8a5a20;background:#fff2cf;border:1px solid #ffd995;
     border-radius:13px;padding:3px 9px;display:inline-flex;align-items:center;gap:5px}
@@ -434,6 +439,7 @@
   <nav>
     <button data-sec="devices" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="12" rx="3"/><path d="M8 21h8"/></svg>设备</button>
     <button data-sec="tokens"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="M11 12 21 2M17 6l2 2"/></svg>访问令牌</button>
+    <button data-sec="friends"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="8.5" r="3.5"/><path d="M2.5 20a6 6 0 0 1 12 0"/><circle cx="17" cy="10" r="2.6"/><path d="M14.8 20a4.8 4.8 0 0 1 6.7-4.4"/></svg>好友</button>
     <button data-sec="acl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11l2 2 4-4"/></svg>共享授权</button>
     <button data-sec="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Relay 审计</button>
     <button data-sec="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M14 3v5h5M8 13h8M8 17h6" stroke-linecap="round"/></svg>使用文档</button>
@@ -567,13 +573,26 @@
       </div>
     </section>
 
+    <!-- friends -->
+    <section class="view" data-view="friends">
+      <div class="vhead">
+        <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><circle cx="8.5" cy="8.5" r="3.5"/><path d="M2.5 20a6 6 0 0 1 12 0"/><circle cx="17" cy="10" r="2.6"/><path d="M14.8 20a4.8 4.8 0 0 1 6.7-4.4"/></svg>好友</h1>
+        <button class="addbtn" id="fAdd"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>加好友</button>
+      </div>
+      <p class="sub">好友之间才能互相共享设备。凭对方的用户名（命名空间）精确添加，加错了随时删——删除会同时收回双方之间的全部共享。</p>
+      <div class="tablecard" style="margin-top:18px"><table>
+        <thead><tr><th>命名空间</th><th>状态</th><th>自</th><th style="text-align:right"></th></tr></thead>
+        <tbody id="friendsBody"></tbody>
+      </table></div>
+    </section>
+
     <!-- acl -->
     <section class="view" data-view="acl">
       <div class="vhead">
         <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11l2 2 4-4"/></svg>共享授权</h1>
         <button class="addbtn" id="aAdd"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>新增授权</button>
       </div>
-      <p class="sub">把某台设备的部分权限，分享给命名空间之外的小伙伴。</p>
+      <p class="sub">把某台设备的部分权限，分享给你的好友。先在「好友」页加上对方，这里才点得到。</p>
       <div class="tablecard" style="margin-top:18px"><table>
         <thead><tr><th>id</th><th>设备</th><th>被授权命名空间</th><th>权限</th><th></th></tr></thead>
         <tbody id="acl"></tbody>
@@ -711,6 +730,7 @@ function applyView(s){
   showView(s);
   if(s==='devices')loadOverview();
   else if(s==='tokens')loadTokens();
+  else if(s==='friends')loadFriends();
   else if(s==='acl')loadACL();
   else if(s==='audit')loadAudit();
   else if(s==='docs')loadDocs();
@@ -1239,6 +1259,49 @@ $('#aAdd').onclick=async()=>{
   if(!v)return;
   if(!v.device||!v.grantee){err('设备名和被授权命名空间都要填哦～');return}
   try{await jpost('/api/acl',{device:v.device,grantee:v.grantee,perms:v.perms||'exec'});loadACL()}catch(e){err('授权失败：'+e.message)}
+};
+
+/* ---- friends ---- */
+async function loadFriends(){
+  try{const d=await jget('/api/friends');const xs=d.friends||[];
+    $('#friendsBody').innerHTML=xs.length?xs.map(f=>{
+      const ns=esc(f.namespace);
+      let state,act;
+      if(f.status==='accepted'){
+        state='<span class="pill ok">好友</span>';
+        act=`<button class="rmx" data-act="remove" data-ns="${ns}">删除</button>`;
+      }else if(f.direction==='incoming'){
+        state='<span class="pill ask">想加你为好友</span>';
+        act=`<button class="rmx" data-act="accept" data-ns="${ns}">接受</button> <button class="rmx" data-act="decline" data-ns="${ns}">拒绝</button>`;
+      }else{
+        state='<span class="pill wait">等待对方接受</span>';
+        act=`<button class="rmx" data-act="remove" data-ns="${ns}">撤回</button>`;
+      }
+      const since=f.since?new Date(f.since).toLocaleDateString():'';
+      return `<tr><td>${ns}</td><td>${state}</td><td>${since}</td><td style="text-align:right">${act}</td></tr>`;
+    }).join(''):'<tr><td colspan="4" class="empty">还没有好友，点右上角用对方的用户名加一个～</td></tr>';
+    $$('#friendsBody .rmx').forEach(b=>b.onclick=()=>friendAct(b.dataset.act,b.dataset.ns));
+  }catch(e){err('好友列表加载失败：'+e.message)}
+}
+async function friendAct(act,ns){
+  const go=async()=>{try{await jpost('/api/friends/'+act,{namespace:ns});loadFriends()}catch(e){err('操作失败：'+e.message)}};
+  if(act==='remove'){askConfirm('删除好友','删除后你们之间已有的设备共享会全部收回，确定吗？','删除',go);return}
+  go();
+}
+$('#fAdd').onclick=async()=>{
+  const v=await openForm({title:'加好友',okText:'发送请求',fields:[
+    {key:'ns',label:'对方的用户名（命名空间）',type:'text',placeholder:'如 octocat'}]});
+  if(!v||!v.ns)return;
+  const ns=v.ns.trim().toLowerCase();
+  try{
+    const r=await fetch('/api/users/lookup?namespace='+encodeURIComponent(ns));
+    if(r.status===404){err('没有找到用户 "'+ns+'"，请确认对方已经登录过这个站点');return}
+    if(!r.ok)throw httpErr(r.status,await r.text());
+    const res=await jpost('/api/friends/request',{namespace:ns});
+    const out=await res.json().catch(()=>({}));
+    toast('ok',out.status==='accepted'?'对方也在等你，已互为好友！':'好友请求已发送，等对方接受');
+    loadFriends();
+  }catch(e){err('加好友失败：'+e.message)}
 };
 
 /* ---- audit ---- */

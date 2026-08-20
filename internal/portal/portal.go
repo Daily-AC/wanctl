@@ -156,6 +156,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices", s.handleDevices)
 	mux.HandleFunc("/api/devices/lark", s.handleDeviceLark)
 	mux.HandleFunc("/api/namespaces", s.handleNamespaces)
+	mux.HandleFunc("/api/friends", s.handleFriendsList)
+	mux.HandleFunc("/api/friends/request", s.friendAction("request"))
+	mux.HandleFunc("/api/friends/accept", s.friendAction("accept"))
+	mux.HandleFunc("/api/friends/decline", s.friendAction("decline"))
+	mux.HandleFunc("/api/friends/remove", s.friendAction("remove"))
+	mux.HandleFunc("/api/users/lookup", s.handleUserLookup)
 	mux.HandleFunc("/api/releases", s.handleReleases)
 	mux.HandleFunc("/api/downloads", s.handleDownloads)
 	mux.HandleFunc("/api/acl", s.handleACL)
@@ -239,6 +245,10 @@ var mutationPaths = map[string]bool{
 	"/api/docs/groups/delete":      true,
 	"/auth/logout":                 true,
 	"/auth/redeem":                 true,
+	"/api/friends/request":         true,
+	"/api/friends/accept":          true,
+	"/api/friends/decline":         true,
+	"/api/friends/remove":          true,
 }
 
 var readWritePaths = map[string]bool{
@@ -879,17 +889,40 @@ func (s *Server) handleDeviceLarkWrite(w http.ResponseWriter, r *http.Request) {
 	copyResp(w, resp)
 }
 
+// handleNamespaces feeds the sharing form's grantee dropdown. It used to
+// return every namespace in the system, which let any signed-in user
+// enumerate all users; sharing is friend-gated now, so only accepted friends
+// are offered — which is also exactly the set a grant would succeed for.
 func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireNS(w, r); !ok {
+	ns, ok := s.requireNS(w, r)
+	if !ok {
 		return
 	}
-	resp, err := s.adminReq("GET", "/admin/users", nil, nil)
+	resp, err := s.adminReq("GET", "/admin/friends", url.Values{"namespace": {ns}}, nil)
 	if err != nil {
 		http.Error(w, "relay unreachable", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
-	copyResp(w, resp)
+	if resp.StatusCode != http.StatusOK {
+		copyResp(w, resp)
+		return
+	}
+	var out struct {
+		Friends []struct {
+			Namespace string `json:"namespace"`
+			Status    string `json:"status"`
+		} `json:"friends"`
+	}
+	json.NewDecoder(resp.Body).Decode(&out)
+	namespaces := []string{}
+	for _, f := range out.Friends {
+		if f.Status == "accepted" {
+			namespaces = append(namespaces, f.Namespace)
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"namespaces": namespaces})
 }
 
 func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
