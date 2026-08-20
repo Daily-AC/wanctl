@@ -1,4 +1,4 @@
-package com.***REMOVED***.wanctl;
+package dev.wanctl.agent;
 
 import android.content.Context;
 import android.net.nsd.NsdManager;

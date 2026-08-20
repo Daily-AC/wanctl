@@ -1,4 +1,4 @@
-package com.***REMOVED***.wanctl;
+package dev.wanctl.agent;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -41,7 +41,7 @@ import java.util.concurrent.Executors;
  * refused, whatever the release manifest says.
  */
 final class Installer {
-    private static final String ACTION_STATUS = "com.***REMOVED***.wanctl.INSTALL_STATUS";
+    private static final String ACTION_STATUS = "dev.wanctl.agent.INSTALL_STATUS";
 
     private final Activity activity;
     private final ExecutorService io = Executors.newSingleThreadExecutor();

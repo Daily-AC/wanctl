@@ -1,4 +1,4 @@
-package com.***REMOVED***.wanctl;
+package dev.wanctl.agent;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -48,8 +48,8 @@ public final class AgentService extends Service {
     private static final long BACKOFF_MIN_MS = 2_000;
     private static final long BACKOFF_MAX_MS = 60_000;
 
-    public static final String ACTION_STOP = "com.***REMOVED***.wanctl.STOP";
-    public static final String ACTION_RESTART = "com.***REMOVED***.wanctl.RESTART";
+    public static final String ACTION_STOP = "dev.wanctl.agent.STOP";
+    public static final String ACTION_RESTART = "dev.wanctl.agent.RESTART";
 
     private Thread supervisor;
     private volatile Process child;

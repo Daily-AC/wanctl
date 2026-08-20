@@ -1,4 +1,4 @@
-package com.***REMOVED***.wanctl;
+package dev.wanctl.agent;
 
 import android.os.Handler;
 import android.os.Looper;
