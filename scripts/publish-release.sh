@@ -10,7 +10,7 @@ printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9
   exit 1
 }
 test -f "$NOTES" || { echo "release notes not found: $NOTES" >&2; exit 1; }
-command -v glab >/dev/null 2>&1 || { echo "glab is required" >&2; exit 1; }
+command -v gh >/dev/null 2>&1 || { echo "gh is required" >&2; exit 1; }
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 DIST=$(CDPATH= cd -- "$DIST" && pwd)
@@ -67,10 +67,12 @@ grep -qF "$EXPECTED_XML" "$DIST/install.ps1" || {
   exit 1
 }
 
-if (cd "$ROOT" && glab release view "$VERSION" >/dev/null 2>&1); then
+if (cd "$ROOT" && gh release view "$VERSION" >/dev/null 2>&1); then
   echo "release $VERSION already exists; refusing to overwrite it" >&2
   exit 1
 fi
 
-(cd "$ROOT" && glab release create "$VERSION" "$DIST"/* \
-  --name "wanctl $VERSION" --notes-file "$NOTES" --no-update)
+# GitHub Actions publishes directly from release.yml. This is the equivalent
+# manual path, with the same artifact validation above plus explicit notes.
+(cd "$ROOT" && gh release create "$VERSION" "$DIST"/* \
+  --title "wanctl $VERSION" --notes-file "$NOTES" --verify-tag)
