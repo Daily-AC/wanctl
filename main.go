@@ -1,5 +1,5 @@
 // Command wanctl is a cross-internet remote-control CLI. The same binary runs as
-// the relay (`wanctl relay`, on thunderbox), the controlled device
+// the relay (`wanctl relay`), the controlled device
 // (`wanctl agent`), and the controller (`wanctl exec/push/pull`). Endpoints meet
 // through the relay's WebSocket broker and speak end-to-end mutual TLS, so the
 // relay only sees ciphertext.
@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -44,7 +45,7 @@ var usage = `wanctl — control a device across the internet over an encrypted, 
 
 USAGE
  DEVICE LIFECYCLE (run on the box you want to control)
-  wanctl                                      log in (Feishu) if needed, then run the agent detached in the background
+  wanctl                                      log in if needed, then run the agent detached in the background
   wanctl start                                (re)start the background agent without re-login; records its pid
   wanctl stop                                 stop the background agent
   wanctl status [-target NS/DEV]              show local agent/credential status, or remote agent mode + version
@@ -61,7 +62,7 @@ USAGE
   for boot-without-login; Windows starts the limited-user task at the next logon.
 
  CONTROLLER (run where you / the AI drive from)
-  wanctl login [--code CODE]                  log in (Feishu) and save the token — no daemon (use this on AI / controller boxes);
+  wanctl login [--code CODE]                  log in via the portal and save the token — no daemon (use this on AI / controller boxes);
                                               --code skips the prompt for a front-end that already has the enrollment code
   wanctl update                               download the latest binary from the relay and swap it in
   wanctl update --fetch-apk DIR               Android: download+verify the APK there and print its path (the app installs it)
@@ -109,18 +110,22 @@ USAGE
   wanctl logs --service portal|relay [--since 15m] [--grep STR] [--limit N]
                                               read recent server logs; --follow is not yet supported
   wanctl portal-admins [list|add|remove]        manage local portal root fingerprints
+  wanctl admin invite [--github LOGIN]        mint an invite code (or pre-approve a GitHub login); needs WANCTL_ADMIN_SECRET
+  wanctl admin invites | invite-revoke ID     list or revoke admission invites
   wanctl agent [--name N] [--relay URL] [--token T] [--yes] [--shell S] [--portal-fps FP[,FP]]
-  wanctl relay  [--addr :8080]                run the relay (thunderbox); DATABASE_URL or WANCTL_TOKENS
-  wanctl portal [--addr :8080]                run the team portal (thunderbox, internal SSO)
+  wanctl relay  [--addr :8080]                run the relay; DATABASE_URL or WANCTL_TOKENS
+  wanctl portal [--addr :8080]                run the web portal (GitHub OAuth or reverse-proxy SSO)
 
 Defaults: relay=` + configuredDisplay(defaultRelay, "(not set)") + `  portal=` + configuredDisplay(defaultPortal, "(not set)") + `  transport=` + defaultTransport + ` (override with WANCTL_RELAY/WANCTL_PORTAL/WANCTL_TRANSPORT)
 ENV (controller): WANCTL_TOKEN=... (or run 'wanctl' to log in)  WANCTL_RELAY=...
                   WANCTL_PORTAL=... WANCTL_ADMIN_SECRET=... (server logs only)
 ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"  WANCTL_ADMIN_SECRET=...  WANCTL_PORTAL_NS=...
-ENV (portal):     RELAY_ADMIN_URL=...  WANCTL_ADMIN_SECRET=...  PORTAL_USER_HEADER=...
+ENV (portal):     RELAY_ADMIN_URL=...  WANCTL_ADMIN_SECRET=...
+              login, either:  WANCTL_GITHUB_CLIENT_ID/_SECRET=... WANCTL_SESSION_SECRET=<32+ bytes>
+                         or:  PORTAL_USER_HEADER=X-Auth-Request-Email (behind a trusted SSO proxy)
               PORTAL_PUBLIC_ORIGIN=https://portal.example  PORTAL_DEBUG_WHOAMI=1 (diagnostics only)
               WANCTL_RELAY=...  WANCTL_PORTAL_TOKEN=...  WANCTL_TRANSPORT=ws
-              WANCTL_LARK_APP_ID=...  WANCTL_LARK_APP_SECRET=... (optional; enables Feishu approvals)
+              WANCTL_LARK_APP_ID=...  WANCTL_LARK_APP_SECRET=... (optional; enables Lark approvals)
 ENV (agent):      WANCTL_PORTAL_FPS=SHA256:...[,SHA256:...]  (WANCTL_PORTAL_FP is a legacy alias)
 `
 
@@ -208,6 +213,8 @@ func main() {
 	case "version":
 		fmt.Println(buildVersion)
 		return
+	case "admin":
+		err = cmdAdmin(os.Args[2:])
 	case "service":
 		err = cmdService(ctx, os.Args[2:])
 	case "mcp":
@@ -319,25 +326,51 @@ func cmdPortal(args []string) error {
 	if err != nil {
 		return err
 	}
+	ghClientID := os.Getenv("WANCTL_GITHUB_CLIENT_ID")
+	sessionSecret := os.Getenv("WANCTL_SESSION_SECRET")
+	if ghClientID != "" {
+		// The two login modes must not coexist: with OAuth active the identity
+		// header is ignored, and a deployment that sets both is confused about
+		// which proxy it trusts.
+		if os.Getenv("PORTAL_USER_HEADER") != "" {
+			return fmt.Errorf("set either WANCTL_GITHUB_CLIENT_ID (OAuth login) or PORTAL_USER_HEADER (trusted proxy), not both")
+		}
+		if os.Getenv("WANCTL_GITHUB_CLIENT_SECRET") == "" {
+			return fmt.Errorf("WANCTL_GITHUB_CLIENT_ID is set but WANCTL_GITHUB_CLIENT_SECRET is empty")
+		}
+		if len(sessionSecret) < 32 {
+			return fmt.Errorf("WANCTL_SESSION_SECRET must be at least 32 bytes when OAuth login is enabled (have %d)", len(sessionSecret))
+		}
+	}
 	p := portal.New(portal.Config{
 		RelayAdminURL: os.Getenv("RELAY_ADMIN_URL"),
 		AdminSecret:   os.Getenv("WANCTL_ADMIN_SECRET"),
 		UserHeader:    os.Getenv("PORTAL_USER_HEADER"),
-		RelayDialURL:  config.EnvOr("WANCTL_RELAY", config.DefaultRelay),
-		PortalToken:   os.Getenv("WANCTL_PORTAL_TOKEN"),
-		Transport:     envOr("WANCTL_TRANSPORT", "http"),
-		Identity:      id,
-		Known:         known,
-		PublicOrigin:  os.Getenv("PORTAL_PUBLIC_ORIGIN"),
-		DebugWhoami:   os.Getenv("PORTAL_DEBUG_WHOAMI") == "1",
+
+		GitHubClientID:     ghClientID,
+		GitHubClientSecret: os.Getenv("WANCTL_GITHUB_CLIENT_SECRET"),
+		SessionSecret:      sessionSecret,
+		GitHubAuthBase:     os.Getenv("WANCTL_GITHUB_AUTH_BASE"),
+		GitHubAPIBase:      os.Getenv("WANCTL_GITHUB_API_BASE"),
+		RelayDialURL:       config.EnvOr("WANCTL_RELAY", config.DefaultRelay),
+		PortalToken:        os.Getenv("WANCTL_PORTAL_TOKEN"),
+		Transport:          envOr("WANCTL_TRANSPORT", "http"),
+		Identity:           id,
+		Known:              known,
+		PublicOrigin:       os.Getenv("PORTAL_PUBLIC_ORIGIN"),
+		DebugWhoami:        os.Getenv("PORTAL_DEBUG_WHOAMI") == "1",
 	})
 	p.SetLogBuffer(logs)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	p.Start(ctx)
 	defer p.Close()
-	log.Printf("wanctl portal on %s\n  identity:      %s\n  identity hdr:  %q\n  relay(admin):  %q\n  relay(dial):   %q",
-		*addr, id.Fingerprint, envOr("PORTAL_USER_HEADER", "X-Auth-Request-Email"),
+	loginMode := "header " + strconv.Quote(envOr("PORTAL_USER_HEADER", "X-Auth-Request-Email"))
+	if ghClientID != "" {
+		loginMode = "github oauth (client " + ghClientID + ")"
+	}
+	log.Printf("wanctl portal on %s\n  identity:      %s\n  login:         %s\n  relay(admin):  %q\n  relay(dial):   %q",
+		*addr, id.Fingerprint, loginMode,
 		os.Getenv("RELAY_ADMIN_URL"), os.Getenv("WANCTL_RELAY"))
 	server := limits.HTTPServer(*addr, p.Handler())
 	go func() {

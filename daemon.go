@@ -66,7 +66,7 @@ func cmdStart() error {
 		return nil
 	}
 	if config.EnvOr("WANCTL_TOKEN", config.StoredToken()) == "" {
-		return fmt.Errorf("尚未登录：先运行 `wanctl`（无参）完成飞书授权")
+		return fmt.Errorf("尚未登录：先运行 `wanctl`（无参）完成登录授权")
 	}
 	self, err := selfPath()
 	if err != nil {

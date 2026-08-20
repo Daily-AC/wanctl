@@ -20,7 +20,7 @@ network path is already protected by a trusted encrypted tunnel. Use `wss://`
 for production LAN relays whenever certificates are available.
 
 > **Status:** M1 (cross-internet transport, relay, exec/file) + M2 (policy &
-> approval) + M4 (Feishu-SSO portal + Postgres + sharing ACL) + M5 (JSONL logging)
+> approval) + M4 (SSO portal + Postgres + sharing ACL) + M5 (JSONL logging)
 > + M6 (skill) done and verified over the public relay. The
 > proxy-agnostic HTTP transport works through the hosting platform's nginx edge
 > (which strips WS upgrades). The device console (approvals/rules/mode/activity) is driven from the

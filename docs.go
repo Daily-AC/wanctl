@@ -75,7 +75,7 @@ func relayBase() (string, error) {
 func relayToken() (string, error) {
 	t := config.EnvOr("WANCTL_TOKEN", config.StoredToken())
 	if t == "" {
-		return "", fmt.Errorf("没有可用 token；先运行 `wanctl login` 完成飞书授权")
+		return "", fmt.Errorf("没有可用 token；先运行 `wanctl login` 完成登录授权")
 	}
 	return t, nil
 }
