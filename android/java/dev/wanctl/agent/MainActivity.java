@@ -1,4 +1,4 @@
-package com.***REMOVED***.wanctl;
+package dev.wanctl.agent;
 
 import android.Manifest;
 import android.app.Activity;

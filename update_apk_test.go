@@ -107,12 +107,12 @@ func TestRunningFromAPK(t *testing.T) {
 		path string
 		want bool
 	}{
-		{"/data/app/~~abc==/com.***REMOVED***.wanctl-xyz==/lib/arm64/libwanctl.so", true},
-		{"/data/app/com.***REMOVED***.wanctl-1/lib/arm64/libwanctl.so", true},
+		{"/data/app/~~abc==/dev.wanctl.agent-xyz==/lib/arm64/libwanctl.so", true},
+		{"/data/app/dev.wanctl.agent-1/lib/arm64/libwanctl.so", true},
 		// Not an APK: the adb-push location, Termux, and a plain copy.
 		{"/data/local/tmp/wanctl", false},
 		{"/data/data/com.termux/files/usr/bin/wanctl", false},
-		{"/data/app/~~abc==/com.***REMOVED***.wanctl-xyz==/wanctl", false},
+		{"/data/app/~~abc==/dev.wanctl.agent-xyz==/wanctl", false},
 		{"/usr/local/bin/wanctl", false},
 	} {
 		if got := isAPKPath(tc.path); got != tc.want {

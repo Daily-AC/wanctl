@@ -72,7 +72,7 @@ var androidAppSources = []string{
 // That sounds like it cannot fail, and it did. `.gitignore` opened with a bare
 // `wanctl` — meant for the built binary at the root, but a pattern without a
 // leading slash matches at every depth, so it also matched
-// android/java/com/***REMOVED***/wanctl/ and kept all nine files out of the
+// android/java/dev/wanctl/agent/ and kept all nine files out of the
 // repository. Every local build worked, because the files were on disk; the
 // acceptance APK was built from a working tree, not from a clone.
 //
@@ -83,7 +83,7 @@ var androidAppSources = []string{
 // already been handed out.
 func TestAndroidAppIsInTheRepository(t *testing.T) {
 	for _, name := range androidAppSources {
-		path := filepath.Join("android", "java", "com", "***REMOVED***", "wanctl", name)
+		path := filepath.Join("android", "java", "dev", "wanctl", "agent", name)
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("%s is missing from the checkout: %v\n"+
 				"\tif it was deleted on purpose, drop it from androidAppSources;\n"+
@@ -97,7 +97,7 @@ func TestAndroidAppIsInTheRepository(t *testing.T) {
 // took the Java side on trust — so it kept passing while AgentService.java was
 // not in the repository at all.
 func TestAppKeysOnMarkersItCanActuallySee(t *testing.T) {
-	service, err := os.ReadFile(filepath.Join("android", "java", "com", "***REMOVED***", "wanctl", "AgentService.java"))
+	service, err := os.ReadFile(filepath.Join("android", "java", "dev", "wanctl", "agent", "AgentService.java"))
 	if err != nil {
 		t.Fatalf("read AgentService.java: %v", err)
 	}

@@ -1,6 +1,6 @@
 # Build output, all of it at the repository root. The leading slashes are
 # load-bearing: a pattern without one matches at every depth, and a bare
-# `wanctl` therefore also matched android/java/com/***REMOVED***/wanctl/ — which
+# `wanctl` therefore also matched android/java/dev/wanctl/agent/ — which
 # silently kept the entire Android app out of the repository.
 /wanctl
 /wanctl.exe

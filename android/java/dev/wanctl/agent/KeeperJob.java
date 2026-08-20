@@ -1,4 +1,4 @@
-package com.***REMOVED***.wanctl;
+package dev.wanctl.agent;
 
 import android.app.job.JobInfo;
 import android.app.job.JobParameters;
@@ -16,7 +16,7 @@ import android.util.Log;
  * identical settings: the second delivered the broadcast and the agent came
  * back in 1 second; the first was dropped outright —
  *
- * <pre>am_broadcast_discard_app: [0,…,BOOT_COMPLETED,187,ResolveInfo{com.***REMOVED***.wanctl/.BootReceiver}]</pre>
+ * <pre>am_broadcast_discard_app: [0,…,BOOT_COMPLETED,187,ResolveInfo{dev.wanctl.agent/.BootReceiver}]</pre>
  *
  * — while the same broadcast reached other apps in the same second. The system
  * discards a receiver whose process it could not start, and a just-booted

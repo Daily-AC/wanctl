@@ -15,7 +15,7 @@
   the executable bit. Termux ships its 24 MB bootstrap the same way.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.***REMOVED***.wanctl">
+    package="dev.wanctl.agent">
   <!-- versionCode / versionName are injected by scripts/build-apk.sh from the
        release tag, so the APK and the wanctl binary inside it can never claim
        different versions. -->
