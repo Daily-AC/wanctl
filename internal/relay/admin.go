@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"wanctl/internal/serverlog"
-	"wanctl/internal/sessionauth"
 )
 
 // Admin endpoints let the portal (which has no DB of its own) manage tokens,
@@ -43,6 +42,12 @@ func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/invites", r.adminInvites)
 	mux.HandleFunc("/admin/invites/revoke", r.adminInviteRevoke)
 	mux.HandleFunc("/admin/users", r.adminUsers)
+	mux.HandleFunc("/admin/users/lookup", r.adminUserLookup)
+	mux.HandleFunc("/admin/friends", r.adminFriends)
+	mux.HandleFunc("/admin/friends/request", r.adminFriendRequest)
+	mux.HandleFunc("/admin/friends/accept", r.adminFriendAccept)
+	mux.HandleFunc("/admin/friends/decline", r.adminFriendDecline)
+	mux.HandleFunc("/admin/friends/remove", r.adminFriendRemove)
 	mux.HandleFunc("/admin/tokens/resolve", r.adminTokenResolve)
 	mux.HandleFunc("/admin/tokens", r.adminTokens)
 	mux.HandleFunc("/admin/tokens/issue", r.adminTokenIssue)
@@ -465,6 +470,10 @@ func (r *Relay) adminACL(w http.ResponseWriter, req *http.Request) {
 		var body struct{ Namespace, Device, Grantee, Perms string }
 		json.NewDecoder(req.Body).Decode(&body)
 		if err := r.admin.AddACL(body.Namespace, body.Device, body.Grantee, body.Perms); err != nil {
+			if errors.Is(err, ErrNotFriends) {
+				writeErrorToken(w, http.StatusForbidden, ErrNotFriends.Error())
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -526,10 +535,20 @@ type AdminStore interface {
 	ListLarkApproval(namespace string) ([]DeviceLarkApproval, error)
 	UpsertLarkApproval(DeviceLarkApproval) (DeviceLarkApproval, error)
 	ListUsers() ([]string, error)
+	LookupUser(namespace string) (bool, error)
+	FriendRequest(requester, addressee, reservedNS string) (string, error)
+	FriendAccept(namespace, requester string) error
+	FriendDecline(namespace, requester string) error
+	FriendRemove(namespace, other string) error
+	ListFriends(namespace string) ([]Friend, error)
+	IsFriend(a, b string) (bool, error)
 	RemoveDevice(namespace, device string) error
 	ListACL(namespace string) ([]map[string]any, error)
+	ListReceivedACL(namespace string) ([]ReceivedShare, error)
 	AddACL(namespace, device, grantee, perms string) error
+	GrantACL(namespace, device, grantee, perms string) (int, error)
 	RevokeACL(namespace string, id int) error
+	RevokeACLMatch(namespace string, id int, device, grantee string) (bool, error)
 	ListAudit(namespace string) ([]map[string]any, error)
 }
 
@@ -1011,16 +1030,7 @@ func (p *PGStore) ListACL(namespace string) ([]map[string]any, error) {
 }
 
 func (p *PGStore) AddACL(namespace, device, grantee, perms string) error {
-	if perms == "" {
-		perms = "exec,read,write"
-	}
-	caps, err := sessionauth.ParseGrant(perms)
-	if err != nil {
-		return fmt.Errorf("invalid ACL permissions: %w", err)
-	}
-	_, err = p.db.Exec(
-		`INSERT INTO acl (owner_namespace, device, grantee_namespace, perms) VALUES ($1,$2,$3,$4)`,
-		namespace, device, grantee, caps.String())
+	_, err := p.GrantACL(namespace, device, grantee, perms)
 	return err
 }
 

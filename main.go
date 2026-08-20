@@ -77,6 +77,11 @@ USAGE
   wanctl docs groups                          list documentation groups
   wanctl docs group new --slug S --title T [--position N]
   wanctl docs group rm <slug>
+  wanctl friends                             list friends and pending requests
+  wanctl friends add|accept|decline|remove <namespace>
+  wanctl share list
+  wanctl share grant --device DEV --to NS [--perms exec,read]
+  wanctl share revoke --device DEV --to NS
   wanctl exec  [--target NS/DEV] [--oneshot] [NS/DEV|DEV] <command...>
   wanctl exec  [--target NS/DEV] --script <local-file> [--interp powershell|sh] [NS/DEV|DEV]
                                               run a LOCAL script on the device — no shell quoting or encoding hazards
@@ -196,6 +201,10 @@ func main() {
 		err = cmdLogin(ctx, os.Args[2:])
 	case "docs":
 		err = cmdDocs(ctx, os.Args[2:])
+	case "friends":
+		err = cmdFriends(ctx, os.Args[2:])
+	case "share":
+		err = cmdShare(ctx, os.Args[2:])
 	case "start":
 		err = cmdStart()
 	case "stop":
