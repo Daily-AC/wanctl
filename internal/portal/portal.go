@@ -1,5 +1,6 @@
-// Package portal is the team web app (humans, behind thunderbox Feishu SSO). It
-// identifies the logged-in user from an SSO-injected request header, resolves a
+// Package portal is the web app humans use. It authenticates the user either
+// with its own GitHub OAuth login (self-hosted deployments) or from an
+// SSO-injected request header (behind a trusted reverse proxy), resolves a
 // namespace, and proxies token/device/ACL/audit operations to the relay's
 // secret-gated admin API. It holds no database of its own — the relay owns the
 // Postgres — so it needs only the relay URL and a shared admin secret.
@@ -60,6 +61,15 @@ type Config struct {
 	Known         *transport.Store
 	PublicOrigin  string // optional canonical origin when TLS terminates upstream
 	DebugWhoami   bool   // enable the diagnostic endpoint; never enable routinely
+
+	// GitHub OAuth login (self-hosted deployments). Setting GitHubClientID
+	// switches the portal to OAuth mode: identity comes only from the signed
+	// session cookie and the identity header is ignored entirely.
+	GitHubClientID     string
+	GitHubClientSecret string
+	SessionSecret      string // HMAC key for session/state cookies; >=32 bytes
+	GitHubAuthBase     string // default https://github.com (override for GHE/tests)
+	GitHubAPIBase      string // default https://api.github.com
 }
 
 // Server is the portal web app.
@@ -77,6 +87,12 @@ type Server struct {
 	dialer *client.Client   // controller used to open console sessions
 	known  *transport.Store // pinned device identities (shared with dialer)
 	fp     string           // this portal's own controller fingerprint
+
+	ghClientID     string
+	ghClientSecret string
+	sessionKey     []byte
+	ghAuthBase     string
+	ghAPIBase      string
 
 	mu    sync.Mutex
 	conns map[string]*deviceConn // key "ns/device"
@@ -103,6 +119,12 @@ func New(cfg Config) *Server {
 		skillURL:     relaySkillsURL(cfg.RelayDialURL),
 		conns:        map[string]*deviceConn{},
 		known:        cfg.Known,
+
+		ghClientID:     cfg.GitHubClientID,
+		ghClientSecret: cfg.GitHubClientSecret,
+		sessionKey:     []byte(cfg.SessionSecret),
+		ghAuthBase:     strings.TrimRight(orDefault(cfg.GitHubAuthBase, "https://github.com"), "/"),
+		ghAPIBase:      strings.TrimRight(orDefault(cfg.GitHubAPIBase, "https://api.github.com"), "/"),
 	}
 	if cfg.Identity != nil {
 		s.fp = cfg.Identity.Fingerprint
@@ -122,6 +144,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/whoami", s.handleWhoami)
 	mux.HandleFunc("/enroll", s.handleEnroll)
+	mux.HandleFunc("/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("/auth/callback", s.handleAuthCallback)
+	mux.HandleFunc("/auth/logout", s.handleAuthLogout)
+	mux.HandleFunc("/auth/redeem", s.handleAuthRedeem)
+	mux.HandleFunc("/pending", s.handlePending)
 	mux.HandleFunc("/skills", s.handleSkills)
 	mux.HandleFunc("/api/me", s.handleMe)
 	mux.HandleFunc("/api/tokens", s.handleTokens)
@@ -210,6 +237,8 @@ var mutationPaths = map[string]bool{
 	"/api/docs/articles/delete":    true,
 	"/api/docs/groups":             true,
 	"/api/docs/groups/delete":      true,
+	"/auth/logout":                 true,
+	"/auth/redeem":                 true,
 }
 
 var readWritePaths = map[string]bool{
@@ -449,14 +478,22 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// In OAuth mode the SPA is only ever served to an admitted user, so it
+	// needs no login screen of its own: anonymous visitors are sent to GitHub,
+	// signed-in-but-uninvited ones to the pending page.
+	if s.oauthEnabled() {
+		if _, ok := s.pageAuth(w, r, "/"); !ok {
+			return
+		}
+	}
 	b, _ := assets.ReadFile("index.html")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(b)
 }
 
 // handleSkills 302's to the relay's public /skills (which serves the canonical
-// SKILL.md). The portal can't host it directly because its thunderbox app is
-// SSO-gated and AI clients have no session.
+// SKILL.md). The portal can't host it directly because it sits behind login
+// and AI clients have no session.
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 	if s.skillURL == "" {
 		http.Error(w, "relay is not configured; set WANCTL_RELAY so /skills can redirect to the public relay", http.StatusServiceUnavailable)
@@ -518,8 +555,14 @@ func sensitiveHeader(name string) bool {
 		strings.Contains(name, "api-key") || strings.Contains(name, "apikey")
 }
 
+// identity returns a short human identity for attribution (audit lines, lark
+// notification targets): the GitHub login in OAuth mode, the SSO header value
+// in header mode.
 func (s *Server) identity(r *http.Request) string {
-	return strings.TrimSpace(r.Header.Get(s.userHeader))
+	if p := s.principalFrom(r); p != nil {
+		return p.Login
+	}
+	return ""
 }
 
 // adminReq calls the relay admin API with the shared secret.
@@ -544,13 +587,14 @@ func (s *Server) adminReq(method, path string, query url.Values, body any) (*htt
 	return s.hc.Do(req)
 }
 
-// requireNS authenticates the caller and resolves their namespace via the relay.
 // handleEnroll serves the device-enrollment page. The visitor is already
-// authenticated by Feishu SSO, so we resolve their namespace, ask the relay to
-// mint a one-time code bound to a fresh token, and show it for them to paste
-// into `wanctl`.
+// signed in (GitHub OAuth or the SSO header), so we resolve their namespace,
+// ask the relay to mint a one-time code bound to a fresh token, and show it
+// for them to paste into `wanctl`.
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
-	ns, ok := s.requireNS(w, r)
+	// A browser page: authentication failures redirect through login/pending
+	// so `wanctl login` opening this URL lands back here after the OAuth trip.
+	ns, ok := s.pageAuth(w, r, "/enroll")
 	if !ok {
 		return
 	}
@@ -616,42 +660,42 @@ color:var(--brand);background:var(--cream);border:2px dashed var(--brand);border
 <div class="tip">这台机器就成了一个可被远程控制的设备。停止用 <b>wanctl stop</b>。</div>
 </div></body></html>`
 
+// requireNS authenticates an API request and resolves its namespace. Errors
+// are written as API responses; browser page handlers use pageAuth instead,
+// which redirects through the login/pending pages.
 func (s *Server) requireNS(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if s.relayURL == "" || s.adminSecret == "" {
 		http.Error(w, "portal not wired yet (set RELAY_ADMIN_URL and WANCTL_ADMIN_SECRET)", http.StatusServiceUnavailable)
 		return "", false
 	}
-	id := s.identity(r)
-	if id == "" {
-		http.Error(w, "no SSO identity header ("+s.userHeader+"); open /whoami to find the right header", http.StatusUnauthorized)
-		return "", false
-	}
-	resp, err := s.adminReq("POST", "/admin/resolve-user", nil, map[string]string{"identity": id})
-	if err != nil {
-		http.Error(w, "relay unreachable: "+err.Error(), http.StatusBadGateway)
-		return "", false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		if resp.StatusCode == http.StatusConflict {
-			b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			reason := strings.TrimSpace(string(b))
-			if reason == "" {
-				reason = "SSO identity maps to an existing namespace"
-			}
-			http.Error(w, reason, http.StatusConflict)
-			return "", false
+	p := s.principalFrom(r)
+	if p == nil {
+		if s.oauthEnabled() {
+			http.Error(w, "not signed in; open /auth/login", http.StatusUnauthorized)
+		} else {
+			http.Error(w, "no SSO identity header ("+s.userHeader+"); open /whoami to find the right header", http.StatusUnauthorized)
 		}
-		http.Error(w, "relay admin error", resp.StatusCode)
 		return "", false
 	}
-	var out struct{ Namespace string }
-	json.NewDecoder(resp.Body).Decode(&out)
-	if out.Namespace == "" {
-		http.Error(w, "could not resolve namespace", http.StatusInternalServerError)
-		return "", false
+	ns, _, status, detail := s.resolveNamespace(p, "")
+	switch status {
+	case resolveOK:
+		return ns, true
+	case resolvePending:
+		http.Error(w, pendingInviteBody, http.StatusForbidden)
+	case resolveConflict:
+		http.Error(w, detail, http.StatusConflict)
+	default:
+		http.Error(w, detail, http.StatusBadGateway)
 	}
-	return out.Namespace, true
+	return "", false
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 // proxyGet forwards a GET to the relay admin (scoped by namespace) to the client.
@@ -690,12 +734,32 @@ func copyResp(w http.ResponseWriter, resp *http.Response) {
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
-	ns, ok := s.requireNS(w, r)
-	if !ok {
+	if s.relayURL == "" || s.adminSecret == "" {
+		http.Error(w, "portal not wired yet (set RELAY_ADMIN_URL and WANCTL_ADMIN_SECRET)", http.StatusServiceUnavailable)
+		return
+	}
+	p := s.principalFrom(r)
+	if p == nil {
+		http.Error(w, "not signed in", http.StatusUnauthorized)
+		return
+	}
+	ns, role, status, detail := s.resolveNamespace(p, "")
+	switch status {
+	case resolveOK:
+	case resolvePending:
+		http.Error(w, pendingInviteBody, http.StatusForbidden)
+		return
+	case resolveConflict:
+		http.Error(w, detail, http.StatusConflict)
+		return
+	default:
+		http.Error(w, detail, http.StatusBadGateway)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"identity": s.identity(r), "namespace": ns})
+	json.NewEncoder(w).Encode(map[string]any{
+		"identity": p.Login, "namespace": ns, "provider": p.Provider, "role": role,
+	})
 }
 
 func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
@@ -1336,7 +1400,7 @@ func (s *Server) handleDeviceEvents(w http.ResponseWriter, r *http.Request) {
 		s.connError(w, device, err)
 		return
 	}
-	// Long-poll, not SSE: thunderbox's nginx buffers streaming responses (and
+	// Long-poll, not SSE: a buffering edge proxy holds streaming responses (and
 	// ignores X-Accel-Buffering), so an open text/event-stream never reaches the
 	// browser. Block for one approval-state push (or time out), return a finite
 	// JSON response nginx forwards promptly, and let the client re-poll.
