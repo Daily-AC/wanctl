@@ -38,7 +38,7 @@ var assets embed.FS
 // than stored in the docs table so that what the portal shows is whatever
 // version is actually deployed — a changelog that needs a separate sync step is
 // a changelog that is eventually wrong. These are the Chinese, user-facing
-// notes; docs/releases/*.md stays the English engineering record for GitLab.
+// notes; docs/releases/*.md stays the English engineering record in git.
 //
 //go:embed changelog/*.md
 var changelogFS embed.FS

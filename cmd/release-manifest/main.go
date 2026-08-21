@@ -295,7 +295,7 @@ func rsaPublicKeyFromPEM(path string) (*rsa.PublicKey, error) {
 
 // rsaSigningKey loads the script-facing signing key from WANCTL_RELEASE_RSA_KEY,
 // base64-encoded PKCS#8 DER — same shape as WANCTL_RELEASE_SIGNING_KEY (single
-// line, so GitLab can mask it), different algorithm.
+// line, so CI secret masking works), different algorithm.
 func rsaSigningKey() (*rsa.PrivateKey, error) {
 	encoded := strings.TrimSpace(os.Getenv("WANCTL_RELEASE_RSA_KEY"))
 	if encoded == "" {

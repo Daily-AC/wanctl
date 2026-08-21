@@ -454,9 +454,9 @@
     <!-- devices -->
     <section class="view show" data-view="devices">
       <h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none"><path d="M6 16a4 4 0 0 1 .5-8 5 5 0 0 1 9.7-1A4 4 0 0 1 18 16Z" fill="#ffe1b0" stroke="#ef8b4f" stroke-width="1.6"/></svg>我的小设备们</h1>
-      <p class="sub">经飞书 SSO 登录后纳管的设备。绿脸在线、灰脸离线，点一张卡片进去远程审批它待办的高危操作～</p>
+      <p class="sub">登录后纳管到你名下的设备。绿脸在线、灰脸离线，点一张卡片进去远程审批它待办的高危操作～</p>
       <div class="guidebar" id="guidebar">
-        <span class="gtxt">新设备：从 GitLab release 获取已签名安装器，设置 <code>WANCTL_RELAY</code> 后运行，再用 <code>wanctl</code> 登录。</span>
+        <span class="gtxt">新设备：到「下载安装」页复制一行安装命令跑上，再运行 <code>wanctl</code> 登录接入。</span>
         <button class="glink" data-goto="docs">看使用文档 →</button>
       </div>
       <div class="grid" id="grid"><div class="empty">正在召唤设备们…</div></div>
@@ -787,7 +787,7 @@ async function loadOverview(){
         </div>
         <div class="meta"><span class="seen">最近 · ${ago(x.last_seen)}</span>
           <span class="enter">进去看看<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span></div>
-      </div>`;}).join(''):'<div class="empty">还没有设备～从已签名的 GitLab release 安装并登记第一台设备吧。</div>';
+      </div>`;}).join(''):'<div class="empty">还没有设备～到「下载安装」页跑一行安装命令，接入第一台设备吧。</div>';
     $$('#grid .devcard').forEach(c=>c.onclick=()=>openDevice(c.dataset.dev));
     $('#stDev').textContent=xs.length;$('#stOn').textContent=on;
   }catch(e){err('设备列表加载失败：'+e.message);$('#grid').innerHTML='<div class="empty">加载失败，刷新页面再试试～</div>';}
@@ -1169,7 +1169,7 @@ async function loadDownloads(){
           <td><a href="${esc(a.url)}" download>下载</a></td>
         </tr>`).join('')}</tbody>
       </table></div>
-      <p class="sub" style="margin-top:14px">要给重要的机器装，更稳的是从 GitLab Releases 页拿——从中继下载的安装脚本没法为这个中继自己背书。</p>`;
+      <p class="sub" style="margin-top:14px">要给重要的机器装，更稳的是从 <a href="https://github.com/Daily-AC/wanctl/releases" target="_blank" rel="noopener">GitHub Releases</a> 页拿——从中继下载的安装脚本没法为这个中继自己背书。</p>`;
     $$('#dlbody pre[data-copy]').forEach(p=>p.onclick=()=>{if(navigator.clipboard)navigator.clipboard.writeText(p.textContent.trim());toast('ok','已复制到剪贴板')});
     dlLoaded=true;
   }catch(e){$('#dlbody').innerHTML='<div class="empty">读不到下载清单（'+esc(e.message)+'）</div>'}
