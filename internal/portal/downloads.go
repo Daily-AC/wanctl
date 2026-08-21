@@ -83,15 +83,22 @@ func (s *Server) handleDownloads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Links are for the user's browser and terminal, so they must use the
+	// public relay origin: the admin URL this handler fetched the manifest
+	// through is a private address on compose deployments.
+	base := s.relayPublic
+	if base == "" {
+		base = s.relayURL
+	}
 	out := &Downloads{
 		Version:     m.Version,
 		PublishedAt: m.PublishedAt,
-		Base:        s.relayURL + "/dl/",
-		InstallSh:   s.relayURL + "/install.sh",
-		InstallPs1:  s.relayURL + "/install.ps1",
+		Base:        base + "/dl/",
+		InstallSh:   base + "/install.sh",
+		InstallPs1:  base + "/install.ps1",
 	}
 	for _, a := range m.Artifacts {
-		out.Artifacts = append(out.Artifacts, Download{Artifact: a, URL: s.relayURL + "/dl/" + a.Name})
+		out.Artifacts = append(out.Artifacts, Download{Artifact: a, URL: base + "/dl/" + a.Name})
 	}
 
 	s.downloads.mu.Lock()

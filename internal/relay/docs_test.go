@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -129,9 +130,23 @@ func newTestRelay(t *testing.T) (*Relay, *memDocs) {
 	d := newMemDocs()
 	r.SetDocs(d)
 	r.SetAdminSecret("test-secret")
-	// Admin store stub: only used to gate adminOK on r.admin != nil.
-	r.admin = &noopAdmin{}
+	// With an admission store present, docs writes are admin-only; alice is
+	// this suite's admin.
+	r.admin = &roleAdmin{roles: map[string]string{"alice": "admin"}}
 	return r, d
+}
+
+// roleAdmin is noopAdmin plus a namespace→role table for docs write gating.
+type roleAdmin struct {
+	noopAdmin
+	roles map[string]string
+}
+
+func (a *roleAdmin) RoleForNamespace(ns string) (string, error) {
+	if role, ok := a.roles[ns]; ok {
+		return role, nil
+	}
+	return "", sql.ErrNoRows
 }
 
 type noopAdmin struct{}
@@ -174,6 +189,7 @@ func (n *noopAdmin) RevokeACLMatch(string, int, string, string) (bool, error) {
 	return false, nil
 }
 func (n *noopAdmin) ListAudit(string) ([]map[string]any, error) { return nil, nil }
+func (n *noopAdmin) RoleForNamespace(string) (string, error)    { return "", sql.ErrNoRows }
 
 func do(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -296,5 +312,51 @@ func TestDocsAdminMirror(t *testing.T) {
 	json.NewDecoder(rr.Body).Decode(&got)
 	if got.AuthorNamespace != "bob" {
 		t.Fatalf("author not propagated: %+v", got)
+	}
+}
+
+// The docs site is one shared surface: with an admission store present, only a
+// namespace whose user holds the admin role may write, and a namespace with no
+// user record at all (token outliving its user) is refused too.
+func TestDocsWriteAdminOnly(t *testing.T) {
+	r := New(envTokens{"tok-alice": "alice", "tok-bob": "bob", "tok-ghost": "ghost"})
+	r.SetDocs(newMemDocs())
+	r.admin = &roleAdmin{roles: map[string]string{"alice": "admin", "bob": "user"}}
+	h := r.Handler()
+
+	group := `{"slug":"g","title":"G","position":1}`
+	if rr := do(t, h, "POST", "/docs/groups?token=tok-bob", group); rr.Code != 403 {
+		t.Fatalf("group create as user: status %d body %s", rr.Code, rr.Body.String())
+	}
+	if rr := do(t, h, "POST", "/docs/groups?token=tok-ghost", group); rr.Code != 403 {
+		t.Fatalf("group create with userless namespace: status %d body %s", rr.Code, rr.Body.String())
+	}
+	if rr := do(t, h, "POST", "/docs/groups?token=tok-alice", group); rr.Code != 200 {
+		t.Fatalf("group create as admin: status %d body %s", rr.Code, rr.Body.String())
+	}
+
+	article := `{"slug":"a","title":"A","body":"x","group_slug":"g","position":1}`
+	if rr := do(t, h, "POST", "/docs/articles?token=tok-bob", article); rr.Code != 403 {
+		t.Fatalf("article create as user: status %d body %s", rr.Code, rr.Body.String())
+	}
+	if rr := do(t, h, "POST", "/docs/articles?token=tok-alice", article); rr.Code != 200 {
+		t.Fatalf("article create as admin: status %d body %s", rr.Code, rr.Body.String())
+	}
+	if rr := do(t, h, "POST", "/docs/articles/delete?token=tok-bob", `{"slug":"a"}`); rr.Code != 403 {
+		t.Fatalf("article delete as user: status %d body %s", rr.Code, rr.Body.String())
+	}
+	if rr := do(t, h, "POST", "/docs/groups/delete?token=tok-bob", `{"id":1}`); rr.Code != 403 {
+		t.Fatalf("group delete as user: status %d body %s", rr.Code, rr.Body.String())
+	}
+}
+
+// A relay serving docs without any admission store keeps the pre-admission
+// trust model: any valid namespace token edits.
+func TestDocsWriteWithoutAdmissionStore(t *testing.T) {
+	r := New(envTokens{"tok-alice": "alice"})
+	r.SetDocs(newMemDocs())
+	h := r.Handler()
+	if rr := do(t, h, "POST", "/docs/groups?token=tok-alice", `{"slug":"g","title":"G","position":1}`); rr.Code != 200 {
+		t.Fatalf("group create without admission store: status %d body %s", rr.Code, rr.Body.String())
 	}
 }

@@ -75,6 +75,7 @@ type Config struct {
 // Server is the portal web app.
 type Server struct {
 	relayURL     string
+	relayPublic  string // user-reachable relay origin for download links
 	downloads    downloadsCache
 	adminSecret  string
 	userHeader   string
@@ -111,6 +112,7 @@ func New(cfg Config) *Server {
 	}
 	s := &Server{
 		relayURL:     strings.TrimRight(cfg.RelayAdminURL, "/"),
+		relayPublic:  relayPublicOrigin(cfg.RelayDialURL),
 		adminSecret:  cfg.AdminSecret,
 		userHeader:   uh,
 		hc:           &http.Client{Timeout: 15 * time.Second},
@@ -393,9 +395,10 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 // --- docs ---
 //
 // Tree and per-article reads hit the relay's public endpoints (no auth, no
-// admin secret). Writes require a logged-in SSO user — the portal resolves the
-// SSO header to a namespace, then forwards to the relay's admin-gated mirror
-// with that namespace stamped as the article author.
+// admin secret). Writes require a signed-in admin — the docs site is one
+// shared surface, and its durable source of truth is docs/portal/ in git —
+// then forward to the relay's admin-gated mirror with the admin's namespace
+// stamped as the article author.
 
 func (s *Server) handleDocsTree(w http.ResponseWriter, r *http.Request) {
 	s.proxyRelayPublic(w, "/docs/tree.json")
@@ -415,7 +418,7 @@ func (s *Server) handleDocsArticleWrite(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	ns, ok := s.requireNS(w, r)
+	ns, ok := s.requireAdmin(w, r)
 	if !ok {
 		return
 	}
@@ -427,7 +430,7 @@ func (s *Server) handleDocsArticleDelete(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.requireNS(w, r); !ok {
+	if _, ok := s.requireAdmin(w, r); !ok {
 		return
 	}
 	s.docsForwardAdmin(w, r, "/admin/docs/articles/delete", "")
@@ -438,7 +441,7 @@ func (s *Server) handleDocsGroupWrite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	ns, ok := s.requireNS(w, r)
+	ns, ok := s.requireAdmin(w, r)
 	if !ok {
 		return
 	}
@@ -450,7 +453,7 @@ func (s *Server) handleDocsGroupDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.requireNS(w, r); !ok {
+	if _, ok := s.requireAdmin(w, r); !ok {
 		return
 	}
 	s.docsForwardAdmin(w, r, "/admin/docs/groups/delete", "")
@@ -522,6 +525,17 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 func relaySkillsURL(raw string) string {
+	origin := relayPublicOrigin(raw)
+	if origin == "" {
+		return ""
+	}
+	return origin + "/skills"
+}
+
+// relayPublicOrigin normalizes the controller dial URL into the http(s) origin
+// users can actually reach. The admin URL is often a private address (a compose
+// network name), so anything user-facing must be built from this instead.
+func relayPublicOrigin(raw string) string {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" {
 		return ""
@@ -535,7 +549,7 @@ func relaySkillsURL(raw string) string {
 	default:
 		return ""
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/skills"
+	u.Path = strings.TrimRight(u.Path, "/")
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String()
@@ -778,36 +792,46 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"identity": p.Login, "namespace": ns, "provider": p.Provider, "role": role,
+		"lark": s.larkEnabled(),
 	})
 }
 
-// requireAdmin admits only a signed-in user whose resolved role is "admin".
-// Admission invites gate who may join this deployment, so unlike the other
+// larkEnabled reports whether this deployment runs the Feishu approval
+// workflow, so the SPA can hide that card where it could never deliver.
+func (s *Server) larkEnabled() bool {
+	s.larkMu.Lock()
+	defer s.larkMu.Unlock()
+	return s.larkRuntime != nil
+}
+
+// requireAdmin admits only a signed-in user whose resolved role is "admin",
+// returning their namespace. Admission invites gate who may join this
+// deployment and the docs site is shared by everyone, so unlike the other
 // /api handlers the namespace alone is not enough.
-func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if s.relayURL == "" || s.adminSecret == "" {
 		http.Error(w, "portal not wired yet (set RELAY_ADMIN_URL and WANCTL_ADMIN_SECRET)", http.StatusServiceUnavailable)
-		return false
+		return "", false
 	}
 	p := s.principalFrom(r)
 	if p == nil {
 		http.Error(w, "not signed in", http.StatusUnauthorized)
-		return false
+		return "", false
 	}
-	_, role, status, detail := s.resolveNamespace(p, "")
+	ns, role, status, detail := s.resolveNamespace(p, "")
 	if status != resolveOK {
 		http.Error(w, detail, http.StatusBadGateway)
-		return false
+		return "", false
 	}
 	if role != "admin" {
 		http.Error(w, "admin only", http.StatusForbidden)
-		return false
+		return "", false
 	}
-	return true
+	return ns, true
 }
 
 func (s *Server) handleInvites(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if _, ok := s.requireAdmin(w, r); !ok {
 		return
 	}
 	if r.Method == "POST" {
@@ -836,7 +860,7 @@ func (s *Server) handleInvites(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInviteRevoke(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if _, ok := s.requireAdmin(w, r); !ok {
 		return
 	}
 	var body struct {
