@@ -153,13 +153,13 @@ func (h *signedDistHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 }
 
 // installerHandler serves the bootstrap installer that ships inside the signed
-// release directory. Colleagues without access to the internal GitLab release
-// page have no other way to obtain it, so the relay serves it again.
+// release directory. Users who won't visit the upstream release page have no
+// other way to obtain it, so the relay serves it again.
 //
 // TRUST LIMITATION: unlike /dl/*, this file is NOT covered by the signed
 // manifest, and the public key it embeds is the one this same relay hands out.
 // A compromised relay could therefore serve a malicious installer together with
-// a matching key. Recipients who can reach GitLab should still prefer the
+// a matching key. Recipients should still prefer the independently hosted
 // release page, and anyone can confirm what they downloaded out-of-band by
 // comparing its SHA-256 against the checksum published with the release.
 func installerHandler(dir, name, contentType string) http.HandlerFunc {

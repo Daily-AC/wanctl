@@ -3,12 +3,16 @@
 `https://portal.example.com/#docs` 上那些文章的正文就在这个目录里。门户只是渲染层，改文档改这里，然后同步上去：
 
 ```sh
+export WANCTL_RELAY=https://你的中继域名
+export WANCTL_PORTAL=https://你的门户域名
 wanctl login                      # 需要一个已登录的控制端身份
 scripts/sync-portal-docs.py       # 幂等：已有的更新，缺的新建
 scripts/sync-portal-docs.py --dry-run   # 先看它打算做什么
 ```
 
 `manifest.json` 定义分组、标题、排序和文件映射；正文是同目录下的 markdown，文件名规则 `<组 slug>__<文章 slug>.md`。
+
+正文里的域名一律写占位符 `relay.example.com` / `portal.example.com`（本目录是公开仓库，不绑定任何具体部署）；同步脚本推送前会把占位符换成 `--relay-origin` / `--portal-origin`（默认取 `WANCTL_RELAY` / `WANCTL_PORTAL` 环境变量）指定的真实域名，换不干净会拒绝推送。
 
 ## 为什么要有这一层
 

@@ -56,6 +56,13 @@
       "group": "advanced",
       "position": 10,
       "file": "advanced__approval-and-trust.md"
+    },
+    {
+      "slug": "friends-and-invites",
+      "title": "邀请、好友与共享",
+      "group": "advanced",
+      "position": 20,
+      "file": "advanced__friends-and-invites.md"
     }
   ]
 }

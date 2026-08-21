@@ -31,9 +31,9 @@ built without a deployment default.
 What you do need is a **token bound to a namespace** — get it via OAuth:
 
 ```bash
-wanctl login    # opens the team portal in a browser; user logs in via Feishu,
-                # copies the one-time code, and pastes it back here. Token is
-                # saved under the controller's config dir (no env needed).
+wanctl login    # opens the portal in a browser; user completes the portal
+                # login, copies the one-time code, and pastes it back here.
+                # Token is saved under the controller's config dir.
 ```
 
 If a token is already provided in `WANCTL_TOKEN` (CI / pre-provisioned), skip
@@ -186,21 +186,27 @@ on any platform:
 curl -fsSL @WANCTL_RELAY@/install.sh | sh
 wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
 wanctl                          # then run this on that machine — opens the
-                                # browser for Feishu login, takes a code, and
-                                # starts the agent in the background.
+                                # browser for the portal login, takes a code,
+                                # and starts the agent in the background.
 ```
 
 ```powershell
 # Windows — PowerShell only, no bash / curl needed
 irm @WANCTL_RELAY@/install.ps1 | iex
 wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
-wanctl                          # same flow: browser → Feishu → agent runs.
+wanctl                          # same flow: browser → portal login → agent runs.
 ```
 
 For a machine where the stakes are high, download the installer from the
-independently authenticated GitLab release and run that file instead: a script
-served by the relay cannot bootstrap trust in that same relay. Tell the user
-this tradeoff rather than deciding it for them.
+independently authenticated release page (github.com/Daily-AC/wanctl/releases)
+and run that file instead: a script served by the relay cannot bootstrap trust
+in that same relay. Tell the user this tradeoff rather than deciding it for
+them.
+
+If the installed binary was built without deployment defaults (the open-source
+release artifacts are), also export `WANCTL_RELAY=@WANCTL_RELAY@` and
+`WANCTL_PORTAL=<the portal URL — ask the user>` on that machine before running
+`wanctl`, or the enroll step cannot find its relay and portal.
 
 For non-interactive setups, run the verified installer first, seed the verified
 Portal fingerprint, then start `wanctl agent --token <pre-issued-token>` and

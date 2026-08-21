@@ -179,7 +179,7 @@ func TestDistributionVerificationConcurrencyIsBounded(t *testing.T) {
 	}
 }
 
-// Colleagues without internal GitLab access bootstrap from the relay, so the
+// Users who skip the upstream release page bootstrap from the relay, so the
 // installers must be served rather than retired. They are not manifest-signed;
 // see installerHandler for the trust limitation this accepts.
 func TestRelayServesInstallers(t *testing.T) {
