@@ -27,7 +27,7 @@ wanctl
 wanctl service install
 ```
 
-这会注册一个开机自启的计划任务，关掉终端窗口它也继续跑（前面用 `setx` 持久化过地址，计划任务里的 agent 也找得到 relay）。`wanctl status` 看状态、`wanctl stop` 停。
+这会注册一个开机自启的计划任务，关掉终端窗口它也继续跑（relay 地址会直接写进计划任务，重启后不依赖环境变量）。`wanctl status` 看状态、`wanctl stop` 停。
 
 ## 装到重要的机器上
 

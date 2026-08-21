@@ -43,10 +43,23 @@ func cmdService(ctx context.Context, args []string) error {
 		name := fs.String("name", "", "device name to bake into the unit (default: hostname, resolved at every start)")
 		portalFPs := fs.String("portal-fps", "", "comma-separated portal admin fingerprints the agent must trust")
 		mode := fs.String("mode", "", "policy mode to bake in; omit so the persisted mode (and portal switches) win")
+		relay := fs.String("relay", "", "relay URL to bake into the unit (default: the currently configured relay)")
+		tr := fs.String("transport", "", "transport to bake into the unit: ws or http (default: the currently configured transport)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		extra, err := serviceAgentArgs(*name, *portalFPs, *mode)
+		relayURL := *relay
+		if relayURL == "" {
+			var err error
+			if relayURL, err = config.Relay(); err != nil {
+				return fmt.Errorf("the unit needs a relay URL baked in (service managers don't read your shell profile): %w", err)
+			}
+		}
+		transport := *tr
+		if transport == "" {
+			transport = config.EnvOr("WANCTL_TRANSPORT", config.DefaultTransport)
+		}
+		extra, err := serviceAgentArgs(*name, *portalFPs, *mode, relayURL, transport)
 		if err != nil {
 			return err
 		}
@@ -67,13 +80,19 @@ func cmdService(ctx context.Context, args []string) error {
 // serviceAgentArgs turns the install-time options into the `wanctl agent`
 // arguments the unit will carry. They are baked in because a unit is what runs
 // after a reboot, when nobody is at a terminal to re-supply them: a name left
-// out silently degrades to the hostname, and portal fingerprints left out leave
-// the device unable to accept portal-side decisions at all.
+// out silently degrades to the hostname, portal fingerprints left out leave
+// the device unable to accept portal-side decisions at all, and a relay left
+// out kills the agent outright on binaries built without a deployment default
+// — service managers don't read the shell profile the user exported
+// WANCTL_RELAY into (issue #2).
 //
 // --mode is deliberately available but not defaulted: baking a mode in makes the
 // unit outrank the persisted mode, so a portal-side switch is undone by the next
 // restart.
-func serviceAgentArgs(name, portalFPs, mode string) ([]string, error) {
+func serviceAgentArgs(name, portalFPs, mode, relay, transport string) ([]string, error) {
+	if relay == "" {
+		return nil, fmt.Errorf("--relay: the unit needs a relay URL baked in")
+	}
 	var extra []string
 	if name != "" {
 		extra = append(extra, "--name", name)
@@ -89,6 +108,13 @@ func serviceAgentArgs(name, portalFPs, mode string) ([]string, error) {
 			return nil, fmt.Errorf("--mode: want normal or bypass, got %q", mode)
 		}
 		extra = append(extra, "--mode", mode)
+	}
+	extra = append(extra, "--relay", relay)
+	if transport != "" {
+		if transport != "ws" && transport != "http" {
+			return nil, fmt.Errorf("--transport: want ws or http, got %q", transport)
+		}
+		extra = append(extra, "--transport", transport)
 	}
 	return extra, nil
 }
