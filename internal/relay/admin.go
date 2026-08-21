@@ -550,6 +550,7 @@ type AdminStore interface {
 	RevokeACL(namespace string, id int) error
 	RevokeACLMatch(namespace string, id int, device, grantee string) (bool, error)
 	ListAudit(namespace string) ([]map[string]any, error)
+	RoleForNamespace(namespace string) (string, error)
 }
 
 func deriveNS(identity string) string {
@@ -984,6 +985,15 @@ func markAmbiguousDevices(devices []map[string]any) {
 			d["ambiguous"] = true
 		}
 	}
+}
+
+// RoleForNamespace reports the admission role of the user owning a namespace.
+// sql.ErrNoRows when no user record exists: tokens can outlive their user, and
+// pre-admission deployments never had one.
+func (p *PGStore) RoleForNamespace(namespace string) (string, error) {
+	var role string
+	err := p.db.QueryRow(`SELECT role FROM users WHERE namespace = $1`, namespace).Scan(&role)
+	return role, err
 }
 
 func (p *PGStore) ListUsers() ([]string, error) {

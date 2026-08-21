@@ -101,8 +101,20 @@ func (r *Relay) handleDocsArticle(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, a)
 }
 
-// --- namespace-token write (anyone with a valid relay token can edit;
-// audit logs the namespace responsible). Internal-team trust model. ---
+// --- namespace-token write. The docs site is one shared surface, not
+// per-namespace data, so on a deployment with user admission only admins may
+// edit it; the durable source of truth is docs/portal/ in git either way.
+// Without an admission store (docs enabled on a relay with no user database)
+// the original internal-team trust model stands: any valid namespace token. ---
+
+// docsWriteAllowed gates the namespace-token docs write endpoints.
+func (r *Relay) docsWriteAllowed(ns string) bool {
+	if r.admin == nil {
+		return true
+	}
+	role, err := r.admin.RoleForNamespace(ns)
+	return err == nil && role == "admin"
+}
 
 func (r *Relay) handleDocsGroupsNS(w http.ResponseWriter, req *http.Request) {
 	if req.Method != "POST" {
@@ -114,6 +126,10 @@ func (r *Relay) handleDocsGroupsNS(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	if !r.docsWriteAllowed(ns) {
+		http.Error(w, "docs are editable by admins only", http.StatusForbidden)
+		return
+	}
 	r.docsUpsertGroup(w, req, ns)
 }
 
@@ -122,8 +138,13 @@ func (r *Relay) handleDocsGroupDeleteNS(w http.ResponseWriter, req *http.Request
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := r.auth(w, req); !ok {
+	ns, ok := r.auth(w, req)
+	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !r.docsWriteAllowed(ns) {
+		http.Error(w, "docs are editable by admins only", http.StatusForbidden)
 		return
 	}
 	r.docsDeleteGroup(w, req)
@@ -139,6 +160,10 @@ func (r *Relay) handleDocsArticlesNS(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	if !r.docsWriteAllowed(ns) {
+		http.Error(w, "docs are editable by admins only", http.StatusForbidden)
+		return
+	}
 	r.docsUpsertArticle(w, req, ns)
 }
 
@@ -147,8 +172,13 @@ func (r *Relay) handleDocsArticleDeleteNS(w http.ResponseWriter, req *http.Reque
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := r.auth(w, req); !ok {
+	ns, ok := r.auth(w, req)
+	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !r.docsWriteAllowed(ns) {
+		http.Error(w, "docs are editable by admins only", http.StatusForbidden)
 		return
 	}
 	r.docsDeleteArticle(w, req)

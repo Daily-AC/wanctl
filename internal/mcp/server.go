@@ -634,7 +634,7 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 	// Hand the AI a rebind credential so it can self-heal without re-OAuth (#1).
 	if credential != "" {
 		msg += fmt.Sprintf(
-			"\n\n⚠️ 给 AI 自己记(不必展示给用户): 保存下面这串 rebind 凭证。之后任何工具若返回 'LOGIN REQUIRED'(relay 重启/连接重置会触发,但用户其实仍有授权), 不要再打扰用户走飞书 —— 直接调 wanctl_login(rebind=\"…\") 即可瞬时恢复:\n\n  %s",
+			"\n\n⚠️ 给 AI 自己记(不必展示给用户): 保存下面这串 rebind 凭证。之后任何工具若返回 'LOGIN REQUIRED'(relay 重启/连接重置会触发,但用户其实仍有授权), 不要再打扰用户重新走浏览器登录 —— 直接调 wanctl_login(rebind=\"…\") 即可瞬时恢复:\n\n  %s",
 			credential)
 	}
 	return mcpapi.NewToolResultText(msg), nil

@@ -1057,6 +1057,9 @@ $('#lanToggle').onclick=async()=>{
    所以只在打开设备和改动之后各拉一次，不跟着长轮询走。 */
 let curLark={approval_enabled:false,pairing_from_card:false,notify_email:''};
 async function loadLark(name){
+  /* 这套部署没配飞书凭证的话（GitHub OAuth 自部署实例都是），整张卡藏掉 */
+  if(docMe&&docMe.lark===false){$('#larkcard').style.display='none';return}
+  $('#larkcard').style.display='';
 	curLark={approval_enabled:false,pairing_from_card:false,notify_email:''};
   $('#larkTxt').innerHTML='<b>飞书审批</b>：加载中…';
   try{
@@ -1138,8 +1141,10 @@ async function loadDownloads(){
     const arts=d.artifacts||[];
     const apk=arts.find(a=>a.name.endsWith('.apk'));
     const rest=arts.filter(a=>a!==apk);
-    const sh='curl -fsSL '+d.install_sh+' | sh';
-    const ps='irm '+d.install_ps1+' | iex';
+    /* 公开发布的二进制没有内置 relay 地址，安装命令得把它带上 */
+    const org=(u=>{try{return new URL(u).origin}catch{return''}})(d.install_sh);
+    const sh='curl -fsSL '+d.install_sh+' | '+(org?'WANCTL_RELAY='+org+' ':'')+'sh';
+    const ps=(org?"$env:WANCTL_RELAY='"+org+"'; ":'')+'irm '+d.install_ps1+' | iex';
     $('#dlbody').innerHTML=`
       <div class="tablecard" style="margin-top:18px;padding:18px 20px">
         <div style="font-size:13px;color:var(--ink-2)">当前发布 <b>${esc(d.version)}</b></div>
@@ -1159,6 +1164,7 @@ async function loadDownloads(){
         <pre data-copy style="cursor:pointer">${esc(sh)}</pre>
         <div style="font-size:13px;color:var(--ink-2);margin:12px 0 4px">Windows（PowerShell）</div>
         <pre data-copy style="cursor:pointer">${esc(ps)}</pre>
+        <p class="sub" style="margin:12px 0 0">装完在那台机器上跑 <code>wanctl</code> 登录接入；完整步骤（包括环境变量写进 shell 配置）见「使用文档」的快速开始。</p>
       </div>
       <div class="tablecard" style="margin-top:14px"><table>
         <thead><tr><th>平台</th><th>文件</th><th>大小</th><th></th></tr></thead>
@@ -1382,7 +1388,7 @@ function firstArticleSlug(){
 }
 
 function renderDocNav(){
-  const can=!!docMe?.namespace;
+  const can=docMe?.role==='admin';
   $('#docNavTop').style.display=can?'':'none';
   const html=(docTree?.groups||[]).map(g=>`
     <div class="dg">
@@ -1400,7 +1406,7 @@ async function openDocArticle(slug){
   $$('#docTree li').forEach(li=>li.classList.toggle('on',li.dataset.slug===slug));
   try{
     const a=await jget('/api/docs/article/'+encodeURIComponent(slug));
-    const can=!!docMe?.namespace;
+    const can=docMe?.role==='admin';
     $('#docArt').innerHTML=
       '<div class="doctitle">'+esc(a.title)+'</div>'+
       '<div class="docmeta">'+
