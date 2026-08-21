@@ -20,6 +20,6 @@ wanctl
 
 安装器会先验证一份签名过的发布清单，再核对二进制的大小和哈希，然后才落盘。用的是系统自带的 `openssl`（macOS 的 LibreSSL 也可以），不需要额外装什么。
 
-想要开机自启，跑 `wanctl service install`。注意一个已知缺口：生成的服务单元目前**不带 relay 地址**，服务环境里没有 `WANCTL_RELAY` 就连不上。Linux 用 `systemctl --user edit wanctl` 补一行 `[Service]` 下的 `Environment=WANCTL_RELAY=https://relay.example.com`；macOS 在生成的 plist 里加 `EnvironmentVariables` 字典。
+想要开机自启，跑 `wanctl service install`——它会把当时生效的 relay 地址和传输方式一起写进服务单元，重启后不依赖任何环境变量（也可用 `--relay` / `--transport` 显式指定）。
 
 Windows 机器看[下一篇](#docs/windows-install)。
