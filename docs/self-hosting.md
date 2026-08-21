@@ -128,16 +128,20 @@ docker compose exec -e WANCTL_RELAY=http://127.0.0.1:8080 relay wanctl admin inv
 Alternatively, pre-approve a specific GitHub login by appending `--github
 LOGIN`. Give the one-time code to the user; the pending page accepts it.
 
-After installing or building the `wanctl` binary on a device, enroll and start
-it with one command:
+On a device, install the signed binary from the project release page, point it
+at your instance (persisted; `wanctl config` shows and edits it later), then
+enroll and start it:
 
 ```bash
-WANCTL_PORTAL=https://portal.example.com WANCTL_RELAY=https://relay.example.com wanctl
+curl -fsSL https://github.com/Daily-AC/wanctl/releases/latest/download/install.sh | sh
+wanctl config set relay=https://relay.example.com portal=https://portal.example.com
+wanctl
 ```
 
-The command opens the portal, asks for the one-time enrollment code shown
+The last command opens the portal, asks for the one-time enrollment code shown
 there, stores the issued token, and starts the agent. The agent makes outbound
-connections only.
+connections only. (A bare `wanctl` with nothing configured prompts for the two
+URLs on a terminal.)
 
 ### Optional: enable the portal device console
 
@@ -182,11 +186,15 @@ docker compose build relay && docker compose up -d relay
 ```
 
 The relay log switches from `release distribution disabled` to serving `/dl/*`,
-and a device installs with:
+and a device on a network that cannot reach GitHub installs from the mirror:
 
 ```bash
 curl -fsSL https://relay.example.com/install.sh | WANCTL_RELAY=https://relay.example.com sh
 ```
+
+This mirror is optional: official binaries and installers default to the
+project's GitHub release page for both install and `wanctl update`, so most
+deployments never need to serve /dl at all.
 
 ## Troubleshooting
 

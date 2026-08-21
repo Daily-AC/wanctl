@@ -48,6 +48,9 @@ func cmdSupervise(ctx context.Context, args []string) error {
 func cmdUp(ctx context.Context) error {
 	tok := config.EnvOr("WANCTL_TOKEN", config.StoredToken())
 	if tok == "" {
+		if err := ensureEndpointsConfigured(); err != nil {
+			return err
+		}
 		t, err := enroll(ctx)
 		if err != nil {
 			return err

@@ -118,11 +118,11 @@ func New() (*Client, error) {
 				return nil, err
 			}
 			if tr == "" {
-				tr = config.DefaultTransport
+				tr = config.Transport()
 			}
 		}
 	} else if tr == "" {
-		tr = config.DefaultTransport
+		tr = config.Transport()
 	}
 	c := NewWith(id, known, relayURL, token, tr)
 	c.label = config.EnvOr("WANCTL_LABEL", config.StoredLabel())

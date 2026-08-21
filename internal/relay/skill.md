@@ -25,10 +25,15 @@ device to approve them.
 
 ## Setup (controller — first run)
 
-Use the relay that served this skill with the proxy-compatible HTTP transport
-(`@WANCTL_RELAY@`, `http`). Set `WANCTL_RELAY` explicitly when the binary was
-built without a deployment default.
-What you do need is a **token bound to a namespace** — get it via OAuth:
+Point the CLI at the relay that served this skill — once, persisted:
+
+```bash
+wanctl config set relay=@WANCTL_RELAY@
+```
+
+(`wanctl config` shows the effective settings; WANCTL_RELAY env still overrides
+for one-off use.) What you also need is a **token bound to a namespace** — get
+it via OAuth:
 
 ```bash
 wanctl login    # opens the portal in a browser; user completes the portal
@@ -43,8 +48,7 @@ saved credential, `wanctl logout`.
 Controller setup:
 
 ```bash
-export WANCTL_RELAY=@WANCTL_RELAY@
-export WANCTL_TRANSPORT=http
+wanctl config set relay=@WANCTL_RELAY@ transport=http
 # Optional for CI/pre-provisioned controllers:
 export WANCTL_TOKEN=<token>
 ```
@@ -182,8 +186,10 @@ verifies a signed manifest before installing anything and needs no extra tooling
 on any platform:
 
 ```bash
-# macOS / Linux (any POSIX shell)
-curl -fsSL @WANCTL_RELAY@/install.sh | sh
+# macOS / Linux (any POSIX shell). Installer and binaries come from the
+# project's GitHub release page and are signature-verified before install.
+curl -fsSL https://github.com/Daily-AC/wanctl/releases/latest/download/install.sh | sh
+wanctl config set relay=@WANCTL_RELAY@ portal=<the portal URL — ask the user>
 wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
 wanctl                          # then run this on that machine — opens the
                                 # browser for the portal login, takes a code,
@@ -192,21 +198,16 @@ wanctl                          # then run this on that machine — opens the
 
 ```powershell
 # Windows — PowerShell only, no bash / curl needed
-irm @WANCTL_RELAY@/install.ps1 | iex
+irm https://github.com/Daily-AC/wanctl/releases/latest/download/install.ps1 | iex
+wanctl config set relay=@WANCTL_RELAY@ portal=<the portal URL — ask the user>
 wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
 wanctl                          # same flow: browser → portal login → agent runs.
 ```
 
-For a machine where the stakes are high, download the installer from the
-independently authenticated release page (github.com/Daily-AC/wanctl/releases)
-and run that file instead: a script served by the relay cannot bootstrap trust
-in that same relay. Tell the user this tradeoff rather than deciding it for
-them.
-
-If the installed binary was built without deployment defaults (the open-source
-release artifacts are), also export `WANCTL_RELAY=@WANCTL_RELAY@` and
-`WANCTL_PORTAL=<the portal URL — ask the user>` on that machine before running
-`wanctl`, or the enroll step cannot find its relay and portal.
+The release page is independent of the relay, so the installer can vouch for
+the relay rather than the other way around. (A relay that hosts its own /dl
+mirror still works: `WANCTL_RELAY=@WANCTL_RELAY@ sh` makes the installer pull
+from the mirror instead.)
 
 For non-interactive setups, run the verified installer first, seed the verified
 Portal fingerprint, then start `wanctl agent --token <pre-issued-token>` and
@@ -218,7 +219,8 @@ install the native service. On that machine, `wanctl stop` stops it and
 - One Go binary plays controller, agent, and relay. As a controller you only use
   the controller commands above.
 - To upgrade `wanctl` itself (controller or device side): run `wanctl update`.
-  It fetches the latest binary from the relay and atomically replaces the
+  It fetches the latest signed binary from the project release page (or the
+  relay's /dl mirror on builds without one baked in) and atomically replaces the
   current one; if a background daemon is running it is restarted automatically.
 - The user can also edit the deployment's documentation via `wanctl docs ...`
   (see `wanctl docs --help`) and browse it in the configured portal.

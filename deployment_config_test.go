@@ -9,7 +9,9 @@ import (
 )
 
 func TestRelayCommandsFailBeforeNetworkWhenUnconfigured(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	t.Setenv("WANCTL_RELAY", "")
+	t.Setenv("WANCTL_RELEASE_BASE", "")
 	old := config.DefaultRelay
 	config.DefaultRelay = ""
 	t.Cleanup(func() { config.DefaultRelay = old })
@@ -20,7 +22,7 @@ func TestRelayCommandsFailBeforeNetworkWhenUnconfigured(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := run()
-			if err == nil || !strings.Contains(err.Error(), "set WANCTL_RELAY=https://your-relay") {
+			if err == nil || !strings.Contains(err.Error(), "wanctl config set relay=") {
 				t.Fatalf("error = %v", err)
 			}
 		})

@@ -102,6 +102,9 @@ USAGE
   wanctl push  [--target NS/DEV] <local> <remote>
   wanctl pull  [--target NS/DEV] <remote> <local>
   wanctl peers
+  wanctl config                               show effective settings (relay/portal/transport) and their source
+  wanctl config set key=value ...             persist settings; e.g. wanctl config set relay=https://r portal=https://p
+  wanctl config unset key ...                 remove persisted settings
   wanctl net [wan|lan|auto|status]           switch which relay the controller uses: public (wan), intranet
                                               fast-path (lan, real-time WS), or probe-and-pick (auto)
   wanctl label ["<who you are>"]              show or set this controller's self-description; devices refuse to
@@ -121,7 +124,7 @@ USAGE
   wanctl relay  [--addr :8080]                run the relay; DATABASE_URL or WANCTL_TOKENS
   wanctl portal [--addr :8080]                run the web portal (GitHub OAuth or reverse-proxy SSO)
 
-Defaults: relay=` + configuredDisplay(defaultRelay, "(not set)") + `  portal=` + configuredDisplay(defaultPortal, "(not set)") + `  transport=` + defaultTransport + ` (override with WANCTL_RELAY/WANCTL_PORTAL/WANCTL_TRANSPORT)
+Defaults: relay=` + configuredDisplay(defaultRelay, "(not set)") + `  portal=` + configuredDisplay(defaultPortal, "(not set)") + `  transport=` + defaultTransport + ` (persist with 'wanctl config set', override with WANCTL_RELAY/WANCTL_PORTAL/WANCTL_TRANSPORT)
 ENV (controller): WANCTL_TOKEN=... (or run 'wanctl' to log in)  WANCTL_RELAY=...
                   WANCTL_PORTAL=... WANCTL_ADMIN_SECRET=... (server logs only)
 ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"  WANCTL_ADMIN_SECRET=...  WANCTL_PORTAL_NS=...
@@ -137,8 +140,8 @@ ENV (agent):      WANCTL_PORTAL_FPS=SHA256:...[,SHA256:...]  (WANCTL_PORTAL_FP i
 // Deployment defaults live in internal/config so they can be injected with
 // -ldflags while environment variables still take precedence at runtime.
 var (
-	defaultRelay  = config.EnvOr("WANCTL_RELAY", config.DefaultRelay)
-	defaultPortal = config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)
+	defaultRelay  = settingValue("relay")
+	defaultPortal = settingValue("portal")
 )
 
 const defaultTransport = config.DefaultTransport
@@ -199,6 +202,8 @@ func main() {
 		err = cmdUp(ctx)
 	case "login":
 		err = cmdLogin(ctx, os.Args[2:])
+	case "config":
+		err = cmdConfig(os.Args[2:])
 	case "docs":
 		err = cmdDocs(ctx, os.Args[2:])
 	case "friends":
@@ -239,6 +244,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "wanctl: "+err.Error())
 		os.Exit(1)
 	}
+}
+
+// settingValue is config.Setting without the source, for flag defaults and
+// display lines.
+func settingValue(key string) string {
+	v, _ := config.Setting(key)
+	return v
 }
 
 func envOr(key, def string) string {
@@ -397,11 +409,11 @@ func cmdPortal(args []string) error {
 func cmdAgent(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("agent", flag.ExitOnError)
 	name := fs.String("name", "", "device name (default hostname)")
-	relayURL := fs.String("relay", envOr("WANCTL_RELAY", defaultRelay), "relay ws(s) URL")
+	relayURL := fs.String("relay", settingValue("relay"), "relay ws(s) URL")
 	token := fs.String("token", envOr("WANCTL_TOKEN", config.StoredToken()), "access/registration token")
 	shell := fs.String("shell", "", "shell (default powershell on Windows, /bin/sh elsewhere)")
 	yes := fs.Bool("yes", false, "auto-trust new controllers (unattended)")
-	tr := fs.String("transport", envOr("WANCTL_TRANSPORT", defaultTransport), "transport: ws or http (http is proxy-agnostic)")
+	tr := fs.String("transport", config.Transport(), "transport: ws or http (http is proxy-agnostic)")
 	mode := fs.String("mode", "", "policy mode: normal (prompt on miss) or bypass (auto-allow, DANGEROUS). Empty = keep the last persisted mode (default normal).")
 	managed := fs.Bool("managed", false, "agent is owned by an external supervisor")
 	portalFPS := fs.String("portal-fps", config.PortalFingerprintsEnv(), "comma-separated portal admin fingerprints to seed locally")
@@ -808,7 +820,7 @@ func cmdNet(args []string) error {
 	case "status":
 		mode := config.StoredNetMode()
 		fmt.Printf("network mode:   %s\n", mode)
-		fmt.Printf("public relay:   %s\n", configuredDisplay(config.EnvOr("WANCTL_RELAY", config.DefaultRelay), "(not configured)"))
+		fmt.Printf("public relay:   %s\n", configuredDisplay(settingValue("relay"), "(not configured)"))
 		reach := "not reachable"
 		if client.LanReachable(800 * time.Millisecond) {
 			reach = "reachable ✓"

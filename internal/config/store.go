@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -119,6 +120,73 @@ func SaveNetMode(mode string) error {
 		return err
 	}
 	return os.WriteFile(p, []byte(strings.TrimSpace(mode)+"\n"), 0o600)
+}
+
+// settingFiles maps `wanctl config` keys to their file in the config dir —
+// same one-file-per-value layout as token/mode/label.
+var settingFiles = map[string]string{
+	"relay":     "relay",
+	"portal":    "portal",
+	"transport": "transport",
+}
+
+// KnownSetting reports whether key is a persistable endpoint setting.
+func KnownSetting(key string) bool { _, ok := settingFiles[key]; return ok }
+
+// StoredSetting returns the persisted value for a setting, or "" if none.
+// Errors read as "not set" so it composes as a resolution layer.
+func StoredSetting(key string) string {
+	name, ok := settingFiles[key]
+	if !ok {
+		return ""
+	}
+	p, err := fileIn(name)
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// SaveSetting persists a setting with owner-only permissions.
+func SaveSetting(key, value string) error {
+	name, ok := settingFiles[key]
+	if !ok {
+		return fmt.Errorf("unknown setting %q", key)
+	}
+	p, err := fileIn(name)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(strings.TrimSpace(value)+"\n"), 0o600)
+}
+
+// RemoveSetting deletes a persisted setting. Missing file is not an error.
+func RemoveSetting(key string) error {
+	name, ok := settingFiles[key]
+	if !ok {
+		return fmt.Errorf("unknown setting %q", key)
+	}
+	p, err := fileIn(name)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// SettingsDir returns the directory settings persist in, for display.
+func SettingsDir() string {
+	dir, err := transport.ConfigDir()
+	if err != nil {
+		return ""
+	}
+	return dir
 }
 
 // LanRelay resolves the intranet relay URL: WANCTL_LAN_RELAY overrides the

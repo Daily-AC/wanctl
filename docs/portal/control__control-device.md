@@ -1,8 +1,7 @@
-控制端（你自己的电脑）同样先设好两个地址（写进 shell 配置文件）：
+控制端（你自己的电脑）装好工具后，先把实例地址配置好（一次即可，`wanctl config` 随时查看/修改）：
 
 ```
-export WANCTL_RELAY=https://relay.example.com
-export WANCTL_PORTAL=https://portal.example.com
+wanctl config set relay=https://relay.example.com portal=https://portal.example.com
 ```
 
 `wanctl login` 登录一次拿到身份（浏览器门户登录 → 一次性 code 贴回终端）。然后直接用：

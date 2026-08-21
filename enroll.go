@@ -111,6 +111,9 @@ func cmdLogin(ctx context.Context, args []string) error {
 	if existing := config.StoredToken(); existing != "" {
 		fmt.Println("(覆盖已存在的本地凭证)")
 	}
+	if err := ensureEndpointsConfigured(); err != nil {
+		return err
+	}
 	var t string
 	var err error
 	if strings.TrimSpace(*code) != "" {

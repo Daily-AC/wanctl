@@ -68,13 +68,12 @@ func cmdUpdate(ctx context.Context, args []string) error {
 		return splitUpdateViaSudo(ctx, self)
 	}
 
-	relay, err := config.Relay()
+	base, err := updateSource()
 	if err != nil {
 		return err
 	}
-	relay = strings.TrimRight(relay, "/")
-	fmt.Printf("正在验证 %s 的签名发布清单 …\n", relay)
-	tmp, version, err := downloadSignedUpdate(ctx, relay, dir, runtime.GOOS, runtime.GOARCH, buildVersion)
+	fmt.Printf("正在验证 %s 的签名发布清单 …\n", base)
+	tmp, version, err := downloadSignedUpdate(ctx, base, dir, runtime.GOOS, runtime.GOARCH, buildVersion)
 	if err != nil {
 		return err
 	}
@@ -116,7 +115,22 @@ func cmdUpdate(ctx context.Context, args []string) error {
 var errAPKSelfUpdate = fmt.Errorf(
 	"这个 wanctl 由安卓 APK 分发，无法自我升级：APK 里的 lib 目录是系统只读的，" +
 		"而 app 能写的目录 Android 一律禁止 exec。请在 wanctl 应用里点「检查更新」，" +
-		"或从 relay 的 /dl 下载新 APK 安装。")
+		"或从门户「下载安装」页下载新 APK 安装。")
+
+// updateSource resolves where signed release artifacts are fetched from: the
+// build's release page (official builds point at the project's GitHub
+// releases) first, the relay's optional /dl mirror as fallback for deployments
+// that host their own distribution.
+func updateSource() (string, error) {
+	if base := config.ReleaseBase(); base != "" {
+		return strings.TrimRight(base, "/"), nil
+	}
+	relay, err := config.Relay()
+	if err != nil {
+		return "", fmt.Errorf("no release source: set WANCTL_RELEASE_BASE, or configure a relay whose /dl mirror serves releases (%w)", err)
+	}
+	return strings.TrimRight(relay, "/") + "/dl", nil
+}
 
 // runningFromAPK reports whether this binary is the copy an installed Android
 // app carries, as opposed to one someone pushed to /data/local/tmp or installed
@@ -152,13 +166,12 @@ func fetchAndroidAPK(ctx context.Context, dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("prepare %s: %w", dir, err)
 	}
-	relay, err := config.Relay()
+	base, err := updateSource()
 	if err != nil {
 		return err
 	}
-	relay = strings.TrimRight(relay, "/")
-	fmt.Fprintf(os.Stderr, "正在验证 %s 的签名发布清单 …\n", relay)
-	tmp, version, err := downloadSignedUpdate(ctx, relay, dir, "android", wanrelease.AndroidAPKArch, buildVersion)
+	fmt.Fprintf(os.Stderr, "正在验证 %s 的签名发布清单 …\n", base)
+	tmp, version, err := downloadSignedUpdate(ctx, base, dir, "android", wanrelease.AndroidAPKArch, buildVersion)
 	if err != nil {
 		if errors.Is(err, wanrelease.ErrUpToDate) {
 			fmt.Fprintf(os.Stderr, "已是最新版本 (%s)\n", buildVersion)
@@ -416,12 +429,15 @@ func reportPATHShadow(self string) {
 		self, other, other, filepath.Dir(self))
 }
 
-func downloadSignedUpdate(ctx context.Context, relay, dir, goos, goarch, currentVersion string) (string, string, error) {
-	manifestRaw, err := fetchLimited(ctx, relay+"/dl/"+wanrelease.ManifestName, wanrelease.MaxManifestSize)
+// downloadSignedUpdate fetches and verifies a release from base, a URL under
+// which the artifacts live flat: a relay's /dl mirror or a GitHub release's
+// download path — both serve manifest.json and the binaries side by side.
+func downloadSignedUpdate(ctx context.Context, base, dir, goos, goarch, currentVersion string) (string, string, error) {
+	manifestRaw, err := fetchLimited(ctx, base+"/"+wanrelease.ManifestName, wanrelease.MaxManifestSize)
 	if err != nil {
 		return "", "", err
 	}
-	signatureRaw, err := fetchLimited(ctx, relay+"/dl/"+wanrelease.SignatureName, 4096)
+	signatureRaw, err := fetchLimited(ctx, base+"/"+wanrelease.SignatureName, 4096)
 	if err != nil {
 		return "", "", err
 	}
@@ -433,7 +449,7 @@ func downloadSignedUpdate(ctx context.Context, relay, dir, goos, goarch, current
 	if err != nil {
 		return "", "", err
 	}
-	url := relay + "/dl/" + artifact.Name
+	url := base + "/" + artifact.Name
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return "", "", err

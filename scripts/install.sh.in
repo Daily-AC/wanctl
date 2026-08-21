@@ -1,13 +1,22 @@
 #!/bin/sh
 # Verifies an RSA signature over the release manifest before installing
-# anything. The strongest place to get this script is the authenticated GitLab
-# release, which is independent of the relay it downloads binaries from.
+# anything. This script ships on the project's release page, independent of any
+# relay mirror it may download binaries from.
 set -eu
 
-# Defaults to the relay this installer was built for; override to install from
-# a different one.
-RELAY=${WANCTL_RELAY:-@WANCTL_DEFAULT_RELAY@}
-[ -n "$RELAY" ] || { echo "set WANCTL_RELAY to the artifact relay URL" >&2; exit 1; }
+# Where the artifacts live, flat (manifest.json + binaries side by side).
+# Explicit env wins; a relay's /dl mirror next; then the release page this
+# installer was built for.
+BASE=${WANCTL_DIST_BASE:-}
+if [ -z "$BASE" ]; then
+  RELAY=${WANCTL_RELAY:-}
+  if [ -n "$RELAY" ]; then BASE=${RELAY%/}/dl; else BASE="@WANCTL_RELEASE_BASE@"; fi
+fi
+if [ -z "$BASE" ]; then
+  RELAY="@WANCTL_DEFAULT_RELAY@"
+  [ -n "$RELAY" ] && BASE=${RELAY%/}/dl
+fi
+[ -n "$BASE" ] || { echo "set WANCTL_DIST_BASE (or WANCTL_RELAY) to where the release artifacts live" >&2; exit 1; }
 command -v openssl >/dev/null 2>&1 || {
   echo "openssl is required to verify the release signature" >&2
   [ -n "${PREFIX:-}" ] && [ -x "$PREFIX/bin/pkg" ] && echo "on Termux: pkg install openssl-tool" >&2
@@ -20,7 +29,6 @@ cat >"$TMPDIR_WANCTL/release.pub" <<'WANCTL_RELEASE_KEY'
 @WANCTL_RELEASE_RSA_PUBLIC_KEY_PEM@
 WANCTL_RELEASE_KEY
 
-BASE=${RELAY%/}/dl
 curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-filesize 1048576 \
   "$BASE/manifest.json" -o "$TMPDIR_WANCTL/manifest.json"
 curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-filesize 1024 \

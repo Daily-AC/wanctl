@@ -201,8 +201,8 @@ func (l *localFsSession) info() string {
 	if id != nil {
 		out += "controller fingerprint: " + id.Fingerprint + "\n"
 	}
-	out += "relay:                 " + configuredValue(config.EnvOr("WANCTL_RELAY", config.DefaultRelay)) + "\n"
-	out += "portal:                " + configuredValue(config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)) + "\n"
+	out += "relay:                 " + configuredValue(settingValue("relay")) + "\n"
+	out += "portal:                " + configuredValue(settingValue("portal")) + "\n"
 	out += "config dir:            " + dir + "  (override with WANCTL_CONFIG_DIR for per-AI-user isolation)\n"
 	return out
 }
@@ -379,10 +379,16 @@ func (r *remoteSession) info() string {
 			out += "controller fingerprint: " + r.identity.Fingerprint + "\n"
 		}
 	}
-	out += "relay:                 " + configuredValue(config.EnvOr("WANCTL_RELAY", config.DefaultRelay)) + "\n"
-	out += "portal:                " + configuredValue(config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)) + "\n"
+	out += "relay:                 " + configuredValue(settingValue("relay")) + "\n"
+	out += "portal:                " + configuredValue(settingValue("portal")) + "\n"
 	out += "note:                  identity is derived per-namespace, so the same person reconnecting keeps the same fingerprint (no re-pairing).\n"
 	return out
+}
+
+// settingValue is config.Setting without the source, for display lines.
+func settingValue(key string) string {
+	v, _ := config.Setting(key)
+	return v
 }
 
 func configuredValue(value string) string {
