@@ -17,6 +17,9 @@ jobs:
       WANCTL_RELEASE_RSA_KEY: ${{ secrets.WANCTL_RELEASE_RSA_KEY }}
       WANCTL_ANDROID_KEYSTORE_B64: ${{ secrets.WANCTL_ANDROID_KEYSTORE_B64 }}
       WANCTL_ANDROID_KEYSTORE_PASS: ${{ secrets.WANCTL_ANDROID_KEYSTORE_PASS }}
+      # Baked into binaries (`wanctl update`) and installers as the place
+      # release artifacts are downloaded from, decoupled from any relay.
+      WANCTL_RELEASE_BASE: https://github.com/${{ github.repository }}/releases/latest/download
     steps:
       - name: Check out repository
         uses: actions/checkout@v7

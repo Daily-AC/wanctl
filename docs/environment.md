@@ -27,7 +27,7 @@ Variables marked "conditional" are required only for the feature described.
 | `PORTAL_USER_HEADER` | portal | Conditional | `X-Auth-Request-Email` | Trusted reverse-proxy identity header for header-auth mode. The proxy must strip client-supplied copies. Mutually exclusive with GitHub OAuth. |
 | `PORTAL_PUBLIC_ORIGIN` | portal | No | derived from request | External portal origin used for OAuth redirects and secure cookies. Set it when TLS terminates at a proxy. |
 | `PORTAL_DEBUG_WHOAMI` | portal | No | `0` | Set to `1` to enable the diagnostic `/whoami` endpoint. Do not enable routinely. |
-| `WANCTL_RELAY` | portal | Conditional | build-time default or none | Public relay URL used by the portal console and `/skills` redirect. Also used by clients and agents. |
+| `WANCTL_RELAY` | portal | Conditional | persisted config, then build-time default | Public relay URL used by the portal console and `/skills` redirect. Also used by clients and agents, who can persist it with `wanctl config set relay=…`. |
 | `WANCTL_PORTAL_TOKEN` | portal | Conditional | none | Token in `WANCTL_PORTAL_NS`; required only for the live device console. |
 | `WANCTL_TRANSPORT` | portal, agent, controller, MCP | No | `http` | Carrier: proxy-agnostic `http` long-poll or `ws`. |
 | `WANCTL_CONFIG_DIR` | all stateful roles | No | OS user config directory | Directory for identity, trust, token, label, logs, and process state. The container image sets `/data`. |
@@ -38,7 +38,9 @@ Variables marked "conditional" are required only for the feature described.
 
 | Variable | Role | Required | Default | Purpose |
 |---|---|---:|---|---|
-| `WANCTL_PORTAL` | agent, controller | Conditional | build-time default or none | Portal URL used for login/enrollment and pairing links. |
+| `WANCTL_PORTAL` | agent, controller | Conditional | persisted config, then build-time default | Portal URL used for login/enrollment and pairing links. Persist with `wanctl config set portal=…`. |
+| `WANCTL_RELEASE_BASE` | agent, controller, installers | No | build-time default or none | Base URL where signed release artifacts live flat (official builds bake the project's GitHub releases). `wanctl update` and the installers pull from it; empty falls back to the relay's `/dl` mirror. |
+| `WANCTL_DIST_BASE` | installers | No | none | Installer-only override of the artifact source; wins over `WANCTL_RELAY` and the baked release base. |
 | `WANCTL_TOKEN` | agent, controller, MCP | Conditional | saved token or none | Namespace bearer token. Overrides the token stored in the config directory. |
 | `WANCTL_LABEL` | controller, MCP | No | saved label or generated MCP label | Human-readable controller identity shown during pairing. |
 | `WANCTL_LAN_RELAY` | agent, controller | No | build-time default or none | Optional intranet WebSocket relay used by the LAN fast path. |

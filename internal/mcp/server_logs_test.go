@@ -106,7 +106,7 @@ func TestMCPToolReportsMissingRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.IsError || !strings.Contains(resultText(res), "set WANCTL_RELAY=https://your-relay") {
+	if !res.IsError || !strings.Contains(resultText(res), "wanctl config set relay=") {
 		t.Fatalf("result = %+v", res)
 	}
 }

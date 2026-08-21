@@ -1,14 +1,8 @@
-在**要被控制的那台机器**上，先把两个地址放进环境（写进 `~/.zshrc` / `~/.bashrc` 一劳永逸）：
+在**要被控制的那台机器**上跑三行——装工具、配置实例地址（一次即可）、登录接入：
 
 ```
-export WANCTL_RELAY=https://relay.example.com
-export WANCTL_PORTAL=https://portal.example.com
-```
-
-然后两行——第一行装好工具，第二行登录把它绑到你的空间：
-
-```
-curl -fsSL $WANCTL_RELAY/install.sh | sh
+curl -fsSL https://github.com/Daily-AC/wanctl/releases/latest/download/install.sh | sh
+wanctl config set relay=https://relay.example.com portal=https://portal.example.com
 wanctl
 ```
 
@@ -16,10 +10,10 @@ wanctl
 
 > 第一次能登录门户的前提是你已经在这个部署里：部署的第一个登录用户自动成为管理员，之后的人要拿管理员发的邀请码，登录后兑换（见「邀请、好友与共享」）。
 >
-> 注：第一次跑 `wanctl` 会同时完成「授权 → 后台启动」两件事；之后 `wanctl start/stop/status` 管 daemon。
+> 跳过第二行直接跑 `wanctl` 也行——第一次会在终端里引导你填这两个地址。配好的地址用 `wanctl config` 随时查看或修改，环境变量 `WANCTL_RELAY`/`WANCTL_PORTAL` 仍可临时覆盖。
 
-安装器会先验证一份签名过的发布清单，再核对二进制的大小和哈希，然后才落盘。用的是系统自带的 `openssl`（macOS 的 LibreSSL 也可以），不需要额外装什么。
+工具和安装脚本都来自项目的 [GitHub Releases](https://github.com/Daily-AC/wanctl/releases)：安装器先验证签名过的发布清单，再核对二进制的大小和哈希，然后才落盘（用系统自带的 `openssl`，macOS 的 LibreSSL 也可以）——发布源与你的中继相互独立，中继出问题也装得上。
 
-想要开机自启，跑 `wanctl service install`——它会把当时生效的 relay 地址和传输方式一起写进服务单元，重启后不依赖任何环境变量（也可用 `--relay` / `--transport` 显式指定）。
+想要开机自启，跑 `wanctl service install`——它会把配置好的 relay 地址和传输方式写进服务单元，重启后不依赖环境变量（`--relay` / `--transport` 可显式指定）。
 
 Windows 机器看[下一篇](#docs/windows-install)。

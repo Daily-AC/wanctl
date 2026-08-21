@@ -59,7 +59,7 @@ func TestDownloadSignedUpdateVerifiesBeforeReturning(t *testing.T) {
 	srv := signedUpdateServer(t, []byte("signed binary"), nil)
 	defer srv.Close()
 	dir := t.TempDir()
-	path, version, err := downloadSignedUpdate(t.Context(), srv.URL, dir, "linux", "amd64", "v1.0.0")
+	path, version, err := downloadSignedUpdate(t.Context(), srv.URL+"/dl", dir, "linux", "amd64", "v1.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestDownloadSignedUpdateRejectsTamperedArtifact(t *testing.T) {
 	})
 	defer srv.Close()
 	dir := t.TempDir()
-	if _, _, err := downloadSignedUpdate(t.Context(), srv.URL, dir, "linux", "amd64", "v1.0.0"); err == nil {
+	if _, _, err := downloadSignedUpdate(t.Context(), srv.URL+"/dl", dir, "linux", "amd64", "v1.0.0"); err == nil {
 		t.Fatal("tampered artifact accepted")
 	}
 	entries, err := os.ReadDir(dir)

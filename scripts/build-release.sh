@@ -21,6 +21,14 @@ if [ -n "${WANCTL_RELEASE_PREVIOUS_PUBLIC_KEYS:-}" ]; then
 fi
 LDFLAGS="-s -w -X main.buildVersion=$VERSION -X wanctl/internal/release.TrustedPublicKeys=$TRUSTED_KEYS"
 
+# Where the released artifacts will be downloadable from, flat (the project's
+# GitHub releases for official builds). Baked into the binaries so `wanctl
+# update` needs no relay-side mirror, and into the installers below.
+RELEASE_BASE=${WANCTL_RELEASE_BASE:-}
+if [ -n "$RELEASE_BASE" ]; then
+  LDFLAGS="$LDFLAGS -X wanctl/internal/config.DefaultReleaseBase=$RELEASE_BASE"
+fi
+
 # android/arm64 is a distinct GOOS from linux/arm64 on purpose: the Android
 # build pulls in internal/androiddns, without which nothing resolves (Android
 # has no /etc/resolv.conf and a CGO-free Go resolver falls back to 127.0.0.1).
@@ -74,17 +82,19 @@ RSA_PUB_PEM_FILE="$DIST/release-public-rsa.pem"
 RSA_PUB_XML=$(cd "$ROOT" && go run ./cmd/release-manifest rsa-public-key-xml)
 
 # When configured, baking the relay into the installers lets `curl … | sh` and
-# `irm … | iex` work without the caller exporting WANCTL_RELAY first. It narrows
-# nothing: the script is fetched from that same relay.
+# `irm … | iex` work against that relay's /dl mirror with nothing exported —
+# the enterprise/intranet distribution shape. Official open-source builds leave
+# it empty and bake RELEASE_BASE instead, so the installers pull straight from
+# the release page.
 DEFAULT_RELAY=$(cd "$ROOT" && go run ./cmd/release-manifest default-relay)
-if [ -z "$DEFAULT_RELAY" ]; then
-  echo "WARNING: no default relay configured; install scripts will require WANCTL_RELAY to be set explicitly" >&2
+if [ -z "$DEFAULT_RELAY" ] && [ -z "$RELEASE_BASE" ]; then
+  echo "WARNING: neither WANCTL_RELEASE_BASE nor a default relay is configured; install scripts will require WANCTL_DIST_BASE or WANCTL_RELAY to be set explicitly" >&2
 fi
 
 render_installer() {
-  awk -v pem="$RSA_PUB_PEM_FILE" -v xml="$RSA_PUB_XML" -v relay="$DEFAULT_RELAY" '
+  awk -v pem="$RSA_PUB_PEM_FILE" -v xml="$RSA_PUB_XML" -v relay="$DEFAULT_RELAY" -v rbase="$RELEASE_BASE" '
     $0 == "@WANCTL_RELEASE_RSA_PUBLIC_KEY_PEM@" { while ((getline line < pem) > 0) print line; close(pem); next }
-    { gsub(/@WANCTL_RELEASE_RSA_PUBLIC_KEY_XML@/, xml); gsub(/@WANCTL_DEFAULT_RELAY@/, relay); print }
+    { gsub(/@WANCTL_RELEASE_RSA_PUBLIC_KEY_XML@/, xml); gsub(/@WANCTL_DEFAULT_RELAY@/, relay); gsub(/@WANCTL_RELEASE_BASE@/, rbase); print }
   ' "$1" > "$2"
 }
 render_installer "$ROOT/scripts/install.sh.in" "$DIST/install.sh"

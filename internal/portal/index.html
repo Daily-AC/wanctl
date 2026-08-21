@@ -1136,27 +1136,34 @@ function osLabel(a){
 }
 async function loadDownloads(){
   if(dlLoaded)return;
-  try{
-    const d=await jget('/api/downloads');
-    const arts=d.artifacts||[];
-    const apk=arts.find(a=>a.name.endsWith('.apk'));
-    const rest=arts.filter(a=>a!==apk);
-    /* 公开发布的二进制没有内置 relay 地址，安装命令得把它带上 */
-    const org=(u=>{try{return new URL(u).origin}catch{return''}})(d.install_sh);
-    const sh='curl -fsSL '+d.install_sh+' | '+(org?'WANCTL_RELAY='+org+' ':'')+'sh';
-    const ps=(org?"$env:WANCTL_RELAY='"+org+"'; ":'')+'irm '+d.install_ps1+' | iex';
-    $('#dlbody').innerHTML=`
+  /* 下载与安装全部来自项目的 GitHub Releases（与中继解耦，也是独立的信任起点）。
+     版本号与资产大小尽力从 GitHub API 拿——门户服务器不一定够得着 GitHub，
+     浏览器这一侧通常可以；拿不到就退回固定的 latest 直链。 */
+  const GH='https://github.com/Daily-AC/wanctl';
+  const latest=GH+'/releases/latest/download';
+  let rel=null;
+  try{const r=await fetch('https://api.github.com/repos/Daily-AC/wanctl/releases/latest');if(r.ok)rel=await r.json()}catch{}
+  const assets=(rel&&rel.assets)||[];
+  const asset=n=>assets.find(a=>a.name===n);
+  const dlurl=n=>{const a=asset(n);return a?a.browser_download_url:latest+'/'+n};
+  const NAMES=[['wanctl-darwin-arm64','macOS · Apple 芯片'],['wanctl-darwin-amd64','macOS · Intel'],['wanctl-linux-amd64','Linux · x86_64'],['wanctl-linux-arm64','Linux · ARM64'],['wanctl-windows-amd64.exe','Windows · x86_64'],['wanctl-android-arm64','Android · 终端二进制']];
+  const relayOrg=docMe&&docMe.relay_origin?docMe.relay_origin:'';
+  const cfg='wanctl config set relay='+(relayOrg||'https://<你的中继>')+' portal='+location.origin+'\nwanctl';
+  const sh='curl -fsSL '+latest+'/install.sh | sh';
+  const ps='irm '+latest+'/install.ps1 | iex';
+  const apkA=asset('wanctl-android-arm64.apk');
+  const apkURL=apkA?apkA.browser_download_url:latest+'/wanctl-android-arm64.apk';
+  $('#dlbody').innerHTML=`
       <div class="tablecard" style="margin-top:18px;padding:18px 20px">
-        <div style="font-size:13px;color:var(--ink-2)">当前发布 <b>${esc(d.version)}</b></div>
+        <div style="font-size:13px;color:var(--ink-2)">发布源 <a href="${GH}/releases" target="_blank" rel="noopener">GitHub Releases</a>${rel&&rel.tag_name?` · 最新 <b>${esc(rel.tag_name)}</b>`:''}</div>
       </div>
-      ${apk?`
       <div class="tablecard" style="margin-top:14px;padding:20px">
         <h2 style="margin:0 0 6px;font-size:17px">安卓手机 / 平板</h2>
         <p class="sub" style="margin:0 0 14px">装这个 App 就行，不需要终端、不需要 Termux。安装后打开它，点登录，再打开「启用 wanctl」。</p>
-        <a class="btn primary" href="${esc(apk.url)}" download style="text-decoration:none;display:inline-block">下载 APK（${human(apk.size)}）</a>
+        <a class="btn primary" href="${esc(apkURL)}" style="text-decoration:none;display:inline-block">下载 APK${apkA?`（${human(apkA.size)}）`:''}</a>
         <p class="sub" style="margin:12px 0 0">手机上打不开这个页面的话，直接在手机浏览器里访问下面这行，或者把它发到手机上：</p>
-        <pre data-copy style="margin-top:8px;cursor:pointer">${esc(apk.url)}</pre>
-      </div>`:''}
+        <pre data-copy style="margin-top:8px;cursor:pointer">${esc(apkURL)}</pre>
+      </div>
       <div class="tablecard" style="margin-top:14px;padding:20px">
         <h2 style="margin:0 0 6px;font-size:17px">电脑：一行装好</h2>
         <p class="sub" style="margin:0 0 12px">安装脚本自带发布公钥，装之前会核对签名、大小和 SHA-256，核不上就不装。点一下命令可以复制～</p>
@@ -1164,21 +1171,21 @@ async function loadDownloads(){
         <pre data-copy style="cursor:pointer">${esc(sh)}</pre>
         <div style="font-size:13px;color:var(--ink-2);margin:12px 0 4px">Windows（PowerShell）</div>
         <pre data-copy style="cursor:pointer">${esc(ps)}</pre>
-        <p class="sub" style="margin:12px 0 0">装完在那台机器上跑 <code>wanctl</code> 登录接入；完整步骤（包括环境变量写进 shell 配置）见「使用文档」的快速开始。</p>
+        <div style="font-size:13px;color:var(--ink-2);margin:12px 0 4px">装完接入这个实例（一次配置，之后 <code>wanctl config</code> 随时改）</div>
+        <pre data-copy style="cursor:pointer">${esc(cfg)}</pre>
       </div>
       <div class="tablecard" style="margin-top:14px"><table>
         <thead><tr><th>平台</th><th>文件</th><th>大小</th><th></th></tr></thead>
-        <tbody>${rest.map(a=>`<tr>
-          <td>${esc(osLabel(a))}</td>
-          <td style="font-family:ui-monospace,monospace;font-size:12.5px">${esc(a.name)}</td>
-          <td>${human(a.size)}</td>
-          <td><a href="${esc(a.url)}" download>下载</a></td>
-        </tr>`).join('')}</tbody>
+        <tbody>${NAMES.map(([n,label])=>{const a=asset(n);return`<tr>
+          <td>${esc(label)}</td>
+          <td style="font-family:ui-monospace,monospace;font-size:12.5px">${esc(n)}</td>
+          <td>${a?human(a.size):'—'}</td>
+          <td><a href="${esc(dlurl(n))}">下载</a></td>
+        </tr>`}).join('')}</tbody>
       </table></div>
-      <p class="sub" style="margin-top:14px">要给重要的机器装，更稳的是从 <a href="https://github.com/Daily-AC/wanctl/releases" target="_blank" rel="noopener">GitHub Releases</a> 页拿——从中继下载的安装脚本没法为这个中继自己背书。</p>`;
-    $$('#dlbody pre[data-copy]').forEach(p=>p.onclick=()=>{if(navigator.clipboard)navigator.clipboard.writeText(p.textContent.trim());toast('ok','已复制到剪贴板')});
-    dlLoaded=true;
-  }catch(e){$('#dlbody').innerHTML='<div class="empty">读不到下载清单（'+esc(e.message)+'）</div>'}
+      <p class="sub" style="margin-top:14px">全部产物由发布流水线签名，安装脚本先验清单再落盘；发布源在 GitHub、与中继相互独立，中继坏了也装得上。</p>`;
+  $$('#dlbody pre[data-copy]').forEach(p=>p.onclick=()=>{if(navigator.clipboard)navigator.clipboard.writeText(p.textContent.trim());toast('ok','已复制到剪贴板')});
+  dlLoaded=true;
 }
 
 /* Release notes are embedded in the running binary, so this page always

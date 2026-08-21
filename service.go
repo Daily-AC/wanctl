@@ -57,7 +57,7 @@ func cmdService(ctx context.Context, args []string) error {
 		}
 		transport := *tr
 		if transport == "" {
-			transport = config.EnvOr("WANCTL_TRANSPORT", config.DefaultTransport)
+			transport = config.Transport()
 		}
 		extra, err := serviceAgentArgs(*name, *portalFPs, *mode, relayURL, transport)
 		if err != nil {

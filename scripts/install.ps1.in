@@ -1,12 +1,21 @@
 # Verifies an RSA signature over the release manifest before installing
-# anything. The strongest place to get this script is the authenticated GitLab
-# release, which is independent of the relay it downloads binaries from.
+# anything. This script ships on the project's release page, independent of any
+# relay mirror it may download binaries from.
 $ErrorActionPreference = 'Stop'
 
-# Defaults to the relay this installer was built for; override to install from
-# a different one.
-$relay = if ($env:WANCTL_RELAY) { $env:WANCTL_RELAY } else { '@WANCTL_DEFAULT_RELAY@' }
-if (-not $relay) { throw 'set WANCTL_RELAY to the artifact relay URL' }
+# Where the artifacts live, flat (manifest.json + binaries side by side).
+# Explicit env wins; a relay's /dl mirror next; then the release page this
+# installer was built for.
+$base = $env:WANCTL_DIST_BASE
+if (-not $base) {
+  if ($env:WANCTL_RELAY) { $base = $env:WANCTL_RELAY.TrimEnd('/') + '/dl' }
+  else { $base = '@WANCTL_RELEASE_BASE@' }
+}
+if (-not $base) {
+  $relay = '@WANCTL_DEFAULT_RELAY@'
+  if ($relay) { $base = $relay.TrimEnd('/') + '/dl' }
+}
+if (-not $base) { throw 'set WANCTL_DIST_BASE (or WANCTL_RELAY) to where the release artifacts live' }
 
 # Verification runs on RSACryptoServiceProvider, which is present in the
 # PowerShell 5.1 every Windows ships with. The previous Ed25519 signature had no
@@ -57,7 +66,6 @@ function Receive-SizedFile([string]$uri, [string]$path, [int64]$maxBytes) {
 $tmpDir = Join-Path $env:TEMP ("wanctl-release-" + [guid]::NewGuid().Guid)
 New-Item -ItemType Directory -Path $tmpDir | Out-Null
 try {
-  $base = $relay.TrimEnd('/') + '/dl'
   $manifestPath = Join-Path $tmpDir 'manifest.json'
   $signaturePath = Join-Path $tmpDir 'manifest.json.rsa.sig'
   Receive-SizedFile "$base/manifest.json" $manifestPath 1048576

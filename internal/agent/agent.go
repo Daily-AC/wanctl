@@ -493,7 +493,7 @@ func (a *Agent) authorize(fp, name, label string) bool {
 // AI surfaces it verbatim in its reply ("ask the user to click this link"); the
 // SPA's #pair route reads device/fp/label and shows a confirmation card.
 func (a *Agent) pairingURL(fp, name, label string) string {
-	portal := config.EnvOr("WANCTL_PORTAL", config.DefaultPortal)
+	portal, _ := config.Setting("portal")
 	if portal == "" {
 		return ""
 	}

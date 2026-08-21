@@ -793,6 +793,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"identity": p.Login, "namespace": ns, "provider": p.Provider, "role": role,
 		"lark": s.larkEnabled(),
+		// The SPA composes copy-pasteable `wanctl config set relay=…` lines,
+		// which need the public relay origin this instance runs on.
+		"relay_origin": s.relayPublic,
 	})
 }
 
