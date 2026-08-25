@@ -29,43 +29,50 @@ if [ -n "$RELEASE_BASE" ]; then
   LDFLAGS="$LDFLAGS -X wanctl/internal/config.DefaultReleaseBase=$RELEASE_BASE"
 fi
 
-# android/arm64 is a distinct GOOS from linux/arm64 on purpose: the Android
-# build pulls in internal/androiddns, without which nothing resolves (Android
-# has no /etc/resolv.conf and a CGO-free Go resolver falls back to 127.0.0.1).
-# Serving a linux/arm64 binary to a phone would install cleanly and then fail
-# every dial.
-for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 android/arm64; do
-  os=${target%/*}
-  arch=${target#*/}
-  suffix=
-  [ "$os" = windows ] && suffix=.exe
-  (cd "$ROOT" && env -u WANCTL_RELEASE_SIGNING_KEY CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "$LDFLAGS" -o "$DIST/wanctl-$os-$arch$suffix" .)
+# The platform matrix and the per-target build environment live in one place,
+# scripts/release-targets.sh, shared with the publisher's file-list check and
+# CI's cross-compile gate. android/* is a distinct GOOS from linux/* on purpose:
+# the Android build pulls in internal/androiddns, without which nothing
+# resolves (Android has no /etc/resolv.conf and a CGO-free Go resolver falls
+# back to 127.0.0.1). Serving a linux binary to a phone would install cleanly
+# and then fail every dial.
+. "$ROOT/scripts/release-targets.sh"
+wanctl_targets | while read -r os arch; do
+  echo "building $os/$arch"
+  (cd "$ROOT" && wanctl_go_build "$os" "$arch" "$DIST/$(wanctl_artifact_name "$os" "$arch")" "$LDFLAGS")
 done
 
-# The Android APK.
+# The Android APKs, one per ABI.
 #
-# It rides in the same signed manifest as everything else, as platform
-# android/arm64.apk — see internal/release.AndroidAPKArch for why that spelling
-# and not a schema change. platformFromName picks it up from the directory with
-# no special case, so all that is needed here is to put it in place before the
-# manifest is created.
+# They ride in the same signed manifest as everything else, as platforms
+# android/<goarch>.apk — see internal/release.APKArch for why that spelling and
+# not a schema change. platformFromName picks them up from the directory with
+# no special case, so all that is needed here is to put them in place before
+# the manifest is created.
 #
-# Not built inline, because it needs the Android SDK and the release job's image
-# does not carry one. CI builds it in the `package:apk` job and leaves it at
-# $APK_STAGED for this script to pick up; a developer running this by hand gets
-# it built on the spot. A release that would silently omit it is refused: the
-# APK's SHA-256 in the manifest is the only thing an already-installed app can
-# check an update against, so shipping without it strands every Android device
-# on whatever version it already has.
-APK_STAGED="$ROOT/build/android/wanctl-android-arm64.apk"
+# Not built inline, because they need the Android SDK and NDK. build-apk.sh
+# leaves them under build/android/ for this script to pick up; a developer
+# running this by hand gets them built on the spot. A release that would
+# silently omit them is refused: the APK's SHA-256 in the manifest is the only
+# thing an already-installed app can check an update against, so shipping
+# without it strands every Android device on whatever version it already has.
+APK_DIR="$ROOT/build/android"
+apks_staged() {
+  for arch in $(wanctl_apk_arches); do
+    [ -f "$APK_DIR/wanctl-android-$arch.apk" ] || return 1
+  done
+}
 if [ "${WANCTL_SKIP_APK:-}" = 1 ]; then
-  echo "WARNING: skipping the Android APK (WANCTL_SKIP_APK=1); installed Android apps will not see this release" >&2
-elif [ -f "$APK_STAGED" ]; then
-  echo "using the Android APK staged at $APK_STAGED"
-  cp "$APK_STAGED" "$DIST/wanctl-android-arm64.apk"
+  echo "WARNING: skipping the Android APKs (WANCTL_SKIP_APK=1); installed Android apps will not see this release" >&2
 else
-  WANCTL_RELEASE_TRUSTED_KEYS="$TRUSTED_KEYS" "$ROOT/scripts/build-apk.sh" "$VERSION"
-  cp "$APK_STAGED" "$DIST/wanctl-android-arm64.apk"
+  if apks_staged; then
+    echo "using the Android APKs staged under $APK_DIR"
+  else
+    WANCTL_RELEASE_TRUSTED_KEYS="$TRUSTED_KEYS" "$ROOT/scripts/build-apk.sh" "$VERSION"
+  fi
+  for arch in $(wanctl_apk_arches); do
+    cp "$APK_DIR/wanctl-android-$arch.apk" "$DIST/wanctl-android-$arch.apk"
+  done
 fi
 
 (cd "$ROOT" && go run ./cmd/release-manifest create "$VERSION" "$DIST")

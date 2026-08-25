@@ -222,17 +222,25 @@ func VerifyManifest(manifestRaw, signatureRaw []byte, trusted string) (Manifest,
 	return Manifest{}, errors.New("release manifest signature verification failed")
 }
 
-// AndroidAPKArch is the pseudo-architecture under which the Android APK rides
-// in the release manifest.
+// APKArch is the pseudo-architecture under which the Android APK for a GOARCH
+// rides in the release manifest: "arm64.apk", "arm.apk", "386.apk", "amd64.apk".
 //
 // The APK is a second artifact for one real platform, which the schema has no
 // field for — and bumping the schema would strand every already-installed
 // client, since VerifyManifest rejects a version it does not know and that is
 // the code path `wanctl update` runs before it can update itself. Naming the
-// arch "arm64.apk" fits the existing rule (Name == "wanctl-"+OS+"-"+Arch, so
+// arch "<goarch>.apk" fits the existing rule (Name == "wanctl-"+OS+"-"+Arch, so
 // the file is wanctl-android-arm64.apk), keeps the OS/Arch pair unique against
-// the real android/arm64 entry, and is invisible to older clients: no Go
+// the real android/<goarch> entry, and is invisible to older clients: no Go
 // toolchain reports GOARCH as "arm64.apk", so Select never matches it for them.
+//
+// One APK per ABI rather than a universal one: the binary inside knows its
+// own runtime.GOARCH and fetches the matching APK, so an in-app update
+// downloads one binary's worth, not four.
+func APKArch(goarch string) string { return goarch + ".apk" }
+
+// AndroidAPKArch is the arm64 APK's pseudo-architecture — the original and
+// only one before v0.3.1, which every app installed before then asks for.
 const AndroidAPKArch = "arm64.apk"
 
 // ErrUpToDate reports that the signed manifest offers nothing newer than what

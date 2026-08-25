@@ -171,7 +171,9 @@ func fetchAndroidAPK(ctx context.Context, dir string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "正在验证 %s 的签名发布清单 …\n", base)
-	tmp, version, err := downloadSignedUpdate(ctx, base, dir, "android", wanrelease.AndroidAPKArch, buildVersion)
+	// The APK that carries this binary's own ABI: an arm64 app must not be
+	// handed the armeabi-v7a package, even though the device would install it.
+	tmp, version, err := downloadSignedUpdate(ctx, base, dir, "android", wanrelease.APKArch(runtime.GOARCH), buildVersion)
 	if err != nil {
 		if errors.Is(err, wanrelease.ErrUpToDate) {
 			fmt.Fprintf(os.Stderr, "已是最新版本 (%s)\n", buildVersion)

@@ -47,13 +47,15 @@ jobs:
       - name: Vet with lark tag
         run: go vet -tags lark ./...
 
-      - name: Cross-compile for Windows
-        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...
-
-      # Android's build-tagged DNS implementation is invisible to every other
-      # target, so compile it here instead of discovering breakage at release.
-      - name: Cross-compile for Android
-        run: CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build ./...
+      # Every platform a release ships, built the way build-release.sh builds
+      # it — including the three Android targets that link through the NDK
+      # (present on GitHub's Ubuntu image as ANDROID_NDK_LATEST_HOME). Android's
+      # build-tagged DNS implementation is invisible to every other target, and
+      # 32-bit targets have their own ways to break (int width, atomic
+      # alignment), so a target that stopped compiling is caught here rather
+      # than at the tag.
+      - name: Cross-compile every release target
+        run: ./scripts/cross-compile.sh
 
   supply-chain:
     runs-on: ubuntu-latest

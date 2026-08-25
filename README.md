@@ -23,6 +23,22 @@ GitHub OAuth, HTTPS termination, admission, and device enrollment.
 To try the encrypted relay path locally without Postgres or OAuth, run the
 [local smoke test](docs/architecture.md#local-smoke-test-no-external-services).
 
+### Supported platforms
+
+Every release ships signed binaries for the whole matrix below; the one-line
+installers (`install.sh`, `install.ps1`) detect the OS and CPU and fetch the
+matching one, and `wanctl update` does the same from inside the binary.
+
+| OS | 64-bit | 32-bit |
+|---|---|---|
+| Linux | amd64, arm64 | 386, arm (armv6/v7), mips, mipsle (softfloat, routers) |
+| macOS | amd64, arm64 (Apple silicon) | — (macOS has run no 32-bit code since Catalina) |
+| Windows | amd64, arm64 | 386 |
+| Android | arm64, amd64 — binary + APK each | arm (armeabi-v7a), 386 — binary + APK each |
+
+The list lives in `scripts/release-targets.sh`, which the release build, the
+publisher's checks and CI's cross-compile gate all read.
+
 ## Architecture
 
 ```text

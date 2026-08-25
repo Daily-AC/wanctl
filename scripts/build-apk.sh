@@ -84,14 +84,16 @@ else
 fi
 
 rm -rf "$OUT"
-mkdir -p "$OUT/gen" "$OUT/classes" "$OUT/dex" "$OUT/flat" "$OUT/lib/arm64-v8a"
+mkdir -p "$OUT/gen" "$OUT/classes" "$OUT/dex" "$OUT/flat"
 
-# ---------------------------------------------------------------- the binary
+# ---------------------------------------------------------------- the binaries
 
-# Same flags as scripts/build-release.sh so the binary in the APK is the binary
-# that would have been published as wanctl-android-arm64. The name is the point:
-# only files under lib/<abi>/ are extracted to nativeLibraryDir with the
-# executable bit and the apk_data_file label that untrusted_app may exec.
+# Same flags and the same per-target environment as scripts/build-release.sh,
+# so the binary in each APK is the binary that would have been published as
+# wanctl-android-<goarch>. The lib/<abi>/ placement is the point: only files
+# there are extracted to nativeLibraryDir with the executable bit and the
+# apk_data_file label that untrusted_app may exec.
+. "$ROOT/scripts/release-targets.sh"
 #
 # The trusted release keys have to be baked in or the binary inside the APK can
 # verify nothing — and the one thing it is asked to verify is the APK of the
@@ -128,9 +130,12 @@ fi
 if [ -n "$PORTAL" ]; then
   LDFLAGS="$LDFLAGS -X wanctl/internal/config.DefaultPortal=$PORTAL"
 fi
-echo "  building wanctl android/arm64 …"
-(cd "$ROOT" && env -u WANCTL_RELEASE_SIGNING_KEY CGO_ENABLED=0 GOOS=android GOARCH=arm64 \
-    go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/lib/arm64-v8a/libwanctl.so" .)
+for arch in $(wanctl_apk_arches); do
+  abi=$(wanctl_android_abi "$arch")
+  mkdir -p "$OUT/lib/$abi"
+  echo "  building wanctl android/$arch (lib/$abi) …"
+  (cd "$ROOT" && wanctl_go_build android "$arch" "$OUT/lib/$abi/libwanctl.so" "$LDFLAGS")
+done
 
 # ---------------------------------------------------------------- generated source
 
@@ -184,13 +189,8 @@ find "$OUT/classes" -name '*.class' > "$OUT/classes.txt"
 # ---------------------------------------------------------------- package
 
 echo "  packaging …"
-cp "$OUT/base.apk" "$OUT/unsigned.apk"
-(cd "$OUT/dex" && zip -q -X "$OUT/unsigned.apk" classes.dex)
-# Deflate the binary: extractNativeLibs="true" means the installer decompresses
-# it onto disk anyway, and storing it raw would add 10 MB to every download.
-(cd "$OUT" && zip -q -X "$OUT/unsigned.apk" lib/arm64-v8a/libwanctl.so)
-
-"$BT/zipalign" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
+cp "$OUT/base.apk" "$OUT/common.apk"
+(cd "$OUT/dex" && zip -q -X "$OUT/common.apk" classes.dex)
 
 # ---------------------------------------------------------------- signing
 
@@ -224,41 +224,63 @@ else
   SIGNED_WITH=debug
 fi
 
-APK="$OUT/wanctl-android-arm64.apk"
-"$BT/apksigner" sign \
-    --ks "$KS" --ks-pass "pass:$KS_PASS" \
-    --ks-key-alias "$KEY_ALIAS" --key-pass "pass:$KEY_PASS" \
-    --out "$APK" "$OUT/aligned.apk"
-rm -f "$KS" "$OUT/aligned.apk" "$OUT/unsigned.apk" "$OUT/base.apk"
-"$BT/apksigner" verify "$APK"
+# One APK per ABI: the same resources and dex, plus exactly one lib/<abi>/.
+# The package manager installs whichever one matches the device, and the app
+# then updates itself through the matching android/<goarch>.apk entry in the
+# manifest, since the binary inside knows its own GOARCH. All four share a
+# versionCode — Android accepts a same-version reinstall as long as the
+# signature matches, so a device handed the "wrong" ABI still ends up on a
+# working build.
+for arch in $(wanctl_apk_arches); do
+  abi=$(wanctl_android_abi "$arch")
+  APK="$OUT/wanctl-android-$arch.apk"
+  cp "$OUT/common.apk" "$OUT/unsigned-$arch.apk"
+  # Deflate the binary: extractNativeLibs="true" means the installer decompresses
+  # it onto disk anyway, and storing it raw would add 10 MB to every download.
+  (cd "$OUT" && zip -q -X "$OUT/unsigned-$arch.apk" "lib/$abi/libwanctl.so")
+  "$BT/zipalign" -f -p 4 "$OUT/unsigned-$arch.apk" "$OUT/aligned-$arch.apk"
+  "$BT/apksigner" sign \
+      --ks "$KS" --ks-pass "pass:$KS_PASS" \
+      --ks-key-alias "$KEY_ALIAS" --key-pass "pass:$KEY_PASS" \
+      --out "$APK" "$OUT/aligned-$arch.apk"
+  rm -f "$OUT/aligned-$arch.apk" "$OUT/unsigned-$arch.apk"
+  "$BT/apksigner" verify "$APK"
 
-# The one property the whole design rests on. If the .so is not in the APK at
-# lib/<abi>/, or extractNativeLibs is off, the installed app has nothing to
-# exec — and that failure would otherwise surface on a device as a bare
-# "Permission denied" that reads like an SELinux denial.
-if ! unzip -l "$APK" | grep -q 'lib/arm64-v8a/libwanctl.so'; then
-  echo "FATAL: libwanctl.so missing from the APK" >&2
-  exit 1
-fi
-# Assert the value, not merely the attribute's presence: false is the Android
-# Gradle Plugin's default and reads almost identically in a diff, and getting it
-# wrong yields an installed app with an empty nativeLibraryDir — which surfaces
-# on the device as a bare "Permission denied" that reads like an SELinux denial.
-# Older aapt2 renders a true boolean as 0xffffffff, newer ones as `true`.
-EXTRACT=$("$BT/aapt2" dump xmltree "$APK" --file AndroidManifest.xml \
-    | grep 'extractNativeLibs' | head -1)
-case "$EXTRACT" in
-  *=true | *0xffffffff) ;;
-  *)
-    echo "FATAL: extractNativeLibs is not true (${EXTRACT:-attribute absent});" >&2
-    echo "       nativeLibraryDir would be empty and there would be nothing to exec" >&2
+  # The one property the whole design rests on. If the .so is not in the APK at
+  # lib/<abi>/, or extractNativeLibs is off, the installed app has nothing to
+  # exec — and that failure would otherwise surface on a device as a bare
+  # "Permission denied" that reads like an SELinux denial.
+  if ! unzip -l "$APK" | grep -q "lib/$abi/libwanctl.so"; then
+    echo "FATAL: lib/$abi/libwanctl.so missing from $APK" >&2
     exit 1
-    ;;
-esac
+  fi
+  # And only that one: a second ABI directory would make the package manager
+  # pick by its own preference order, which is not the artifact's name.
+  if [ "$(unzip -l "$APK" | grep -c 'lib/.*/libwanctl.so')" != 1 ]; then
+    echo "FATAL: $APK carries more than one ABI" >&2
+    exit 1
+  fi
+  # Assert the value, not merely the attribute's presence: false is the Android
+  # Gradle Plugin's default and reads almost identically in a diff, and getting it
+  # wrong yields an installed app with an empty nativeLibraryDir — which surfaces
+  # on the device as a bare "Permission denied" that reads like an SELinux denial.
+  # Older aapt2 renders a true boolean as 0xffffffff, newer ones as `true`.
+  EXTRACT=$("$BT/aapt2" dump xmltree "$APK" --file AndroidManifest.xml \
+      | grep 'extractNativeLibs' | head -1)
+  case "$EXTRACT" in
+    *=true | *0xffffffff) ;;
+    *)
+      echo "FATAL: extractNativeLibs is not true (${EXTRACT:-attribute absent});" >&2
+      echo "       nativeLibraryDir would be empty and there would be nothing to exec" >&2
+      exit 1
+      ;;
+  esac
+done
+rm -f "$KS" "$OUT/common.apk" "$OUT/base.apk"
 
 echo
-echo "signed with the $SIGNED_WITH key: $APK"
+echo "signed with the $SIGNED_WITH key:"
 if [ "$SIGNED_WITH" = debug ]; then
   echo "WARNING: debug key — installable on your own device only, DO NOT distribute" >&2
 fi
-ls -l "$APK"
+ls -l "$OUT"/wanctl-android-*.apk
