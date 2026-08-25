@@ -17,9 +17,19 @@ if [ -z "$BASE" ]; then
   [ -n "$RELAY" ] && BASE=${RELAY%/}/dl
 fi
 [ -n "$BASE" ] || { echo "set WANCTL_DIST_BASE (or WANCTL_RELAY) to where the release artifacts live" >&2; exit 1; }
+# Everything below is written for the shell and utilities a stripped busybox
+# gives a router: no `tr` character classes, no `od`, no `install`. The two
+# tools that are genuinely required are named up front with the package that
+# provides them.
+command -v curl >/dev/null 2>&1 || {
+  echo "curl is required to download the release" >&2
+  [ -x /bin/opkg ] && echo "on OpenWrt: opkg install curl openssl-util" >&2
+  exit 1
+}
 command -v openssl >/dev/null 2>&1 || {
   echo "openssl is required to verify the release signature" >&2
   [ -n "${PREFIX:-}" ] && [ -x "$PREFIX/bin/pkg" ] && echo "on Termux: pkg install openssl-tool" >&2
+  [ -x /bin/opkg ] && echo "on OpenWrt: opkg install openssl-util" >&2
   exit 1
 }
 TMPDIR_WANCTL=$(mktemp -d)
@@ -55,7 +65,14 @@ if [ -n "$EXISTING" ]; then
   fi
 fi
 
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+# Not `tr '[:upper:]' '[:lower:]'`: a busybox built without character classes
+# (OpenWrt's is) treats those as literal sets and turns "Linux" into "Linlx",
+# which then matches nothing in the manifest.
+case "$(uname -s)" in
+  Linux) OS=linux ;;
+  Darwin) OS=darwin ;;
+  *) echo "unsupported operating system: $(uname -s) (wanctl ships linux, darwin, windows and android)" >&2; exit 1 ;;
+esac
 # Android reports itself as Linux through `uname -s` — the kernel is Linux — but
 # it needs the android artifact, which carries the DNS fallback that a phone
 # cannot work without. `uname -o` says Android under Termux; app_process is the
@@ -71,8 +88,10 @@ fi
 #   armv6l/armv7l/armv8l  32-bit ARM kernels; the arm build is GOARM=6, so it
 #                          runs on all of them. armv5 is not served.
 #   mips                   both endiannesses report the same name, so the byte
-#                          order is probed directly: od prints 1 for a
-#                          little-endian machine and 256 for a big-endian one.
+#                          order is read from the ELF header of the shell
+#                          itself: byte 5 is 1 on a little-endian build and 2
+#                          on a big-endian one. Not `od` — OpenWrt's busybox
+#                          does not ship that applet at all.
 MACHINE=$(uname -m)
 case "$MACHINE" in
   x86_64|amd64) ARCH=amd64 ;;
@@ -80,10 +99,10 @@ case "$MACHINE" in
   i?86|x86) ARCH=386 ;;
   armv6l|armv7l|armv8l|armhf|arm) ARCH=arm ;;
   mips|mipsel|mips64|mips64el)
-    case "$(printf '\001\000' | od -An -t d2 | tr -d ' \n')" in
-      1) ARCH=mipsle ;;
-      256) ARCH=mips ;;
-      *) echo "cannot determine MIPS byte order" >&2; exit 1 ;;
+    case "$(dd if=/bin/sh bs=1 skip=5 count=1 2>/dev/null | tr '\001\002' 'LB')" in
+      L) ARCH=mipsle ;;
+      B) ARCH=mips ;;
+      *) echo "cannot determine MIPS byte order from /bin/sh" >&2; exit 1 ;;
     esac ;;
   *) echo "unsupported architecture: $MACHINE (wanctl ships amd64, arm64, 386, arm, mips and mipsle)" >&2; exit 1 ;;
 esac
@@ -124,9 +143,13 @@ else
 fi
 DEST=${WANCTL_BIN:-${EXISTING:-$DEFAULT_DEST}}
 mkdir -p "$(dirname "$DEST")" 2>/dev/null || true
-if install -m 0755 "$TMPDIR_WANCTL/$BIN" "$DEST" 2>/dev/null; then :
-elif [ "$OS" != android ] && command -v sudo >/dev/null 2>&1; then sudo install -m 0755 "$TMPDIR_WANCTL/$BIN" "$DEST"
-else mkdir -p "$HOME/.local/bin"; DEST="$HOME/.local/bin/wanctl"; install -m 0755 "$TMPDIR_WANCTL/$BIN" "$DEST"; fi
+# cp + chmod + rename rather than `install`, which busybox routers lack. The
+# rename is what lets this replace a binary that is currently running.
+place() { cp "$1" "$2.new" && chmod 0755 "$2.new" && mv -f "$2.new" "$2"; }
+if place "$TMPDIR_WANCTL/$BIN" "$DEST" 2>/dev/null; then :
+elif [ "$OS" != android ] && command -v sudo >/dev/null 2>&1; then
+  sudo sh -c 'cp "$1" "$2.new" && chmod 0755 "$2.new" && mv -f "$2.new" "$2"' sh "$TMPDIR_WANCTL/$BIN" "$DEST"
+else mkdir -p "$HOME/.local/bin"; DEST="$HOME/.local/bin/wanctl"; place "$TMPDIR_WANCTL/$BIN" "$DEST"; fi
 echo "verified and installed: $DEST"
 case "$OS:$DEST" in
   android:/data/local/tmp/*) echo "note: /data/local/tmp is not on PATH — run it as $DEST" ;;
