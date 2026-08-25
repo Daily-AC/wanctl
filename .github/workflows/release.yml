@@ -52,7 +52,15 @@ jobs:
       - name: Build signed release
         run: ./scripts/build-release.sh "$GITHUB_REF_NAME"
 
+      # The portal's embedded changelog doubles as the release notes when an
+      # entry exists for the tag; earlier releases went out with an empty body.
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release/*
+        run: |
+          notes="internal/portal/changelog/$GITHUB_REF_NAME.md"
+          if [ -f "$notes" ]; then
+            gh release create "$GITHUB_REF_NAME" --title "wanctl $GITHUB_REF_NAME" --notes-file "$notes" release/*
+          else
+            gh release create "$GITHUB_REF_NAME" --title "wanctl $GITHUB_REF_NAME" --notes "" release/*
+          fi

@@ -78,6 +78,48 @@ func TestAndroidAPKRidesInTheExistingSchema(t *testing.T) {
 	}
 }
 
+// TestAPKPerABIStaysDistinctFromItsBinary pins the v0.3.1 shape: one APK per
+// ABI, each riding as android/<goarch>.apk next to the android/<goarch> binary.
+// An arm app running `wanctl update --fetch-apk` selects by its own GOARCH, so
+// it must get the arm APK and never the arm64 one, while the binary lookup for
+// the same GOARCH still sees the bare binary.
+func TestAPKPerABIStaysDistinctFromItsBinary(t *testing.T) {
+	if got := wanrelease.APKArch("arm64"); got != wanrelease.AndroidAPKArch {
+		t.Fatalf("APKArch(arm64) = %q, want the pre-v0.3.1 spelling %q", got, wanrelease.AndroidAPKArch)
+	}
+	payload := []byte("not really an APK")
+	sum := sha256.Sum256(payload)
+	var artifacts []wanrelease.Artifact
+	for _, arch := range []string{"arm64", "arm", "386", "amd64"} {
+		for _, a := range []string{arch, wanrelease.APKArch(arch)} {
+			artifacts = append(artifacts, wanrelease.Artifact{
+				OS: "android", Arch: a,
+				Name:   wanrelease.ArtifactName("android", a),
+				Size:   int64(len(payload)),
+				SHA256: hex.EncodeToString(sum[:]),
+			})
+		}
+	}
+	raw, err := json.Marshal(wanrelease.Manifest{Schema: 1, Version: "v9.9.9", PublishedAt: time.Now().UTC(), Artifacts: artifacts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := wanrelease.ParseManifest(raw)
+	if err != nil {
+		t.Fatalf("a manifest carrying four APKs must parse: %v", err)
+	}
+	for _, arch := range []string{"arm64", "arm", "386", "amd64"} {
+		bin, err := wanrelease.Select(parsed, "android", arch, "v0.0.1")
+		if err != nil || bin.Name != "wanctl-android-"+arch {
+			t.Fatalf("Select(android/%s) = %q, %v", arch, bin.Name, err)
+		}
+		apk, err := wanrelease.Select(parsed, "android", wanrelease.APKArch(arch), "v0.0.1")
+		if err != nil || apk.Name != "wanctl-android-"+arch+".apk" {
+			t.Fatalf("Select(android/%s) = %q, %v", wanrelease.APKArch(arch), apk.Name, err)
+		}
+	}
+}
+
 // TestUpToDateIsDistinguishable covers the Android app's "已是最新" path: it has
 // to tell "nothing newer" apart from "the download failed", and string matching
 // on a message that happens to be Chinese today is not a contract.

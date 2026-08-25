@@ -64,12 +64,29 @@ OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 if [ "$OS" = linux ] && { [ "$(uname -o 2>/dev/null)" = Android ] || [ -x /system/bin/app_process ] || [ -x /system/bin/app_process64 ]; }; then
   OS=android
 fi
-ARCH=$(uname -m)
-case "$ARCH" in x86_64|amd64) ARCH=amd64 ;; aarch64|arm64) ARCH=arm64 ;; *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;; esac
-if [ "$OS" = android ] && [ "$ARCH" != arm64 ]; then
-  echo "wanctl ships only android/arm64; this device reports $(uname -m)" >&2
-  exit 1
-fi
+# Map the machine to the GOARCH the release was built for. The binaries are
+# static, so a 32-bit userland on a 64-bit kernel (x86_64 reporting for an i386
+# distro, aarch64 for an armhf one) still runs the 64-bit build; what has to be
+# right is the kernel, and uname -m reports the kernel's view.
+#   armv6l/armv7l/armv8l  32-bit ARM kernels; the arm build is GOARM=6, so it
+#                          runs on all of them. armv5 is not served.
+#   mips                   both endiannesses report the same name, so the byte
+#                          order is probed directly: od prints 1 for a
+#                          little-endian machine and 256 for a big-endian one.
+MACHINE=$(uname -m)
+case "$MACHINE" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  i?86|x86) ARCH=386 ;;
+  armv6l|armv7l|armv8l|armhf|arm) ARCH=arm ;;
+  mips|mipsel|mips64|mips64el)
+    case "$(printf '\001\000' | od -An -t d2 | tr -d ' \n')" in
+      1) ARCH=mipsle ;;
+      256) ARCH=mips ;;
+      *) echo "cannot determine MIPS byte order" >&2; exit 1 ;;
+    esac ;;
+  *) echo "unsupported architecture: $MACHINE (wanctl ships amd64, arm64, 386, arm, mips and mipsle)" >&2; exit 1 ;;
+esac
 BIN="wanctl-$OS-$ARCH"
 
 # The manifest is trusted at this point. Extract only the exact platform block

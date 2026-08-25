@@ -36,6 +36,31 @@ function Test-ReleaseSignature([string]$manifestPath, [string]$signaturePath) {
   }
 }
 
+# Which of the three Windows builds this machine runs. The OS word size comes
+# first because it decides what can execute at all: a 32-bit Windows on a 64-bit
+# CPU can only run the 386 build. On a 64-bit OS the CPU says which 64-bit build:
+# Win32_Processor.Architecture is 12 for ARM64 and 9 for x64, and unlike
+# PROCESSOR_ARCHITECTURE it is not rewritten for an emulated x64 PowerShell on
+# an ARM64 machine — where the env var reads AMD64 and would install the slow
+# emulated build on a machine that has a native one. RuntimeInformation is not
+# used: on .NET Framework it can only ever answer X86 or X64.
+function Get-WindowsGoArch {
+  if (-not [Environment]::Is64BitOperatingSystem) { return '386' }
+  $cpu = $null
+  try { $cpu = (Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1).Architecture } catch {}
+  switch ($cpu) {
+    12 { return 'arm64' }
+    9 { return 'amd64' }
+  }
+  $native = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+  switch -Regex ($native) {
+    '^ARM64$' { return 'arm64' }
+    '^(AMD64|x64)$' { return 'amd64' }
+    '^x86$' { return '386' }
+  }
+  throw "unsupported Windows architecture: cpu=$cpu env=$native (wanctl ships amd64, 386 and arm64)"
+}
+
 function Receive-SizedFile([string]$uri, [string]$path, [int64]$maxBytes) {
   Add-Type -AssemblyName System.Net.Http
   $client = [Net.Http.HttpClient]::new()
@@ -90,8 +115,9 @@ try {
       throw "refusing release $($manifest.version): installed version is $currentText"
     }
   }
-  $artifact = @($manifest.artifacts | Where-Object { $_.os -eq 'windows' -and $_.arch -eq 'amd64' })
-  if ($artifact.Count -ne 1 -or $artifact[0].name -ne 'wanctl-windows-amd64.exe') { throw 'signed manifest has no unique windows/amd64 artifact' }
+  $arch = Get-WindowsGoArch
+  $artifact = @($manifest.artifacts | Where-Object { $_.os -eq 'windows' -and $_.arch -eq $arch })
+  if ($artifact.Count -ne 1 -or $artifact[0].name -ne "wanctl-windows-$arch.exe") { throw "signed manifest has no unique windows/$arch artifact" }
   if ([int64]$artifact[0].size -le 0 -or [int64]$artifact[0].size -gt 67108864) { throw 'signed artifact size is invalid' }
   $binaryPath = Join-Path $tmpDir $artifact[0].name
   Receive-SizedFile "$base/$($artifact[0].name)" $binaryPath ([int64]$artifact[0].size)

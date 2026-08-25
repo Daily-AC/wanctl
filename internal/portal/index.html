@@ -1131,7 +1131,7 @@ let dlLoaded=false;
 function human(n){if(!n)return'';const m=n/1048576;return m>=1?m.toFixed(1)+' MB':Math.round(n/1024)+' KB'}
 function osLabel(a){
   const os={darwin:'macOS',linux:'Linux',windows:'Windows',android:'Android'}[a.os]||a.os;
-  const arch={amd64:'Intel / x86_64',arm64:a.os==='darwin'?'Apple 芯片':'ARM64','arm64.apk':'手机 App'}[a.arch]||a.arch;
+  const arch={amd64:'Intel / x86_64',arm64:a.os==='darwin'?'Apple 芯片':'ARM64',386:'x86 32 位',arm:'ARM 32 位',mips:'MIPS 大端',mipsle:'MIPS 小端','arm64.apk':'手机 App（ARM64）','arm.apk':'手机 App（ARM 32 位）','386.apk':'手机 App（x86）','amd64.apk':'手机 App（x86_64）'}[a.arch]||a.arch;
   return os+' · '+arch;
 }
 async function loadDownloads(){
@@ -1146,13 +1146,22 @@ async function loadDownloads(){
   const assets=(rel&&rel.assets)||[];
   const asset=n=>assets.find(a=>a.name===n);
   const dlurl=n=>{const a=asset(n);return a?a.browser_download_url:latest+'/'+n};
-  const NAMES=[['wanctl-darwin-arm64','macOS · Apple 芯片'],['wanctl-darwin-amd64','macOS · Intel'],['wanctl-linux-amd64','Linux · x86_64'],['wanctl-linux-arm64','Linux · ARM64'],['wanctl-windows-amd64.exe','Windows · x86_64'],['wanctl-android-arm64','Android · 终端二进制']];
+  /* Same order as scripts/release-targets.sh; 64-bit first within each OS
+     because that is what nearly everyone has. */
+  const NAMES=[
+    ['wanctl-darwin-arm64','macOS · Apple 芯片'],['wanctl-darwin-amd64','macOS · Intel'],
+    ['wanctl-linux-amd64','Linux · x86_64'],['wanctl-linux-arm64','Linux · ARM64'],['wanctl-linux-386','Linux · x86 32 位'],['wanctl-linux-arm','Linux · ARM 32 位（armv6 / v7）'],['wanctl-linux-mipsle','Linux · MIPS 小端（路由器常见）'],['wanctl-linux-mips','Linux · MIPS 大端'],
+    ['wanctl-windows-amd64.exe','Windows · x86_64'],['wanctl-windows-386.exe','Windows · x86 32 位'],['wanctl-windows-arm64.exe','Windows · ARM64'],
+    ['wanctl-android-arm64','Android · 终端二进制（ARM64）'],['wanctl-android-arm','Android · 终端二进制（ARM 32 位）'],['wanctl-android-386','Android · 终端二进制（x86）'],['wanctl-android-amd64','Android · 终端二进制（x86_64）']];
   const relayOrg=docMe&&docMe.relay_origin?docMe.relay_origin:'';
   const cfg='wanctl config set relay='+(relayOrg||'https://<你的中继>')+' portal='+location.origin+'\nwanctl';
   const sh='curl -fsSL '+latest+'/install.sh | sh';
   const ps='irm '+latest+'/install.ps1 | iex';
   const apkA=asset('wanctl-android-arm64.apk');
   const apkURL=apkA?apkA.browser_download_url:latest+'/wanctl-android-arm64.apk';
+  /* One APK per ABI. Nearly every phone is arm64, so that one is the button;
+     the rest are a line of links for the 32-bit / x86 minority. */
+  const APKS=[['arm','ARM 32 位'],['386','x86'],['amd64','x86_64']].map(([a,l])=>{const n='wanctl-android-'+a+'.apk';const as=asset(n);return`<a href="${esc(as?as.browser_download_url:latest+'/'+n)}">${esc(l)}${as?`（${human(as.size)}）`:''}</a>`}).join(' · ');
   $('#dlbody').innerHTML=`
       <div class="tablecard" style="margin-top:18px;padding:18px 20px">
         <div style="font-size:13px;color:var(--ink-2)">发布源 <a href="${GH}/releases" target="_blank" rel="noopener">GitHub Releases</a>${rel&&rel.tag_name?` · 最新 <b>${esc(rel.tag_name)}</b>`:''}</div>
@@ -1163,6 +1172,7 @@ async function loadDownloads(){
         <a class="btn primary" href="${esc(apkURL)}" style="text-decoration:none;display:inline-block">下载 APK${apkA?`（${human(apkA.size)}）`:''}</a>
         <p class="sub" style="margin:12px 0 0">手机上打不开这个页面的话，直接在手机浏览器里访问下面这行，或者把它发到手机上：</p>
         <pre data-copy style="margin-top:8px;cursor:pointer">${esc(apkURL)}</pre>
+        <p class="sub" style="margin:12px 0 0">上面这个是 ARM64 版，绝大多数手机和平板都是它。老机器或 x86 设备用这些：${APKS}</p>
       </div>
       <div class="tablecard" style="margin-top:14px;padding:20px">
         <h2 style="margin:0 0 6px;font-size:17px">电脑：一行装好</h2>
