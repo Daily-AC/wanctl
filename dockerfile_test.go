@@ -32,3 +32,37 @@ func TestContainerRuntimeIsPinnedAndNonRoot(t *testing.T) {
 		t.Fatal("Dockerfile still references EOL Alpine 3.20")
 	}
 }
+
+// One toolchain, pinned once. go.mod's `go` directive is what setup-go builds
+// the release binaries with; the Dockerfile must name the same version so the
+// container, the binaries and the vulnerability scan all speak of one stdlib
+// (audit 2026-08-28, SEC-F-01: 1.25.5 binaries shipped behind a 1.26.6 scan).
+func TestToolchainPinnedOnce(t *testing.T) {
+	mod, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var goVersion string
+	for _, line := range strings.Split(string(mod), "\n") {
+		if strings.HasPrefix(line, "go ") {
+			goVersion = strings.TrimSpace(strings.TrimPrefix(line, "go "))
+		}
+	}
+	if goVersion == "" {
+		t.Fatal("go.mod has no go directive")
+	}
+	df, err := os.ReadFile("Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(df), "FROM golang:"+goVersion+"-") {
+		t.Fatalf("Dockerfile does not build on golang:%s (go.mod's version)", goVersion)
+	}
+	scan, err := os.ReadFile("scripts/security-scan.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(scan), "GOTOOLCHAIN=go1") {
+		t.Fatal("scripts/security-scan.sh pins its own toolchain; go.mod must be the only pin")
+	}
+}

@@ -60,7 +60,7 @@ trust model, transports, sharing rules, and component map.
 
 ## Build
 
-wanctl requires Go 1.25.5 or newer.
+wanctl requires the Go release named by the `go` directive in `go.mod` (currently 1.26.6); the Go tool downloads it automatically.
 
 ```bash
 go build -o wanctl .
