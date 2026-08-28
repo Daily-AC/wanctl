@@ -179,6 +179,50 @@ func TestDistributionVerificationConcurrencyIsBounded(t *testing.T) {
 	}
 }
 
+// slotProbe records how many verification slots were held at the moment the
+// first body byte was written, i.e. once streaming to the client has begun.
+type slotProbe struct {
+	*httptest.ResponseRecorder
+	slots    chan struct{}
+	heldAt   int
+	sawWrite bool
+}
+
+func (p *slotProbe) Write(b []byte) (int, error) {
+	if !p.sawWrite {
+		p.sawWrite = true
+		p.heldAt = len(p.slots)
+	}
+	return p.ResponseRecorder.Write(b)
+}
+
+// Two slow readers used to pin both slots for as long as they cared to drain
+// the body, answering everyone else with 503 (audit 2026-08-28, SEC-F-07).
+func TestDistributionSlotReleasedBeforeStreaming(t *testing.T) {
+	dir := signedDist(t)
+	handler, err := newSignedDistHandler(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := handler.(*signedDistHandler)
+	probe := &slotProbe{ResponseRecorder: httptest.NewRecorder(), slots: h.verifySlots}
+	req := httptest.NewRequest(http.MethodGet, "/wanctl-linux-amd64", nil)
+	req.URL.Path = "wanctl-linux-amd64"
+	h.ServeHTTP(probe, req)
+	if probe.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", probe.Code)
+	}
+	if !probe.sawWrite {
+		t.Fatal("no body was written")
+	}
+	if probe.heldAt != 0 {
+		t.Fatalf("%d verification slot(s) still held while streaming, want 0", probe.heldAt)
+	}
+	if n := len(h.verifySlots); n != 0 {
+		t.Fatalf("%d verification slot(s) leaked after the request", n)
+	}
+}
+
 // Users who skip the upstream release page bootstrap from the relay, so the
 // installers must be served rather than retired. They are not manifest-signed;
 // see installerHandler for the trust limitation this accepts.

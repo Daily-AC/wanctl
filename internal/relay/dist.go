@@ -3,6 +3,7 @@ package relay
 import (
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -131,25 +132,42 @@ func (h *signedDistHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 	}
 	select {
 	case h.verifySlots <- struct{}{}:
-		defer func() { <-h.verifySlots }()
 	default:
 		http.Error(w, "release verification is busy", http.StatusServiceUnavailable)
 		return
 	}
+	verified, err := h.readVerified(name, artifact)
+	// The slot bounds the memory and CPU spent hashing artifacts, not the
+	// network. Holding it while streaming let two slow clients keep every other
+	// /dl request at 503 (audit 2026-08-28, SEC-F-07).
+	<-h.verifySlots
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	http.ServeContent(w, req, name, time.Time{}, bytes.NewReader(verified))
+}
+
+var (
+	errArtifactUnavailable = errors.New("signed artifact unavailable")
+	errArtifactChanged     = errors.New("signed artifact changed; restart relay to re-verify")
+)
+
+// readVerified returns the artifact's bytes only if they still match the
+// signed manifest entry.
+func (h *signedDistHandler) readVerified(name string, artifact wanrelease.Artifact) ([]byte, error) {
 	f, err := os.Open(filepath.Join(h.dir, name))
 	if err != nil {
-		http.Error(w, "signed artifact unavailable", http.StatusServiceUnavailable)
-		return
+		return nil, errArtifactUnavailable
 	}
 	var verified bytes.Buffer
 	err = wanrelease.VerifyArtifact(f, &verified, artifact)
 	closeErr := f.Close()
 	if err != nil || closeErr != nil {
-		http.Error(w, "signed artifact changed; restart relay to re-verify", http.StatusServiceUnavailable)
-		return
+		return nil, errArtifactChanged
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	http.ServeContent(w, req, name, time.Time{}, bytes.NewReader(verified.Bytes()))
+	return verified.Bytes(), nil
 }
 
 // installerHandler serves the bootstrap installer that ships inside the signed
