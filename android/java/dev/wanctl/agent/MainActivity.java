@@ -50,7 +50,15 @@ public final class MainActivity extends Activity {
     private Prefs prefs;
     private Installer installer;
 
-    private TextView version, status, relay, fingerprint, credential, autoTrustWarn, bypassWarn, elevationWarn;
+    private TextView version, status, portal, relay, fingerprint, credential, autoTrustWarn, bypassWarn, elevationWarn;
+
+    /**
+     * The relay the binary resolved from its config, as reported by
+     * `wanctl status`. Shown while the agent is not connected, so the screen
+     * distinguishes "this build points nowhere" from "not connected yet"
+     * (GitHub issue #4).
+     */
+    private String configuredRelay = "";
     private EditText name;
     private Switch enabled, boot, autoTrust, bypass, elevation;
     private Button battery, login, logs, update;
@@ -66,6 +74,7 @@ public final class MainActivity extends Activity {
 
         version = findViewById(R.id.version);
         status = findViewById(R.id.status);
+        portal = findViewById(R.id.portal);
         relay = findViewById(R.id.relay);
         fingerprint = findViewById(R.id.fingerprint);
         credential = findViewById(R.id.credential);
@@ -245,7 +254,13 @@ public final class MainActivity extends Activity {
                 status.setText(getString(R.string.state_stopped));
                 status.setTextColor(getColor(R.color.off));
         }
-        relay.setText(s.relay().isEmpty() ? getString(R.string.state_unknown) : s.relay());
+        if (!s.relay().isEmpty()) {
+            relay.setText(s.relay());
+        } else if (!configuredRelay.isEmpty()) {
+            relay.setText(configuredRelay);
+        } else {
+            relay.setText(getString(R.string.state_unconfigured));
+        }
         if (!s.fingerprint().isEmpty()) {
             fingerprint.setText(s.fingerprint());
         }
@@ -264,7 +279,16 @@ public final class MainActivity extends Activity {
             Wanctl.Result st = Wanctl.run(this, 10, "status");
             String fp = firstLineAfter(id.out, "fingerprint:");
             String cred = firstLineAfter(st.out, "凭证:");
+            // Both lines come from the binary's own resolution (env, config
+            // file, build default) rather than from Prefs, so what is shown is
+            // what the agent will actually dial.
+            String relayLine = firstLineAfter(st.out, "relay:");
+            String portalLine = firstLineAfter(st.out, "portal:");
             main.post(() -> {
+                configuredRelay = relayLine == null || relayLine.equals("未配置") ? "" : relayLine;
+                portal.setText(portalLine == null || portalLine.equals("未配置")
+                        ? getString(R.string.state_unconfigured) : portalLine);
+                renderState();
                 version.setText(v.ok() ? v.out.trim() : v.message());
                 if (fp != null) {
                     AgentState.get().setFingerprint(fp);

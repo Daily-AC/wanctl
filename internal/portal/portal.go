@@ -83,6 +83,7 @@ type Server struct {
 	publicOrigin string
 	debugWhoami  bool
 	skillURL     string
+	transport    string // the transport this instance's controllers/devices use ("ws" or "http")
 	logs         *serverlog.Buffer
 
 	dialer *client.Client   // controller used to open console sessions
@@ -119,6 +120,7 @@ func New(cfg Config) *Server {
 		publicOrigin: strings.TrimRight(cfg.PublicOrigin, "/"),
 		debugWhoami:  cfg.DebugWhoami,
 		skillURL:     relaySkillsURL(cfg.RelayDialURL),
+		transport:    cfg.Transport,
 		conns:        map[string]*deviceConn{},
 		known:        cfg.Known,
 
@@ -156,6 +158,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/auth/redeem", s.handleAuthRedeem)
 	mux.HandleFunc("/pending", s.handlePending)
 	mux.HandleFunc("/skills", s.handleSkills)
+	mux.HandleFunc("/api/instance", s.handleInstance)
 	mux.HandleFunc("/api/me", s.handleMe)
 	mux.HandleFunc("/api/tokens", s.handleTokens)
 	mux.HandleFunc("/api/tokens/revoke", s.handleTokenRevoke)
@@ -796,6 +799,33 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// The SPA composes copy-pasteable `wanctl config set relay=…` lines,
 		// which need the public relay origin this instance runs on.
 		"relay_origin": s.relayPublic,
+	})
+}
+
+// handleInstance answers, without a session, where this instance's relay is.
+//
+// It exists for front-ends that know the portal but cannot be told the relay:
+// the Android app's enrollment dialog asks for a portal origin and nothing
+// else, and there is no shell on a phone to run `wanctl config set relay=…`
+// (GitHub issue #3). The portal already knows its relay — it dials devices
+// through it — so a client that has the portal can derive the rest.
+//
+// Nothing here is secret: the same origin is the target of the public /skills
+// redirect and is printed on the download page to anyone who can log in.
+func (s *Server) handleInstance(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.relayPublic == "" {
+		http.Error(w, "relay is not configured; set WANCTL_RELAY on the portal", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(map[string]any{
+		"relay":     s.relayPublic,
+		"transport": s.transport,
 	})
 }
 

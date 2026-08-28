@@ -2,13 +2,17 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
+	"wanctl/internal/client"
 	"wanctl/internal/config"
 )
 
@@ -155,9 +159,28 @@ func warnEnvShadow(pending []kv) {
 // hidden prompt would hang scripts and AI-driven shells.
 func ensureEndpointsConfigured() error {
 	_, relayErr := config.Relay()
-	_, portalErr := config.Portal()
+	portal, portalErr := config.Portal()
+	if relayErr != nil && portalErr == nil {
+		// Half configured, and the half we have can name the other: the
+		// portal publishes its relay. This is the only path on Android, where
+		// the enrollment dialog collects a portal and nothing can collect a
+		// relay (GitHub issue #3); on a desktop it just saves a question.
+		if err := discoverRelayFromPortal(portal); err != nil {
+			if runtime.GOOS == "android" {
+				return err
+			}
+			fmt.Printf("未能从门户自动发现中继（%v），改为手动配置。\n", err)
+		} else {
+			relayErr = nil
+		}
+	}
 	if relayErr == nil && portalErr == nil {
 		return nil
+	}
+	if runtime.GOOS == "android" {
+		// There is no shell to run the command in; the app's dialog is the
+		// only place a portal can be typed.
+		return fmt.Errorf("还没配置门户地址：在登录对话框里填写门户地址后重试")
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return fmt.Errorf("还没配置实例地址：运行 `wanctl config set relay=https://你的中继 portal=https://你的门户` 后重试")
@@ -184,6 +207,33 @@ func ensureEndpointsConfigured() error {
 	}
 	if dir := config.SettingsDir(); dir != "" {
 		fmt.Printf("✓ 已保存到 %s\n", dir)
+	}
+	return nil
+}
+
+// discoverRelayFromPortal asks the portal for its relay and persists it as
+// the `relay` setting, so every later command — including the agent the app
+// starts next — finds it in the config file without being told again.
+func discoverRelayFromPortal(portal string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	inst, err := client.DiscoverInstance(ctx, portal)
+	if err != nil {
+		return err
+	}
+	if err := config.SaveSetting("relay", inst.Relay); err != nil {
+		return err
+	}
+	fmt.Printf("✓ 从门户发现中继 %s，已保存\n", inst.Relay)
+	// The transport is only persisted when the portal named one and nothing
+	// local already decided it; the build default is otherwise good enough
+	// and a stored value would shadow a later change of that default.
+	if inst.Transport != "" && config.StoredSetting("transport") == "" && os.Getenv("WANCTL_TRANSPORT") == "" {
+		if inst.Transport != config.DefaultTransport {
+			if err := config.SaveSetting("transport", inst.Transport); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

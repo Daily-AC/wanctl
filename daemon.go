@@ -179,6 +179,15 @@ func printLocalStatus() error {
 	} else {
 		fmt.Println("○ 未运行（运行 `wanctl` 启动）")
 	}
+	// The endpoints, so a front-end that cannot run `wanctl config` (the
+	// Android app) can still show which instance this device belongs to.
+	for _, k := range []string{"relay", "portal"} {
+		if v, _ := config.Setting(k); v != "" {
+			fmt.Printf("  %s: %s\n", k, v)
+		} else {
+			fmt.Printf("  %s: 未配置\n", k)
+		}
+	}
 	if config.StoredToken() != "" {
 		fmt.Println("  凭证: 已登录")
 	} else if os.Getenv("WANCTL_TOKEN") != "" {

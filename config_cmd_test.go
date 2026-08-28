@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -102,5 +104,52 @@ func TestUpdateSourcePrefersReleaseBase(t *testing.T) {
 	t.Setenv("WANCTL_RELAY", "")
 	if _, err := updateSource(); err == nil {
 		t.Fatal("no source configured but updateSource succeeded")
+	}
+}
+
+// With only a portal configured — the Android app's situation, where the
+// enrollment dialog collects a portal and nothing can collect a relay — the
+// relay is discovered from the portal and persisted, so the agent started
+// afterwards finds it too (GH #3).
+func TestEnsureEndpointsDiscoversRelayFromPortal(t *testing.T) {
+	portal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/instance" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(`{"relay":"https://relay.example","transport":"http"}`))
+	}))
+	defer portal.Close()
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	t.Setenv("WANCTL_RELAY", "")
+	t.Setenv("WANCTL_TRANSPORT", "")
+	t.Setenv("WANCTL_PORTAL", portal.URL)
+	if err := ensureEndpointsConfigured(); err != nil {
+		t.Fatalf("ensureEndpointsConfigured: %v", err)
+	}
+	if got := config.StoredSetting("relay"); got != "https://relay.example" {
+		t.Fatalf("stored relay = %q", got)
+	}
+	// "http" is the build default; storing it would only shadow a later
+	// change of that default.
+	if got := config.StoredSetting("transport"); got != "" {
+		t.Fatalf("stored transport = %q, want none", got)
+	}
+}
+
+// An old portal without the endpoint must not be mistaken for a configured
+// instance: the non-interactive caller still gets the manual instruction.
+func TestEnsureEndpointsFallsBackWhenPortalCannotDiscover(t *testing.T) {
+	portal := httptest.NewServer(http.NotFoundHandler())
+	defer portal.Close()
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	t.Setenv("WANCTL_RELAY", "")
+	t.Setenv("WANCTL_PORTAL", portal.URL)
+	err := ensureEndpointsConfigured()
+	if err == nil || !strings.Contains(err.Error(), "wanctl config set") {
+		t.Fatalf("err = %v, want the config-set instruction", err)
+	}
+	if got := config.StoredSetting("relay"); got != "" {
+		t.Fatalf("relay was stored from a failed discovery: %q", got)
 	}
 }
