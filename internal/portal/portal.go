@@ -409,7 +409,11 @@ func (s *Server) handleDocsTree(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDocsArticleGet(w http.ResponseWriter, r *http.Request) {
 	slug := strings.TrimPrefix(r.URL.Path, "/api/docs/article/")
-	if slug == "" {
+	// The slug is concatenated into a relay URL, so it must not be able to
+	// climb out of /docs/: an encoded "../healthz" once turned the portal into
+	// a GET proxy onto the relay's private admin origin (audit 2026-08-28,
+	// SEC-C-03). Real slugs are [a-z0-9_-]; reject anything else.
+	if slug == "" || !validDocSlug(slug) {
 		http.NotFound(w, r)
 		return
 	}
@@ -479,6 +483,20 @@ func (s *Server) docsForwardAdmin(w http.ResponseWriter, r *http.Request, path, 
 	}
 	defer resp.Body.Close()
 	copyResp(w, resp)
+}
+
+// validDocSlug is true for the flat article slugs the docs store uses
+// (lowercase letters, digits, underscore, hyphen). It exists to keep an
+// attacker-supplied slug from escaping the /docs/ path (SEC-C-03).
+func validDocSlug(slug string) bool {
+	for _, c := range slug {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // proxyRelayPublic forwards a GET to a relay public endpoint (no auth header).

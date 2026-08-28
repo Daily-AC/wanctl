@@ -145,9 +145,16 @@ type oauthState struct {
 // safeNext accepts only a local absolute path, so the login flow cannot be
 // turned into an open redirect.
 func safeNext(next string) string {
-	if next == "" || !strings.HasPrefix(next, "/") ||
-		strings.HasPrefix(next, "//") || strings.ContainsAny(next, "\\\r\n") {
+	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
 		return "/"
+	}
+	// Any control character (including TAB, which a browser strips before
+	// resolving "/\t/evil.example" as protocol-relative) makes this unsafe
+	// as a redirect target (audit 2026-08-28, SEC-C-05).
+	for _, c := range next {
+		if c < 0x20 || c == 0x7f || c == '\\' {
+			return "/"
+		}
 	}
 	return next
 }

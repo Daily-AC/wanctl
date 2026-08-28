@@ -21,7 +21,6 @@ import (
 const enrollCodeTTL = 5 * time.Minute
 
 type enrollCode struct {
-	token     string
 	namespace string
 	portalFP  string // portal's console-admin identity, as declared at mint time
 	expires   time.Time
@@ -77,15 +76,16 @@ func (r *Relay) handleEnrollMint(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	token, err := r.admin.IssueToken(ns, "device-enroll", 0)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	// The token is NOT issued here. Minting is a GET on the portal's /enroll
+	// page, so a cross-site navigation can trigger it; issuing at mint time
+	// left a live, never-expiring namespace token in the database for every
+	// drive-by or abandoned enrollment (audit 2026-08-28, SEC-C-04). The code
+	// now stands for "a token may be issued to this namespace"; the token is
+	// created only when the code is redeemed at /enroll/exchange.
 	code := newEnrollCode()
 	r.enrollMu.Lock()
 	r.purgeEnrollLocked()
-	r.enrollCodes[code] = &enrollCode{token: token, namespace: ns, portalFP: portalFP, expires: time.Now().Add(enrollCodeTTL)}
+	r.enrollCodes[code] = &enrollCode{namespace: ns, portalFP: portalFP, expires: time.Now().Add(enrollCodeTTL)}
 	r.enrollMu.Unlock()
 	writeJSON(w, map[string]any{"code": code, "expires_in": int(enrollCodeTTL.Seconds())})
 }
@@ -109,7 +109,19 @@ func (r *Relay) handleEnrollExchange(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "invalid or expired code", http.StatusUnauthorized)
 		return
 	}
-	writeJSON(w, map[string]string{"token": ec.token, "namespace": ec.namespace, "portal_fp": ec.portalFP})
+	if r.admin == nil {
+		http.Error(w, "no admin store", http.StatusServiceUnavailable)
+		return
+	}
+	// Issue the token now, on redemption, so an unredeemed code never leaves a
+	// credential behind (SEC-C-04). Label it with the device the agent is about
+	// to register under is not known yet, so keep the "device-enroll" label.
+	token, err := r.admin.IssueToken(ec.namespace, "device-enroll", 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"token": token, "namespace": ec.namespace, "portal_fp": ec.portalFP})
 }
 
 // purgeEnrollLocked drops expired codes. Caller holds enrollMu.
