@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -71,7 +72,32 @@ func Handler(seed []byte, endpointPath string) (http.Handler, error) {
 	if endpointPath != "" {
 		opts = append(opts, server.WithEndpointPath(endpointPath))
 	}
-	return server.NewStreamableHTTPServer(s, opts...), nil
+	return refuseBrowserOrigins(server.NewStreamableHTTPServer(s, opts...)), nil
+}
+
+// refuseBrowserOrigins turns away requests that carry an Origin header the
+// operator did not allow. MCP clients are programs and send no Origin; a
+// browser page always does, and a page the operator merely visited could
+// otherwise reach a localhost `wanctl mcp --http` or DNS-rebind to a bound
+// address and drive it (audit 2026-08-28, SEC-E-05). WANCTL_MCP_ALLOWED_ORIGINS
+// is a comma-separated allow-list for deliberate browser-based hosts.
+func refuseBrowserOrigins(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if origin := req.Header.Get("Origin"); origin != "" && !originAllowed(origin) {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, req)
+	})
+}
+
+func originAllowed(origin string) bool {
+	for _, a := range strings.Split(os.Getenv("WANCTL_MCP_ALLOWED_ORIGINS"), ",") {
+		if a = strings.TrimSpace(a); a != "" && strings.EqualFold(a, origin) {
+			return true
+		}
+	}
+	return false
 }
 
 // ServeHTTP is a convenience for `wanctl mcp --http :addr` that builds a
@@ -99,6 +125,11 @@ type sessionAPI interface {
 	clearLogin() error
 	info() string // for wanctl_status
 	relayURL() (string, error)
+	// localFile decides whether a tool may open path on the machine the MCP
+	// server runs on, and returns the cleaned absolute path to use. The
+	// answer depends on who that machine belongs to: in stdio mode it is the
+	// operator's own, in HTTP mode it is shared infrastructure (SEC-E-01).
+	localFile(path string, write bool) (string, *mcpapi.CallToolResult)
 }
 
 type sessionStore struct {
@@ -172,6 +203,75 @@ func (l *localFsSession) client() (*client.Client, *mcpapi.CallToolResult) {
 	return nil, mcpapi.NewToolResultError(err.Error())
 }
 
+// localFile confines wanctl_push/wanctl_pull on the operator's machine.
+//
+// The model driving this MCP server may be prompt-injected, and these two
+// tools would otherwise let it read any file the operator can read (and
+// ship it to a device it controls) or overwrite any file the operator can
+// write. With WANCTL_MCP_LOCAL_ROOT set, only that tree is reachable. Without
+// it, everything is reachable except the places where credentials live: any
+// dot-directory directly under $HOME (~/.ssh, ~/.aws, ~/.gnupg, ~/.config, …)
+// and wanctl's own config dir. The refusal names the variable so a legitimate
+// use is one export away, not a dead end (audit 2026-08-28, SEC-E-01).
+func (l *localFsSession) localFile(path string, write bool) (string, *mcpapi.CallToolResult) {
+	abs, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return "", mcpapi.NewToolResultError("local: " + err.Error())
+	}
+	abs = filepath.Clean(abs)
+	if root := os.Getenv("WANCTL_MCP_LOCAL_ROOT"); root != "" {
+		rootAbs, err := filepath.Abs(root)
+		if err != nil {
+			return "", mcpapi.NewToolResultError("WANCTL_MCP_LOCAL_ROOT: " + err.Error())
+		}
+		rootAbs = resolveExisting(rootAbs)
+		// Resolve the longest existing prefix so a symlink inside the root
+		// cannot point out of it (the file itself may not exist yet on pull).
+		cand := resolveExisting(abs)
+		if cand != rootAbs && !strings.HasPrefix(cand, rootAbs+string(filepath.Separator)) {
+			return "", mcpapi.NewToolResultError(fmt.Sprintf(
+				"local path %s is outside WANCTL_MCP_LOCAL_ROOT (%s); the MCP server only touches files under that root", abs, rootAbs))
+		}
+		return abs, nil
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if rel, err := filepath.Rel(home, abs); err == nil && !strings.HasPrefix(rel, "..") {
+			first := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+			if strings.HasPrefix(first, ".") && first != "." {
+				return "", mcpapi.NewToolResultError(fmt.Sprintf(
+					"local path %s is under ~/%s, where credentials live; the MCP server does not read or write there. "+
+						"Set WANCTL_MCP_LOCAL_ROOT to the tree you want to allow instead.", abs, first))
+			}
+		}
+	}
+	if dir := config.SettingsDir(); dir != "" {
+		dir = resolveExisting(dir)
+		cand := resolveExisting(abs)
+		if cand == dir || strings.HasPrefix(cand, dir+string(filepath.Separator)) {
+			return "", mcpapi.NewToolResultError("local path is inside wanctl's own config dir (identity, token, trust); refused")
+		}
+	}
+	return abs, nil
+}
+
+// resolveExisting follows symlinks on the longest existing prefix of p and
+// re-attaches the rest, so a path that does not exist yet still compares
+// against a resolved root (macOS puts $TMPDIR under /var → /private/var).
+func resolveExisting(p string) string {
+	rest := ""
+	for cur := p; ; {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
+}
+
 func (l *localFsSession) saveLogin(token, _ string) error { return config.SaveToken(token) }
 func (l *localFsSession) clearLogin() error               { return config.ClearToken() }
 func (l *localFsSession) relayURL() (string, error) {
@@ -240,6 +340,17 @@ func (r *remoteSession) ensureIdentity() error {
 	}
 	r.identity = id
 	return nil
+}
+
+// localFile on a shared MCP server: there is no legitimate "local" file. The
+// machine is the relay's own container or a multi-tenant host, so a path here
+// is a path on shared infrastructure — /proc/self/environ would hand any
+// logged-in tenant the relay's admin secret and database credentials
+// (audit 2026-08-28, SEC-E-01). wanctl_push_blob and wanctl_exec cover what
+// these tools were for.
+func (r *remoteSession) localFile(string, bool) (string, *mcpapi.CallToolResult) {
+	return "", mcpapi.NewToolResultError("wanctl_push/wanctl_pull are unavailable on a shared (HTTP) MCP server: " +
+		"'local' would be a path on the server itself. Upload with wanctl_push_blob; read remote files with wanctl_exec (e.g. cat/base64).")
 }
 
 func (r *remoteSession) client() (*client.Client, *mcpapi.CallToolResult) {
@@ -451,7 +562,7 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpExecPoll)
 
 	s.AddTool(mcpapi.NewTool("wanctl_push",
-		mcpapi.WithDescription("Upload a local file to a remote path on the target device. Same pairing/policy rules as wanctl_exec. NOTE: in HTTP (remote) MCP mode, 'local' is a path on the MCP SERVER, not on the AI host — this tool is intended for stdio mode where the AI host has direct filesystem access."),
+		mcpapi.WithDescription("Upload a local file to a remote path on the target device. Same pairing/policy rules as wanctl_exec. Available in stdio mode only (on a shared HTTP MCP server 'local' would be a path on the server itself). Paths under a dot-directory of the operator's home (~/.ssh, ~/.config, …) are refused; WANCTL_MCP_LOCAL_ROOT confines the tool to one tree."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
 		mcpapi.WithString("local", mcpapi.Required(), mcpapi.Description("Absolute path on the MCP-server machine (or your local machine in stdio mode) to upload.")),
 		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to write to.")),
@@ -466,7 +577,7 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpPushBlob)
 
 	s.AddTool(mcpapi.NewTool("wanctl_pull",
-		mcpapi.WithDescription("Download a remote file from the target device to a local path. Same pairing/policy rules as wanctl_exec. NOTE: in HTTP (remote) MCP mode 'local' is on the MCP SERVER; for AI-host-side files use stdio mode."),
+		mcpapi.WithDescription("Download a remote file from the target device to a local path. Same pairing/policy rules as wanctl_exec. Available in stdio mode only; the same local-path limits as wanctl_push apply. On a shared HTTP MCP server read remote files with wanctl_exec instead."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
 		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to read.")),
 		mcpapi.WithString("local", mcpapi.Required(), mcpapi.Description("Absolute path on the MCP-server machine (or your local machine in stdio mode) to write to.")),
@@ -499,10 +610,9 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpTrust)
 
 	s.AddTool(mcpapi.NewTool("wanctl_trust_server",
-		mcpapi.WithDescription("Confirm an unknown device identity for THIS MCP session. Call only after a human independently verifies the exact target and fingerprint returned by DEVICE IDENTITY CONFIRMATION REQUIRED. Certificate changes remain blocked unless replace=true is explicitly requested after re-verification."),
+		mcpapi.WithDescription("Confirm an UNKNOWN device identity for THIS MCP session — first contact only. Call only after a human independently verifies the exact target and fingerprint returned by DEVICE IDENTITY CONFIRMATION REQUIRED (for example against `wanctl id` run on the device). A device whose certificate CHANGED cannot be re-pinned from here: that is the signature of a relay substituting its own identity, and only a human at a terminal may accept it (`wanctl trust --replace`)."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Exact owner/device target from the confirmation error.")),
 		mcpapi.WithString("fingerprint", mcpapi.Required(), mcpapi.Description("Exact SHA256 fingerprint verified with the device owner.")),
-		mcpapi.WithBoolean("replace", mcpapi.Description("Replace an existing pin after independent re-verification. Default false.")),
 	), mcpTrustServer)
 
 	s.AddTool(mcpapi.NewTool("wanctl_rules",
@@ -842,7 +952,12 @@ func mcpPush(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	if local == "" || remote == "" {
 		return mcpapi.NewToolResultError("local and remote are required"), nil
 	}
-	c, hint := sessions.get(ctx).client()
+	sess := sessions.get(ctx)
+	local, hint := sess.localFile(local, false)
+	if hint != nil {
+		return hint, nil
+	}
+	c, hint := sess.client()
 	if hint != nil {
 		return hint, nil
 	}
@@ -903,7 +1018,12 @@ func mcpPull(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	if local == "" || remote == "" {
 		return mcpapi.NewToolResultError("remote and local are required"), nil
 	}
-	c, hint := sessions.get(ctx).client()
+	sess := sessions.get(ctx)
+	local, hint := sess.localFile(local, true)
+	if hint != nil {
+		return hint, nil
+	}
+	c, hint := sess.client()
 	if hint != nil {
 		return hint, nil
 	}
@@ -942,6 +1062,12 @@ func mcpServerLogs(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Cal
 	service := reqStr(req, "service", "")
 	if service != "portal" && service != "relay" {
 		return mcpapi.NewToolResultError("service must be portal or relay"), nil
+	}
+	if _, ok := sessions.get(ctx).(*remoteSession); ok {
+		// On a shared server the admin secret in this process's environment
+		// belongs to the operator, not to whichever tenant is logged in
+		// (audit 2026-08-28, SEC-E-03).
+		return mcpapi.NewToolResultError("wanctl_server_logs is available in stdio mode only: on a shared MCP server it would read the operator's logs with the operator's secret"), nil
 	}
 	if _, hint := sessions.get(ctx).client(); hint != nil {
 		return hint, nil
@@ -1048,7 +1174,11 @@ func mcpTrustServer(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Ca
 	if hint != nil {
 		return hint, nil
 	}
-	canonical, err := c.PinServer(ctx, target, fingerprint, reqBool(req, "replace"))
+	// Never replace. The fingerprint a model "confirms" is the one the
+	// current dial presented — exactly the value a hostile relay would
+	// substitute — so a changed certificate must stay a hard failure here and
+	// go through a human at a terminal (audit 2026-08-28, SEC-E-02).
+	canonical, err := c.PinServer(ctx, target, fingerprint, false)
 	if err != nil {
 		return mcpapi.NewToolResultError(err.Error()), nil
 	}
