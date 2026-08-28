@@ -88,6 +88,15 @@ func (q *sideQueue) drain(timeout time.Duration) (data []byte, closed bool) {
 type httpSession struct {
 	toClient *sideQueue // bytes the controller will read
 	toAgent  *sideQueue // bytes the agent will read
+	// The two namespaces allowed to touch this session's queues: the dialing
+	// controller and the device owner. The session id is a 128-bit secret, but
+	// binding the parties means a leaked id in one namespace cannot be used to
+	// inject into or tear down a session in another (audit 2026-08-28,
+	// SEC-A-02). lastActive is bumped by every /h/up and /h/down so the sweeper
+	// can reap sessions that both parties have abandoned (SEC-A-03).
+	callerNS   string
+	ownerNS    string
+	lastActive time.Time
 }
 
 func (s *httpSession) close() {
@@ -97,7 +106,19 @@ func (s *httpSession) close() {
 
 const (
 	httpAgentTTL = 40 * time.Second
-	downPollWait = 20 * time.Second
+	// httpAgentsPerNS bounds how many distinct device names one namespace may
+	// hold in the HTTP registry at once. Without it a single token could poll
+	// /h/poll?device=<unique> in a loop and grow the registry without bound —
+	// one client took the relay from 21 MB to 700 MB in a local run (audit
+	// 2026-08-28, SEC-A-01). Real namespaces have a handful of devices; this
+	// only stops the flood, and only new names past the cap (existing devices
+	// keep polling).
+	httpAgentsPerNS = 256
+	// httpSessionIdle reaps a session neither party has polled for this long.
+	// A live session is polled at least every downPollWait (20s); an abandoned
+	// one is not, so 3× is comfortably clear of a slow but live command.
+	httpSessionIdle = 3 * downPollWait
+	downPollWait    = 20 * time.Second
 )
 
 func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
@@ -113,9 +134,15 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	}
 	key := ns + "/" + device
 	inst := req.URL.Query().Get("inst")
+	r.startHTTPReaper()
 	r.hmu.Lock()
 	a := r.hagents[key]
 	if a == nil {
+		if r.countNamespaceAgentsLocked(ns) >= httpAgentsPerNS {
+			r.hmu.Unlock()
+			http.Error(w, "too many devices registered for this namespace", http.StatusTooManyRequests)
+			return
+		}
 		a = &httpAgent{ns: ns, device: device, open: make(chan sessionauth.Open, 8), changed: make(chan struct{})}
 		r.hagents[key] = a
 	}
@@ -203,15 +230,13 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 	}
 	sid := newID()
 	auth.Session = sid
-	r.hsess[sid] = &httpSession{toClient: newSideQueue(), toAgent: newSideQueue()}
 	r.hmu.Unlock()
+	r.newHTTPSession(sid, auth)
 
 	select {
 	case a.open <- auth:
 	default:
-		r.hmu.Lock()
-		delete(r.hsess, sid)
-		r.hmu.Unlock()
+		r.closeHTTPSession(sid, r.session(sid))
 		http.Error(w, "agent busy", http.StatusServiceUnavailable)
 		return
 	}
@@ -275,11 +300,12 @@ func (r *Relay) handleHPeers(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
-	if _, ok := r.auth(w, req); !ok {
+	ns, ok := r.auth(w, req)
+	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	s := r.session(req.URL.Query().Get("session"))
+	s := r.sessionForParty(req.URL.Query().Get("session"), ns)
 	if s == nil {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
@@ -307,11 +333,12 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
-	if _, ok := r.auth(w, req); !ok {
+	ns, ok := r.auth(w, req)
+	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	s := r.session(req.URL.Query().Get("session"))
+	s := r.sessionForParty(req.URL.Query().Get("session"), ns)
 	if s == nil {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
@@ -335,18 +362,22 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
-	if _, ok := r.auth(w, req); !ok {
+	ns, ok := r.auth(w, req)
+	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	sid := req.URL.Query().Get("session")
 	r.hmu.Lock()
 	s := r.hsess[sid]
+	if s == nil || (ns != s.callerNS && ns != s.ownerNS) {
+		r.hmu.Unlock()
+		http.Error(w, "no such session", http.StatusNotFound)
+		return
+	}
 	delete(r.hsess, sid)
 	r.hmu.Unlock()
-	if s != nil {
-		s.close()
-	}
+	s.close()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -354,6 +385,71 @@ func (r *Relay) session(sid string) *httpSession {
 	r.hmu.Lock()
 	defer r.hmu.Unlock()
 	return r.hsess[sid]
+}
+
+// sessionForParty returns the session only if ns is one of its two parties
+// (the dialing controller or the device owner), and marks it active. A caller
+// that is neither gets nil — indistinguishable from an unknown id.
+func (r *Relay) sessionForParty(sid, ns string) *httpSession {
+	r.hmu.Lock()
+	defer r.hmu.Unlock()
+	s := r.hsess[sid]
+	if s == nil || (ns != s.callerNS && ns != s.ownerNS) {
+		return nil
+	}
+	s.lastActive = time.Now()
+	return s
+}
+
+// countNamespaceAgentsLocked counts distinct devices ns holds in the HTTP
+// registry. Caller holds hmu.
+func (r *Relay) countNamespaceAgentsLocked(ns string) int {
+	n := 0
+	for _, a := range r.hagents {
+		if a.ns == ns {
+			n++
+		}
+	}
+	return n
+}
+
+// startHTTPReaper launches the registry/session sweeper once, on the first
+// HTTP poll a relay ever serves (a WS-only or env-token smoke relay never
+// spawns it).
+func (r *Relay) startHTTPReaper() {
+	r.reaperOnce.Do(func() {
+		go func() {
+			t := time.NewTicker(httpAgentTTL)
+			defer t.Stop()
+			for range t.C {
+				r.reapHTTP(time.Now())
+			}
+		}()
+	})
+}
+
+// reapHTTP drops HTTP-registry entries whose agent stopped polling and
+// sessions both parties abandoned. A live agent refreshes lastSeen every poll
+// cycle and a live session is polled every downPollWait, so neither is at
+// risk. Exported timing via the constants keeps the test honest.
+func (r *Relay) reapHTTP(now time.Time) {
+	var dead []*httpSession
+	r.hmu.Lock()
+	for key, a := range r.hagents {
+		if now.Sub(a.lastSeen) > httpAgentTTL {
+			delete(r.hagents, key)
+		}
+	}
+	for sid, s := range r.hsess {
+		if !s.lastActive.IsZero() && now.Sub(s.lastActive) > httpSessionIdle {
+			delete(r.hsess, sid)
+			dead = append(dead, s)
+		}
+	}
+	r.hmu.Unlock()
+	for _, s := range dead {
+		s.close()
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

@@ -68,9 +68,10 @@ type Relay struct {
 	agents  map[string]*agentConn      // key "ns/device" (WebSocket transport)
 	pending map[string]*pendingSession // key session id (WebSocket transport)
 
-	hmu     sync.Mutex
-	hagents map[string]*httpAgent   // key "ns/device" (HTTP transport)
-	hsess   map[string]*httpSession // key session id (HTTP transport)
+	hmu        sync.Mutex
+	hagents    map[string]*httpAgent   // key "ns/device" (HTTP transport)
+	hsess      map[string]*httpSession // key session id (HTTP transport)
+	reaperOnce sync.Once
 
 	enrollMu    sync.Mutex
 	enrollCodes map[string]*enrollCode // one-time device-enrollment codes
