@@ -141,6 +141,10 @@ func New(opts Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A PowerShell device needs prefix rules matched against PowerShell's own
+	// evaluation syntax, which the POSIX command parser cannot see
+	// (audit 2026-08-28, SEC-D1-02).
+	engine.SetPowerShell(isPowerShell(opts.Shell))
 	logger, err := eventlog.Open("events.jsonl")
 	if err != nil {
 		return nil, err
@@ -1212,4 +1216,10 @@ func (a *Agent) runConsolePrompt(ctx context.Context) {
 			a.console.Decide(p.ID, verdict)
 		}
 	}
+}
+
+// isPowerShell reports whether the resolved session shell is a PowerShell.
+func isPowerShell(shell string) bool {
+	s := strings.ToLower(shell)
+	return strings.Contains(s, "powershell") || strings.Contains(s, "pwsh")
 }

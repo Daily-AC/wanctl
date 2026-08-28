@@ -92,6 +92,20 @@ type Engine struct {
 	mode     Mode
 	path     string
 	modePath string
+	// psShell is true when this device's session shell is PowerShell, whose
+	// argument binding eagerly evaluates @(...), .{...}, &{...} and backtick
+	// sequences the POSIX command parser cannot see. A prefix rule must not
+	// authorize a command carrying one (audit 2026-08-28, SEC-D1-02).
+	psShell bool
+}
+
+// SetPowerShell records whether the device runs a PowerShell session shell, so
+// prefix rules are matched conservatively against PowerShell's own evaluation
+// syntax. The agent calls it once at startup from its resolved shell.
+func (e *Engine) SetPowerShell(v bool) {
+	e.mu.Lock()
+	e.psShell = v
+	e.mu.Unlock()
 }
 
 // Open loads (or initializes) the named rule file in the config dir. The mode
@@ -176,7 +190,7 @@ func (e *Engine) Allowed(req Request) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, r := range e.rules {
-		if ruleMatches(r, req) {
+		if ruleMatchesShell(r, req, e.psShell) {
 			return true
 		}
 	}
@@ -193,7 +207,7 @@ func (e *Engine) AllowedFileRoot(req Request) (string, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, r := range e.rules {
-		if ruleMatches(r, req) {
+		if ruleMatchesShell(r, req, e.psShell) {
 			return r.Pattern, true
 		}
 	}
@@ -207,13 +221,15 @@ func (e *Engine) Bypasses(kind Kind) bool {
 	return e.Mode() == ModeBypass && kind != KindExecElevated
 }
 
-func ruleMatches(r Rule, req Request) bool {
+func ruleMatches(r Rule, req Request) bool { return ruleMatchesShell(r, req, false) }
+
+func ruleMatchesShell(r Rule, req Request, psShell bool) bool {
 	switch req.Kind {
 	case KindExec, KindExecElevated:
 		// The rule's kind must equal the request's: an exec rule never covers
 		// an elevated command, and an elevated rule never covers a plain one
 		// (it would be a wider grant than the command needs).
-		if r.Kind != req.Kind || !MatchCommand(r.Pattern, req.Cmd) {
+		if r.Kind != req.Kind || !matchCommand(r.Pattern, req.Cmd, psShell) {
 			return false
 		}
 		return r.Scope == ScopeGlobal || (r.Scope == ScopeDir && r.Dir == req.Cwd && req.Cwd != "")
@@ -232,7 +248,9 @@ func ruleMatches(r Rule, req Request) bool {
 // contain shell operators. Prefix rules only extend a single simple command,
 // so an argv prefix cannot authorize another command, a command substitution,
 // or a redirection. A trailing " *" explicitly matches any argument suffix.
-func MatchCommand(p, c string) bool {
+func MatchCommand(p, c string) bool { return matchCommand(p, c, false) }
+
+func matchCommand(p, c string, psShell bool) bool {
 	p = strings.TrimSpace(p)
 	c = strings.TrimSpace(c)
 	if c == p {
@@ -244,10 +262,31 @@ func MatchCommand(p, c string) bool {
 	if !isSingleSimpleCommand(c) {
 		return false
 	}
+	// On a PowerShell device the POSIX parser above is blind to PowerShell's
+	// own evaluation syntax, so `ping @(Remove-Item x)` reads as one simple
+	// command and a `ping *` prefix rule would authorize it. A prefix rule
+	// never covers a command that carries such a sequence; an exact rule
+	// (handled by the c == p branch) still can (audit 2026-08-28, SEC-D1-02).
+	if psShell && hasPowerShellEval(c) {
+		return false
+	}
 	if strings.HasSuffix(p, " *") {
 		return strings.HasPrefix(c, p[:len(p)-1]) // keep the space before *
 	}
 	return strings.HasPrefix(c, p+" ")
+}
+
+// hasPowerShellEval reports whether c contains a PowerShell construct that
+// evaluates code during argument binding: a subexpression @(...) or $(...), a
+// call/dot-source scriptblock &{...} / .{...}, a backtick escape, or a
+// statement separator inside what the POSIX parser took for one argument.
+func hasPowerShellEval(c string) bool {
+	for _, seq := range []string{"@(", "$(", "&{", ".{", "${", "`", ";", "|", "&"} {
+		if strings.Contains(c, seq) {
+			return true
+		}
+	}
+	return false
 }
 
 func isSingleSimpleCommand(command string) bool {
