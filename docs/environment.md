@@ -11,13 +11,16 @@ Variables marked "conditional" are required only for the feature described.
 | `WANCTL_ROLE` | container | No | `relay` | Docker image command: `relay`, `portal`, or `mcp`. |
 | `DATABASE_URL` | relay | Conditional | none | PostgreSQL DSN. Required for the portal-backed multi-user deployment; otherwise relay needs `WANCTL_TOKENS` or `WANCTL_UPSTREAM_RELAY`. |
 | `WANCTL_AUTO_MIGRATE` | relay | No | enabled | Set to `0` to skip embedded database migrations. |
-| `WANCTL_ADMIN_SECRET` | relay, portal, admin CLI | Conditional | none | Shared secret for `/admin/*`. Required for a functional portal, upstream token resolution, admin CLI, and server-log access. |
+| `WANCTL_ADMIN_SECRET` | relay, portal, admin CLI | Conditional | none | Shared secret for `/admin/*`; relay startup requires at least 32 bytes when set. Required for a functional portal, upstream token resolution, admin CLI, and server-log access. |
 | `WANCTL_TOKENS` | relay | Conditional | none | Static `token:namespace` pairs separated by commas; fallback for a relay without Postgres. |
 | `WANCTL_UPSTREAM_RELAY` | relay | Conditional | none | Upstream relay URL used to resolve tokens when this relay has no database. Requires `WANCTL_ADMIN_SECRET`. |
 | `WANCTL_PORTAL_NS` | relay | No | none | Namespace allowed to open privileged portal console sessions. Conventionally `portal`. |
 | `WANCTL_DIST_DIR` | relay | No | `/dist` | Directory containing signed release artifacts and installers. |
-| `WANCTL_PUBLIC_ORIGIN` | relay | No | request origin | Canonical relay origin substituted into the served `/skills` document. |
+| `WANCTL_PUBLIC_ORIGIN` | relay | Conditional | none | Canonical relay origin substituted into `/skills`. The route returns 503 when unset rather than deriving AI-controller instructions from request Host. |
 | `WANCTL_MCP_SEED` | relay, MCP | Conditional | none | Hex seed enabling `/wanctl-mcp` on relay; required and at least 32 decoded bytes for standalone `mcp --http`. |
+| `WANCTL_MCP_LOCAL_ROOT` | MCP stdio | No | process working directory | Only local tree `wanctl_push` and `wanctl_pull` may access. The wanctl config directory is always excluded. |
+| `WANCTL_MCP_ALLOWED_ORIGINS` | MCP HTTP | No | none | Comma-separated browser Origin allowlist. Requests with an Origin are denied unless listed; programmatic clients normally send none. |
+| `WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER` | MCP | No | `0` | Set to `1` only to restore model-callable device TOFU pinning. Default is fail-closed because the model cannot distinguish an independently verified fingerprint from one supplied by a hostile relay. |
 | `RELAY_ADMIN_URL` | portal | Yes | none | Internal relay base URL used for the portal's admin proxy, such as `http://relay:8080`. |
 | `WANCTL_GITHUB_CLIENT_ID` | portal | Conditional | none | Enables GitHub OAuth login. Mutually exclusive with `PORTAL_USER_HEADER`. |
 | `WANCTL_GITHUB_CLIENT_SECRET` | portal | Conditional | none | OAuth App client secret; required when the client ID is set. |
@@ -63,6 +66,15 @@ Variables marked "conditional" are required only for the feature described.
 |---|---|---:|---|---|
 | `WANCTL_RELEASE_SIGNING_KEY` | release manifest tool | Conditional | none | Base64 Ed25519 seed or private key; required to sign a release. |
 | `WANCTL_RELEASE_RSA_KEY` | release manifest tool | Conditional | none | Base64 PKCS#8 or PKCS#1 RSA private key (at least 2048 bits) used for installer signatures. |
+
+## Build and install
+
+| Variable | Role | Required | Default | Purpose |
+|---|---|---:|---|---|
+| `WANCTL_VERSION` | Docker build / compose | No | `dev` | Version stamped into a self-hosted relay or portal image. Set it to the checked-out tag or `git describe --always`. |
+| `WANCTL_RELEASE_PUBLIC_KEYS` | Docker build / compose | No | none | Comma-separated Ed25519 public keys baked into a self-hosted image so relay `/dl` can verify signed releases. |
+| `WANCTL_DEFAULT_PORTAL` | Android build | No | none | Portal origin baked into an APK; an empty value leaves the runtime login dialog responsible for collecting it. |
+| `WANCTL_BIN` | installers | No | platform-dependent | Destination path for the installed `wanctl` executable. |
 
 ## Opt-in live tests
 

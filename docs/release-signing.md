@@ -46,8 +46,10 @@ path as "verified against a compromised relay's own key" and prefer the GitHub
 release when the machine matters. Verification still fails closed either way: an attacker who can replace
 `/dist` binaries but not the served script gets nothing.
 
-Both installers bake in the relay they were built for, so `WANCTL_RELAY` is only
-needed to point at a different one.
+Official installers bake the GitHub release base and leave the relay empty.
+Self-hosters may instead build them with a default relay for a signed `/dl`
+mirror. `WANCTL_DIST_BASE` or `WANCTL_RELAY` overrides either source at install
+time.
 
 The release build injects a comma-separated set of trusted raw Ed25519 public
 keys into `internal/release.TrustedPublicKeys`. A normal build has no trust key;
@@ -66,30 +68,38 @@ openssl rand 32 | base64
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -outform DER | base64 | tr -d '\n'
 ```
 
-Store both as secrets on the protected `release` GitHub environment, with its
-deployment tag policy restricted to release tags. Base64 keeps them single-line, which keeps
+Store both as secrets on the `release` GitHub environment, with its deployment
+tag policy restricted to release tags. Base64 keeps them single-line, which keeps
 secret-masking reliable; the RSA value is ~2.4 KB, comfortably within GitHub's
 secret size limit. Losing the RSA key is not fatal to
 existing installs — it only signs for new ones — but it does force a public-key
 rotation in the next release. Do not store it in the repository, a Docker
 build argument, an image layer, the relay filesystem, or a general-purpose app
-environment. Restrict the `release` environment and protected version tags to
-release maintainers. The release job aborts if the key is absent.
+environment. The repository must additionally enforce protected `v*` tags, a
+required environment reviewer with administrator bypass disabled, and immutable
+releases. These are repository settings, not properties of the workflow file;
+the 2026-08-28 audit found them absent, so release publication remains blocked
+on that operator action. The release job aborts if any signing key or Android
+keystore input is absent.
 
 The workflow builds each platform binary with the matching public key, creates
 `manifest.json`, signs its exact bytes as `manifest.json.sig`, and uploads the
-release directory as assets on the immutable GitHub Release. The directory also contains
+release directory as assets on the GitHub Release. Repository immutable-release
+protection must be enabled separately. The directory also contains
 `release-public.pem`, which lets a maintainer independently verify the downloaded
 release assets without access to the private signing key. Deploy that directory
 read-only at
 `WANCTL_DIST_DIR`. The relay verifies the manifest and every file before serving
 anything. A bad or incomplete directory returns HTTP 503 for all `/dl/*` paths.
 Build the relay image with the public release metadata (public keys are not
-secrets), then mount the same signed directory read-only:
+secrets), then mount the same signed directory read-only. The canonical
+self-host path passes these values through `selfhost/.env` and Compose:
 
 ```sh
-docker build --build-arg WANCTL_VERSION=v1.2.3 \
-  --build-arg WANCTL_RELEASE_PUBLIC_KEYS='<current[,overlap] public keys>' .
+cd selfhost
+cp .env.example .env
+# Set WANCTL_VERSION and WANCTL_RELEASE_PUBLIC_KEYS in .env, then:
+docker compose build
 ```
 
 For a local release rehearsal:
@@ -101,15 +111,15 @@ go run ./cmd/release-manifest verify release release/release-public.pem
 ```
 
 Pushing a protected `vMAJOR.MINOR.PATCH` tag starts `.github/workflows/release.yml`.
-The workflow requires both signing secrets. If both optional Android secrets,
-`WANCTL_ANDROID_KEYSTORE_B64` and `WANCTL_ANDROID_KEYSTORE_PASS`, are present, it
-also builds and uploads the signed APK; otherwise it explicitly omits the APK.
+The workflow requires both signing secrets plus the Android keystore and
+password. It publishes all four per-ABI APKs; a release without them is refused
+because it would strand installed Android devices.
 
 To publish the same release manually, build or download the complete `release/`
 directory, check out that exact tag, authenticate `gh`, then run:
 
 ```sh
-./scripts/publish-release.sh v1.2.3 release docs/releases/v1.2.3.md
+./scripts/publish-release.sh v1.2.3 release internal/portal/changelog/v1.2.3.md
 ```
 
 The publisher rejects an existing release, a tag/source mismatch, unexpected or
