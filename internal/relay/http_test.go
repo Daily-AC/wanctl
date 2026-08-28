@@ -194,7 +194,7 @@ func TestHTTPPollReceivesRelayIssuedCapabilities(t *testing.T) {
 
 func TestHTTPUploadRejectsOversizedBody(t *testing.T) {
 	r := New(EnvTokenStore("tok-alice:alice"))
-	r.hsess["session"] = &httpSession{toClient: newSideQueue(), toAgent: newSideQueue()}
+	r.hsess["session"] = &httpSession{toClient: newSideQueue(), toAgent: newSideQueue(), callerNS: "alice", ownerNS: "alice"}
 	req := httptest.NewRequest("POST", "/h/up?token=tok-alice&session=session&role=client",
 		bytes.NewReader(make([]byte, limits.RelayHTTPUploadBytes+1)))
 	resp := httptest.NewRecorder()

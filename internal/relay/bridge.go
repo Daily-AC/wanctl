@@ -64,8 +64,14 @@ func (c *httpSessionConn) Close() error {
 	return nil
 }
 
-func (r *Relay) newHTTPSession(sid string) *httpSession {
-	s := &httpSession{toClient: newSideQueue(), toAgent: newSideQueue()}
+func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open) *httpSession {
+	s := &httpSession{
+		toClient:   newSideQueue(),
+		toAgent:    newSideQueue(),
+		callerNS:   auth.CallerNamespace,
+		ownerNS:    auth.OwnerNamespace,
+		lastActive: time.Now(),
+	}
 	r.hmu.Lock()
 	r.hsess[sid] = s
 	r.hmu.Unlock()
@@ -103,9 +109,8 @@ func (r *Relay) handleWSDialToHTTP(w http.ResponseWriter, req *http.Request, tar
 	}
 	sid := newID()
 	auth.Session = sid
-	s := &httpSession{toClient: newSideQueue(), toAgent: newSideQueue()}
-	r.hsess[sid] = s
 	r.hmu.Unlock()
+	s := r.newHTTPSession(sid, auth)
 
 	select {
 	case a.open <- auth:
@@ -137,15 +142,14 @@ func (r *Relay) handleHDialToWS(w http.ResponseWriter, targetKey string, auth se
 	}
 
 	sid := newID()
-	s := r.newHTTPSession(sid)
+	auth.Op = "open"
+	auth.Session = sid
+	auth.URL = "/session/" + sid
+	s := r.newHTTPSession(sid, auth)
 	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), done: make(chan struct{})}
 	r.mu.Lock()
 	r.pending[sid] = ps
 	r.mu.Unlock()
-
-	auth.Op = "open"
-	auth.Session = sid
-	auth.URL = "/session/" + sid
 	if err := ac.send(auth); err != nil {
 		r.finishPendingSession(sid, ps)
 		r.closeHTTPSession(sid, s)
