@@ -203,55 +203,48 @@ func (l *localFsSession) client() (*client.Client, *mcpapi.CallToolResult) {
 	return nil, mcpapi.NewToolResultError(err.Error())
 }
 
-// localFile confines wanctl_push/wanctl_pull on the operator's machine.
-//
-// The model driving this MCP server may be prompt-injected, and these two
-// tools would otherwise let it read any file the operator can read (and
-// ship it to a device it controls) or overwrite any file the operator can
-// write. With WANCTL_MCP_LOCAL_ROOT set, only that tree is reachable. Without
-// it, everything is reachable except the places where credentials live: any
-// dot-directory directly under $HOME (~/.ssh, ~/.aws, ~/.gnupg, ~/.config, …)
-// and wanctl's own config dir. The refusal names the variable so a legitimate
-// use is one export away, not a dead end (audit 2026-08-28, SEC-E-01).
-func (l *localFsSession) localFile(path string, write bool) (string, *mcpapi.CallToolResult) {
+// localFile confines wanctl_push/wanctl_pull on the operator's machine. The
+// model may be prompt-injected, so the default root is the directory in which
+// the MCP server was started; WANCTL_MCP_LOCAL_ROOT may name a different tree
+// explicitly. wanctl's credential/config directory is refused independently
+// of either root.
+func (l *localFsSession) localFile(path string, _ bool) (string, *mcpapi.CallToolResult) {
 	abs, err := filepath.Abs(strings.TrimSpace(path))
 	if err != nil {
 		return "", mcpapi.NewToolResultError("local: " + err.Error())
 	}
 	abs = filepath.Clean(abs)
-	if root := os.Getenv("WANCTL_MCP_LOCAL_ROOT"); root != "" {
-		rootAbs, err := filepath.Abs(root)
+	root := strings.TrimSpace(os.Getenv("WANCTL_MCP_LOCAL_ROOT"))
+	rootLabel := "the MCP server's working directory"
+	if root == "" {
+		root, err = os.Getwd()
 		if err != nil {
-			return "", mcpapi.NewToolResultError("WANCTL_MCP_LOCAL_ROOT: " + err.Error())
+			return "", mcpapi.NewToolResultError("resolve MCP working directory: " + err.Error())
 		}
-		rootAbs = resolveExisting(rootAbs)
-		// Resolve the longest existing prefix so a symlink inside the root
-		// cannot point out of it (the file itself may not exist yet on pull).
-		cand := resolveExisting(abs)
-		if cand != rootAbs && !strings.HasPrefix(cand, rootAbs+string(filepath.Separator)) {
-			return "", mcpapi.NewToolResultError(fmt.Sprintf(
-				"local path %s is outside WANCTL_MCP_LOCAL_ROOT (%s); the MCP server only touches files under that root", abs, rootAbs))
-		}
-		return abs, nil
+	} else {
+		rootLabel = "WANCTL_MCP_LOCAL_ROOT"
 	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		if rel, err := filepath.Rel(home, abs); err == nil && !strings.HasPrefix(rel, "..") {
-			first := strings.SplitN(rel, string(filepath.Separator), 2)[0]
-			if strings.HasPrefix(first, ".") && first != "." {
-				return "", mcpapi.NewToolResultError(fmt.Sprintf(
-					"local path %s is under ~/%s, where credentials live; the MCP server does not read or write there. "+
-						"Set WANCTL_MCP_LOCAL_ROOT to the tree you want to allow instead.", abs, first))
-			}
-		}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", mcpapi.NewToolResultError(rootLabel + ": " + err.Error())
+	}
+	rootAbs = resolveExisting(rootAbs)
+	cand := resolveExisting(abs)
+	if !pathWithin(cand, rootAbs) {
+		return "", mcpapi.NewToolResultError(fmt.Sprintf(
+			"local path %s is outside %s (%s); set WANCTL_MCP_LOCAL_ROOT to the exact tree the MCP server may access", abs, rootLabel, rootAbs))
 	}
 	if dir := config.SettingsDir(); dir != "" {
 		dir = resolveExisting(dir)
-		cand := resolveExisting(abs)
-		if cand == dir || strings.HasPrefix(cand, dir+string(filepath.Separator)) {
+		if pathWithin(cand, dir) {
 			return "", mcpapi.NewToolResultError("local path is inside wanctl's own config dir (identity, token, trust); refused")
 		}
 	}
 	return abs, nil
+}
+
+func pathWithin(path, root string) bool {
+	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
 // resolveExisting follows symlinks on the longest existing prefix of p and
@@ -610,7 +603,7 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpTrust)
 
 	s.AddTool(mcpapi.NewTool("wanctl_trust_server",
-		mcpapi.WithDescription("Confirm an UNKNOWN device identity for THIS MCP session — first contact only. Call only after a human independently verifies the exact target and fingerprint returned by DEVICE IDENTITY CONFIRMATION REQUIRED (for example against `wanctl id` run on the device). A device whose certificate CHANGED cannot be re-pinned from here: that is the signature of a relay substituting its own identity, and only a human at a terminal may accept it (`wanctl trust --replace`)."),
+		mcpapi.WithDescription("Device identity pinning is disabled on the MCP surface by default because a model can repeat the fingerprint supplied by a hostile relay. In stdio mode a human pins it outside the model with `wanctl trust server`; shared HTTP mode stays fail-closed on first contact. Operators accepting the weaker legacy flow may explicitly set WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Exact owner/device target from the confirmation error.")),
 		mcpapi.WithString("fingerprint", mcpapi.Required(), mcpapi.Description("Exact SHA256 fingerprint verified with the device owner.")),
 	), mcpTrustServer)
@@ -1165,6 +1158,9 @@ func mcpTrust(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 }
 
 func mcpTrustServer(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	if os.Getenv("WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER") != "1" {
+		return mcpapi.NewToolResultError("device identity confirmation is disabled in MCP: the model cannot prove it verified a fingerprint independently of the relay. In stdio mode, run `wanctl trust server --target OWNER/DEVICE --fingerprint SHA256:...` in a human-controlled terminal. A shared HTTP MCP session has no independent trust store and remains blocked on first contact; the weaker legacy flow requires the explicit unsafe opt-in WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1"), nil
+	}
 	target := reqStr(req, "target", "")
 	fingerprint := reqStr(req, "fingerprint", "")
 	if target == "" || fingerprint == "" {

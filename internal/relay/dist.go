@@ -199,19 +199,16 @@ func installerHandler(dir, name, contentType string) http.HandlerFunc {
 }
 
 func (r *Relay) handleSkills(w http.ResponseWriter, req *http.Request) {
+	origin := strings.TrimRight(os.Getenv("WANCTL_PUBLIC_ORIGIN"), "/")
+	if origin == "" {
+		// Never turn an untrusted Host/X-Forwarded-Proto pair into controller
+		// instructions. Behind a shared cache that let one request poison the
+		// served SKILL.md with an attacker-controlled relay endpoint.
+		http.Error(w, "WANCTL_PUBLIC_ORIGIN is required to serve /skills", http.StatusServiceUnavailable)
+		return
+	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.Header().Set("Content-Disposition", `inline; filename="SKILL.md"`)
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	origin := strings.TrimRight(os.Getenv("WANCTL_PUBLIC_ORIGIN"), "/")
-	if origin == "" {
-		scheme := strings.TrimSpace(strings.Split(req.Header.Get("X-Forwarded-Proto"), ",")[0])
-		if scheme == "" {
-			scheme = "http"
-			if req.TLS != nil {
-				scheme = "https"
-			}
-		}
-		origin = scheme + "://" + req.Host
-	}
 	w.Write(bytes.ReplaceAll(skillMD, []byte("@WANCTL_RELAY@"), []byte(origin)))
 }

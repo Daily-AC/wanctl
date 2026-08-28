@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
+
+	"wanctl/internal/admission"
+	"wanctl/internal/config"
 )
 
 // ResolveTokenNamespace asks the relay to authenticate token and return the
@@ -18,14 +19,18 @@ func ResolveTokenNamespace(ctx context.Context, relayURL, token, transport strin
 	if transport == "http" {
 		path = "/h/peers"
 	}
-	base := strings.TrimRight(relayURL, "/")
-	base = strings.Replace(base, "wss://", "https://", 1)
-	base = strings.Replace(base, "ws://", "http://", 1)
-	u := base + path + "?" + url.Values{"token": {token}}.Encode()
+	base, err := config.RelayHTTPOrigin(relayURL)
+	if err != nil {
+		return "", err
+	}
+	u := base + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return "", err
 	}
+	// This was wanctl's last internal caller of the deprecated ?token= form.
+	// Keep credentials out of URLs and proxy/access logs.
+	admission.SetBearer(req, token)
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("resolve token namespace: %w", err)

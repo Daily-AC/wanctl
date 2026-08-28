@@ -753,12 +753,9 @@ func (a *Agent) Mode() policy.Mode { return a.engine.Mode() }
 
 // httpBase converts the relay URL to an HTTP(S) origin for the HTTP transport.
 func httpBase(relayURL string) string {
-	b := strings.TrimRight(relayURL, "/")
-	if strings.HasPrefix(b, "wss:") {
-		return "https:" + b[4:]
-	}
-	if strings.HasPrefix(b, "ws:") {
-		return "http:" + b[3:]
+	b, err := config.RelayHTTPOrigin(relayURL)
+	if err != nil {
+		return strings.TrimRight(relayURL, "/")
 	}
 	return b
 }

@@ -216,6 +216,10 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// HTTP controllers can dial a WebSocket agent without any HTTP agent ever
+	// polling. Start the session reaper on this path too, or abandoned hybrid
+	// sessions live forever despite the idle deadline.
+	r.startHTTPReaper()
 	targetKey, auth, ok := r.dialAllowed(ns, req.URL.Query().Get("target"))
 	if !ok {
 		http.Error(w, "forbidden", http.StatusForbidden)

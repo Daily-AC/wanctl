@@ -4,8 +4,8 @@
 # Deliberately not Gradle. The chain here is aapt2 → javac → d8 → zipalign →
 # apksigner, all of which ship inside the Android SDK, so the build needs no
 # network at all. That is not minimalism for its own sake: this project's own CI
-# already runs on a runner that cannot reach proxy.golang.org (see
-# .gitlab-ci.yml), and adding a build system that resolves a dependency graph
+# has run on builders that cannot reach proxy.golang.org, and adding a build
+# system that resolves a dependency graph
 # from Maven Central on every invocation would put the Android artifact behind
 # the flakiest link in the pipeline. The app is a few hundred lines of framework
 # Java with no AndroidX, so there is nothing for a dependency resolver to do.

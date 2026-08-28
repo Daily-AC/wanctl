@@ -268,6 +268,10 @@ func cmdRelay(args []string) error {
 	log.SetOutput(io.MultiWriter(os.Stderr, logs))
 	log.SetFlags(log.LstdFlags)
 
+	adminSecret := os.Getenv("WANCTL_ADMIN_SECRET")
+	if err := validateAdminSecret(adminSecret); err != nil {
+		return err
+	}
 	var r *relay.Relay
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
 		pg, err := relay.OpenPG(dsn)
@@ -288,7 +292,7 @@ func cmdRelay(args []string) error {
 			stores = append(stores, relay.EnvTokenStore(spec))
 		}
 		if upstream != "" {
-			sec := os.Getenv("WANCTL_ADMIN_SECRET")
+			sec := adminSecret
 			if sec == "" {
 				return fmt.Errorf("WANCTL_UPSTREAM_RELAY needs WANCTL_ADMIN_SECRET (shared with the upstream relay)")
 			}
@@ -308,8 +312,8 @@ func cmdRelay(args []string) error {
 	// resolution). Set it regardless of the token-store backend: a satellite
 	// relay may itself be asked to resolve for another one, and the resolve
 	// endpoint only needs the token store.
-	if sec := os.Getenv("WANCTL_ADMIN_SECRET"); sec != "" {
-		r.SetAdminSecret(sec)
+	if adminSecret != "" {
+		r.SetAdminSecret(adminSecret)
 		log.Print("wanctl relay: admin API enabled (secret-gated)")
 	}
 	r.SetLogBuffer(logs)
@@ -330,6 +334,13 @@ func cmdRelay(args []string) error {
 	}
 	log.Printf("wanctl relay listening on %s", *addr)
 	return limits.HTTPServer(*addr, r.Handler()).ListenAndServe()
+}
+
+func validateAdminSecret(secret string) error {
+	if secret != "" && len(secret) < 32 {
+		return fmt.Errorf("WANCTL_ADMIN_SECRET must be at least 32 bytes when set (have %d)", len(secret))
+	}
+	return nil
 }
 
 func cmdPortal(args []string) error {

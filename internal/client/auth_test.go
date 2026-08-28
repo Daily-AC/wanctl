@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"wanctl/internal/admission"
 )
 
 func TestResolveTokenNamespaceUsesRelayIdentity(t *testing.T) {
@@ -14,16 +16,19 @@ func TestResolveTokenNamespaceUsesRelayIdentity(t *testing.T) {
 		if r.URL.Path != "/peers" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
-		gotToken = r.URL.Query().Get("token")
+		gotToken, _, _ = admission.Token(r)
+		if r.URL.Query().Get("token") != "" {
+			t.Fatal("token was placed in the request URL")
+		}
 		json.NewEncoder(w).Encode(map[string]any{"namespace": "real-owner", "devices": []string{}})
 	}))
 	defer srv.Close()
 
-	ns, err := ResolveTokenNamespace(context.Background(), srv.URL, "raw token/+", "ws")
+	ns, err := ResolveTokenNamespace(context.Background(), srv.URL, "raw-token/+", "ws")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ns != "real-owner" || gotToken != "raw token/+" {
+	if ns != "real-owner" || gotToken != "raw-token/+" {
 		t.Fatalf("namespace = %q, token = %q", ns, gotToken)
 	}
 }

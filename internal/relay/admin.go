@@ -469,6 +469,11 @@ func (r *Relay) adminACL(w http.ResponseWriter, req *http.Request) {
 	if req.Method == "POST" {
 		var body struct{ Namespace, Device, Grantee, Perms string }
 		json.NewDecoder(req.Body).Decode(&body)
+		if strings.TrimSpace(body.Namespace) == "" || strings.TrimSpace(body.Device) == "" ||
+			strings.TrimSpace(body.Grantee) == "" || strings.TrimSpace(body.Perms) == "" {
+			http.Error(w, "namespace, device, grantee and perms are required", http.StatusBadRequest)
+			return
+		}
 		if err := r.admin.AddACL(body.Namespace, body.Device, body.Grantee, body.Perms); err != nil {
 			if errors.Is(err, ErrNotFriends) {
 				writeErrorToken(w, http.StatusForbidden, ErrNotFriends.Error())
