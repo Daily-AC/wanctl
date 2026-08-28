@@ -39,7 +39,7 @@ Four material corrections were required:
 | Tracker | Item | Result | Status at audit close |
 |---|---|---|---|
 | GitHub | #3 Android enrollment dead-end | Root cause was missing relay discovery, not a missing portal input. Added public `/api/instance`, client discovery, persistence, and Android status copy. | Fixed and closed; verified on a real Android device and production portal. |
-| GitHub | #4 committed APK/default portal | Premise was false: `build/` is ignored and no APK is tracked. The real UI-legibility concern was fixed with #3. | Close as corrected/invalid after the final audit push. |
+| GitHub | #4 committed APK/default portal | Premise was false: `build/` is ignored and no APK is tracked. The real UI-legibility concern was fixed with #3. | Closed after the final audit push with the repository/history evidence. |
 | Internal | #30 auto-trust has no durable record | Auto-trust and portal pairing admissions now append `trust` events; reconnects do not duplicate them. | Code fixed in public lineage; tracker remains open until lineage/release disposition is explicit. |
 | Internal | #28 approval card never arrives | Code path is not the claimed cross-transport defect. The reported 502 is outside the relay handler's possible responses and requires production service-log diagnosis. | Open operational investigation; do not claim code-fixed. |
 | Internal | #26 Android built-in verbs | Battery exists. The uncommitted `open <url>` prototype would bypass approval in bypass mode. | Open; do not port `open` until it has a non-bypassable policy class. |
