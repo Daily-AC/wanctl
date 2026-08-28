@@ -4,7 +4,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -20,11 +19,11 @@ import (
 	wanrelease "wanctl/internal/release"
 )
 
-func TestSkillsUsesForwardedOrigin(t *testing.T) {
-	t.Setenv("WANCTL_PUBLIC_ORIGIN", "")
+func TestSkillsUsesConfiguredPublicOrigin(t *testing.T) {
+	t.Setenv("WANCTL_PUBLIC_ORIGIN", "https://relay.example")
 	req := httptest.NewRequest(http.MethodGet, "http://relay.internal/skills", nil)
-	req.Host = "relay.example"
-	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Host = "attacker.example"
+	req.Header.Set("X-Forwarded-Proto", "http")
 	rec := httptest.NewRecorder()
 
 	New(EnvTokenStore("")).handleSkills(rec, req)
@@ -35,25 +34,20 @@ func TestSkillsUsesForwardedOrigin(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "@WANCTL_RELAY@") {
 		t.Fatal("response still contains relay placeholder")
 	}
-	if !strings.Contains(rec.Body.String(), "https://relay.example/skills") {
-		t.Fatalf("response does not use forwarded origin: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "https://relay.example/skills") || strings.Contains(rec.Body.String(), "attacker.example") {
+		t.Fatalf("response does not use configured public origin: %s", rec.Body.String())
 	}
 }
 
-func TestSkillsUsesDirectTLSOrigin(t *testing.T) {
+func TestSkillsRefusesRequestDerivedOrigin(t *testing.T) {
 	t.Setenv("WANCTL_PUBLIC_ORIGIN", "")
-	req := httptest.NewRequest(http.MethodGet, "https://relay.direct/skills", nil)
-	req.Host = "relay.direct:8443"
-	req.TLS = &tls.ConnectionState{}
+	req := httptest.NewRequest(http.MethodGet, "https://attacker.example/skills", nil)
 	rec := httptest.NewRecorder()
 
 	New(EnvTokenStore("")).handleSkills(rec, req)
 
-	if strings.Contains(rec.Body.String(), "@WANCTL_RELAY@") {
-		t.Fatal("response still contains relay placeholder")
-	}
-	if !strings.Contains(rec.Body.String(), "https://relay.direct:8443/skills") {
-		t.Fatalf("response does not use direct TLS origin: %s", rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "attacker.example") {
+		t.Fatalf("status = %d, body = %q", rec.Code, rec.Body.String())
 	}
 }
 

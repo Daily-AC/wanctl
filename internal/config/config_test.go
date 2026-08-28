@@ -122,6 +122,22 @@ func TestTransportDefaultsToHTTP(t *testing.T) {
 	}
 }
 
+func TestRelayHTTPOriginOnlyChangesTheScheme(t *testing.T) {
+	for raw, want := range map[string]string{
+		"wss://relay.aws.example/path/": "https://relay.aws.example/path",
+		"ws://news-relay.example":       "http://news-relay.example",
+		"https://relay.example":         "https://relay.example",
+	} {
+		got, err := RelayHTTPOrigin(raw)
+		if err != nil || got != want {
+			t.Errorf("RelayHTTPOrigin(%q) = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+	if _, err := RelayHTTPOrigin("ftp://relay.example"); err == nil {
+		t.Fatal("unsupported relay scheme was accepted")
+	}
+}
+
 func TestSettingRejectsUnknownKeys(t *testing.T) {
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	if err := SaveSetting("nonsense", "x"); err == nil {

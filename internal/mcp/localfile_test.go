@@ -38,6 +38,9 @@ func TestStdioLocalFileRefusesCredentialStores(t *testing.T) {
 	cfg := filepath.Join(home, "wanctl-config")
 	t.Setenv("WANCTL_CONFIG_DIR", cfg)
 	os.MkdirAll(cfg, 0o700)
+	project := filepath.Join(home, "project")
+	os.MkdirAll(project, 0o700)
+	t.Chdir(project)
 	l := &localFsSession{}
 
 	for _, bad := range []string{
@@ -51,13 +54,16 @@ func TestStdioLocalFileRefusesCredentialStores(t *testing.T) {
 		}
 	}
 	for _, ok := range []string{
-		filepath.Join(home, "Downloads", "app.apk"),
-		filepath.Join(home, "project", ".env"), // a dot-FILE in a project, not a dot-dir of $HOME
-		filepath.Join(home, ".hidden-project-dir-is-not-root-level", "x"),
+		filepath.Join(project, "app.apk"),
+		filepath.Join(project, ".env"),
+		filepath.Join(project, "subdir", "x"),
 	} {
-		if _, hint := l.localFile(ok, true); hint != nil && !strings.Contains(ok, "hidden-project") {
+		if _, hint := l.localFile(ok, true); hint != nil {
 			t.Errorf("%s was refused: %s", ok, toolText(hint))
 		}
+	}
+	if _, hint := l.localFile(filepath.Join(home, "Downloads", "app.apk"), false); hint == nil {
+		t.Fatal("a normal-looking path outside the MCP working directory was allowed")
 	}
 }
 
@@ -83,6 +89,14 @@ func TestStdioLocalFileHonoursRoot(t *testing.T) {
 	}
 	if _, hint := l.localFile(filepath.Join(root, "link"), false); hint == nil {
 		t.Fatal("symlink escape allowed")
+	}
+	// An explicit broad root never overrides the independent credential-store
+	// deny rule.
+	cfg := filepath.Join(root, "wanctl-config")
+	t.Setenv("WANCTL_CONFIG_DIR", cfg)
+	os.MkdirAll(cfg, 0o700)
+	if _, hint := l.localFile(filepath.Join(cfg, "token"), false); hint == nil {
+		t.Fatal("WANCTL_MCP_LOCAL_ROOT allowed wanctl's own token")
 	}
 }
 

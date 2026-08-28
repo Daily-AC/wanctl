@@ -301,6 +301,20 @@ func TestAdminResolveUserReturnsConflict(t *testing.T) {
 	}
 }
 
+func TestAdminACLRejectsMissingPermissions(t *testing.T) {
+	r := New(envTokens{})
+	r.SetAdminSecret("secret")
+	r.SetAdmin(&noopAdmin{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/acl", strings.NewReader(
+		`{"namespace":"alice","device":"devbox","grantee":"bob"}`))
+	req.Header.Set("X-Admin-Secret", "secret")
+	rec := httptest.NewRecorder()
+	r.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %q", rec.Code, rec.Body.String())
+	}
+}
+
 type resolveIdentityAdmin struct {
 	noopAdmin
 	provider, subject, reservedNS string

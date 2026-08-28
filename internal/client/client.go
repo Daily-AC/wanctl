@@ -139,7 +139,10 @@ func LanReachable(timeout time.Duration) bool {
 	if lanRelay == "" {
 		return false
 	}
-	base := strings.Replace(strings.TrimRight(lanRelay, "/"), "ws", "http", 1)
+	base, err := config.RelayHTTPOrigin(lanRelay)
+	if err != nil {
+		return false
+	}
 	hc := &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: nil}}
 	resp, err := hc.Get(base + "/healthz")
 	if err != nil {
@@ -200,7 +203,11 @@ func (c *Client) peerInfo(ctx context.Context) (peerInfo, error) {
 	if c.transport == "http" {
 		path = "/h/peers"
 	}
-	httpURL := strings.Replace(c.relayURL, "ws", "http", 1) + path
+	base, err := config.RelayHTTPOrigin(c.relayURL)
+	if err != nil {
+		return peerInfo{}, err
+	}
+	httpURL := base + path
 	req, _ := http.NewRequestWithContext(ctx, "GET", httpURL, nil)
 	admission.SetBearer(req, c.token)
 	resp, err := c.httpc.Do(req)
@@ -302,7 +309,10 @@ func (c *Client) dialWS(ctx context.Context, target string) (net.Conn, error) {
 }
 
 func (c *Client) dialHTTP(ctx context.Context, target string) (net.Conn, error) {
-	base := strings.Replace(c.relayURL, "ws", "http", 1)
+	base, err := config.RelayHTTPOrigin(c.relayURL)
+	if err != nil {
+		return nil, err
+	}
 	dialURL := base + "/h/dial?" + url.Values{"target": {target}}.Encode()
 	req, _ := http.NewRequestWithContext(ctx, "GET", dialURL, nil)
 	admission.SetBearer(req, c.token)

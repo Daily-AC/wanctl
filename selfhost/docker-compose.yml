@@ -9,6 +9,9 @@ x-wanctl-image: &wanctl-image
       # (e.g. https://goproxy.cn,direct); the image build fails on module
       # download timeouts without it.
       GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+      # Stamp self-hosted binaries instead of leaving every production image
+      # as "dev". Set this to the checked-out tag or commit description.
+      WANCTL_VERSION: ${WANCTL_VERSION:-dev}
       # Trust anchor for serving signed releases from ./dist (optional; see
       # "Serve signed releases to devices" in docs/self-hosting.md). It is a
       # build argument, not runtime config, so a compromised host cannot

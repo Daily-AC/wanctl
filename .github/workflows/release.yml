@@ -91,7 +91,7 @@ jobs:
         run: |
           notes="internal/portal/changelog/$GITHUB_REF_NAME.md"
           if [ -f "$notes" ]; then
-            gh release create "$GITHUB_REF_NAME" --title "wanctl $GITHUB_REF_NAME" --notes-file "$notes" release/*
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "wanctl $GITHUB_REF_NAME" --notes-file "$notes" release/*
           else
-            gh release create "$GITHUB_REF_NAME" --title "wanctl $GITHUB_REF_NAME" --notes "" release/*
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "wanctl $GITHUB_REF_NAME" --notes "" release/*
           fi

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"wanctl/internal/admission"
+	"wanctl/internal/config"
 )
 
 type conn struct {
@@ -56,23 +57,17 @@ const (
 // (http:// or https://, or ws(s):// which is normalized). No network I/O happens
 // here; the first Read long-polls the down channel.
 func Dial(ctx context.Context, base, session, role, token string) (net.Conn, error) {
+	httpBase, err := config.RelayHTTPOrigin(base)
+	if err != nil {
+		return nil, err
+	}
 	return &conn{
-		base:    normalizeBase(base),
+		base:    httpBase,
 		session: session,
 		role:    role,
 		token:   token,
 		hc:      &http.Client{Timeout: 60 * time.Second},
 	}, nil
-}
-
-func normalizeBase(b string) string {
-	if len(b) >= 4 && b[:4] == "wss:" {
-		return "https:" + b[4:]
-	}
-	if len(b) >= 3 && b[:3] == "ws:" {
-		return "http:" + b[3:]
-	}
-	return b
 }
 
 func (c *conn) Read(p []byte) (int, error) {

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"wanctl/internal/client"
+	"wanctl/internal/config"
 	"wanctl/internal/console"
 	"wanctl/internal/serverlog"
 	"wanctl/internal/transport"
@@ -557,23 +558,8 @@ func relaySkillsURL(raw string) string {
 // users can actually reach. The admin URL is often a private address (a compose
 // network name), so anything user-facing must be built from this instead.
 func relayPublicOrigin(raw string) string {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	switch u.Scheme {
-	case "ws":
-		u.Scheme = "http"
-	case "wss":
-		u.Scheme = "https"
-	case "http", "https":
-	default:
-		return ""
-	}
-	u.Path = strings.TrimRight(u.Path, "/")
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String()
+	origin, _ := config.RelayHTTPOrigin(raw)
+	return origin
 }
 
 // handleWhoami is an explicitly enabled diagnostic for SSO-header discovery.

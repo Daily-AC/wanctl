@@ -22,6 +22,15 @@ func TestBuilds(t *testing.T) {
 	}
 }
 
+func TestAdminSecretStrengthFloor(t *testing.T) {
+	if err := validateAdminSecret("short"); err == nil {
+		t.Fatal("short admin secret was accepted")
+	}
+	if err := validateAdminSecret(strings.Repeat("x", 32)); err != nil {
+		t.Fatalf("32-byte admin secret rejected: %v", err)
+	}
+}
+
 func TestParseStatusArgs(t *testing.T) {
 	tests := []struct {
 		name       string

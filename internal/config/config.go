@@ -6,7 +6,9 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 )
 
 var (
@@ -90,6 +92,29 @@ func Transport() string {
 // configured and callers fall back to the relay's /dl mirror.
 func ReleaseBase() string {
 	return EnvOr("WANCTL_RELEASE_BASE", DefaultReleaseBase)
+}
+
+// RelayHTTPOrigin converts a relay's dial URL to the HTTP(S) base used by
+// peers, long-poll, enrollment, and other finite HTTP requests. Parse the
+// scheme rather than replacing the first "ws" substring: a hostname such as
+// relay.aws.example must remain unchanged.
+func RelayHTTPOrigin(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("invalid relay URL %q", raw)
+	}
+	switch u.Scheme {
+	case "ws":
+		u.Scheme = "http"
+	case "wss":
+		u.Scheme = "https"
+	case "http", "https":
+	default:
+		return "", fmt.Errorf("unsupported relay URL scheme %q", u.Scheme)
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return strings.TrimRight(u.String(), "/"), nil
 }
 
 // EnvOr returns the value of env var key, or def if unset/empty.

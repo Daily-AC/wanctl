@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/admission"
 	"wanctl/internal/transport"
 
 	mcpapi "github.com/mark3labs/mcp-go/mcp"
@@ -119,7 +120,7 @@ func TestLegacyBase64RebindIsRejected(t *testing.T) {
 func TestRebindDoesNotTrustClaimedNamespace(t *testing.T) {
 	var resolvedToken string
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resolvedToken = r.URL.Query().Get("token")
+		resolvedToken, _, _ = admission.Token(r)
 		json.NewEncoder(w).Encode(map[string]any{"namespace": "real-owner", "devices": []string{}})
 	}))
 	defer relay.Close()
