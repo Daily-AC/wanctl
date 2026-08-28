@@ -31,11 +31,14 @@ build_image() {
 
 run_govulncheck() {
   cd "$root"
-  # Pinned here as well as in .gitlab-ci.yml, and both have to move together:
-  # this line wins inside the job, so bumping only the CI variable leaves the
-  # scan reporting vulnerabilities in a toolchain the pipeline thinks it left
-  # behind (measured 2026-08-14, pipeline 9859).
-  GOTOOLCHAIN=go1.26.6 go run "golang.org/x/vuln/cmd/govulncheck@$govuln_version" ./...
+  # The toolchain is deliberately NOT pinned here. go.mod's `go` directive is
+  # the single pin (setup-go reads it, GOTOOLCHAIN=auto honours it, and the
+  # Dockerfile is held to it by TestToolchainPinnedOnce), so the scan can only
+  # ever report the stdlib the release binaries were actually built with. A
+  # separate pin here once let the scan run on 1.26.6 while go.mod still said
+  # 1.25.5: every v0.2.0–v0.3.2 binary shipped 20 stdlib CVEs behind a green
+  # scan (audit 2026-08-28, SEC-F-01).
+  go run "golang.org/x/vuln/cmd/govulncheck@$govuln_version" ./...
 }
 
 run_sbom() {
