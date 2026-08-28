@@ -476,6 +476,11 @@ func (a *Agent) authorize(fp, name, label string) bool {
 	if a.opts.AutoYes {
 		a.known.AddLabeled(fp, name, label)
 		fmt.Printf("[auto-trust] new controller %q paired: %s\n", name, fp)
+		// --yes skips the prompt, not the record: the admission is permanent
+		// (known_clients.json) and the owner who opted in still gets to ask
+		// "who has been admitted, and when" through `wanctl logs --type trust`
+		// instead of a stdout line nobody reads.
+		a.log.Append(eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "auto-trust"})
 		return true
 	}
 	// Surface the pairing request to a connected front-end (the portal web
@@ -484,6 +489,7 @@ func (a *Agent) authorize(fp, name, label string) bool {
 	if a.console.AskPair(fp, name, label) {
 		a.known.AddLabeled(fp, name, label)
 		fmt.Printf("[paired] controller %q trusted via console: %s\n", name, fp)
+		a.log.Append(eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "console"})
 		return true
 	}
 	return false

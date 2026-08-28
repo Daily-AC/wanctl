@@ -21,12 +21,12 @@ import (
 // Event is one logged action.
 type Event struct {
 	Ts       time.Time `json:"ts"`
-	Type     string    `json:"type"`              // connect | exec | file | logs
+	Type     string    `json:"type"`              // connect | trust | exec | file | logs
 	PeerFP   string    `json:"peer_fp,omitempty"` // peer fingerprint
 	PeerName string    `json:"peer_name,omitempty"`
 	Detail   string    `json:"detail,omitempty"` // command line or file path
 	Cwd      string    `json:"cwd,omitempty"`
-	Decision string    `json:"decision,omitempty"` // bypass | pre-approved | approved | remembered:* | denied
+	Decision string    `json:"decision,omitempty"` // bypass | pre-approved | approved | remembered:* | denied; for trust: auto-trust | console
 	Exit     *int      `json:"exit,omitempty"`     // exec exit code
 	Bytes    int64     `json:"bytes,omitempty"`
 	// Via names the elevation channel that ran an elevated command (su,
