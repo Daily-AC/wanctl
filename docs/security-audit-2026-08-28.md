@@ -145,9 +145,12 @@ The audit follow-up was accepted only after all of the following completed:
 
 ## Residual priorities
 
-Before a new public release, the highest-value remaining actions are: configure
-GitHub release protections without deadlocking the single-maintainer workflow;
-decide how shared HTTP MCP obtains an independently verified first-contact
-device pin; bound and persist MCP rebind credentials; and move relay-served
-installers under the signed manifest. The larger registry/uplink and lineage
-consolidations are architectural projects, not safe drive-by refactors.
+Publication of v0.3.3 was explicitly approved with the repository-settings
+part of SEC-F-02 still open; the signed workflow and post-publication artifact
+verification remain the active release controls. The highest-value follow-ups
+are: configure GitHub release protections without deadlocking the
+single-maintainer workflow; decide how shared HTTP MCP obtains an independently
+verified first-contact device pin; bound and persist MCP rebind credentials;
+and move relay-served installers under the signed manifest. The larger
+registry/uplink and lineage consolidations are architectural projects, not safe
+drive-by refactors.
