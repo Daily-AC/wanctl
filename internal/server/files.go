@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"wanctl/internal/protocol"
+	"wanctl/internal/transport"
 )
 
 const fileChunk = 64 << 10
@@ -259,10 +260,60 @@ func openPolicyFile(policyRoot, path string) (*os.File, error) {
 	return f, nil
 }
 
+// protectedTarget names why target may not be transferred, or "" if it is fine.
+// It refuses anything inside wanctl's own config directory and the running
+// binary itself.
+func protectedTarget(target string) string {
+	target = longestRealPrefix(target)
+	if dir, err := transport.ConfigDir(); err == nil && dir != "" {
+		if pathWithin(target, longestRealPrefix(dir)) {
+			return "wanctl's own config dir (identity, trust, policy)"
+		}
+	}
+	if self, err := os.Executable(); err == nil {
+		if self = longestRealPrefix(self); target == self {
+			return "the running wanctl binary"
+		}
+	}
+	return ""
+}
+
+func pathWithin(target, dir string) bool {
+	if target == dir {
+		return true
+	}
+	return strings.HasPrefix(target, dir+string(filepath.Separator))
+}
+
+// longestRealPrefix resolves symlinks on the longest existing leading portion
+// of p and re-attaches the rest, so a not-yet-created file still compares
+// against a resolved directory (and platform links like macOS /var ->
+// /private/var do not create a false mismatch).
+func longestRealPrefix(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	dir := filepath.Dir(p)
+	if dir == p {
+		return p
+	}
+	return filepath.Join(longestRealPrefix(dir), filepath.Base(p))
+}
+
 func rootedName(policyRoot, path string) (string, string, error) {
 	target, err := filepath.Abs(path)
 	if err != nil {
 		return "", "", err
+	}
+	// The device's own identity, trust set, policy and token are never
+	// legitimate transfer targets. Without this a write grant whose policy
+	// root reaches the config dir (a global/bypass write) could overwrite
+	// portal_admins.json to make the controller a console administrator, or
+	// read key.pem to steal the device identity — an escalation independent of
+	// the policy root (audit 2026-08-28, SEC-D1-01). Refused for both read and
+	// write, since rootedName backs openPolicyFile and newPendingUpload alike.
+	if reason := protectedTarget(target); reason != "" {
+		return "", "", fmt.Errorf("refusing %s: %q", reason, path)
 	}
 	rootPath := policyRoot
 	if rootPath == "" {
