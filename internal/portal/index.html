@@ -229,6 +229,7 @@
   .rowait{margin-top:22px;padding:11px 16px;border-radius:12px;background:#fdf6e8;border:1px dashed #e0cf9f;color:#8a6d3b;font-size:13px;font-weight:600}
   .view.rdonly .rotag{display:inline-flex}
   .view.rdonly .robanner{display:block}
+  .view.rdonly #tabs,.view.rdonly .pane{display:none!important}
   .view.rdonly .decide,.view.rdonly #rAdd,.view.rdonly #rmDevice,.view.rdonly .rmx,.view.rdonly #toggle,.view.rdonly #lanToggle,
   .view.rdonly #larkToggle,.view.rdonly #larkPairToggle{display:none!important}
   .doc{margin-top:22px;display:flex;flex-direction:column;gap:18px}
@@ -478,7 +479,7 @@
         <div class="modechip"><span class="mtag lan" id="dLanTag">内网直连中 · LAN</span><span class="lab">执行模式</span><span class="mtag normal" id="dMtag">乖乖 / NORMAL</span></div>
         <button class="rmdev" id="rmDevice" title="把这台设备从你的空间里解除">解除设备</button>
       </div>
-      <div class="robanner">这台设备由 <b id="roOwner">设备主人</b> 共享给你，这里只能查看。审批、规则、模式、内网直连等所有权限调整都要找设备主人操作。</div>
+      <div class="robanner">这台设备由 <b id="roOwner">设备主人</b> 共享给你。控制台、活动日志和审批属于设备主人，门户不展示；你被授予的操作（exec / read / write）请直接用 CLI 或 MCP 对它执行。</div>
 
       <div class="tabs" id="tabs">
         <div class="t on" data-tab="approve">待审批<span class="b" id="pBadge">0</span></div>
@@ -802,6 +803,7 @@ function openDevice(name){
   const h='#device/'+encodeURIComponent(name);
   if(location.hash!==h)history.pushState(null,'',h);
   applyShared(name);
+  if(curShared)return; // the owner's console is not ours to read (SEC-B-01)
   $('#pending').innerHTML='<div class="empty">连接设备中…</div>';
   renderConsole();
   loadLark(name);
@@ -833,7 +835,7 @@ async function pollConsole(name){
   const gen=++pollGen;
   while(cur===name&&gen===pollGen){
     await new Promise(s=>setTimeout(s,3000));
-    if(cur!==name||gen!==pollGen)return;
+    if(cur!==name||gen!==pollGen||curShared)return;
     try{
       const st=await jget('/api/devices/console?device='+encodeURIComponent(name));
       if(cur!==name||gen!==pollGen)return;
