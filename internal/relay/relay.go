@@ -117,7 +117,39 @@ func (r *Relay) Handler() http.Handler {
 		mux.Handle("/wanctl-mcp", r.mcpHandler)
 		mux.Handle("/wanctl-mcp/", r.mcpHandler)
 	}
-	return mux
+	return limitBodies(mux)
+}
+
+// limitBodies puts a size cap on every request body before a handler decodes
+// it. The tunnel routes are exempt: WebSocket upgrades carry no body, and
+// /h/up applies its own per-write cap (limits.RelayHTTPUploadBytes). A JSON
+// decoder that hits the cap returns *http.MaxBytesError and the server closes
+// the connection, so a handler that ignores the decode error still cannot be
+// made to buffer more than the cap.
+func limitBodies(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Body != nil && req.Body != http.NoBody {
+			if n := bodyCapFor(req.URL.Path); n > 0 {
+				req.Body = http.MaxBytesReader(w, req.Body, n)
+			}
+		}
+		next.ServeHTTP(w, req)
+	})
+}
+
+// bodyCapFor returns the body cap for a route, or 0 for routes that bound
+// themselves.
+func bodyCapFor(path string) int64 {
+	switch {
+	case path == "/h/up":
+		return 0
+	case strings.HasPrefix(path, "/wanctl-mcp"):
+		return limits.RelayMCPBodyBytes
+	case strings.HasPrefix(path, "/docs/"), strings.HasPrefix(path, "/admin/docs/"):
+		return limits.RelayDocsBodyBytes
+	default:
+		return limits.RelayControlBodyBytes
+	}
 }
 
 // SetMCPHandler installs the HTTP/Streamable MCP handler the relay will expose
