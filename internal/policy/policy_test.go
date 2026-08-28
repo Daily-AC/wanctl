@@ -171,3 +171,38 @@ func TestRuleForAndPersistence(t *testing.T) {
 		t.Fatal("persisted global exec rule should apply after reload")
 	}
 }
+
+// On a PowerShell device the POSIX parser is blind to @(...) / .{...} / &{...}
+// and backtick, so a prefix rule must refuse a command carrying one; an exact
+// rule still authorizes it (audit 2026-08-28, SEC-D1-02).
+func TestMatchCommandPowerShellPrefixBypass(t *testing.T) {
+	bypasses := []string{
+		"ping @(Remove-Item C:\\important)",
+		"ping @(1;calc.exe;2)",
+		"ping .{malicious}",
+		"ping &{malicious}",
+		"ping `nWrite-Host",
+		"ping $(whoami)",
+	}
+	for _, c := range bypasses {
+		// POSIX matcher (Unix agent): @() has no meaning there, but the shared
+		// hasPowerShellEval only fires when psShell is true.
+		if matchCommand("ping *", c, true) {
+			t.Errorf("PowerShell prefix match authorized %q", c)
+		}
+		// An exact rule is always allowed to name the whole command.
+		if !matchCommand(c, c, true) {
+			t.Errorf("exact rule failed to match its own command %q", c)
+		}
+	}
+	// Ordinary arguments still match a prefix rule on PowerShell.
+	if !matchCommand("ping *", "ping example.com", true) {
+		t.Error("a benign PowerShell command was refused by its prefix rule")
+	}
+	// The public POSIX MatchCommand is unchanged (psShell=false): @() there is
+	// already not a single simple command via the parser, so it is refused for
+	// a different reason — assert the benign case still works.
+	if !MatchCommand("git status", "git status --short") {
+		t.Error("POSIX prefix semantics regressed")
+	}
+}
