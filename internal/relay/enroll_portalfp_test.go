@@ -14,8 +14,9 @@ import (
 func TestEnrollExchangeReturnsPortalFingerprint(t *testing.T) {
 	fp := transport.Fingerprint([]byte("portal cert"))
 	r := New(EnvTokenStore(""))
+	r.SetAdmin(&issuingAdmin{})
 	r.enrollCodes["GOOD-2345"] = &enrollCode{
-		token: "wanctl_secret", namespace: "alice", portalFP: fp,
+		namespace: "alice", portalFP: fp,
 		expires: time.Now().Add(time.Minute),
 	}
 

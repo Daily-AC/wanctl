@@ -952,7 +952,7 @@ function applyState(st){
     const impact=isExec?'执行命令 · 谨慎放行':(p.kind==='write'?'写入 / 删除文件 · 删了就没啦':'读取文件内容');
     return `<div class="note" data-pid="${esc(p.id)}">
       <div class="ribbon"><span class="warnico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 9v4M12 17h.01M10.3 4 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0Z"/></svg></span>
-        <span class="txt">有一个高危操作在等你点头！</span><span class="req">${esc((p.id||'').slice(0,8))} · ${kindLabel[p.kind]||p.kind}</span></div>
+        <span class="txt">有一个高危操作在等你点头！</span><span class="req">${esc((p.id||'').slice(0,8))} · ${esc(kindLabel[p.kind]||p.kind)}</span></div>
       <div class="body">
         <div class="stmt">设备 <b>${esc(cur)}</b> 想${isExec?'执行下面这条命令':'操作下面这个文件'}，先问问你可不可以～</div>
         <div class="term"><div class="dots"><i></i><i></i><i></i></div><div class="cmd">${detail||'<span style=\"color:var(--ink-3)\">（空）</span>'}</div></div>
@@ -1232,7 +1232,7 @@ async function loadDeviceLogs(){
     $('#devlog').innerHTML=xs.length?xs.map(e=>{
       const dec=e.decision||'';const denied=/den/i.test(dec);
       const cls=dec?(denied?'verdotn':'verdotk'):'';
-      const exit=(e.exit===0||e.exit)?e.exit:'—';
+      const exit=esc((e.exit===0||e.exit)?''+e.exit:'—'); // device-controlled; escape (audit 2026-08-28, SEC-C-01)
       const src=esc((''+(e.peer_name||e.peer_fp||'—')).slice(0,18));
       return `<tr><td>${fmt(e.ts)}</td><td>${logTypeLabel[e.type]||esc(e.type)}</td>`+
         `<td>${esc(e.detail||'—')}${e.cwd?`<div style="color:var(--ink-3);font-size:11px">cwd: ${esc(e.cwd)}</div>`:''}</td>`+

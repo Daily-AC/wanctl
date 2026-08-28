@@ -364,3 +364,33 @@ func TestConsoleWriteEndpointsPassOwnerGate(t *testing.T) {
 		t.Fatalf("expected 502 (console not wired) after passing the gate, got %d body %s", w.Code, w.Body.String())
 	}
 }
+
+// A docs slug containing an encoded traversal must not reach the relay: it
+// once turned the portal into a GET proxy onto the relay's admin origin
+// (audit 2026-08-28, SEC-C-03).
+func TestDocsArticleRejectsTraversalSlug(t *testing.T) {
+	reached := false
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+	for _, bad := range []string{"../healthz", "../../admin/logs", "a/b", "UPPER", "sp ace", "dot.dot"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/api/docs/article/placeholder", nil)
+		req.URL.Path = "/api/docs/article/" + bad // the already-decoded path a proxy would hand us
+		s.handleDocsArticleGet(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("slug %q: status %d, want 404", bad, rec.Code)
+		}
+	}
+	if reached {
+		t.Fatal("a bad slug reached the relay")
+	}
+	// A legitimate slug still passes through.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/docs/article/quickstart__enroll-device", nil)
+	s.handleDocsArticleGet(rec, req)
+	if !reached {
+		t.Fatal("a valid slug did not reach the relay")
+	}
+}
