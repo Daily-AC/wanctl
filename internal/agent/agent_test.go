@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"wanctl/internal/config"
+	"wanctl/internal/eventlog"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/relay"
@@ -174,5 +175,74 @@ func TestAgentRunStopsOnContextCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return within 5s of cancellation — the agent would ignore SIGTERM")
+	}
+}
+
+// An auto-trusted admission is permanent (known_clients.json), so it must
+// leave a record the owner can query, not only a stdout line (GitLab #30).
+func TestAutoTrustAdmissionIsLogged(t *testing.T) {
+	srv := httptest.NewServer(relay.New(relay.EnvTokenStore("tok:alice")).Handler())
+	defer srv.Close()
+	base := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	ag, err := New(Options{RelayURL: base, Token: "tok", Name: "home-pc", AutoYes: true, Mode: policy.ModeBypass})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ag.Run(ctx)
+	time.Sleep(200 * time.Millisecond)
+
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	cid, _ := transport.LoadOrCreateIdentity()
+	known, _ := transport.OpenStore("known_servers.json")
+	dctx, dcancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer dcancel()
+	nc, _, err := wsconn.Dial(dctx, base+"/dial?token=tok&target=alice/home-pc", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	dr, err := transport.ClientHandshake(dctx, nc, "home-pc", cid, known)
+	if err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	defer dr.Conn.Close()
+	protocol.WriteMessage(dr.Conn, protocol.Message{Kind: protocol.KindHello, Role: "client", Name: "probe-mac", Label: "throwaway probe", Version: "1"})
+	if reply, _ := protocol.ReadMessage(dr.Conn); reply.Kind != protocol.KindOK {
+		t.Fatalf("hello reply: %s %s", reply.Kind, reply.Reason)
+	}
+
+	events, err := ag.log.Read(eventlog.Filter{Type: "trust"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("trust events = %d, want 1: %+v", len(events), events)
+	}
+	e := events[0]
+	if e.Decision != "auto-trust" || e.PeerFP != cid.Fingerprint || e.PeerName != "probe-mac" || e.Detail != "throwaway probe" {
+		t.Fatalf("trust event = %+v", e)
+	}
+
+	// A second connection from the same controller is a plain connect, not a
+	// second admission.
+	dr.Conn.Close()
+	nc2, _, err := wsconn.Dial(dctx, base+"/dial?token=tok&target=alice/home-pc", nil)
+	if err != nil {
+		t.Fatalf("dial 2: %v", err)
+	}
+	dr2, err := transport.ClientHandshake(dctx, nc2, "home-pc", cid, known)
+	if err != nil {
+		t.Fatalf("handshake 2: %v", err)
+	}
+	defer dr2.Conn.Close()
+	protocol.WriteMessage(dr2.Conn, protocol.Message{Kind: protocol.KindHello, Role: "client", Name: "probe-mac", Version: "1"})
+	if reply, _ := protocol.ReadMessage(dr2.Conn); reply.Kind != protocol.KindOK {
+		t.Fatalf("hello reply 2: %s %s", reply.Kind, reply.Reason)
+	}
+	if events, _ = ag.log.Read(eventlog.Filter{Type: "trust"}); len(events) != 1 {
+		t.Fatalf("trust events after reconnect = %d, want still 1", len(events))
 	}
 }
