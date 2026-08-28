@@ -17,6 +17,27 @@ if (-not $base) {
 }
 if (-not $base) { throw 'set WANCTL_DIST_BASE (or WANCTL_RELAY) to where the release artifacts live' }
 
+# install.sh only ever speaks https (--proto '=https' --proto-redir '=https'
+# --tlsv1.2); this installer used to accept any scheme and the OS default TLS
+# floor, so the two made different promises (audit 2026-08-28, SEC-F-09).
+$baseUri = $null
+if (-not [Uri]::TryCreate($base, [UriKind]::Absolute, [ref]$baseUri) -or $baseUri.Scheme -ne 'https') {
+  throw "release base must be an https URL: $base"
+}
+# On .NET Framework (PowerShell 5.1) HttpClient sits on HttpWebRequest and
+# honours ServicePointManager. Tls13 is missing from the enum on older
+# frameworks and setting it can be refused on older Windows, so fall back to a
+# TLS 1.2-only floor rather than to the OS default.
+$tlsFloor = [Net.SecurityProtocolType]::Tls12
+if ([Enum]::GetNames([Net.SecurityProtocolType]) -contains 'Tls13') {
+  $tlsFloor = $tlsFloor -bor [Net.SecurityProtocolType]::Tls13
+}
+try {
+  [Net.ServicePointManager]::SecurityProtocol = $tlsFloor
+} catch {
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+}
+
 # Verification runs on RSACryptoServiceProvider, which is present in the
 # PowerShell 5.1 every Windows ships with. The previous Ed25519 signature had no
 # native verifier here at all and required installing OpenSSL first — a
@@ -70,6 +91,11 @@ function Receive-SizedFile([string]$uri, [string]$path, [int64]$maxBytes) {
   try {
     $response = $client.GetAsync($uri, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
     $response.EnsureSuccessStatusCode() | Out-Null
+    # RequestUri reflects the final hop after redirects; https→http downgrades
+    # are followed by default (audit 2026-08-28, SEC-F-09).
+    if ($response.RequestMessage.RequestUri.Scheme -ne 'https') {
+      throw "download left https: $($response.RequestMessage.RequestUri)"
+    }
     if ($response.Content.Headers.ContentLength -ne $null -and $response.Content.Headers.ContentLength -gt $maxBytes) { throw 'download exceeds signed size limit' }
     $inputStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
     $outputStream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)

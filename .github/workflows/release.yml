@@ -8,28 +8,39 @@ on:
 permissions:
   contents: write
 
+# Every `uses:` is pinned to a commit SHA rather than a floating tag: a
+# retargeted actions/* tag would otherwise run inside the job that holds the
+# release signing keys (audit 2026-08-28, SEC-F-03). Bump the SHA and the
+# trailing version comment together.
 jobs:
   release:
     runs-on: ubuntu-latest
     environment: release
     env:
-      WANCTL_RELEASE_SIGNING_KEY: ${{ secrets.WANCTL_RELEASE_SIGNING_KEY }}
-      WANCTL_RELEASE_RSA_KEY: ${{ secrets.WANCTL_RELEASE_RSA_KEY }}
-      WANCTL_ANDROID_KEYSTORE_B64: ${{ secrets.WANCTL_ANDROID_KEYSTORE_B64 }}
-      WANCTL_ANDROID_KEYSTORE_PASS: ${{ secrets.WANCTL_ANDROID_KEYSTORE_PASS }}
       # Baked into binaries (`wanctl update`) and installers as the place
       # release artifacts are downloaded from, decoupled from any relay.
       WANCTL_RELEASE_BASE: https://github.com/${{ github.repository }}/releases/latest/download
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # No cache: the signing run must never restore a module or build cache
+      # written by another workflow (audit 2026-08-28, SEC-F-03).
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
+          cache: false
 
+      # The secrets are scoped to the two steps that use them instead of the
+      # whole job, so checkout/setup-go and the scan never see them
+      # (audit 2026-08-28, SEC-F-03).
       - name: Validate release secrets
+        env:
+          WANCTL_RELEASE_SIGNING_KEY: ${{ secrets.WANCTL_RELEASE_SIGNING_KEY }}
+          WANCTL_RELEASE_RSA_KEY: ${{ secrets.WANCTL_RELEASE_RSA_KEY }}
+          WANCTL_ANDROID_KEYSTORE_B64: ${{ secrets.WANCTL_ANDROID_KEYSTORE_B64 }}
+          WANCTL_ANDROID_KEYSTORE_PASS: ${{ secrets.WANCTL_ANDROID_KEYSTORE_PASS }}
         run: |
           test -n "$WANCTL_RELEASE_SIGNING_KEY" || {
             echo 'WANCTL_RELEASE_SIGNING_KEY is required in the release environment' >&2
@@ -40,17 +51,37 @@ jobs:
             exit 1
           }
 
-          if [ -n "$WANCTL_ANDROID_KEYSTORE_B64" ] && [ -n "$WANCTL_ANDROID_KEYSTORE_PASS" ]; then
-            echo 'Android release keystore found; the signed APK will be included.'
-          else
-            echo 'Android keystore or password is missing; skipping the APK.' >&2
-            echo 'WANCTL_SKIP_APK=1' >> "$GITHUB_ENV"
+          # A release without the APKs strands every installed Android app on
+          # its current version (the manifest's APK hash is the only thing it
+          # can verify an update against), so a missing keystore fails the
+          # release instead of quietly skipping the APKs
+          # (audit 2026-08-28, SEC-F-04).
+          if [ -z "$WANCTL_ANDROID_KEYSTORE_B64" ] || [ -z "$WANCTL_ANDROID_KEYSTORE_PASS" ]; then
+            echo 'WANCTL_ANDROID_KEYSTORE_B64 and WANCTL_ANDROID_KEYSTORE_PASS are required in the release environment:' >&2
+            echo 'an official release must include the signed Android APKs; refusing to build one without them.' >&2
+            exit 1
           fi
+          echo 'Android release keystore found; the signed APKs will be included.'
+
+      # A red vulnerability scan blocks the tag instead of being a separate
+      # green-or-red badge nobody has to look at (audit 2026-08-28, SEC-F-04).
+      - name: Scan dependencies and stdlib
+        run: ./scripts/security-scan.sh govulncheck
 
       # The manifest hashes the APK, so build-release.sh creates or stages it
       # before signing the complete release directory.
       - name: Build signed release
+        env:
+          WANCTL_RELEASE_SIGNING_KEY: ${{ secrets.WANCTL_RELEASE_SIGNING_KEY }}
+          WANCTL_RELEASE_RSA_KEY: ${{ secrets.WANCTL_RELEASE_RSA_KEY }}
+          WANCTL_ANDROID_KEYSTORE_B64: ${{ secrets.WANCTL_ANDROID_KEYSTORE_B64 }}
+          WANCTL_ANDROID_KEYSTORE_PASS: ${{ secrets.WANCTL_ANDROID_KEYSTORE_PASS }}
         run: ./scripts/build-release.sh "$GITHUB_REF_NAME"
+
+      # The same completeness checks the manual publisher runs
+      # (audit 2026-08-28, SEC-F-04).
+      - name: Validate release directory
+        run: ./scripts/validate-release.sh "$GITHUB_REF_NAME" release
 
       # The portal's embedded changelog doubles as the release notes when an
       # entry exists for the tag; earlier releases went out with an empty body.

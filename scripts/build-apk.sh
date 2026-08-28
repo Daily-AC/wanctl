@@ -199,15 +199,22 @@ cp "$OUT/base.apk" "$OUT/common.apk"
 # installs on a developer's own device and is worthless to anyone else — said
 # out loud, because an unsigned-in-practice APK that looks finished is exactly
 # the kind of thing that gets published.
+#
+# The keystore is the one secret whose loss breaks the APK upgrade chain, so
+# its on-disk copy is owner-only and removed on every exit path, not just the
+# success one; a failed hand-run build used to leave a world-readable
+# signing.jks in the tree (audit 2026-08-28, SEC-F-05). The umask is scoped to
+# the subshell so the APKs themselves keep normal permissions.
 KS="$OUT/signing.jks"
+trap 'rm -f "$KS"' EXIT HUP INT TERM
 if [ -n "${WANCTL_ANDROID_KEYSTORE_B64:-}" ]; then
-  printf '%s' "$WANCTL_ANDROID_KEYSTORE_B64" | base64 -d > "$KS"
+  (umask 077; printf '%s' "$WANCTL_ANDROID_KEYSTORE_B64" | base64 -d > "$KS")
   KS_PASS=${WANCTL_ANDROID_KEYSTORE_PASS:?WANCTL_ANDROID_KEYSTORE_PASS is required with a keystore}
   KEY_ALIAS=${WANCTL_ANDROID_KEY_ALIAS:-wanctl}
   KEY_PASS=${WANCTL_ANDROID_KEY_PASS:-$KS_PASS}
   SIGNED_WITH=release
 elif [ -n "${WANCTL_ANDROID_KEYSTORE:-}" ]; then
-  cp "$WANCTL_ANDROID_KEYSTORE" "$KS"
+  (umask 077; cp "$WANCTL_ANDROID_KEYSTORE" "$KS")
   KS_PASS=${WANCTL_ANDROID_KEYSTORE_PASS:?WANCTL_ANDROID_KEYSTORE_PASS is required with a keystore}
   KEY_ALIAS=${WANCTL_ANDROID_KEY_ALIAS:-wanctl}
   KEY_PASS=${WANCTL_ANDROID_KEY_PASS:-$KS_PASS}
@@ -217,12 +224,19 @@ else
     echo "no release keystore (WANCTL_ANDROID_KEYSTORE[_B64]) and no debug keystore" >&2
     exit 1
   }
-  cp "$HOME/.android/debug.keystore" "$KS"
+  (umask 077; cp "$HOME/.android/debug.keystore" "$KS")
   KS_PASS=android
   KEY_ALIAS=androiddebugkey
   KEY_PASS=android
   SIGNED_WITH=debug
 fi
+# apksigner reads the passwords from its environment rather than argv, where
+# `ps` could show them to any local process for the duration of four signing
+# runs (audit 2026-08-28, SEC-F-05). Both are re-exported from the resolved
+# values so the debug fallback and an unexported shell variable work the same.
+WANCTL_ANDROID_KEYSTORE_PASS=$KS_PASS
+WANCTL_ANDROID_KEY_PASS=$KEY_PASS
+export WANCTL_ANDROID_KEYSTORE_PASS WANCTL_ANDROID_KEY_PASS
 
 # One APK per ABI: the same resources and dex, plus exactly one lib/<abi>/.
 # The package manager installs whichever one matches the device, and the app
@@ -240,8 +254,8 @@ for arch in $(wanctl_apk_arches); do
   (cd "$OUT" && zip -q -X "$OUT/unsigned-$arch.apk" "lib/$abi/libwanctl.so")
   "$BT/zipalign" -f -p 4 "$OUT/unsigned-$arch.apk" "$OUT/aligned-$arch.apk"
   "$BT/apksigner" sign \
-      --ks "$KS" --ks-pass "pass:$KS_PASS" \
-      --ks-key-alias "$KEY_ALIAS" --key-pass "pass:$KEY_PASS" \
+      --ks "$KS" --ks-pass env:WANCTL_ANDROID_KEYSTORE_PASS \
+      --ks-key-alias "$KEY_ALIAS" --key-pass env:WANCTL_ANDROID_KEY_PASS \
       --out "$APK" "$OUT/aligned-$arch.apk"
   rm -f "$OUT/aligned-$arch.apk" "$OUT/unsigned-$arch.apk"
   "$BT/apksigner" verify "$APK"
@@ -276,7 +290,7 @@ for arch in $(wanctl_apk_arches); do
       ;;
   esac
 done
-rm -f "$KS" "$OUT/common.apk" "$OUT/base.apk"
+rm -f "$OUT/common.apk" "$OUT/base.apk"
 
 echo
 echo "signed with the $SIGNED_WITH key:"
