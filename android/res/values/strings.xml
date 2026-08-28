@@ -13,7 +13,9 @@
   <string name="label_name">设备名</string>
   <string name="hint_name">留空则用机型名</string>
   <string name="label_status">状态</string>
+  <string name="label_portal">门户</string>
   <string name="label_relay">relay</string>
+  <string name="state_unconfigured">未配置：点「登录」填写门户地址</string>
   <string name="label_fingerprint">指纹</string>
   <string name="label_credential">凭证</string>
 

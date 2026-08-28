@@ -61,6 +61,17 @@
     <TextView style="@style/Key"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:text="@string/label_portal" />
+
+    <TextView
+        android:id="@+id/portal"
+        style="@style/Value"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
+
+    <TextView style="@style/Key"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:text="@string/label_relay" />
 
     <TextView
