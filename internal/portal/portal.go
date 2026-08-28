@@ -963,7 +963,7 @@ func (s *Server) handleDeviceLark(w http.ResponseWriter, r *http.Request) {
 	}
 
 	device := r.URL.Query().Get("device")
-	ns, _, ok := s.requireDevice(w, r, device)
+	ns, ok := s.requireOwnedConsole(w, r, device)
 	if !ok {
 		return
 	}
@@ -1147,10 +1147,16 @@ func (s *Server) requireDevice(w http.ResponseWriter, r *http.Request, device st
 	return "", false, false
 }
 
-// requireOwnedConsole is requireDevice plus a write gate: ACL-shared devices
-// are strictly read-only in the portal. Approvals, pairing, trust, rules, mode
-// and LAN switches belong to the device owner alone — a grantee's perms (e.g.
-// exec) never extend to driving the device's policy console.
+// requireOwnedConsole is requireDevice plus an owner gate. ACL-shared devices
+// get no console in the portal at all — neither writes (approvals, pairing,
+// trust, rules, mode, LAN) nor reads (console state, activity log, approval
+// events, Feishu settings). The protocol already says so: a grant can carry
+// exec/read/write but never console or logs (sessionauth.ParseGrant), and the
+// device refuses those kinds from a grantee's own session. The portal dials
+// with its own privileged token, so it must apply the same rule itself or it
+// becomes the way around it: every controller's commands, the rule set, the
+// trusted-controller fingerprints and the owner's notify address would be
+// readable by anyone holding a read-only share (audit 2026-08-28, SEC-B-01).
 func (s *Server) requireOwnedConsole(w http.ResponseWriter, r *http.Request, device string) (string, bool) {
 	ns, shared, ok := s.requireDevice(w, r, device)
 	if !ok {
@@ -1351,7 +1357,7 @@ func (s *Server) dropConn(ns, device string) {
 
 func (s *Server) handleDeviceConsole(w http.ResponseWriter, r *http.Request) {
 	device := r.URL.Query().Get("device")
-	ns, _, ok := s.requireDevice(w, r, device)
+	ns, ok := s.requireOwnedConsole(w, r, device)
 	if !ok {
 		return
 	}
@@ -1535,7 +1541,7 @@ func (s *Server) handleDeviceMode(w http.ResponseWriter, r *http.Request) {
 // {"logs":[...]} for the SPA's activity timeline.
 func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request) {
 	device := r.URL.Query().Get("device")
-	ns, _, ok := s.requireDevice(w, r, device)
+	ns, ok := s.requireOwnedConsole(w, r, device)
 	if !ok {
 		return
 	}
@@ -1563,7 +1569,7 @@ const eventPollWait = 25 * time.Second
 
 func (s *Server) handleDeviceEvents(w http.ResponseWriter, r *http.Request) {
 	device := r.URL.Query().Get("device")
-	ns, _, ok := s.requireDevice(w, r, device)
+	ns, ok := s.requireOwnedConsole(w, r, device)
 	if !ok {
 		return
 	}
