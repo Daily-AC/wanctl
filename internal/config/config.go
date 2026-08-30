@@ -37,7 +37,7 @@ const (
 
 // Setting resolves one endpoint setting and reports where the value came from
 // ("env WANCTL_…", "config file", "build default", or "" when unset). The keys
-// are the ones `wanctl config` exposes: relay, portal, transport.
+// are the ones `wanctl config` exposes: relay, portal, transport, release_base.
 func Setting(key string) (value, source string) {
 	envKey, def := "", ""
 	switch key {
@@ -47,6 +47,8 @@ func Setting(key string) (value, source string) {
 		envKey, def = "WANCTL_PORTAL", DefaultPortal
 	case "transport":
 		envKey, def = "WANCTL_TRANSPORT", DefaultTransport
+	case "release_base":
+		envKey, def = "WANCTL_RELEASE_BASE", DefaultReleaseBase
 	default:
 		return "", ""
 	}
@@ -87,11 +89,17 @@ func Transport() string {
 	return t
 }
 
-// ReleaseBase resolves where signed release artifacts are downloaded from
-// (WANCTL_RELEASE_BASE over the build default). Empty means no release page is
-// configured and callers fall back to the relay's /dl mirror.
+// ReleaseBase resolves where signed release artifacts are downloaded from:
+// WANCTL_RELEASE_BASE, then `wanctl config set release_base=…`, then the build
+// default. Empty means no release page is configured and callers fall back to
+// the relay's /dl mirror.
+//
+// The persisted layer is what lets someone who cannot reach the build's release
+// page — an official build bakes GitHub — point `wanctl update` at a mirror
+// once instead of exporting an environment variable for every invocation.
 func ReleaseBase() string {
-	return EnvOr("WANCTL_RELEASE_BASE", DefaultReleaseBase)
+	base, _ := Setting("release_base")
+	return base
 }
 
 // RelayHTTPOrigin converts a relay's dial URL to the HTTP(S) base used by

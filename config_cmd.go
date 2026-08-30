@@ -36,17 +36,18 @@ func cmdConfig(args []string) error {
 }
 
 const configHelp = `wanctl config                      查看生效配置与来源
-wanctl config set key=value ...    持久化设置 (relay / portal / transport)
+wanctl config set key=value ...    持久化设置 (relay / portal / transport / release_base)
 wanctl config unset key ...        删除持久化设置
 
 例:
   wanctl config set relay=https://relay.example.com portal=https://portal.example.com
   wanctl config set transport=ws
+  wanctl config set release_base=https://your-relay.example.com/dl
   wanctl config unset transport
 
 优先级: 命令行 flag > 环境变量 > 这里的配置 > 编译期默认值。`
 
-var configKeys = []string{"relay", "portal", "transport"}
+var configKeys = []string{"relay", "portal", "transport", "release_base"}
 
 type kv struct{ k, v string }
 
@@ -54,14 +55,14 @@ func configShow() error {
 	for _, k := range configKeys {
 		v, source := config.Setting(k)
 		if v == "" {
-			fmt.Printf("%-9s = (未设置)\n", k)
+			fmt.Printf("%-12s = (未设置)\n", k)
 			continue
 		}
 		note := source
 		if stored := config.StoredSetting(k); stored != "" && stored != v {
 			note += fmt.Sprintf("，覆盖了配置文件里的 %s", stored)
 		}
-		fmt.Printf("%-9s = %s  (%s)\n", k, v, note)
+		fmt.Printf("%-12s = %s  (%s)\n", k, v, note)
 	}
 	if dir := config.SettingsDir(); dir != "" {
 		fmt.Printf("配置目录: %s\n", dir)
@@ -132,6 +133,18 @@ func validateSetting(key, value string) error {
 			return fmt.Errorf("%s: scheme %q not supported (want %s)", key, u.Scheme, schemes)
 		}
 		return nil
+	case "release_base":
+		// Where `wanctl update` fetches signed artifacts from. Only http(s):
+		// the download code speaks nothing else, and the installers refuse
+		// anything but https outright.
+		u, err := url.Parse(value)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("release_base: %q is not a URL", value)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("release_base: scheme %q not supported (want http/https)", u.Scheme)
+		}
+		return nil
 	case "transport":
 		if value != "ws" && value != "http" {
 			return fmt.Errorf("transport: want ws or http, got %q", value)
@@ -145,7 +158,10 @@ func validateSetting(key, value string) error {
 // warnEnvShadow points out when an environment variable will keep overriding
 // what was just saved — otherwise `config set` looks ignored.
 func warnEnvShadow(pending []kv) {
-	envKey := map[string]string{"relay": "WANCTL_RELAY", "portal": "WANCTL_PORTAL", "transport": "WANCTL_TRANSPORT"}
+	envKey := map[string]string{
+		"relay": "WANCTL_RELAY", "portal": "WANCTL_PORTAL",
+		"transport": "WANCTL_TRANSPORT", "release_base": "WANCTL_RELEASE_BASE",
+	}
 	for _, p := range pending {
 		if ev := os.Getenv(envKey[p.k]); ev != "" && ev != p.v {
 			fmt.Fprintf(os.Stderr, "注意: 环境变量 %s=%s 仍会覆盖刚保存的值\n", envKey[p.k], ev)
