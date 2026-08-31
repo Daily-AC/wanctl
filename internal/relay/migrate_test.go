@@ -172,7 +172,7 @@ func TestRunMigrationsRollsBackFailedVersion(t *testing.T) {
 	}
 }
 
-func TestEmbeddedMigrationsIncludeFriendsAsVersionThree(t *testing.T) {
+func TestEmbeddedMigrationsIncludeFriendsAndNotify(t *testing.T) {
 	state := &migrationState{applied: map[int]bool{1: true, 2: true}}
 	if err := runMigrations(newMigrationTestDB(t, state), migrationFiles); err != nil {
 		t.Fatal(err)
@@ -180,7 +180,11 @@ func TestEmbeddedMigrationsIncludeFriendsAsVersionThree(t *testing.T) {
 	if !state.applied[3] {
 		t.Fatalf("applied versions = %#v, want version 3", state.applied)
 	}
-	if len(state.committedBodies) != 1 || !strings.Contains(state.committedBodies[0], "CREATE TABLE IF NOT EXISTS friends") {
-		t.Fatalf("version 3 body = %#v", state.committedBodies)
+	if !state.applied[4] {
+		t.Fatalf("applied versions = %#v, want version 4", state.applied)
+	}
+	if len(state.committedBodies) != 2 || !strings.Contains(state.committedBodies[0], "CREATE TABLE IF NOT EXISTS friends") ||
+		!strings.Contains(state.committedBodies[1], "CREATE TABLE IF NOT EXISTS notify_webhook") {
+		t.Fatalf("migration bodies = %#v", state.committedBodies)
 	}
 }
