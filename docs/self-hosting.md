@@ -189,7 +189,25 @@ The relay log switches from `release distribution disabled` to serving `/dl/*`,
 and a device on a network that cannot reach GitHub installs from the mirror:
 
 ```bash
-curl -fsSL https://relay.example.com/install.sh | WANCTL_RELAY=https://relay.example.com sh
+curl -fsSL https://relay.example.com/install.sh | sh
+```
+```powershell
+irm https://relay.example.com/install.ps1 | iex
+```
+
+Nothing has to be exported: a relay rewrites the installers it serves to point
+at its own `/dl`, since whoever could fetch the script from this relay can
+reach this relay — and often cannot reach the release page the script was built
+for. `WANCTL_RELAY` and `WANCTL_DIST_BASE` still override it, and a copy taken
+from the GitHub release page is unaffected. This requires `RELAY_PUBLIC_ORIGIN`
+(the compose file passes it to the relay as `WANCTL_PUBLIC_ORIGIN`).
+
+Binaries installed this way still run `wanctl update` against the release page
+baked in at build time. On a network that cannot reach it, point them at the
+mirror once:
+
+```bash
+wanctl config set release_base=https://relay.example.com/dl
 ```
 
 This mirror is optional: official binaries and installers default to the
