@@ -1,7 +1,9 @@
 // Package eventlog is the device-side structured activity log. The agent appends
 // one JSON object per line to <config>/logs/events.jsonl so an operator (or a
 // driving agent via `wanctl logs`) can trace what ran, who asked, and how it was
-// decided. The relay never sees this — content lives only on the device.
+// decided. By default the relay sees only notification metadata; an owner may
+// explicitly opt in to sending RedactText-sanitized command details through the
+// relay webhook path. The complete event log always remains device-local.
 package eventlog
 
 import (

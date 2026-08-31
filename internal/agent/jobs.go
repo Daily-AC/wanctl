@@ -108,6 +108,7 @@ type jobStore struct {
 	jobs    map[string]*job
 	running int
 	limits  jobLimits
+	onDone  func(command, cwd string, code int)
 }
 
 func newJobStore() *jobStore { return newJobStoreWithLimits(defaultJobLimits()) }
@@ -161,6 +162,9 @@ func (s *jobStore) start(shell, command, cwd string) (string, error) {
 		j.code = code
 		j.finished = time.Now()
 		j.mu.Unlock()
+		if s.onDone != nil {
+			s.onDone(command, cwd, code)
+		}
 
 		s.mu.Lock()
 		s.running--
