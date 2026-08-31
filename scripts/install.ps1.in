@@ -6,9 +6,14 @@ $ErrorActionPreference = 'Stop'
 # Where the artifacts live, flat (manifest.json + binaries side by side).
 # Explicit env wins; a relay's /dl mirror next; then the release page this
 # installer was built for.
+# A relay serving this script rewrites the empty string below to its own public
+# origin, so `irm https://relay/install.ps1 | iex` installs from that relay with
+# nothing exported. The release build leaves it empty.
+$relaySelf = ''
 $base = $env:WANCTL_DIST_BASE
 if (-not $base) {
-  if ($env:WANCTL_RELAY) { $base = $env:WANCTL_RELAY.TrimEnd('/') + '/dl' }
+  $relay = if ($env:WANCTL_RELAY) { $env:WANCTL_RELAY } else { $relaySelf }
+  if ($relay) { $base = $relay.TrimEnd('/') + '/dl' }
   else { $base = '@WANCTL_RELEASE_BASE@' }
 }
 if (-not $base) {

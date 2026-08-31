@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,9 +34,66 @@ func (r *Relay) registerDist(mux *http.ServeMux) {
 		fmt.Fprintf(os.Stderr, "wanctl relay: release distribution disabled: %v\n", err)
 	}
 	mux.Handle("/dl/", http.StripPrefix("/dl/", handler))
-	mux.HandleFunc("/install.sh", installerHandler(dir, "install.sh", "text/x-shellscript; charset=utf-8"))
-	mux.HandleFunc("/install.ps1", installerHandler(dir, "install.ps1", "text/plain; charset=utf-8"))
+	// Resolved once at startup rather than per request: the value cannot change
+	// under a running relay, and a bad one should be reported on boot instead of
+	// silently degrading every installer download.
+	origin := installerOrigin()
+	if origin == "" && os.Getenv("WANCTL_PUBLIC_ORIGIN") != "" {
+		fmt.Fprintf(os.Stderr, "wanctl relay: WANCTL_PUBLIC_ORIGIN is not a plain http(s) origin; "+
+			"served installers will keep pointing at the release page they were built for\n")
+	}
+	mux.HandleFunc("/install.sh", installerHandler(dir, "install.sh", "text/x-shellscript; charset=utf-8", origin))
+	mux.HandleFunc("/install.ps1", installerHandler(dir, "install.ps1", "text/plain; charset=utf-8", origin))
 	mux.HandleFunc("/skills", r.handleSkills)
+}
+
+// Each installer ships this marker for the serving relay to fill in. An
+// installer built before the marker existed simply keeps its baked-in base.
+const (
+	shellRelaySelf      = `RELAY_SELF=""`
+	powershellRelaySelf = `$relaySelf = ''`
+)
+
+// installerOrigin returns the origin to bake into served installers, or "" to
+// serve them untouched.
+//
+// The value comes from WANCTL_PUBLIC_ORIGIN, never from the request: a Host or
+// X-Forwarded-Proto header would let one poisoned cache entry redirect every
+// subsequent install to an attacker's mirror. (That mirror could not forge a
+// release — the installers verify the manifest against the RSA key they embed
+// — but it could stall or downgrade installs.)
+func installerOrigin() string {
+	origin := strings.TrimRight(os.Getenv("WANCTL_PUBLIC_ORIGIN"), "/")
+	if origin == "" {
+		return ""
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return ""
+	}
+	// This string is spliced into a shell script and a PowerShell script, so
+	// only characters a URL genuinely needs may survive: a quote, backtick,
+	// dollar sign, backslash or whitespace would stop being data and start
+	// being code. A deployment sets this variable itself, so the guard is
+	// against a typo becoming an execution bug, not against an outside attacker.
+	if strings.ContainsAny(origin, "'\"`$\\ \t\r\n;|&<>()") {
+		return ""
+	}
+	return origin
+}
+
+// localizeInstaller points an installer at the relay serving it.
+func localizeInstaller(body []byte, name, origin string) []byte {
+	if origin == "" {
+		return body
+	}
+	switch name {
+	case "install.sh":
+		return bytes.Replace(body, []byte(shellRelaySelf), []byte(`RELAY_SELF="`+origin+`"`), 1)
+	case "install.ps1":
+		return bytes.Replace(body, []byte(powershellRelaySelf), []byte(`$relaySelf = '`+origin+`'`), 1)
+	}
+	return body
 }
 
 func newSignedDistHandler(dir string) (http.Handler, error) {
@@ -171,8 +229,10 @@ func (h *signedDistHandler) readVerified(name string, artifact wanrelease.Artifa
 }
 
 // installerHandler serves the bootstrap installer that ships inside the signed
-// release directory. Users who won't visit the upstream release page have no
-// other way to obtain it, so the relay serves it again.
+// release directory, rewritten to install from this relay's own /dl mirror.
+// Users who won't visit the upstream release page have no other way to obtain
+// it, so the relay serves it again — and for them a script that then downloads
+// from that same unreachable page would be useless.
 //
 // TRUST LIMITATION: unlike /dl/*, this file is NOT covered by the signed
 // manifest, and the public key it embeds is the one this same relay hands out.
@@ -180,7 +240,7 @@ func (h *signedDistHandler) readVerified(name string, artifact wanrelease.Artifa
 // a matching key. Recipients should still prefer the independently hosted
 // release page, and anyone can confirm what they downloaded out-of-band by
 // comparing its SHA-256 against the checksum published with the release.
-func installerHandler(dir, name, contentType string) http.HandlerFunc {
+func installerHandler(dir, name, contentType, origin string) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodGet && req.Method != http.MethodHead {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -191,6 +251,10 @@ func installerHandler(dir, name, contentType string) http.HandlerFunc {
 			http.Error(w, "installer unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		// Whoever fetched this script from this relay is, by construction,
+		// someone for whom this relay is reachable — and often someone for whom
+		// the upstream release page is not.
+		body = localizeInstaller(body, name, origin)
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "public, max-age=300")

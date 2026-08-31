@@ -125,9 +125,10 @@ func SaveNetMode(mode string) error {
 // settingFiles maps `wanctl config` keys to their file in the config dir —
 // same one-file-per-value layout as token/mode/label.
 var settingFiles = map[string]string{
-	"relay":     "relay",
-	"portal":    "portal",
-	"transport": "transport",
+	"relay":        "relay",
+	"portal":       "portal",
+	"transport":    "transport",
+	"release_base": "release-base",
 }
 
 // KnownSetting reports whether key is a persistable endpoint setting.

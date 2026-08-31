@@ -16,7 +16,7 @@ Variables marked "conditional" are required only for the feature described.
 | `WANCTL_UPSTREAM_RELAY` | relay | Conditional | none | Upstream relay URL used to resolve tokens when this relay has no database. Requires `WANCTL_ADMIN_SECRET`. |
 | `WANCTL_PORTAL_NS` | relay | No | none | Namespace allowed to open privileged portal console sessions. Conventionally `portal`. |
 | `WANCTL_DIST_DIR` | relay | No | `/dist` | Directory containing signed release artifacts and installers. |
-| `WANCTL_PUBLIC_ORIGIN` | relay | Conditional | none | Canonical relay origin substituted into `/skills`. The route returns 503 when unset rather than deriving AI-controller instructions from request Host. |
+| `WANCTL_PUBLIC_ORIGIN` | relay | Conditional | none | Canonical relay origin substituted into `/skills` and into the installers served from `/install.sh` and `/install.ps1`, so a script fetched from this relay installs from this relay. Never derived from request Host: `/skills` returns 503 when unset, and the installers are served with their built-in base untouched. |
 | `WANCTL_MCP_SEED` | relay, MCP | Conditional | none | Hex seed enabling `/wanctl-mcp` on relay; required and at least 32 decoded bytes for standalone `mcp --http`. |
 | `WANCTL_MCP_LOCAL_ROOT` | MCP stdio | No | process working directory | Only local tree `wanctl_push` and `wanctl_pull` may access. The wanctl config directory is always excluded. |
 | `WANCTL_MCP_ALLOWED_ORIGINS` | MCP HTTP | No | none | Comma-separated browser Origin allowlist. Requests with an Origin are denied unless listed; programmatic clients normally send none. |
@@ -42,7 +42,7 @@ Variables marked "conditional" are required only for the feature described.
 | Variable | Role | Required | Default | Purpose |
 |---|---|---:|---|---|
 | `WANCTL_PORTAL` | agent, controller | Conditional | persisted config, then build-time default | Portal URL used for login/enrollment and pairing links. Persist with `wanctl config set portal=…`. |
-| `WANCTL_RELEASE_BASE` | agent, controller, installers | No | build-time default or none | Base URL where signed release artifacts live flat (official builds bake the project's GitHub releases). `wanctl update` and the installers pull from it; empty falls back to the relay's `/dl` mirror. |
+| `WANCTL_RELEASE_BASE` | agent, controller, installers | No | `wanctl config set release_base=…`, then the build-time default | Base URL where signed release artifacts live flat (official builds bake the project's GitHub releases). `wanctl update` and the installers pull from it; empty falls back to the relay's `/dl` mirror. Persist it with `wanctl config set release_base=https://relay.example.com/dl` when the baked-in release page is unreachable from where the binary runs. |
 | `WANCTL_DIST_BASE` | installers | No | none | Installer-only override of the artifact source; wins over `WANCTL_RELAY` and the baked release base. |
 | `WANCTL_TOKEN` | agent, controller, MCP | Conditional | saved token or none | Namespace bearer token. Overrides the token stored in the config directory. |
 | `WANCTL_LABEL` | controller, MCP | No | saved label or generated MCP label | Human-readable controller identity shown during pairing. |

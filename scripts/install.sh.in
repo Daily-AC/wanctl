@@ -7,9 +7,14 @@ set -eu
 # Where the artifacts live, flat (manifest.json + binaries side by side).
 # Explicit env wins; a relay's /dl mirror next; then the release page this
 # installer was built for.
+# A relay serving this script rewrites the empty string below to its own public
+# origin, so `curl https://relay/install.sh | sh` installs from that relay with
+# nothing exported. The release build leaves it empty, and a copy taken from the
+# release page keeps pointing at the release page.
+RELAY_SELF=""
 BASE=${WANCTL_DIST_BASE:-}
 if [ -z "$BASE" ]; then
-  RELAY=${WANCTL_RELAY:-}
+  RELAY=${WANCTL_RELAY:-$RELAY_SELF}
   if [ -n "$RELAY" ]; then BASE=${RELAY%/}/dl; else BASE="@WANCTL_RELEASE_BASE@"; fi
 fi
 if [ -z "$BASE" ]; then
