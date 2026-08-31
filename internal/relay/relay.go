@@ -178,6 +178,8 @@ func (r *Relay) SetAdmin(a AdminStore) {
 	r.admin = a
 	if store, ok := a.(NotifyStore); ok {
 		r.notifyStore = store
+	} else {
+		r.notifyStore = nil
 	}
 }
 
