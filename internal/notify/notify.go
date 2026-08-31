@@ -90,9 +90,6 @@ func ValidateDestination(dst Destination) error {
 	default:
 		return fmt.Errorf("unsupported webhook format %q", dst.Format)
 	}
-	if dst.Format == FormatFeishu && dst.Secret != "" {
-		return errors.New("Feishu signing is unavailable; use an IP allow-list or keyword security setting")
-	}
 	return nil
 }
 
@@ -124,7 +121,11 @@ func sanitize(e Event) Event {
 
 type feishuCard struct {
 	MsgType string `json:"msg_type"`
-	Card    struct {
+	// Feishu carries its signature in the body rather than the URL, so these
+	// are siblings of msg_type and absent when signing is not configured.
+	Timestamp string `json:"timestamp,omitempty"`
+	Sign      string `json:"sign,omitempty"`
+	Card      struct {
 		Config struct {
 			WideScreenMode bool `json:"wide_screen_mode"`
 		} `json:"config"`
@@ -157,7 +158,7 @@ func severe(event string) bool {
 		strings.HasPrefix(event, "friend.") || event == "notify.throttled"
 }
 
-func feishuBody(e Event, keyword string) ([]byte, error) {
+func feishuBody(e Event, keyword, secret string, now time.Time) ([]byte, error) {
 	var card feishuCard
 	card.MsgType = "interactive"
 	card.Card.Config.WideScreenMode = true
@@ -180,7 +181,25 @@ func feishuBody(e Event, keyword string) ([]byte, error) {
 			map[string]string{"tag": "plain_text", "content": eventNote(e)},
 		}},
 	}
+	if secret != "" {
+		ts := now.Unix()
+		card.Timestamp = strconv.FormatInt(ts, 10)
+		card.Sign = FeishuSign(secret, ts)
+	}
 	return json.Marshal(card)
+}
+
+// FeishuSign implements Feishu's custom-bot signature, which is deliberately
+// NOT the same construction as DingTalk's: Feishu signs the EMPTY string using
+// "{timestamp}\n{secret}" as the HMAC key and counts the timestamp in seconds,
+// whereas DingTalk signs "{timestamp}\n{secret}" keyed by the secret in
+// milliseconds. Getting the direction wrong yields a well-formed signature that
+// the server always rejects, so the unit test pins a vector computed from
+// Feishu's own documented sample rather than from this code.
+// Source: https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot
+func FeishuSign(secret string, timestampSec int64) string {
+	mac := hmac.New(sha256.New, []byte(strconv.FormatInt(timestampSec, 10)+"\n"+secret))
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
 }
 
 func eventNote(e Event) string {
@@ -242,7 +261,7 @@ func buildRequest(dst Destination, event Event, msgUUID string, now time.Time) (
 	var err error
 	switch dst.Format {
 	case FormatFeishu:
-		body, err = feishuBody(event, dst.Keyword)
+		body, err = feishuBody(event, dst.Keyword, dst.Secret, now)
 	case FormatDingTalk:
 		body, err = dingtalkBody(event, dst.Keyword, msgUUID)
 		if err == nil && dst.Secret != "" {

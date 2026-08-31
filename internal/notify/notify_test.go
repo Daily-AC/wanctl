@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -171,16 +172,6 @@ func TestDingTalkSignatureFixedVector(t *testing.T) {
 		t.Fatalf("signed URL = %s", got)
 	}
 }
-
-func TestFeishuSecretIsRejectedWithoutVerifiedFormula(t *testing.T) {
-	err := ValidateDestination(Destination{
-		URL: "https://open.feishu.cn/open-apis/bot/v2/hook/id", Format: FormatFeishu, Secret: "secret",
-	})
-	if err == nil || !strings.Contains(err.Error(), "IP allow-list") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
 func TestSenderRejectsPrivateDestination(t *testing.T) {
 	resolver := staticResolver{"hook.example": {{IP: net.ParseIP("10.0.0.8")}}}
 	var calls int
@@ -236,5 +227,62 @@ func TestSenderLimitsAccountToFifteenEventsAndOneNotice(t *testing.T) {
 	}
 	if throttled != 1 {
 		t.Fatalf("throttle notices = %d, events = %v", throttled, events)
+	}
+}
+
+// TestFeishuSignVector pins Feishu's signature construction against a vector
+// computed outside this package (Python, following Feishu's documented
+// algorithm). Feishu and DingTalk use opposite HMAC directions and different
+// timestamp units, so a same-shaped mistake would still produce a plausible
+// string; only an external vector catches it.
+func TestFeishuSignVector(t *testing.T) {
+	const want = "cwcFMwLmbD1sHo+u7QsHVT95ls+pZLcBESGTstkPpro="
+	if got := FeishuSign("wanctl-test-secret", 1600000000); got != want {
+		t.Fatalf("FeishuSign = %q, want %q", got, want)
+	}
+	// The two providers must not converge on the same construction.
+	dingURL, err := DingTalkSignedURL(
+		"https://oapi.dingtalk.com/robot/send?access_token=abc", "wanctl-test-secret", 1600000000000)
+	if err != nil {
+		t.Fatalf("DingTalkSignedURL: %v", err)
+	}
+	if strings.Contains(dingURL, url.QueryEscape(want)) {
+		t.Error("DingTalk signature matches the Feishu construction; one of them is wrong")
+	}
+}
+
+func TestFeishuBodyCarriesSignatureOnlyWhenConfigured(t *testing.T) {
+	e := Event{Event: "device.online", Namespace: "alice", Device: "legion", TS: time.Unix(1600000000, 0)}
+	signed, err := buildRequest(Destination{
+		URL: "https://open.feishu.cn/open-apis/bot/v2/hook/xxx", Format: FormatFeishu,
+		Secret: "wanctl-test-secret",
+	}, e, "uuid", time.Unix(1600000000, 0))
+	if err != nil {
+		t.Fatalf("signed buildRequest: %v", err)
+	}
+	b, _ := io.ReadAll(signed.Body)
+	var got struct {
+		Timestamp string `json:"timestamp"`
+		Sign      string `json:"sign"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Timestamp != "1600000000" {
+		t.Errorf("timestamp = %q, want seconds 1600000000", got.Timestamp)
+	}
+	if got.Sign != "cwcFMwLmbD1sHo+u7QsHVT95ls+pZLcBESGTstkPpro=" {
+		t.Errorf("sign = %q, want the documented vector", got.Sign)
+	}
+
+	plain, err := buildRequest(Destination{
+		URL: "https://open.feishu.cn/open-apis/bot/v2/hook/xxx", Format: FormatFeishu,
+	}, e, "uuid", time.Unix(1600000000, 0))
+	if err != nil {
+		t.Fatalf("plain buildRequest: %v", err)
+	}
+	pb, _ := io.ReadAll(plain.Body)
+	if bytes.Contains(pb, []byte("\"sign\"")) || bytes.Contains(pb, []byte("\"timestamp\"")) {
+		t.Errorf("unsigned Feishu body must omit sign/timestamp, got %s", pb)
 	}
 }

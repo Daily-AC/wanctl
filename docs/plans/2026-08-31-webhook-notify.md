@@ -27,9 +27,8 @@ The account configuration contains:
 - `format`: `feishu`, `dingtalk`, or `json`.
 - optional `keyword`: always included in the message title for robot keyword
   security checks.
-- optional `secret`: supported for DingTalk signing. Feishu signing is rejected
-  until its opposite-direction HMAC formula can be verified from an official
-  source; use an IP allow-list or keyword for Feishu.
+- optional `secret`: supported for both DingTalk and Feishu signing. The two
+  constructions are deliberately different; see Wire formats.
 - four event-class switches: approval, exec, lifecycle, and security.
 - `exec_failures_only`, default true.
 - `include_detail`, default false.
@@ -207,8 +206,22 @@ robot URL. A fixed timestamp/secret test vector locks the key/data direction.
   pairing, and trust flows.
 
 Fixed relay egress makes a Feishu or DingTalk robot IP allow-list the recommended
-security setting. Keyword checks are supported in message titles. DingTalk
-signing is supported; Feishu signing is not guessed.
+security setting. Keyword checks are supported in message titles, and both
+providers' signing schemes are implemented.
+
+Feishu and DingTalk sign differently, and the mistake they invite is to reuse one
+construction for both — the result is a well-formed signature the server always
+rejects, which looks like a configuration problem rather than a code bug:
+
+| | DingTalk | Feishu |
+| --- | --- | --- |
+| HMAC key | the secret | `"{timestamp}\n{secret}"` |
+| HMAC data | `"{timestamp}\n{secret}"` | the empty string |
+| Timestamp unit | milliseconds | seconds |
+| Signature location | URL query, URL-encoded | body fields `timestamp` and `sign` |
+
+Both directions are pinned by unit tests against vectors computed outside this
+codebase from each provider's own documented sample.
 
 ## Health and portal
 

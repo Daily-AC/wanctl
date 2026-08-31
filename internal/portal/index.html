@@ -494,7 +494,7 @@
 					<label class="wide">Webhook URL<input id="notifyURL" type="url" autocomplete="off" placeholder="https://..."></label>
 					<label>格式<select id="notifyFormat"><option value="feishu">飞书群机器人</option><option value="dingtalk">钉钉群机器人</option><option value="json">通用 JSON</option></select></label>
 					<label>安全关键词<input id="notifyKeyword" autocomplete="off" placeholder="可选"></label>
-					<label class="wide">加签 secret<input id="notifySecret" type="password" autocomplete="new-password" placeholder="可选；飞书暂不支持加签"></label>
+					<label class="wide">加签 secret<input id="notifySecret" type="password" autocomplete="new-password" placeholder="可选；飞书和钉钉都支持"></label>
 				</div>
 				<div class="notifychecks">
 					<label class="notifycheck"><input type="checkbox" id="notifyApproval">审批事件</label>
@@ -1194,7 +1194,7 @@ async function loadNotifyAccount(){
     $('#notifyURL').value='';$('#notifyURL').placeholder=notifyAccount.url||'https://...';
     $('#notifyFormat').value=notifyAccount.format||'feishu';
     $('#notifyKeyword').value=notifyAccount.keyword||'';
-    $('#notifySecret').value='';$('#notifySecret').placeholder=notifyAccount.secret_set?'已保存；留空保持不变':'可选；飞书暂不支持加签';
+    $('#notifySecret').value='';$('#notifySecret').placeholder=notifyAccount.secret_set?'已保存；留空保持不变':'可选；飞书和钉钉都支持';
     $('#notifyApproval').checked=!!notifyAccount.on_approval;
     $('#notifyExec').checked=!!notifyAccount.on_exec;
     $('#notifyLifecycle').checked=!!notifyAccount.on_lifecycle;
