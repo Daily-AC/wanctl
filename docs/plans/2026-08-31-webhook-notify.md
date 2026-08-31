@@ -101,8 +101,9 @@ no device field, and unknown fields are rejected.
 
 Each report carries a stable event ID. The relay keeps a ten-minute
 namespace/device/event-ID dedupe window, so HTTP retries and control-channel
-reconnections cannot produce duplicate notifications. Agent retries reuse the
-same serialized report.
+reconnections cannot produce duplicate notifications. The table is capped at
+10,000 entries with oldest-entry eviction. Agent retries reuse the same
+serialized report.
 
 Both agent transports use the same HTTPS reporting endpoint. A WS registration
 includes the instance ID; HTTP long-poll registration already carries it.

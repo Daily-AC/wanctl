@@ -86,7 +86,7 @@ type Relay struct {
 	enrollCodes map[string]*enrollCode // one-time device-enrollment codes
 
 	notifyDedupeMu sync.Mutex
-	notifyDedupe   map[string]time.Time
+	notifyDedupe   map[notifyDedupeKey]time.Time
 }
 
 // New constructs a Relay backed by the given TokenStore.
@@ -98,7 +98,7 @@ func New(ts TokenStore) *Relay {
 		hagents:      map[string]*httpAgent{},
 		hsess:        map[string]*httpSession{},
 		enrollCodes:  map[string]*enrollCode{},
-		notifyDedupe: map[string]time.Time{},
+		notifyDedupe: map[notifyDedupeKey]time.Time{},
 		notifySend:   notify.NewSender(notify.Options{}),
 	}
 }

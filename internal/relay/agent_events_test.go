@@ -82,3 +82,22 @@ func TestAgentPolicyContainsNoWebhookCredentials(t *testing.T) {
 		t.Fatalf("policy leaked credentials: %s", rr.Body.String())
 	}
 }
+
+func TestAgentEventDedupeHasHardCapacity(t *testing.T) {
+	r := New(envTokens{})
+	now := time.Now()
+	oldest := notifyDedupeKey{namespace: "alice", device: "legion", id: "oldest"}
+	r.notifyDedupe[oldest] = now.Add(-time.Minute)
+	for i := 1; i < agentEventDedupeMax; i++ {
+		r.notifyDedupe[notifyDedupeKey{namespace: "alice", device: "legion", id: string(rune(i))}] = now
+	}
+	if r.notifyEventDuplicate("alice", "legion", "new", now) {
+		t.Fatal("new event was marked duplicate")
+	}
+	if len(r.notifyDedupe) != agentEventDedupeMax {
+		t.Fatalf("dedupe size = %d, want %d", len(r.notifyDedupe), agentEventDedupeMax)
+	}
+	if _, found := r.notifyDedupe[oldest]; found {
+		t.Fatal("oldest dedupe entry was not evicted")
+	}
+}

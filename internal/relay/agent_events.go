@@ -14,7 +14,16 @@ import (
 	"wanctl/internal/notify"
 )
 
-const agentEventDedupeTTL = 10 * time.Minute
+const (
+	agentEventDedupeTTL = 10 * time.Minute
+	agentEventDedupeMax = 10_000
+)
+
+type notifyDedupeKey struct {
+	namespace string
+	device    string
+	id        string
+}
 
 type agentEventReport struct {
 	ID     string    `json:"id"`
@@ -144,7 +153,7 @@ func (r *Relay) agentInstanceLive(namespace, device, inst string) bool {
 }
 
 func (r *Relay) notifyEventDuplicate(namespace, device, id string, now time.Time) bool {
-	key := namespace + "/" + device + "/" + id
+	key := notifyDedupeKey{namespace: namespace, device: device, id: id}
 	r.notifyDedupeMu.Lock()
 	defer r.notifyDedupeMu.Unlock()
 	cutoff := now.Add(-agentEventDedupeTTL)
@@ -155,6 +164,16 @@ func (r *Relay) notifyEventDuplicate(namespace, device, id string, now time.Time
 	}
 	if seen, found := r.notifyDedupe[key]; found && seen.After(cutoff) {
 		return true
+	}
+	if len(r.notifyDedupe) >= agentEventDedupeMax {
+		var oldestKey notifyDedupeKey
+		var oldestTime time.Time
+		for existing, seen := range r.notifyDedupe {
+			if oldestTime.IsZero() || seen.Before(oldestTime) {
+				oldestKey, oldestTime = existing, seen
+			}
+		}
+		delete(r.notifyDedupe, oldestKey)
 	}
 	r.notifyDedupe[key] = now
 	return false
