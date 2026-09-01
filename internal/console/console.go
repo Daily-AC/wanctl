@@ -113,6 +113,8 @@ type Service struct {
 	subs      map[chan struct{}]struct{}
 	trustedFn func() []TrustedController // supplies the trusted-controller list (set by the agent)
 	lanFn     func() *LanInfo            // supplies LAN-uplink state (set by the agent; nil = no LAN feature)
+	pendingFn func(Pending)              // best-effort observer; never runs on the approval path
+	pairingFn func(PendingPairing)       // best-effort observer; called only for a new pairing entry
 }
 
 // SetLanSource installs a callback returning the LAN-uplink state, included
@@ -159,6 +161,22 @@ func (s *Service) SetTrustedSource(fn func() []TrustedController) {
 	s.mu.Unlock()
 }
 
+// SetPendingHook observes newly queued approvals without participating in the
+// decision. The hook always runs in its own goroutine.
+func (s *Service) SetPendingHook(fn func(Pending)) {
+	s.mu.Lock()
+	s.pendingFn = fn
+	s.mu.Unlock()
+}
+
+// SetPairingHook observes newly created pairing requests. Repeated dials that
+// refresh the same pending fingerprint do not produce another event.
+func (s *Service) SetPairingHook(fn func(PendingPairing)) {
+	s.mu.Lock()
+	s.pairingFn = fn
+	s.mu.Unlock()
+}
+
 // New builds a console service bound to a policy engine and (optional) event log.
 func New(engine *policy.Engine, log *eventlog.Logger, info Info) *Service {
 	return &Service{
@@ -185,6 +203,7 @@ func (s *Service) AskPair(fp, name, label string) bool {
 	s.mu.Lock()
 	s.pruneExpiredPairsLocked()
 	p := s.pairs[fp]
+	created := false
 	if p != nil {
 		// Already decided? Return its verdict immediately.
 		select {
@@ -203,6 +222,7 @@ func (s *Service) AskPair(fp, name, label string) bool {
 		}
 		p.expires = time.Now().Add(pairTTL)
 	} else {
+		created = true
 		p = &pendingPair{
 			view:    PendingPairing{FP: fp, Name: name, Label: label, Created: time.Now()},
 			decided: make(chan struct{}),
@@ -211,10 +231,15 @@ func (s *Service) AskPair(fp, name, label string) bool {
 		s.pairs[fp] = p
 	}
 	hasFrontend := len(s.subs) > 0
+	pairingFn := s.pairingFn
+	pairingView := p.view
 	decided := p.decided
 	wait := s.timeout
 	s.mu.Unlock()
 	s.notify()
+	if created && pairingFn != nil {
+		go pairingFn(pairingView)
+	}
 
 	if !hasFrontend {
 		// Headless or no portal tab attending; let the controller fail fast and
@@ -306,8 +331,12 @@ func (s *Service) Ask(req policy.Request) policy.Decision {
 	}
 	s.mu.Lock()
 	s.pend[id] = p
+	pendingFn := s.pendingFn
 	s.mu.Unlock()
 	s.notify()
+	if pendingFn != nil {
+		go pendingFn(p.view)
+	}
 	defer func() {
 		s.mu.Lock()
 		delete(s.pend, id)

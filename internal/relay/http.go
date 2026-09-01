@@ -137,6 +137,7 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	r.startHTTPReaper()
 	r.hmu.Lock()
 	a := r.hagents[key]
+	wasHTTPLive := a != nil && time.Since(a.lastSeen) <= httpAgentTTL
 	if a == nil {
 		if r.countNamespaceAgentsLocked(ns) >= httpAgentsPerNS {
 			r.hmu.Unlock()
@@ -165,8 +166,13 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	a.lastSeen = time.Now()
 	changed := a.changed
 	r.hmu.Unlock()
-	if r.admin != nil {
-		r.admin.UpsertDevice(ns, device, req.URL.Query().Get("fp"))
+	wasLive := wasHTTPLive || r.wsDeviceLive(key)
+	created := r.recordDeviceRegistration(ns, device, req.URL.Query().Get("fp"))
+	if !wasLive {
+		r.emitDeviceEvent(ns, device, onlineEvent(device))
+	}
+	if created {
+		r.emitAccountEvent(ns, enrollEvent(device))
 	}
 
 	select {
@@ -262,6 +268,7 @@ func (r *Relay) handleHDeregister(w http.ResponseWriter, req *http.Request) {
 	key := ns + "/" + device
 	inst := req.URL.Query().Get("inst")
 	r.hmu.Lock()
+	removed := false
 	if inst != "" {
 		if a := r.hagents[key]; a != nil && a.inst != "" && a.inst != inst {
 			r.hmu.Unlock()
@@ -269,8 +276,14 @@ func (r *Relay) handleHDeregister(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	delete(r.hagents, key)
+	if _, ok := r.hagents[key]; ok {
+		delete(r.hagents, key)
+		removed = true
+	}
 	r.hmu.Unlock()
+	if removed && !r.deviceLive(ns, device) {
+		r.emitDeviceEvent(ns, device, offlineEvent(device))
+	}
 	if r.audit != nil {
 		r.audit.Audit(ns, device, "deregister")
 	}
@@ -288,10 +301,14 @@ func (r *Relay) deviceLive(ns, device string) bool {
 		return true
 	}
 	r.hmu.Unlock()
+	return r.wsDeviceLive(key)
+}
+
+func (r *Relay) wsDeviceLive(key string) bool {
 	r.mu.Lock()
-	_, wsLive := r.agents[key]
+	_, live := r.agents[key]
 	r.mu.Unlock()
-	return wsLive
+	return live
 }
 
 func (r *Relay) handleHPeers(w http.ResponseWriter, req *http.Request) {
@@ -438,10 +455,12 @@ func (r *Relay) startHTTPReaper() {
 // risk. Exported timing via the constants keeps the test honest.
 func (r *Relay) reapHTTP(now time.Time) {
 	var dead []*httpSession
+	var offline []*httpAgent
 	r.hmu.Lock()
 	for key, a := range r.hagents {
 		if now.Sub(a.lastSeen) > httpAgentTTL {
 			delete(r.hagents, key)
+			offline = append(offline, a)
 		}
 	}
 	for sid, s := range r.hsess {
@@ -451,6 +470,11 @@ func (r *Relay) reapHTTP(now time.Time) {
 		}
 	}
 	r.hmu.Unlock()
+	for _, a := range offline {
+		if !r.wsDeviceLive(a.ns + "/" + a.device) {
+			r.emitDeviceEvent(a.ns, a.device, offlineEvent(a.device))
+		}
+	}
 	for _, s := range dead {
 		s.close()
 	}

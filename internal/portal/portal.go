@@ -165,6 +165,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tokens/revoke", s.handleTokenRevoke)
 	mux.HandleFunc("/api/devices", s.handleDevices)
 	mux.HandleFunc("/api/devices/lark", s.handleDeviceLark)
+	mux.HandleFunc("/api/devices/notify", s.handleDeviceNotify)
+	mux.HandleFunc("/api/notify", s.handleNotify)
+	mux.HandleFunc("/api/notify/test", s.handleNotifyTest)
 	mux.HandleFunc("/api/namespaces", s.handleNamespaces)
 	mux.HandleFunc("/api/friends", s.handleFriendsList)
 	mux.HandleFunc("/api/friends/request", s.friendAction("request"))
@@ -251,6 +254,9 @@ var mutationPaths = map[string]bool{
 	"/api/devices/mode":            true,
 	"/api/devices/lan":             true,
 	"/api/devices/lark":            true,
+	"/api/devices/notify":          true,
+	"/api/notify":                  true,
+	"/api/notify/test":             true,
 	"/api/docs/articles":           true,
 	"/api/docs/articles/delete":    true,
 	"/api/docs/groups":             true,
@@ -266,10 +272,12 @@ var mutationPaths = map[string]bool{
 }
 
 var readWritePaths = map[string]bool{
-	"/api/tokens":       true,
-	"/api/acl":          true,
-	"/api/devices/lark": true,
-	"/api/invites":      true,
+	"/api/tokens":         true,
+	"/api/acl":            true,
+	"/api/devices/lark":   true,
+	"/api/devices/notify": true,
+	"/api/notify":         true,
+	"/api/invites":        true,
 }
 
 func (s *Server) securityMiddleware(next http.Handler) http.Handler {
@@ -937,6 +945,65 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	if ns, ok := s.requireNS(w, r); ok {
 		s.proxyGet(w, ns, "/admin/devices")
 	}
+}
+
+func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
+	ns, ok := s.requireNS(w, r)
+	if !ok {
+		return
+	}
+	if r.Method == http.MethodPost {
+		s.proxyPost(w, r, ns, "/admin/notify")
+		return
+	}
+	s.proxyGet(w, ns, "/admin/notify")
+}
+
+func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
+	if ns, ok := s.requireNS(w, r); ok {
+		s.proxyPost(w, r, ns, "/admin/notify/test")
+	}
+}
+
+func (s *Server) handleDeviceNotify(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		var body struct {
+			Device  string `json:"device"`
+			Enabled bool   `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		ns, ok := s.requireOwnedConsole(w, r, body.Device)
+		if !ok {
+			return
+		}
+		resp, err := s.adminReq(http.MethodPost, "/admin/devices/notify", nil, map[string]any{
+			"namespace": ns, "device": body.Device, "enabled": body.Enabled,
+		})
+		if err != nil {
+			http.Error(w, "relay unreachable", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		copyResp(w, resp)
+		return
+	}
+	device := r.URL.Query().Get("device")
+	ns, ok := s.requireOwnedConsole(w, r, device)
+	if !ok {
+		return
+	}
+	resp, err := s.adminReq(http.MethodGet, "/admin/devices/notify", url.Values{
+		"namespace": {ns}, "device": {device},
+	}, nil)
+	if err != nil {
+		http.Error(w, "relay unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	copyResp(w, resp)
 }
 
 type deviceLarkApproval struct {

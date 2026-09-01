@@ -232,6 +232,7 @@
   .view.rdonly #tabs,.view.rdonly .pane{display:none!important}
   .view.rdonly .decide,.view.rdonly #rAdd,.view.rdonly #rmDevice,.view.rdonly .rmx,.view.rdonly #toggle,.view.rdonly #lanToggle,
   .view.rdonly #larkToggle,.view.rdonly #larkPairToggle{display:none!important}
+	.view.rdonly #notifyToggle{display:none!important}
   .doc{margin-top:22px;display:flex;flex-direction:column;gap:18px}
   .dcard{display:flex;gap:18px;background:#fff;border:1px solid var(--soft,#efe7d6);border-radius:18px;padding:22px 24px;box-shadow:0 4px 18px rgba(0,0,0,.04)}
   .dcard.hot{border-color:#ffcf9b;background:linear-gradient(180deg,#fffaf2,#fff)}
@@ -346,6 +347,19 @@
   .slip .row{margin-top:13px}
 
   .modecard{background:var(--card);border:2px solid var(--line);border-radius:24px;padding:22px 24px;box-shadow:var(--sh);max-width:580px}
+	.device-notify-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px}
+	.device-notify-grid .modecard{max-width:none;margin-top:0!important}
+	.notifycard{max-width:780px}
+	.notifyform{display:grid;grid-template-columns:minmax(0,2fr) minmax(150px,1fr);gap:12px;margin-top:18px}
+	.notifyform .wide{grid-column:1/-1}
+	.notifyform label{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:700;color:var(--ink-2)}
+	.notifyform input,.notifyform select{width:100%;min-width:0}
+	.notifychecks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 18px;margin-top:16px}
+	.notifycheck{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--ink);cursor:pointer}
+	.notifycheck input{flex:none;min-width:0;width:17px;height:17px;accent-color:var(--peach-d)}
+	.notifyactions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px}
+	.notifyactions .larkhealth{margin:0;flex:1;min-width:240px}
+	@media(max-width:760px){.device-notify-grid,.notifyform,.notifychecks{grid-template-columns:1fr}.notifyform .wide{grid-column:auto}}
   .modecard .now{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
   .modecard .now .txt{font-size:14px;color:var(--ink);flex:1;min-width:180px}
   .modecard .now .txt b{font-family:var(--round);font-weight:700}
@@ -439,6 +453,7 @@
 
   <nav>
     <button data-sec="devices" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="12" rx="3"/><path d="M8 21h8"/></svg>设备</button>
+		<button data-sec="notify"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4" stroke-linecap="round"/></svg>通知</button>
     <button data-sec="tokens"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="M11 12 21 2M17 6l2 2"/></svg>访问令牌</button>
     <button data-sec="friends"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8.5" cy="8.5" r="3.5"/><path d="M2.5 20a6 6 0 0 1 12 0"/><circle cx="17" cy="10" r="2.6"/><path d="M14.8 20a4.8 4.8 0 0 1 6.7-4.4"/></svg>好友</button>
     <button data-sec="acl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11l2 2 4-4"/></svg>共享授权</button>
@@ -468,6 +483,36 @@
         <div class="stat s4"><div class="n" id="stAcl">·</div><div class="l">共享授权</div></div>
       </div>
     </section>
+
+		<!-- account notifications -->
+		<section class="view" data-view="notify">
+			<h1 class="htitle"><svg class="puff" viewBox="0 0 24 24" fill="none" stroke="#ef8b4f" stroke-width="1.8"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>Webhook 通知</h1>
+			<p class="sub">账号共用一个群机器人或自定义 webhook，每台设备再单独开启。</p>
+			<div class="modecard notifycard">
+				<div class="now"><span class="landot off" id="notifyAccountDot"></span><span class="txt" id="notifyAccountTxt"><b>通知出口</b>：加载中…</span></div>
+				<div class="notifyform">
+					<label class="wide">Webhook URL<input id="notifyURL" type="url" autocomplete="off" placeholder="https://..."></label>
+					<label>格式<select id="notifyFormat"><option value="feishu">飞书群机器人</option><option value="dingtalk">钉钉群机器人</option><option value="json">通用 JSON</option></select></label>
+					<label>安全关键词<input id="notifyKeyword" autocomplete="off" placeholder="可选"></label>
+					<label class="wide">加签 secret<input id="notifySecret" type="password" autocomplete="new-password" placeholder="可选；飞书和钉钉都支持"></label>
+				</div>
+				<div class="notifychecks">
+					<label class="notifycheck"><input type="checkbox" id="notifyApproval">审批事件</label>
+					<label class="notifycheck"><input type="checkbox" id="notifyExec">执行结束</label>
+					<label class="notifycheck"><input type="checkbox" id="notifyLifecycle">设备上下线</label>
+					<label class="notifycheck"><input type="checkbox" id="notifySecurity">配对与安全事件</label>
+					<label class="notifycheck"><input type="checkbox" id="notifyExecFailures">执行只报失败</label>
+					<label class="notifycheck"><input type="checkbox" id="notifyDetail">通知里包含脱敏命令行</label>
+					<label class="notifycheck"><input type="checkbox" id="notifyClearSecret">清除已保存的 secret</label>
+				</div>
+				<div class="notifyactions">
+					<button class="btn" id="notifySave">保存设置</button>
+					<button class="btn soft" id="notifyTest">发送测试通知</button>
+					<button class="rmx" id="notifyDelete">清除配置</button>
+					<div class="larkhealth" id="notifyHealth">还没有投递尝试记录</div>
+				</div>
+			</div>
+		</section>
 
     <!-- device drill -->
     <section class="view" data-view="device">
@@ -526,25 +571,35 @@
           </div>
           <div class="warn" style="display:block;background:#eef4ff;border-color:#d3e2ff;color:#4a6fae" id="lanHint">设备与控制端在同一内网时，会多挂一条到内网中继的直连通道：实时流式输出、低延迟。受控端与被控端都在内网时，控制端跑 <b>wanctl net lan</b>（或 auto）即可走快车道。加密与审批和公网通道完全一致。</div>
         </div>
-        <div class="modecard" id="larkcard" style="margin-top:16px">
-          <div class="now">
-            <span class="landot off" id="larkDot"></span>
-            <span class="txt" id="larkTxt"><b>飞书审批</b>：加载中…</span>
-            <div class="toggle lanoff" id="larkToggle"><span class="k"></span></div>
-          </div>
-          <div class="larkmode" id="larkMode">当前执行模式：加载中…</div>
-          <div class="larkhealth" id="larkHealth">还没有投递或连接尝试记录</div>
-          <div class="warn" style="display:block;background:#fff5e9;border-color:#ffe2bd;color:#95642a" id="larkHint">
-            开着的时候，这台设备遇到没命中规则的操作，会把上下文推一张卡到你的飞书私聊，你在卡上直接点允许或拒绝。<br>
-            要知道代价：门户会一直挂着这台设备的连线，所以规则未命中<b>不再立刻拒绝</b>，而是<b>最多等你 3 分钟</b>。
-            没人看手机的时候，脚本会卡满这 3 分钟才失败——无人值守的机器建议先把规则配好。
-          </div>
-          <div class="now" id="larkPairRow" style="margin-top:14px">
-            <span class="txt" id="larkPairTxt"><b>卡片里直接信任新控制端</b>：关着的话卡片只通知，要信任得回门户点</span>
-            <div class="toggle lanoff" id="larkPairToggle"><span class="k"></span></div>
-          </div>
-        </div>
-      </div>
+					<div class="device-notify-grid">
+						<div class="modecard" id="larkcard">
+							<div class="now">
+								<span class="landot off" id="larkDot"></span>
+								<span class="txt" id="larkTxt"><b>飞书审批</b>：加载中…</span>
+								<div class="toggle lanoff" id="larkToggle"><span class="k"></span></div>
+							</div>
+							<div class="larkmode" id="larkMode">当前执行模式：加载中…</div>
+							<div class="larkhealth" id="larkHealth">还没有投递或连接尝试记录</div>
+							<div class="warn" style="display:block;background:#fff5e9;border-color:#ffe2bd;color:#95642a" id="larkHint">
+								开着的时候，这台设备遇到没命中规则的操作，会把上下文推一张卡到你的飞书私聊，你在卡上直接点允许或拒绝。<br>
+								要知道代价：门户会一直挂着这台设备的连线，所以规则未命中<b>不再立刻拒绝</b>，而是<b>最多等你 3 分钟</b>。
+								没人看手机的时候，脚本会卡满这 3 分钟才失败——无人值守的机器建议先把规则配好。
+							</div>
+							<div class="now" id="larkPairRow" style="margin-top:14px">
+								<span class="txt" id="larkPairTxt"><b>卡片里直接信任新控制端</b>：关着的话卡片只通知，要信任得回门户点</span>
+								<div class="toggle lanoff" id="larkPairToggle"><span class="k"></span></div>
+							</div>
+						</div>
+						<div class="modecard" id="notifyDeviceCard">
+							<div class="now">
+								<span class="landot off" id="notifyDeviceDot"></span>
+								<span class="txt" id="notifyDeviceTxt"><b>Webhook 通知</b>：加载中…</span>
+								<div class="toggle lanoff" id="notifyToggle"><span class="k"></span></div>
+							</div>
+							<div class="larkhealth" id="notifyDeviceHealth">还没有投递尝试记录</div>
+						</div>
+					</div>
+				</div>
 
       <div class="pane" data-pane="log">
         <div class="rulebar"><span class="rulehint">这台设备每一次命令 / 文件操作的裁决与结果，从新到旧</span><button class="addbtn" id="logReload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>刷新</button></div>
@@ -751,6 +806,7 @@ function applyView(s){
   closeDevice();
   showView(s);
   if(s==='devices')loadOverview();
+	else if(s==='notify')loadNotifyAccount();
   else if(s==='tokens')loadTokens();
   else if(s==='friends')loadFriends();
   else if(s==='invites')loadInvites();
@@ -807,6 +863,7 @@ function openDevice(name){
   $('#pending').innerHTML='<div class="empty">连接设备中…</div>';
   renderConsole();
   loadLark(name);
+	loadDeviceNotify(name);
   pollConsole(name);
 }
 /* 共享设备在门户里严格只读（后端同样强制），这里切换只读视觉态。
@@ -1114,6 +1171,85 @@ async function saveLark(field,value){
 }
 $('#larkToggle').onclick=()=>saveLark('approval_enabled',!curLark.approval_enabled);
 $('#larkPairToggle').onclick=()=>saveLark('pairing_from_card',!curLark.pairing_from_card);
+
+/* ---- webhook notifications ---- */
+let notifyAccount={configured:false,format:'feishu',on_approval:true,on_exec:false,on_lifecycle:true,on_security:true,exec_failures_only:true,include_detail:false};
+function paintNotifyHealth(el,h,empty){
+  if(!h){el.className='larkhealth';el.textContent=empty||'还没有投递尝试记录';return}
+  const when=new Date(h.attempted_at).toLocaleString();
+  const provider=h.provider_code?'，平台码 '+h.provider_code:'';
+  if(h.result==='failure'){
+    el.className='larkhealth fail';
+    el.textContent='最近一次失败（HTTP '+(h.http_status||'—')+provider+'，连续 '+(h.consecutive_failures||1)+' 次，'+when+'）：'+(h.error||'未知错误');
+    return;
+  }
+  el.className='larkhealth';el.textContent='最近一次成功（HTTP '+(h.http_status||'—')+provider+'，'+when+'）';
+}
+async function loadNotifyAccount(){
+  $('#notifyAccountTxt').innerHTML='<b>通知出口</b>：加载中…';
+  try{
+    notifyAccount=await jget('/api/notify');
+    $('#notifyAccountDot').className='landot '+(notifyAccount.configured?'on':'off');
+    $('#notifyAccountTxt').innerHTML=notifyAccount.configured?'<b>通知出口</b>：已配置 '+esc(notifyAccount.format):'<b>通知出口</b>：未配置';
+    $('#notifyURL').value='';$('#notifyURL').placeholder=notifyAccount.url||'https://...';
+    $('#notifyFormat').value=notifyAccount.format||'feishu';
+    $('#notifyKeyword').value=notifyAccount.keyword||'';
+    $('#notifySecret').value='';$('#notifySecret').placeholder=notifyAccount.secret_set?'已保存；留空保持不变':'可选；飞书和钉钉都支持';
+    $('#notifyApproval').checked=!!notifyAccount.on_approval;
+    $('#notifyExec').checked=!!notifyAccount.on_exec;
+    $('#notifyLifecycle').checked=!!notifyAccount.on_lifecycle;
+    $('#notifySecurity').checked=!!notifyAccount.on_security;
+    $('#notifyExecFailures').checked=!!notifyAccount.exec_failures_only;
+    $('#notifyDetail').checked=!!notifyAccount.include_detail;
+    $('#notifyClearSecret').checked=false;
+    paintNotifyHealth($('#notifyHealth'),notifyAccount.health,notifyAccount.configured?'已配置，尚无投递尝试':'保存配置后可发送测试通知');
+  }catch(e){err('通知设置加载失败：'+e.message)}
+}
+$('#notifySave').onclick=async()=>{
+  const body={
+    format:$('#notifyFormat').value,keyword:$('#notifyKeyword').value.trim(),
+    on_approval:$('#notifyApproval').checked,on_exec:$('#notifyExec').checked,
+    on_lifecycle:$('#notifyLifecycle').checked,on_security:$('#notifySecurity').checked,
+    exec_failures_only:$('#notifyExecFailures').checked,include_detail:$('#notifyDetail').checked
+  };
+  const url=$('#notifyURL').value.trim(),secret=$('#notifySecret').value.trim();
+  if(url)body.url=url;
+  if(secret||$('#notifyClearSecret').checked)body.secret=secret;
+  try{const r=await jpost('/api/notify',body);notifyAccount=await r.json();toast('ok','通知设置已保存');loadNotifyAccount()}
+  catch(e){err('保存通知设置失败：'+e.message)}
+};
+$('#notifyTest').onclick=async()=>{
+  const b=$('#notifyTest');b.disabled=true;
+  try{
+    const r=await jpost('/api/notify/test',{}),d=await r.json();
+    const code=d.provider_code?'，平台码 '+d.provider_code:'';
+    if(d.error){$('#notifyHealth').className='larkhealth fail';$('#notifyHealth').textContent='测试失败：HTTP '+(d.http_status||'—')+code+'；'+d.error}
+    else{$('#notifyHealth').className='larkhealth';$('#notifyHealth').textContent='测试成功：HTTP '+d.http_status+code;toast('ok','测试通知已送达')}
+  }catch(e){err('测试通知失败：'+e.message)}finally{b.disabled=false}
+};
+$('#notifyDelete').onclick=async()=>{
+  const ok=await askCute({title:'清除 webhook 配置？',msg:'账号将停止发送所有 webhook 通知，设备开关会保留。',okText:'清除配置'});if(!ok)return;
+  try{await jpost('/api/notify',{delete:true});toast('ok','通知配置已清除');loadNotifyAccount()}catch(e){err('清除通知配置失败：'+e.message)}
+};
+let curDeviceNotify={enabled:false};
+async function loadDeviceNotify(name){
+  curDeviceNotify={enabled:false};$('#notifyDeviceTxt').innerHTML='<b>Webhook 通知</b>：加载中…';
+  try{const cfg=await jget('/api/devices/notify?device='+encodeURIComponent(name));if(cur!==name)return;curDeviceNotify=cfg;paintDeviceNotify()}
+  catch(e){if(cur===name)$('#notifyDeviceTxt').innerHTML='<b>Webhook 通知</b>：读不到设置（'+esc(e.message)+'）'}
+}
+function paintDeviceNotify(){
+  const on=!!curDeviceNotify.enabled;
+  $('#notifyDeviceDot').className='landot '+(on?'on':'off');
+  $('#notifyToggle').className='toggle '+(on?'lanon':'lanoff');
+  $('#notifyDeviceTxt').innerHTML=on?'<b>Webhook 通知</b>：已开启':'<b>Webhook 通知</b>：已关闭';
+  paintNotifyHealth($('#notifyDeviceHealth'),curDeviceNotify.health,on?'已开启，尚无投递尝试':'通知未开启，没有投递尝试');
+}
+$('#notifyToggle').onclick=async()=>{
+  if(roGuard())return;
+  const body={device:cur,enabled:!curDeviceNotify.enabled};
+  try{const r=await jpost('/api/devices/notify',body),saved=await r.json();saved.health=curDeviceNotify.health;curDeviceNotify=saved;paintDeviceNotify()}
+  catch(e){err('切换 webhook 通知失败：'+e.message)}
+};
 $('#toggle').onclick=async()=>{
   if(roGuard())return;
   const next=curMode==='bypass'?'normal':'bypass';
@@ -1652,7 +1788,7 @@ function route(){
     return;
   }
   if(h.startsWith('#docs'))return applyView('docs');
-  const m={'#tokens':'tokens','#friends':'friends','#invites':'invites','#acl':'acl','#audit':'audit','#devices':'devices','#downloads':'downloads','#changelog':'changelog'};
+  const m={'#tokens':'tokens','#friends':'friends','#invites':'invites','#acl':'acl','#audit':'audit','#devices':'devices','#notify':'notify','#downloads':'downloads','#changelog':'changelog'};
   applyView(m[h]||'devices');
 }
 window.addEventListener('hashchange',route);
