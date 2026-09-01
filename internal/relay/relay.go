@@ -5,6 +5,7 @@
 package relay
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 
 	"wanctl/internal/admission"
 	"wanctl/internal/limits"
+	"wanctl/internal/notify"
 	"wanctl/internal/serverlog"
 	"wanctl/internal/sessionauth"
 	"wanctl/internal/wsconn"
@@ -26,6 +28,7 @@ import (
 type agentConn struct {
 	device string
 	ns     string
+	inst   string
 	ctrl   io.Writer
 	mu     sync.Mutex // serialize control writes
 }
@@ -52,12 +55,18 @@ type Auditor interface {
 	Audit(namespace, device, event string)
 }
 
+type webhookSender interface {
+	Send(context.Context, notify.Destination, notify.Event) (notify.Result, error)
+}
+
 // Relay is the broker.
 type Relay struct {
 	ts          TokenStore
 	acl         ACLChecker
 	audit       Auditor
 	admin       AdminStore
+	notifyStore NotifyStore
+	notifySend  webhookSender
 	docs        DocsStore
 	mcpHandler  http.Handler // optional: HTTP/Streamable MCP at /mcp
 	adminSecret string
@@ -75,17 +84,22 @@ type Relay struct {
 
 	enrollMu    sync.Mutex
 	enrollCodes map[string]*enrollCode // one-time device-enrollment codes
+
+	notifyDedupeMu sync.Mutex
+	notifyDedupe   map[notifyDedupeKey]time.Time
 }
 
 // New constructs a Relay backed by the given TokenStore.
 func New(ts TokenStore) *Relay {
 	return &Relay{
-		ts:          ts,
-		agents:      map[string]*agentConn{},
-		pending:     map[string]*pendingSession{},
-		hagents:     map[string]*httpAgent{},
-		hsess:       map[string]*httpSession{},
-		enrollCodes: map[string]*enrollCode{},
+		ts:           ts,
+		agents:       map[string]*agentConn{},
+		pending:      map[string]*pendingSession{},
+		hagents:      map[string]*httpAgent{},
+		hsess:        map[string]*httpSession{},
+		enrollCodes:  map[string]*enrollCode{},
+		notifyDedupe: map[notifyDedupeKey]time.Time{},
+		notifySend:   notify.NewSender(notify.Options{}),
 	}
 }
 
@@ -94,6 +108,8 @@ func (r *Relay) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("/agent", r.handleAgent)
+	mux.HandleFunc("/agent/notify-policy", r.handleAgentNotifyPolicy)
+	mux.HandleFunc("/agent/events", r.handleAgentEvent)
 	mux.HandleFunc("/dial", r.handleDial)
 	mux.HandleFunc("/session/", r.handleSession)
 	mux.HandleFunc("/peers", r.handlePeers)
@@ -158,7 +174,17 @@ func bodyCapFor(path string) int64 {
 func (r *Relay) SetMCPHandler(h http.Handler) { r.mcpHandler = h }
 
 // SetAdmin installs the admin store backing the /admin/* endpoints.
-func (r *Relay) SetAdmin(a AdminStore) { r.admin = a }
+func (r *Relay) SetAdmin(a AdminStore) {
+	r.admin = a
+	if store, ok := a.(NotifyStore); ok {
+		r.notifyStore = store
+	} else {
+		r.notifyStore = nil
+	}
+}
+
+// SetNotifySender replaces outbound delivery, primarily for deterministic tests.
+func (r *Relay) SetNotifySender(sender webhookSender) { r.notifySend = sender }
 
 // SetLogBuffer installs the process-local service log buffer.
 func (r *Relay) SetLogBuffer(logs *serverlog.Buffer) { r.logs = logs }
@@ -232,26 +258,36 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	nc := wsconn.FromAccepted(req.Context(), c)
 	dec := json.NewDecoder(nc)
 	var reg struct {
-		Op, Device, Fingerprint string
+		Op, Device, Fingerprint, Inst string
 	}
 	if err := dec.Decode(&reg); err != nil || reg.Op != "register" || reg.Device == "" {
 		c.Close(websocket.StatusPolicyViolation, "expected register")
 		return
 	}
 	key := ns + "/" + reg.Device
-	ac := &agentConn{device: reg.Device, ns: ns, ctrl: nc}
+	wasLive := r.deviceLive(ns, reg.Device)
+	ac := &agentConn{device: reg.Device, ns: ns, inst: reg.Inst, ctrl: nc}
 	r.mu.Lock()
 	r.agents[key] = ac
 	r.mu.Unlock()
-	if r.admin != nil {
-		r.admin.UpsertDevice(ns, reg.Device, reg.Fingerprint)
+	created := r.recordDeviceRegistration(ns, reg.Device, reg.Fingerprint)
+	if !wasLive {
+		r.emitDeviceEvent(ns, reg.Device, onlineEvent(reg.Device))
+	}
+	if created {
+		r.emitAccountEvent(ns, enrollEvent(reg.Device))
 	}
 	defer func() {
+		removed := false
 		r.mu.Lock()
 		if r.agents[key] == ac {
 			delete(r.agents, key)
+			removed = true
 		}
 		r.mu.Unlock()
+		if removed && !r.deviceLive(ns, reg.Device) {
+			r.emitDeviceEvent(ns, reg.Device, offlineEvent(reg.Device))
+		}
 		c.Close(websocket.StatusNormalClosure, "")
 	}()
 	// Keep the control connection alive; drain any further messages (e.g. pings).

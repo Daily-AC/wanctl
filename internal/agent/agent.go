@@ -66,6 +66,9 @@ type Agent struct {
 	inst         string
 	apprMu       sync.Mutex
 	appr         policy.Approver
+	notifyMu     sync.RWMutex
+	notifyPolicy agentNotifyPolicy
+	notifyClient *http.Client
 
 	sessMu   sync.Mutex
 	sessions map[string]*server.ShellSession
@@ -159,6 +162,11 @@ func New(opts Options) (*Agent, error) {
 		Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL,
 	})
 	a.console.SetTrustedSource(a.trustedControllers)
+	a.console.SetPendingHook(a.notifyApproval)
+	a.console.SetPairingHook(a.notifyPairing)
+	a.jobs.onDone = func(command, cwd string, code int) {
+		a.notifyExecFinished(command, cwd, "", code)
+	}
 	a.lanEnabled = config.LanUplinkEnabled()
 	a.lanKick = make(chan struct{}, 1)
 	if opts.LanRelay != "" {
@@ -275,6 +283,7 @@ func (a *Agent) gateFile(req policy.Request) (bool, string, string) {
 // primary one; sessions from either relay are served identically (same E2E
 // trust, same policy gate).
 func (a *Agent) Run(ctx context.Context) error {
+	go a.runNotifyPolicy(ctx)
 	if a.opts.LanRelay != "" {
 		go a.runLan(ctx)
 	}
@@ -294,7 +303,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// cancellation (SIGTERM, `wanctl stop`) is never observed.
 	defer wsconn.CloseOnCancel(ctx, nc)()
 	enc := json.NewEncoder(nc)
-	if err := enc.Encode(map[string]string{"op": "register", "device": a.opts.Name, "fingerprint": a.id.Fingerprint}); err != nil {
+	if err := enc.Encode(map[string]string{"op": "register", "device": a.opts.Name, "fingerprint": a.id.Fingerprint, "inst": a.inst}); err != nil {
 		return err
 	}
 	fmt.Printf("wanctl agent %q online via %s\n  fingerprint: %s\n", a.opts.Name, a.opts.RelayURL, a.id.Fingerprint)
@@ -485,6 +494,7 @@ func (a *Agent) authorize(fp, name, label string) bool {
 		// "who has been admitted, and when" through `wanctl logs --type trust`
 		// instead of a stdout line nobody reads.
 		a.log.Append(eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "auto-trust"})
+		a.notifyTrustChanged(fp, name, "granted")
 		return true
 	}
 	// Surface the pairing request to a connected front-end (the portal web
@@ -494,6 +504,7 @@ func (a *Agent) authorize(fp, name, label string) bool {
 		a.known.AddLabeled(fp, name, label)
 		fmt.Printf("[paired] controller %q trusted via console: %s\n", name, fp)
 		a.log.Append(eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "console"})
+		a.notifyTrustChanged(fp, name, "granted")
 		return true
 	}
 	return false
@@ -680,10 +691,15 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 	}
 	if err != nil {
 		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(ranVia)})
+		if code == 0 {
+			code = -1
+		}
+		a.notifyExecFinished(m.Command, m.Cwd, peerName, code)
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return
 	}
 	a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code, Via: string(ranVia)})
+	a.notifyExecFinished(m.Command, m.Cwd, peerName, code)
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExit, Code: code, ElevatedVia: string(ranVia)})
 }
 
@@ -1075,6 +1091,7 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 			resp.Data = json.RawMessage(errJSON)
 		} else {
 			a.console.Notify()
+			a.notifyTrustChanged(msg.FP, "", "revoked")
 		}
 		return resp
 

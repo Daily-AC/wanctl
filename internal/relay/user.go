@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"wanctl/internal/notify"
 	"wanctl/internal/sessionauth"
 )
 
@@ -20,6 +21,9 @@ func (r *Relay) registerUser(mux *http.ServeMux) {
 	mux.HandleFunc("/u/shares", r.userShares)
 	mux.HandleFunc("/u/shares/grant", r.userShareGrant)
 	mux.HandleFunc("/u/shares/revoke", r.userShareRevoke)
+	mux.HandleFunc("/u/notify", r.userNotify)
+	mux.HandleFunc("/u/notify/test", r.userNotifyTest)
+	mux.HandleFunc("/u/devices/notify", r.userDeviceNotify)
 }
 
 func (r *Relay) requireUserStore(w http.ResponseWriter, req *http.Request) (string, bool) {
@@ -111,6 +115,12 @@ func (r *Relay) userFriendRequest(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		friendError(w, err)
 		return
+	}
+	if status == "pending" {
+		r.emitAccountEvent(peer, notify.Event{
+			Event: "friend.requested", Peer: namespace,
+			Message: namespace + " sent you a friend request",
+		})
 	}
 	writeJSON(w, map[string]string{"status": status})
 }
@@ -339,6 +349,12 @@ func (r *Relay) adminFriendAction(w http.ResponseWriter, req *http.Request, acti
 		return
 	}
 	if action == "request" {
+		if status == "pending" {
+			r.emitAccountEvent(body.Peer, notify.Event{
+				Event: "friend.requested", Peer: body.Namespace,
+				Message: body.Namespace + " sent you a friend request",
+			})
+		}
 		writeJSON(w, map[string]string{"status": status})
 		return
 	}

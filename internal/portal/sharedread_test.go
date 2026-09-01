@@ -9,7 +9,7 @@ import (
 )
 
 // A grantee sees a shared device in their list, but the device's console,
-// activity log, approval events and Feishu settings belong to the owner. The
+// activity log, approval events, Feishu settings, and webhook health belong to the owner. The
 // protocol refuses those kinds from a grantee's own session; the portal dials
 // with a privileged token and must refuse them itself (audit 2026-08-28,
 // SEC-B-01).
@@ -33,6 +33,7 @@ func TestSharedDeviceReadsAreOwnerOnly(t *testing.T) {
 		"/api/devices/logs":    s.handleDeviceLogs,
 		"/api/devices/events":  s.handleDeviceEvents,
 		"/api/devices/lark":    s.handleDeviceLark,
+		"/api/devices/notify":  s.handleDeviceNotify,
 	}
 	for path, h := range routes {
 		rec := httptest.NewRecorder()
