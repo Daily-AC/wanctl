@@ -179,23 +179,40 @@ func (c *Client) Peers(ctx context.Context) ([]string, error) {
 	return info.Devices, nil
 }
 
-// PeerAliases lists every exact spelling accepted for an online target: the
-// short device name and its namespace-qualified form.
+// PeersWithAliases lists online device names and the owner-assigned aliases
+// keyed by real device name.
+func (c *Client) PeersWithAliases(ctx context.Context) ([]string, map[string]string, error) {
+	info, err := c.peerInfo(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if info.Aliases == nil {
+		info.Aliases = map[string]string{}
+	}
+	return info.Devices, info.Aliases, nil
+}
+
+// PeerAliases lists every exact spelling accepted for an online target: real
+// names and owner-assigned aliases, both short and namespace-qualified.
 func (c *Client) PeerAliases(ctx context.Context) ([]string, error) {
 	info, err := c.peerInfo(ctx)
 	if err != nil {
 		return nil, err
 	}
-	aliases := make([]string, 0, len(info.Devices)*2)
+	aliases := make([]string, 0, len(info.Devices)*4)
 	for _, device := range info.Devices {
 		aliases = append(aliases, device, info.Namespace+"/"+device)
+		if alias := info.Aliases[device]; alias != "" {
+			aliases = append(aliases, alias, info.Namespace+"/"+alias)
+		}
 	}
 	return aliases, nil
 }
 
 type peerInfo struct {
-	Namespace string   `json:"namespace"`
-	Devices   []string `json:"devices"`
+	Namespace string            `json:"namespace"`
+	Devices   []string          `json:"devices"`
+	Aliases   map[string]string `json:"aliases"`
 }
 
 func (c *Client) peerInfo(ctx context.Context) (peerInfo, error) {

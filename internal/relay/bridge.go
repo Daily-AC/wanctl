@@ -211,3 +211,21 @@ func (r *Relay) liveDevices(ns string) []string {
 	sort.Strings(out)
 	return out
 }
+
+func (r *Relay) livePeers(ns string) ([]string, map[string]string) {
+	devices := r.liveDevices(ns)
+	aliases := map[string]string{}
+	if r.aliases == nil || len(devices) == 0 {
+		return devices, aliases
+	}
+	stored, err := r.aliases.ListDeviceAliases(ns)
+	if err != nil {
+		return devices, aliases
+	}
+	for _, device := range devices {
+		if alias := stored[device]; alias != "" {
+			aliases[device] = alias
+		}
+	}
+	return devices, aliases
+}

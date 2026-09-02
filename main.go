@@ -758,7 +758,7 @@ func cmdPeers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	devs, err := c.Peers(ctx)
+	devs, aliases, err := c.PeersWithAliases(ctx)
 	if err != nil {
 		return err
 	}
@@ -767,7 +767,11 @@ func cmdPeers(ctx context.Context) error {
 		return nil
 	}
 	for _, d := range devs {
-		fmt.Println(d)
+		if alias := aliases[d]; alias != "" {
+			fmt.Printf("%s  (%s)\n", d, alias)
+		} else {
+			fmt.Println(d)
+		}
 	}
 	return nil
 }
