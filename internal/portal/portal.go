@@ -164,6 +164,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tokens", s.handleTokens)
 	mux.HandleFunc("/api/tokens/revoke", s.handleTokenRevoke)
 	mux.HandleFunc("/api/devices", s.handleDevices)
+	mux.HandleFunc("/api/devices/alias", s.handleDeviceAlias)
 	mux.HandleFunc("/api/devices/lark", s.handleDeviceLark)
 	mux.HandleFunc("/api/devices/notify", s.handleDeviceNotify)
 	mux.HandleFunc("/api/notify", s.handleNotify)
@@ -249,6 +250,7 @@ var mutationPaths = map[string]bool{
 	"/api/devices/pair":            true,
 	"/api/devices/untrust":         true,
 	"/api/devices/remove":          true,
+	"/api/devices/alias":           true,
 	"/api/devices/identity/accept": true,
 	"/api/devices/rules":           true,
 	"/api/devices/mode":            true,
@@ -313,7 +315,7 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 }
 
 func setSecurityHeaders(h http.Header) {
-	h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'")
+	h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' https://api.github.com")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Frame-Options", "DENY")
@@ -539,6 +541,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	b, _ := assets.ReadFile("index.html")
+	// The SPA is embedded in the binary; a browser that keeps yesterday's copy
+	// after an upgrade shows a UI that no longer matches the API.
+	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(b)
 }
@@ -807,7 +812,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"identity": p.Login, "namespace": ns, "provider": p.Provider, "role": role,
-		"lark": s.larkEnabled(),
+		"portal_fingerprint": s.fp,
+		"lark":               s.larkEnabled(),
 		// The SPA composes copy-pasteable `wanctl config set relay=…` lines,
 		// which need the public relay origin this instance runs on.
 		"relay_origin": s.relayPublic,
@@ -1534,6 +1540,41 @@ func (s *Server) handleDeviceRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleDeviceAlias(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Device string `json:"device"`
+		Alias  string `json:"alias"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	ns, shared, ok := s.requireDevice(w, r, body.Device)
+	if !ok {
+		return
+	}
+	if shared {
+		http.Error(w, "只能修改自己设备的别名", http.StatusForbidden)
+		return
+	}
+	resp, err := s.adminReq("POST", "/admin/devices/alias", nil, map[string]string{
+		"namespace": ns,
+		"device":    body.Device,
+		"alias":     body.Alias,
+	})
+	if err != nil {
+		http.Error(w, "relay unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	copyResp(w, resp)
 }
 
 func (s *Server) handleDeviceRules(w http.ResponseWriter, r *http.Request) {

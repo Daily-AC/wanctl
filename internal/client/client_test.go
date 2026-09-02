@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -131,3 +132,36 @@ func TestResolveUnqualifiedTargetUsesRelayNamespace(t *testing.T) {
 		t.Fatalf("canonical pin missing: %+v, ok=%v", got, ok)
 	}
 }
+
+func TestPeersWithAliasesAndAcceptedTargetSpellings(t *testing.T) {
+	c := NewWith(nil, transport.NewMemStore(), "https://relay.test", "tok", "http")
+	c.httpc = &http.Client{Transport: peerRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := `{"namespace":"alice","devices":["legion","plain"],"aliases":{"legion":"desk"}}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    r,
+		}, nil
+	})}
+
+	devices, aliases, err := c.PeersWithAliases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(devices, ",") != "legion,plain" || aliases["legion"] != "desk" {
+		t.Fatalf("peers = %v, aliases = %#v", devices, aliases)
+	}
+	spellings, err := c.PeerAliases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "legion,alice/legion,desk,alice/desk,plain,alice/plain"
+	if got := strings.Join(spellings, ","); got != want {
+		t.Fatalf("target spellings = %q, want %q", got, want)
+	}
+}
+
+type peerRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f peerRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
