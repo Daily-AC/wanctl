@@ -3,115 +3,133 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>wanctl — nothing runs until you pull the tag</title>
-<meta name="description" content="wanctl hands an AI agent your machines across the public internet. Every command stops at the device and waits for the person holding the tag. The relay in the middle only ever sees ciphertext.">
+<title>wanctl — your machines, your call</title>
+<meta name="description" content="wanctl gives an AI agent your machines across the public internet. Every command stops at the device and waits for you. The relay in the middle only ever sees ciphertext.">
 <link rel="stylesheet" href="assets/app.css">
 <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
 </head>
 <body>
 
-<header class="top">
-  <a class="wordmark" href="/">
-    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+<header class="nav">
+  <a class="brand" href="/">
+    <svg width="20" height="20" viewBox="0 0 22 22" aria-hidden="true">
       <path d="M6.5 9.2V6.1a4.5 4.5 0 0 1 9 0v3.1" fill="none" stroke="currentColor" stroke-width="1.7"/>
-      <rect x="3.2" y="9.2" width="15.6" height="11.3" rx="1.3" fill="none" stroke="currentColor" stroke-width="1.7"/>
-      <circle cx="11" cy="13.9" r="1.7" fill="currentColor"/>
-      <path d="M11 15.6v2.4" stroke="currentColor" stroke-width="1.7"/>
+      <rect x="3.2" y="9.2" width="15.6" height="11.3" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.7"/>
+      <circle cx="11" cy="13.9" r="1.6" fill="currentColor"/>
     </svg>
     wanctl
   </a>
-  <nav>
-    <a href="#how"        data-en="How it works" data-zh="怎么工作">How it works</a>
-    <a href="#install"    data-en="Install"      data-zh="安装">Install</a>
-    <a href="#security" data-opt data-en="Security" data-zh="安全">Security</a>
+  <nav class="links">
+    <a href="#decide"  data-en="How it works" data-zh="怎么工作">How it works</a>
+    <a href="#fleet" data-opt data-en="Devices" data-zh="设备">Devices</a>
+    <a href="#install" data-en="Install" data-zh="安装">Install</a>
     <a href="https://github.com/Daily-AC/wanctl">GitHub</a>
   </nav>
   <button class="lang" id="lang" type="button" aria-label="Switch language">中文</button>
 </header>
 
 <main>
-  <section class="hero">
-    <div>
-      <h1 data-en="Nothing runs until you pull the tag."
-          data-zh="不摘牌，什么都不会跑。">Nothing runs until you pull the tag.</h1>
-      <p class="lede"
-         data-en="wanctl hands an AI agent your machines across the public internet. Every command it sends stops at the device and waits for the person holding the tag. The relay in the middle only ever sees <b>ciphertext</b>."
-         data-zh="wanctl 把你的机器交给 AI agent 去用，跨公网。它发的每一条命令都会停在设备上，等挂牌的那个人。中间的 relay 自始至终只看得到<b>密文</b>。">
-        wanctl hands an AI agent your machines across the public internet. Every command it sends
-        stops at the device and waits for the person holding the tag. The relay in the middle only
-        ever sees <b>ciphertext</b>.
-      </p>
+
+  <!-- 首屏：双屏真实场景。屏幕里跑的是活的产品界面，不是贴图。 -->
+  <section class="tile center">
+    <h1 data-en="Your machines. Your call." data-zh="你的机器，你说了算。">Your machines. Your call.</h1>
+    <p class="lead"
+       data-en="wanctl gives an AI agent your machines across the public internet. Every command stops at the device and waits for you."
+       data-zh="wanctl 把你的机器跨公网交给 AI agent 去用。它发的每一条命令都会停在设备上，等你。">
+      wanctl gives an AI agent your machines across the public internet.
+      Every command stops at the device and waits for you.
+    </p>
+    <div class="cta-row">
+      <a class="btn" href="#install" data-en="Install" data-zh="安装">Install</a>
+      <a class="link-arrow" href="#decide" data-en="See how it works" data-zh="看看它怎么工作">See how it works</a>
     </div>
-    <div class="cta">
-      <span class="silk" data-en="Install on the machine you want to reach"
-            data-zh="在你想连的那台机器上装">Install on the machine you want to reach</span>
-      <div class="cmdline">
-        <code id="installcmd">curl -fsSL https://wanctl.dev/install.sh | sh</code>
-        <button class="copy" id="copy" type="button"
-                data-en="Copy" data-zh="复制">Copy</button>
+
+    <div class="stage">
+      <div class="laptop">
+        <div class="lid">
+          <div class="notch"></div>
+          <div class="screen"><div class="term" id="term"></div></div>
+        </div>
+        <div class="base"></div>
       </div>
-      <p class="ctanote"
-         data-en="One Go binary: relay, portal, agent, controller and MCP server are all the same file. Windows uses <code>install.ps1</code>."
-         data-zh="一个 Go 二进制：relay、门户、设备端、控制端、MCP server 都是同一个文件。Windows 走 <code>install.ps1</code>。">
-        One Go binary: relay, portal, agent, controller and MCP server are all the same file.
-        Windows uses <code>install.ps1</code>.
-      </p>
+      <div class="phone">
+        <div class="body">
+          <div class="screen">
+            <span class="island"></span>
+            <div class="ask" id="ask"></div>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
-  <div class="boardhead">
-    <span class="silk" data-en="Device board" data-zh="设备板">Device board</span>
-    <span class="silk right"
-          data-en="Sandbox demo · nothing leaves this page"
-          data-zh="沙箱演示 · 什么都不会离开这个页面">Sandbox demo · nothing leaves this page</span>
-  </div>
-
-  <div class="board" id="board"></div>
-
-  <div class="act">
-  <div class="decide" id="decide" hidden>
-    <button class="key pull" data-act="y" type="button">
-      <kbd>Y</kbd><span class="full" data-en="Pull the tag" data-zh="摘牌">Pull the tag</span><span class="abbr" data-en="Pull" data-zh="摘牌">Pull</span>
-    </button>
-    <button class="key" data-act="a" type="button">
-      <kbd>A</kbd><span class="full" data-en="Always, this directory" data-zh="本目录一直允许">Always, this directory</span><span class="abbr" data-en="Here" data-zh="本目录">Here</span>
-    </button>
-    <button class="key" data-act="g" type="button">
-      <kbd>G</kbd><span class="full" data-en="Always, everywhere" data-zh="全局允许">Always, everywhere</span><span class="abbr" data-en="Always" data-zh="全局">Always</span>
-    </button>
-    <button class="key no" data-act="n" type="button">
-      <kbd>N</kbd><span class="full" data-en="Refuse" data-zh="拒绝">Refuse</span><span class="abbr" data-en="Refuse" data-zh="拒绝">Refuse</span>
-    </button>
-    <span class="hint" id="hint"></span>
-  </div>
-
-  <div class="wire">
-    <div class="agenthead">
-      <span class="silk" data-en="Controller" data-zh="控制端">Controller</span>
-      <span class="mono" style="font-size:12px">claude@workstation</span>
+  <!-- 深色屏：审批凭证被放大成主体 -->
+  <section class="tile dark center" id="decide">
+    <h2 data-en="Nothing runs until you say yes."
+        data-zh="你不点头，什么都不会跑。">Nothing runs until you say yes.</h2>
+    <p class="lead"
+       data-en="The device decides locally. A rule you signed can let a command through; anything else waits for a person. Every answer is written down."
+       data-zh="策略在设备本地判定。命中你签过的规则就放行，其余一律等人。每一次回答都会被记下来。">
+      The device decides locally. A rule you signed can let a command through;
+      anything else waits for a person. Every answer is written down.
+    </p>
+    <div class="panel">
+      <div class="head">
+        <span class="t" data-en="Signed decision" data-zh="签过的决定">Signed decision</span>
+        <span class="s mono" id="credtime">—</span>
+      </div>
+      <div class="body" id="cred"></div>
     </div>
-    <div id="agent"></div>
-  </div>
-  </div>
-
-  <section class="ledger">
-    <h2 data-en="Signed decisions" data-zh="签过的决定">Signed decisions</h2>
-    <div id="creds"><p class="empty"
-       data-en="Nothing signed yet. The tag below the board is waiting on you."
-       data-zh="还没有签过。板子下面那块牌在等你。">Nothing signed yet. The tag below the board is waiting on you.</p></div>
   </section>
+
+  <!-- 浅灰屏：设备列表被放大成主体 -->
+  <section class="tile grey center" id="fleet">
+    <h2 data-en="Your fleet, in one list." data-zh="你的机器，一张表看完。">Your fleet, in one list.</h2>
+    <p class="lead"
+       data-en="Laptops, servers, phones and routers. One Go binary runs on all of them, over WebSocket or plain HTTP long-poll."
+       data-zh="笔记本、服务器、手机、路由器。同一个 Go 二进制跑在所有这些上面，走 WebSocket 或普通 HTTP 长轮询。">
+      Laptops, servers, phones and routers. One Go binary runs on all of them,
+      over WebSocket or plain HTTP long-poll.
+    </p>
+    <div class="panel">
+      <div class="head">
+        <span class="t" data-en="Devices" data-zh="设备">Devices</span>
+        <span class="s" id="fleetcount">—</span>
+      </div>
+      <ul class="rows" id="rows"></ul>
+    </div>
+  </section>
+
+  <!-- 白屏：安装 -->
+  <section class="tile center" id="install">
+    <h2 data-en="One line to install." data-zh="一行装完。">One line to install.</h2>
+    <p class="lead"
+       data-en="Run it on the machine you want to reach. The installer verifies a signed release manifest before anything touches disk."
+       data-zh="在你想连的那台机器上跑。安装器先验证签名过的发布清单，验过了才落盘。">
+      Run it on the machine you want to reach. The installer verifies a signed
+      release manifest before anything touches disk.
+    </p>
+    <div class="cmdline">
+      <code id="installcmd">curl -fsSL https://wanctl.dev/install.sh | sh</code>
+      <button id="copy" type="button" data-en="Copy" data-zh="复制">Copy</button>
+    </div>
+    <p class="lead"
+       data-en="Windows uses &lt;code class=&quot;mono&quot;&gt;install.ps1&lt;/code&gt; — no OpenSSL needed."
+       data-zh="Windows 走 &lt;code class=&quot;mono&quot;&gt;install.ps1&lt;/code&gt;，不需要装 OpenSSL。">
+      Windows uses <code class="mono">install.ps1</code> — no OpenSSL needed.
+    </p>
+  </section>
+
 </main>
 
-<div class="strip">
-  <span data-en="RELAY" data-zh="RELAY">RELAY</span> <b>relay.example.com · 42 ms</b>
-  <span data-en="DEVICES" data-zh="DEVICES">DEVICES</span> <b>6</b>
-  <span data-en="ONLINE" data-zh="ONLINE">ONLINE</span> <b>5</b>
-  <span data-en="PENDING" data-zh="PENDING">PENDING</span> <b id="npend">1</b>
-  <span>E2E</span> <b>on</b>
-  <span class="end"><a href="https://github.com/Daily-AC/wanctl">github.com/Daily-AC/wanctl</a></span>
-</div>
+<footer class="foot">
+  <div class="row">
+    <span data-en="Open source, Apache-2.0." data-zh="开源，Apache-2.0。">Open source, Apache-2.0.</span>
+    <a href="https://github.com/Daily-AC/wanctl">github.com/Daily-AC/wanctl</a>
+    <span class="end mono" data-en="Demo devices are fictional." data-zh="演示设备均为虚构。">Demo devices are fictional.</span>
+  </div>
+</footer>
 
 <script src="assets/app.js"></script>
-<script src="assets/field.js"></script>
 </body>
 </html>
