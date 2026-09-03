@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wanctl — nothing runs until you pull the tag</title>
+<meta name="description" content="wanctl hands an AI agent your machines across the public internet. Every command stops at the device and waits for the person holding the tag. The relay in the middle only ever sees ciphertext.">
+<link rel="stylesheet" href="assets/app.css">
+<link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+</head>
+<body>
+
+<header class="top">
+  <a class="wordmark" href="/">
+    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+      <path d="M6.5 9.2V6.1a4.5 4.5 0 0 1 9 0v3.1" fill="none" stroke="currentColor" stroke-width="1.7"/>
+      <rect x="3.2" y="9.2" width="15.6" height="11.3" rx="1.3" fill="none" stroke="currentColor" stroke-width="1.7"/>
+      <circle cx="11" cy="13.9" r="1.7" fill="currentColor"/>
+      <path d="M11 15.6v2.4" stroke="currentColor" stroke-width="1.7"/>
+    </svg>
+    wanctl
+  </a>
+  <nav>
+    <a href="#how"        data-en="How it works" data-zh="怎么工作">How it works</a>
+    <a href="#install"    data-en="Install"      data-zh="安装">Install</a>
+    <a href="#security" data-opt data-en="Security" data-zh="安全">Security</a>
+    <a href="https://github.com/Daily-AC/wanctl">GitHub</a>
+  </nav>
+  <button class="lang" id="lang" type="button" aria-label="Switch language">中文</button>
+</header>
+
+<main>
+  <section class="hero">
+    <div>
+      <h1 data-en="Nothing runs until you pull the tag."
+          data-zh="不摘牌，什么都不会跑。">Nothing runs until you pull the tag.</h1>
+      <p class="lede"
+         data-en="wanctl hands an AI agent your machines across the public internet. Every command it sends stops at the device and waits for the person holding the tag. The relay in the middle only ever sees <b>ciphertext</b>."
+         data-zh="wanctl 把你的机器交给 AI agent 去用，跨公网。它发的每一条命令都会停在设备上，等挂牌的那个人。中间的 relay 自始至终只看得到<b>密文</b>。">
+        wanctl hands an AI agent your machines across the public internet. Every command it sends
+        stops at the device and waits for the person holding the tag. The relay in the middle only
+        ever sees <b>ciphertext</b>.
+      </p>
+    </div>
+    <div class="agent">
+      <div class="agenthead">
+        <span class="silk" data-en="Controller" data-zh="控制端">Controller</span>
+        <span class="mono" style="font-size:12px">claude@mac-studio</span>
+        <span class="silk right" data-en="relay hk · 38 ms" data-zh="relay hk · 38 ms">relay hk · 38 ms</span>
+      </div>
+      <div id="agent"></div>
+    </div>
+  </section>
+
+  <div class="boardhead">
+    <span class="silk" data-en="Device board" data-zh="设备板">Device board</span>
+    <span class="silk right"
+          data-en="Sandbox demo · nothing leaves this page"
+          data-zh="沙箱演示 · 什么都不会离开这个页面">Sandbox demo · nothing leaves this page</span>
+  </div>
+
+  <div class="board" id="board"></div>
+
+  <div class="decide" id="decide" hidden>
+    <button class="key pull" data-act="y" type="button">
+      <kbd>Y</kbd><span class="full" data-en="Pull the tag" data-zh="摘牌">Pull the tag</span><span class="abbr" data-en="Pull" data-zh="摘牌">Pull</span>
+    </button>
+    <button class="key" data-act="a" type="button">
+      <kbd>A</kbd><span class="full" data-en="Always, this directory" data-zh="本目录一直允许">Always, this directory</span><span class="abbr" data-en="Here" data-zh="本目录">Here</span>
+    </button>
+    <button class="key" data-act="g" type="button">
+      <kbd>G</kbd><span class="full" data-en="Always, everywhere" data-zh="全局允许">Always, everywhere</span><span class="abbr" data-en="Always" data-zh="全局">Always</span>
+    </button>
+    <button class="key no" data-act="n" type="button">
+      <kbd>N</kbd><span class="full" data-en="Refuse" data-zh="拒绝">Refuse</span><span class="abbr" data-en="Refuse" data-zh="拒绝">Refuse</span>
+    </button>
+    <span class="hint" id="hint"></span>
+  </div>
+
+  <section class="ledger">
+    <h2 data-en="Signed decisions" data-zh="签过的决定">Signed decisions</h2>
+    <div id="creds"><p class="empty"
+       data-en="Nothing signed yet. The tag below the board is waiting on you."
+       data-zh="还没有签过。板子下面那块牌在等你。">Nothing signed yet. The tag below the board is waiting on you.</p></div>
+  </section>
+</main>
+
+<div class="strip">
+  <span data-en="RELAY" data-zh="RELAY">RELAY</span> <b>hk · 38 ms</b>
+  <span data-en="DEVICES" data-zh="DEVICES">DEVICES</span> <b>6</b>
+  <span data-en="ONLINE" data-zh="ONLINE">ONLINE</span> <b>5</b>
+  <span data-en="PENDING" data-zh="PENDING">PENDING</span> <b id="npend">1</b>
+  <span>E2E</span> <b>on</b>
+  <span class="end"><a href="https://github.com/Daily-AC/wanctl">github.com/Daily-AC/wanctl</a></span>
+</div>
+
+<script src="assets/app.js"></script>
+</body>
+</html>

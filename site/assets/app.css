@@ -1,0 +1,342 @@
+/* TAGOUT — wanctl product site
+   视觉真源 docs/design/DESIGN.md。改这里之前先改那里。
+   场景：白天，车间的配电柜前。冷白漆面、黑丝印、安全黄的牌。 */
+
+/* ── fonts ─────────────────────────────────────────────────────────── */
+@font-face{
+  font-family:'Archivo';font-style:normal;font-weight:100 900;font-stretch:62% 125%;
+  font-display:swap;src:url(fonts/archivo-var-latin.woff2) format('woff2');
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face{
+  font-family:'Archivo';font-style:normal;font-weight:100 900;font-stretch:62% 125%;
+  font-display:swap;src:url(fonts/archivo-var-latin-ext.woff2) format('woff2');
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face{
+  font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;
+  font-display:swap;src:url(fonts/jbmono-var-latin.woff2) format('woff2');
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face{
+  font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;
+  font-display:swap;src:url(fonts/jbmono-var-latin-ext.woff2) format('woff2');
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
+/* ── tokens ────────────────────────────────────────────────────────── */
+:root{
+  --ground:   oklch(0.972 0.002  250);
+  --surface:  oklch(0.988 0.0015 250);
+  --ink:      oklch(0.185 0.004  250);
+  --ink-2:    oklch(0.485 0.006  250);
+  --ink-3:    oklch(0.640 0.005  250); /* 仅装饰笔画/状态点，实测 3.10:1 不得承载文字 */
+  --line:     oklch(0.885 0.004  250);
+  --line-2:   oklch(0.815 0.005  250);
+
+  --tag:      oklch(0.874 0.184 92);
+  --tag-deep: oklch(0.780 0.170 88);
+  --vermil:   oklch(0.552 0.196 30);
+  --live:     oklch(0.605 0.155 150);
+
+  --sans:'Archivo','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
+  --mono:'JetBrains Mono','PingFang SC',ui-monospace,SFMono-Regular,Menlo,monospace;
+
+  /* 字阶 模数 1.333 */
+  --t-12:12px; --t-13:13px; --t-16:16px; --t-21:21px;
+  --t-28:28px; --t-37:37px; --t-50:50px; --t-67:67px;
+
+  /* z 语义刻度 */
+  --z-board:1; --z-tag:2; --z-bar:5; --z-dialog:8;
+
+  --pad:clamp(18px,4.2vw,56px);
+  --ease:cubic-bezier(.2,.8,.2,1);
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--ground);color:var(--ink);
+  font-family:var(--sans);font-size:var(--t-16);font-weight:400;
+  font-variant-numeric:tabular-nums;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+}
+a{color:inherit}
+
+/* 丝印微标签：全大写、宽字距、窄字宽。整页只有这一种小标签。 */
+.silk{
+  font-family:var(--sans);font-size:var(--t-12);font-weight:600;
+  font-stretch:78%;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-2);
+}
+.mono{font-family:var(--mono);font-variant-ligatures:none}
+
+/* ── 顶栏 ──────────────────────────────────────────────────────────── */
+.top{
+  display:flex;align-items:center;gap:clamp(14px,3vw,34px);
+  padding:16px var(--pad);border-bottom:1px solid var(--line);
+}
+.wordmark{
+  font-weight:800;font-stretch:80%;font-size:var(--t-21);
+  letter-spacing:-.02em;text-decoration:none;display:flex;align-items:center;gap:9px;
+}
+.wordmark svg{display:block;flex:none}
+.top nav{display:flex;gap:clamp(12px,2.4vw,26px);margin-left:auto}
+.top nav a{
+  font-size:var(--t-13);font-weight:500;color:var(--ink-2);text-decoration:none;
+  padding-bottom:2px;border-bottom:1px solid transparent;
+}
+.top nav a:hover{color:var(--ink);border-bottom-color:var(--ink)}
+.lang{
+  font-family:var(--mono);font-size:var(--t-12);background:none;cursor:pointer;
+  border:1px solid var(--line-2);color:var(--ink);padding:5px 9px;line-height:1;
+}
+.lang:hover{border-color:var(--ink)}
+.lang:focus-visible,.top nav a:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+
+/* ── hero：左标题 / 右 agent 会话。右列不是盒子，是对齐出来的文本。 ─── */
+.hero{
+  display:grid;grid-template-columns:minmax(0,1.06fr) minmax(0,.94fr);
+  gap:clamp(20px,3.6vw,54px);align-items:start;
+  padding:clamp(26px,3.6vw,44px) var(--pad) clamp(20px,2.6vw,30px);
+}
+h1{
+  margin:0;font-size:clamp(31px,4.7vw,62px);line-height:.94;
+  font-weight:820;font-stretch:88%;letter-spacing:-.032em;
+  text-transform:uppercase;text-wrap:balance;max-width:15ch;
+}
+.lede{
+  margin:clamp(14px,1.8vw,20px) 0 0;max-width:52ch;
+  font-size:clamp(14px,1.05vw,16.5px);line-height:1.6;color:var(--ink-2);
+  text-wrap:pretty;
+}
+.lede b{color:var(--ink);font-weight:600}
+
+/* agent 会话：无边框、无底色，只有一条上分隔线和对齐 */
+.agent{padding-top:7px;border-top:1px solid var(--line-2);min-width:0}
+.agenthead{display:flex;align-items:baseline;gap:10px;margin-bottom:11px}
+.agenthead .right{margin-left:auto;color:var(--ink-2)}
+.agent .line{
+  font-family:var(--mono);font-size:12.5px;line-height:1.7;color:var(--ink-2);
+  white-space:pre-wrap;word-break:break-word;
+}
+.agent .line.cmd{color:var(--ink);font-weight:700}
+.agent .line.wait{color:var(--ink-2)}
+.agent .line.no{color:var(--vermil)}
+.agent .cursor{
+  display:inline-block;width:7px;height:1.05em;vertical-align:-.16em;
+  background:var(--ink);animation:blink 1.05s steps(2,end) infinite;
+}
+@keyframes blink{50%{opacity:0}}
+
+@media (max-width:900px){
+  .hero{grid-template-columns:1fr;gap:22px}
+  .agent{padding-top:14px}
+}
+
+/* ── 板：唯一允许存在的「物体」在这里面 ─────────────────────────────── */
+.boardhead{
+  display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;
+  padding:0 var(--pad) 10px;border-bottom:1px solid var(--line);
+}
+.boardhead .right{margin-left:auto;color:var(--ink-2)}
+
+.board{
+  position:relative;z-index:var(--z-board);
+  display:grid;grid-auto-flow:column;grid-auto-columns:minmax(172px,1fr);
+  gap:clamp(10px,1.4vw,20px);align-items:stretch;
+  padding:clamp(20px,2.4vw,30px) var(--pad) 152px;
+  overflow-x:auto;overflow-y:visible;overscroll-behavior-x:contain;
+  scroll-snap-type:x proximity;
+}
+.board::-webkit-scrollbar{height:6px}
+.board::-webkit-scrollbar-thumb{background:var(--line-2)}
+
+/* 搪瓷牌本体：唯一允许有边框和阴影的物体 */
+.plate{
+  position:relative;scroll-snap-align:center;
+  display:flex;flex-direction:column;
+  background:
+    linear-gradient(177deg,oklch(0.997 0.0005 250) 0%,var(--surface) 38%,oklch(0.962 0.002 250) 100%);
+  border:1px solid var(--line-2);border-top-color:oklch(0.945 0.003 250);border-radius:2px;
+  box-shadow:0 3px 4px -2px oklch(0.185 0.004 250 / .17),
+             inset 0 1px 0 oklch(1 0 0 / .9);
+  padding:13px 13px 14px;min-width:0;
+}
+.plate.off{background:oklch(0.951 0.002 250);border-color:var(--line);box-shadow:none}
+.plate.off .name{color:var(--ink-2)}
+.plate .spec.last{margin-top:auto;padding-top:6px}
+
+.plate .screw{position:absolute;width:7px;height:7px;opacity:.5}
+.plate .screw.tl{top:5px;left:5px}   .plate .screw.tr{top:5px;right:5px}
+.plate .screw.bl{bottom:5px;left:5px}.plate .screw.br{bottom:5px;right:5px}
+
+.prow{display:flex;align-items:center;gap:7px;margin-bottom:11px}
+.led{width:9px;height:9px;border-radius:50%;flex:none;background:var(--live);
+     box-shadow:0 0 0 2.5px oklch(0.605 0.155 150 / .17)}
+.led.off{background:var(--ink-3);box-shadow:none}
+.led.wait{background:var(--tag);box-shadow:0 0 0 2.5px oklch(0.874 0.184 92 / .28);
+          animation:relay 1.1s steps(2,end) infinite}
+@keyframes relay{50%{opacity:.42}}
+.slot{font-size:11px;letter-spacing:.1em}
+.via{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--ink-2);
+     border:1px solid var(--line);padding:1px 4px;line-height:1.5}
+
+/* 铭牌：刻上去的，不是贴上去的 */
+.name{
+  font-weight:700;font-stretch:82%;font-size:var(--t-16);
+  letter-spacing:-.005em;line-height:1.2;margin-bottom:9px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.tagplate{
+  background:oklch(0.905 0.003 250);border-radius:1px;
+  box-shadow:inset 0 1px 2px oklch(0.185 0.004 250 / .22);
+  padding:5px 7px;margin-bottom:10px;
+}
+.tagplate .host{font-family:var(--mono);font-size:var(--t-13);font-weight:700;
+                letter-spacing:-.01em;display:block;white-space:nowrap;
+                overflow:hidden;text-overflow:ellipsis}
+.spec{font-family:var(--mono);font-size:10.5px;line-height:1.55;color:var(--ink-2);
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.keyhole{display:block;margin:11px auto 3px;opacity:.62}
+
+/* 挂牌：穿过锁孔挂在牌下面，不遮任何身份信息。整页唯一的颜色事件。 */
+.shackle{
+  position:absolute;left:50%;bottom:-19px;transform:translateX(-50%);
+  z-index:calc(var(--z-tag) + 1);color:var(--ink-2);
+  animation:drop .3s var(--ease) both;
+}
+.tag{
+  position:absolute;z-index:var(--z-tag);left:50%;top:calc(100% + 14px);
+  width:min(158px,104%);
+  transform:translateX(-50%) rotate(-1.4deg);transform-origin:50% -14px;
+  background:var(--tag);border:1px solid var(--tag-deep);border-radius:2px;
+  padding:13px 10px 10px;cursor:grab;
+  box-shadow:0 6px 11px -5px oklch(0.185 0.004 250 / .38);
+  animation:drop .34s var(--ease) both;animation-delay:.06s;
+}
+.tag:active{cursor:grabbing}
+.tag:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+@keyframes drop{from{transform:translateX(-50%) rotate(-13deg);opacity:0}}
+.tag .hole{
+  position:absolute;top:4px;left:50%;transform:translateX(-50%);
+  width:10px;height:10px;border-radius:50%;background:var(--ground);
+  box-shadow:inset 0 1px 1.5px oklch(0.185 0.004 250 / .42);
+}
+.tag h3{
+  margin:0 0 6px;font-size:11.5px;font-weight:800;font-stretch:74%;
+  letter-spacing:.08em;text-transform:uppercase;line-height:1.2;text-align:center;
+  text-wrap:balance;
+}
+.tag .cmd{
+  font-family:var(--mono);font-size:10px;line-height:1.5;color:var(--ink);
+  border-top:1px solid var(--tag-deep);padding-top:6px;
+  overflow-wrap:anywhere;
+}
+.tag.pulled,.tag.pulled ~ .shackle{animation:pull .34s var(--ease) forwards;pointer-events:none}
+.plate:has(.tag.pulled) .shackle{animation:pull .34s var(--ease) forwards}
+@keyframes pull{to{transform:translateX(-50%) rotate(42deg) translateY(54px);opacity:0}}
+.tag.denied{background:var(--surface);border-color:var(--vermil)}
+.tag.denied h3{color:var(--vermil)}
+.tag.denied .cmd{border-top-color:var(--vermil)}
+
+/* ── 决定键 ────────────────────────────────────────────────────────── */
+.decide{
+  display:flex;gap:8px;flex-wrap:wrap;align-items:center;
+  padding:0 var(--pad) clamp(26px,3.4vw,40px);
+}
+.decide[hidden]{display:none}
+.key{
+  display:flex;align-items:baseline;gap:7px;cursor:pointer;
+  font-family:var(--sans);font-size:var(--t-13);font-weight:600;color:var(--ink);
+  background:var(--surface);border:1px solid var(--line-2);border-radius:2px;
+  padding:9px 13px;transition:border-color .16s var(--ease),background .16s var(--ease);
+}
+.key:hover{border-color:var(--ink);background:oklch(0.998 0 0)}
+.key:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.key kbd{
+  font-family:var(--mono);font-size:11px;font-weight:700;
+  background:var(--ink);color:var(--surface);border-radius:1px;
+  padding:2px 5px;line-height:1;
+}
+.key.pull{background:var(--tag);border-color:var(--tag-deep)}
+.key.pull:hover{background:var(--tag-deep)}
+.key.pull kbd{background:var(--ink);color:var(--tag)}
+.key.no kbd{background:var(--vermil)}
+.decide .hint{font-size:var(--t-13);color:var(--ink-2);margin-left:4px}
+.key .abbr{display:none}
+
+/* ── 凭证（工程图纸标题栏） ─────────────────────────────────────────── */
+.ledger{padding:0 var(--pad) clamp(30px,4vw,50px)}
+.ledger h2{
+  margin:0 0 12px;font-size:var(--t-12);font-weight:600;font-stretch:78%;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2);
+  padding-bottom:9px;border-bottom:1px solid var(--line);
+}
+.cred{
+  border-bottom:1px solid var(--line);padding:11px 0;
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));
+  gap:3px clamp(14px,2.6vw,34px);
+  animation:stamp .26s var(--ease) both;
+}
+@keyframes stamp{from{opacity:0;transform:translateY(-4px)}}
+.cred div{display:flex;gap:9px;align-items:baseline;min-width:0}
+.cred dt{
+  flex:none;width:74px;font-size:10.5px;font-weight:600;font-stretch:78%;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--ink-2);
+}
+.cred dd{
+  margin:0;font-family:var(--mono);font-size:var(--t-13);min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.cred.no dd.verdict{color:var(--vermil);font-weight:700}
+.cred dd.verdict{font-weight:700}
+.ledger .empty{font-size:var(--t-13);color:var(--ink-2);padding:11px 0}
+
+/* ── 输出 ──────────────────────────────────────────────────────────── */
+.out{
+  margin:0;padding:0 var(--pad) clamp(30px,4vw,48px);
+  font-family:var(--mono);font-size:var(--t-13);line-height:1.72;color:var(--ink-2);
+  white-space:pre-wrap;word-break:break-word;
+}
+.out:empty{display:none}
+.out .ok{color:var(--ink)}
+.out .no{color:var(--vermil)}
+
+/* ── 底部仪表条 ────────────────────────────────────────────────────── */
+.strip{
+  position:sticky;bottom:0;z-index:var(--z-bar);
+  display:flex;gap:clamp(12px,2.4vw,30px);flex-wrap:wrap;align-items:center;
+  padding:11px var(--pad);background:var(--ground);border-top:1px solid var(--line-2);
+  font-family:var(--mono);font-size:11px;color:var(--ink-2);
+}
+.strip b{color:var(--ink);font-weight:700}
+.strip .end{margin-left:auto}
+
+@media (max-width:640px){
+  .board{grid-auto-columns:minmax(156px,1fr);scroll-snap-type:x mandatory;
+         padding-top:14px;padding-bottom:150px}
+  .top nav a[data-opt]{display:none}
+  .lede{font-size:14px;line-height:1.55}
+  .boardhead{flex-direction:column;gap:2px}
+  .boardhead .right{margin-left:0}
+
+  /* 主操作永远够得着：决定键钉在底部，仪表条退回文档流末尾 */
+  .decide{
+    position:sticky;bottom:0;z-index:var(--z-bar);
+    background:var(--ground);border-top:1px solid var(--line-2);
+    padding:9px var(--pad);margin-bottom:0;
+    flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;
+  }
+  .decide .hint{display:none}
+  .key .full{display:none}
+  .key .abbr{display:inline}
+  .key{flex:none;padding:8px 11px}
+  .key span{white-space:nowrap}
+  .strip{position:static}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;
+                       transition-duration:1ms!important}
+}
