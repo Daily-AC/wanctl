@@ -23,18 +23,20 @@
   }
 
   /* ── 六台设备 ──────────────────────────────────────────────────── */
+  /* 虚构示例设备。官网是公开页面，绝不渲染任何真实部署的机器名、域名或延迟——
+     与 docs/portal/ 的占位符规矩一致（relay.example.com / portal.example.com）。 */
   var DEVICES = [
-    { slot: 1, host: 'mac-studio',     en: 'Study',         zh: '书房',
+    { slot: 1, host: 'studio-01',  en: 'Workshop',    zh: '工作台',
       os: 'macOS 15.6',       arch: 'arm64',  via: 'ws',   ver: 'v0.3.4', on: true },
-    { slot: 2, host: 'zyl',            en: 'Living room',   zh: '客厅笔记本',
+    { slot: 2, host: 'bench-02',   en: 'Test bench',  zh: '测试机',
       os: 'Windows 11',       arch: 'amd64',  via: 'ws',   ver: 'v0.3.4', on: true },
-    { slot: 3, host: 'ls',             en: 'Tencent cloud', zh: '腾讯云',
+    { slot: 3, host: 'build-01',   en: 'Build box',   zh: '构建机',
       os: 'Ubuntu 24.04',     arch: 'amd64',  via: 'ws',   ver: 'v0.3.4', on: true },
-    { slot: 4, host: 'hk',             en: 'HK edge',       zh: '香港入口',
+    { slot: 4, host: 'edge-fra',   en: 'Edge node',   zh: '边缘节点',
       os: 'Debian 13',        arch: 'amd64',  via: 'http', ver: 'v0.3.4', on: true },
-    { slot: 5, host: 'mi10u',          en: 'Mi 10',         zh: '小米10',
+    { slot: 5, host: 'handset-a',  en: 'Handset',     zh: '手机',
       os: 'Android 13 · APK', arch: 'arm64',  via: '—',    ver: 'v0.3.3', on: false },
-    { slot: 6, host: 'openwrt-router', en: 'Router',        zh: '路由器',
+    { slot: 6, host: 'gateway-r',  en: 'Gateway',     zh: '网关',
       os: 'OpenWrt 24.10',    arch: 'mipsle', via: 'http', ver: 'v0.3.4', on: true }
   ];
 
@@ -84,36 +86,36 @@
 
   /* ── 剧本 ──────────────────────────────────────────────────────── */
   var SCRIPT = [
-    { host: 'zyl', by: 'claude@mac-studio', cwd: 'C:\\work\\asr',
-      cmd: 'wanctl exec --target zyl "python scripts/train.py --epochs 3 --resume"',
+    { host: 'bench-02', by: 'claude@workstation', cwd: 'C:\\work\\asr',
+      cmd: 'wanctl exec --target bench-02 "python scripts/train.py --epochs 3 --resume"',
       raw: 'python scripts/train.py --epochs 3 --resume',
       short: 'python scripts/train.py --epochs 3 --resume',
       out: ['loading checkpoint epoch_02.pt',
             'epoch 3/3   loss 0.417   wer 11.2%',
             'saved epoch_03.pt  ·  4m 51s'] },
     /* 同一条命令加了个参数：前缀规则命中，这是 a/g 与 y 的分野 */
-    { host: 'zyl', by: 'claude@mac-studio', cwd: 'C:\\work\\asr',
-      cmd: 'wanctl exec --target zyl "python scripts/train.py --epochs 3 --resume --seed 7"',
+    { host: 'bench-02', by: 'claude@workstation', cwd: 'C:\\work\\asr',
+      cmd: 'wanctl exec --target bench-02 "python scripts/train.py --epochs 3 --resume --seed 7"',
       raw: 'python scripts/train.py --epochs 3 --resume --seed 7',
       short: 'python scripts/train.py --epochs 3 --resume --seed 7',
       out: ['seed 7  ·  epoch 3/3   loss 0.402   wer 10.8%',
             'saved epoch_03-seed7.pt'] },
     /* 换一条命令：即使签了「全局」也照样挂牌——规则是按命令记的 */
-    { host: 'zyl', by: 'claude@mac-studio', cwd: 'C:\\work\\asr',
-      cmd: 'wanctl exec --target zyl "nvidia-smi --query-gpu=name,memory.used --format=csv"',
+    { host: 'bench-02', by: 'claude@workstation', cwd: 'C:\\work\\asr',
+      cmd: 'wanctl exec --target bench-02 "nvidia-smi --query-gpu=name,memory.used --format=csv"',
       raw: 'nvidia-smi --query-gpu=name,memory.used --format=csv',
       short: 'nvidia-smi --query-gpu=name,memory.used',
       lesson: true,
       out: ['name, memory.used [MiB]',
-            'NVIDIA GeForce RTX 5090, 21344 MiB'] },
-    { pair: true, host: 'mac-studio', by: 'codex@hk',
-      cmd: 'wanctl pair --target mac-studio',
-      raw: '', short: 'codex@hk → mac-studio',
+            'NVIDIA GeForce RTX 4090, 21344 MiB'] },
+    { pair: true, host: 'studio-01', by: 'codex@edge-fra',
+      cmd: 'wanctl pair --target studio-01',
+      raw: '', short: 'codex@edge-fra → studio-01',
       fp: 'SHA256:9e77…c41a' }
   ];
 
-  var SAFER = { host: 'zyl', by: 'claude@mac-studio', cwd: 'C:\\work\\asr',
-    cmd: 'wanctl exec --target zyl "python scripts/train.py --dry-run --epochs 1"',
+  var SAFER = { host: 'bench-02', by: 'claude@workstation', cwd: 'C:\\work\\asr',
+    cmd: 'wanctl exec --target bench-02 "python scripts/train.py --dry-run --epochs 1"',
     raw: 'python scripts/train.py --dry-run --epochs 1',
     short: 'python scripts/train.py --dry-run --epochs 1',
     out: ['dry run: would resume from epoch_02.pt', 'no weights written'] };
@@ -131,6 +133,7 @@
     d.className = 'line ' + (cls || '');
     d.textContent = text;
     agent.appendChild(d);
+    agent.scrollTop = agent.scrollHeight;
     return d;
   }
   var typer = null;
@@ -146,6 +149,7 @@
       if (i >= text.length) { d.textContent = text; if (done) done(); return; }
       i++;
       d.innerHTML = esc(text.slice(0, i)) + '<span class="cursor"></span>';
+      agent.scrollTop = agent.scrollHeight;
       typer = setTimeout(step, 17);
     })();
   }
@@ -207,7 +211,8 @@
     el.innerHTML =
       '<span class="hole"></span>' +
       '<h3>' + esc(j.pair ? t().pairTitle : t().locked) + '</h3>' +
-      '<div class="cmd">' + esc(j.pair ? (j.by + '\n' + j.fp) : j.short) + '</div>';
+      '<div class="from">' + esc(j.by) + '</div>' +
+      '<div class="cmd">' + esc(j.pair ? j.fp : j.short) + '</div>';
     p.appendChild(el);
 
     el.addEventListener('click', function () { act('y'); });
@@ -219,6 +224,7 @@
     $$('button', decide).forEach(function (b) { b.disabled = false; });
     hint.textContent = t().hintWait;
     npend.textContent = '1';
+    burst(1);
   }
 
   /* ── 凭证 ──────────────────────────────────────────────────────── */
@@ -240,7 +246,10 @@
     creds.insertBefore(el, creds.firstChild);
   }
 
+  function burst(dir) { if (window.__field) window.__field.burst(dir); }
+
   function stream(lines, done) {
+    burst(-1);
     var i = 0;
     (function step() {
       if (i >= lines.length) { if (done) done(); return; }
@@ -403,6 +412,27 @@
   try { saved = localStorage.getItem('wanctl.lang'); } catch (_) {}
   if (saved === 'zh' || (!saved && /^zh/i.test(navigator.language || ''))) applyLang('zh');
   else boot(true);
+
+  var copyBtn = $('#copy');
+  if (copyBtn) copyBtn.addEventListener('click', function () {
+    var txt = $('#installcmd').textContent.trim();
+    var ok = function () {
+      copyBtn.classList.add('done');
+      copyBtn.textContent = lang === 'en' ? 'Copied' : '已复制';
+      setTimeout(function () {
+        copyBtn.classList.remove('done');
+        copyBtn.textContent = lang === 'en' ? 'Copy' : '复制';
+      }, 1600);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(ok, function () {});
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = txt; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); ok(); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+  });
 
   window.__demo = {
     state: function () {

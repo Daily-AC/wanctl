@@ -42,13 +42,20 @@
         ever sees <b>ciphertext</b>.
       </p>
     </div>
-    <div class="agent">
-      <div class="agenthead">
-        <span class="silk" data-en="Controller" data-zh="控制端">Controller</span>
-        <span class="mono" style="font-size:12px">claude@mac-studio</span>
-        <span class="silk right" data-en="relay hk · 38 ms" data-zh="relay hk · 38 ms">relay hk · 38 ms</span>
+    <div class="cta">
+      <span class="silk" data-en="Install on the machine you want to reach"
+            data-zh="在你想连的那台机器上装">Install on the machine you want to reach</span>
+      <div class="cmdline">
+        <code id="installcmd">curl -fsSL https://wanctl.dev/install.sh | sh</code>
+        <button class="copy" id="copy" type="button"
+                data-en="Copy" data-zh="复制">Copy</button>
       </div>
-      <div id="agent"></div>
+      <p class="ctanote"
+         data-en="One Go binary: relay, portal, agent, controller and MCP server are all the same file. Windows uses <code>install.ps1</code>."
+         data-zh="一个 Go 二进制：relay、门户、设备端、控制端、MCP server 都是同一个文件。Windows 走 <code>install.ps1</code>。">
+        One Go binary: relay, portal, agent, controller and MCP server are all the same file.
+        Windows uses <code>install.ps1</code>.
+      </p>
     </div>
   </section>
 
@@ -61,6 +68,7 @@
 
   <div class="board" id="board"></div>
 
+  <div class="act">
   <div class="decide" id="decide" hidden>
     <button class="key pull" data-act="y" type="button">
       <kbd>Y</kbd><span class="full" data-en="Pull the tag" data-zh="摘牌">Pull the tag</span><span class="abbr" data-en="Pull" data-zh="摘牌">Pull</span>
@@ -77,6 +85,15 @@
     <span class="hint" id="hint"></span>
   </div>
 
+  <div class="wire">
+    <div class="agenthead">
+      <span class="silk" data-en="Controller" data-zh="控制端">Controller</span>
+      <span class="mono" style="font-size:12px">claude@workstation</span>
+    </div>
+    <div id="agent"></div>
+  </div>
+  </div>
+
   <section class="ledger">
     <h2 data-en="Signed decisions" data-zh="签过的决定">Signed decisions</h2>
     <div id="creds"><p class="empty"
@@ -86,7 +103,7 @@
 </main>
 
 <div class="strip">
-  <span data-en="RELAY" data-zh="RELAY">RELAY</span> <b>hk · 38 ms</b>
+  <span data-en="RELAY" data-zh="RELAY">RELAY</span> <b>relay.example.com · 42 ms</b>
   <span data-en="DEVICES" data-zh="DEVICES">DEVICES</span> <b>6</b>
   <span data-en="ONLINE" data-zh="ONLINE">ONLINE</span> <b>5</b>
   <span data-en="PENDING" data-zh="PENDING">PENDING</span> <b id="npend">1</b>
@@ -95,5 +112,6 @@
 </div>
 
 <script src="assets/app.js"></script>
+<script src="assets/field.js"></script>
 </body>
 </html>

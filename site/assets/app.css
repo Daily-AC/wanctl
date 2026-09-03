@@ -49,7 +49,10 @@
   /* z 语义刻度 */
   --z-board:1; --z-tag:2; --z-bar:5; --z-dialog:8;
 
-  --pad:clamp(18px,4.2vw,56px);
+  /* 内容锁在 1420px 居中：超宽屏上多出来的宽度全部并进左右留白，
+     两列不会被拉开，中间不会空出一大片。 */
+  --maxw:1420px;
+  --pad:max(clamp(18px,4.2vw,56px), calc((100vw - var(--maxw)) / 2));
   --ease:cubic-bezier(.2,.8,.2,1);
 }
 
@@ -95,10 +98,15 @@ a{color:inherit}
 .lang:focus-visible,.top nav a:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 
 /* ── hero：左标题 / 右 agent 会话。右列不是盒子，是对齐出来的文本。 ─── */
+/* 密文场：首屏底下的 relay。它承载「relay 只看得到密文」这句主张，不是背景花纹。 */
+#field{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0}
+.hero > div{position:relative;z-index:1}
+
 .hero{
+  position:relative;
   display:grid;grid-template-columns:minmax(0,1.06fr) minmax(0,.94fr);
   gap:clamp(20px,3.6vw,54px);align-items:start;
-  padding:clamp(26px,3.6vw,44px) var(--pad) clamp(20px,2.6vw,30px);
+  padding:clamp(20px,2.6vw,32px) var(--pad) clamp(16px,2vw,24px);
 }
 h1{
   margin:0;font-size:clamp(31px,4.7vw,62px);line-height:.94;
@@ -112,18 +120,54 @@ h1{
 }
 .lede b{color:var(--ink);font-weight:600}
 
-/* agent 会话：无边框、无底色，只有一条上分隔线和对齐 */
-.agent{padding-top:7px;border-top:1px solid var(--line-2);min-width:0}
-.agenthead{display:flex;align-items:baseline;gap:10px;margin-bottom:11px}
+/* 安装入口：首屏右上，访客要的第一件事 */
+.cta{padding-top:7px;border-top:1px solid var(--line-2);min-width:0}
+.cta > .silk{display:block;margin-bottom:11px}
+.cmdline{display:flex;align-items:stretch;gap:0;border:1px solid var(--ink);border-radius:2px}
+.cmdline code{
+  font-family:var(--mono);font-size:12.5px;line-height:1.5;color:var(--ink);
+  padding:10px 12px;flex:1 1 auto;min-width:0;overflow-x:auto;white-space:nowrap;
+}
+.copy{
+  flex:none;font-family:var(--sans);font-size:12px;font-weight:650;font-stretch:80%;
+  letter-spacing:.08em;text-transform:uppercase;cursor:pointer;
+  background:var(--ink);color:var(--surface);border:0;padding:0 15px;
+}
+.copy:hover{background:oklch(0.30 0.006 250)}
+.copy:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.copy.done{background:var(--tag);color:var(--ink)}
+.ctanote{margin:11px 0 0;font-size:13px;line-height:1.6;color:var(--ink-2);max-width:48ch}
+.ctanote code{font-family:var(--mono);font-size:12px;color:var(--ink)}
+
+/* 决定键与控制端日志并排成一行：因和果字面意义上挨着，
+   眼睛不用在页面上下折返。 */
+.act{
+  display:grid;grid-template-columns:minmax(0,auto) minmax(300px,1fr);
+  gap:clamp(16px,2.6vw,40px);align-items:start;
+  padding-bottom:clamp(14px,2vw,22px);
+}
+@media (max-width:1000px){ .act{grid-template-columns:1fr;gap:10px} }
+
+/* 控制端日志 */
+.wire{padding:0 var(--pad) 0}
+.act > .decide{padding-bottom:0}
+.wire .agenthead{padding-top:9px;border-top:1px solid var(--line)}
+/* 固定高度 + 内部滚动：输出流出时页面高度不变，不产生布局跳动，
+   首屏也永远装得下这一带。 */
+#agent{min-width:0;height:60px;overflow-y:auto;overscroll-behavior:contain;
+       scrollbar-width:thin}
+#agent::-webkit-scrollbar{width:5px}
+#agent::-webkit-scrollbar-thumb{background:var(--line-2)}
+.agenthead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:9px}
 .agenthead .right{margin-left:auto;color:var(--ink-2)}
-.agent .line{
+#agent .line{
   font-family:var(--mono);font-size:12.5px;line-height:1.7;color:var(--ink-2);
   white-space:pre-wrap;word-break:break-word;
 }
-.agent .line.cmd{color:var(--ink);font-weight:700}
-.agent .line.wait{color:var(--ink-2)}
-.agent .line.no{color:var(--vermil)}
-.agent .cursor{
+#agent .line.cmd{color:var(--ink);font-weight:700}
+#agent .line.wait{color:var(--ink-2)}
+#agent .line.no{color:var(--vermil)}
+#agent .cursor{
   display:inline-block;width:7px;height:1.05em;vertical-align:-.16em;
   background:var(--ink);animation:blink 1.05s steps(2,end) infinite;
 }
@@ -131,13 +175,13 @@ h1{
 
 @media (max-width:900px){
   .hero{grid-template-columns:1fr;gap:22px}
-  .agent{padding-top:14px}
+  .cta{padding-top:14px}
 }
 
 /* ── 板：唯一允许存在的「物体」在这里面 ─────────────────────────────── */
 .boardhead{
   display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;
-  padding:0 var(--pad) 10px;border-bottom:1px solid var(--line);
+  padding:0 var(--pad) 8px;border-bottom:1px solid var(--line);
 }
 .boardhead .right{margin-left:auto;color:var(--ink-2)}
 
@@ -145,7 +189,7 @@ h1{
   position:relative;z-index:var(--z-board);
   display:grid;grid-auto-flow:column;grid-auto-columns:minmax(172px,1fr);
   gap:clamp(10px,1.4vw,20px);align-items:stretch;
-  padding:clamp(20px,2.4vw,30px) var(--pad) 152px;
+  padding:clamp(14px,1.6vw,20px) var(--pad) 138px;
   overflow-x:auto;overflow-y:visible;overscroll-behavior-x:contain;
   scroll-snap-type:x proximity;
 }
@@ -228,6 +272,11 @@ h1{
   letter-spacing:.08em;text-transform:uppercase;line-height:1.2;text-align:center;
   text-wrap:balance;
 }
+.tag .from{
+  font-family:var(--mono);font-size:9.5px;line-height:1.3;color:var(--ink);
+  text-align:center;opacity:.72;margin-bottom:6px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
 .tag .cmd{
   font-family:var(--mono);font-size:10px;line-height:1.5;color:var(--ink);
   border-top:1px solid var(--tag-deep);padding-top:6px;
@@ -243,7 +292,7 @@ h1{
 /* ── 决定键 ────────────────────────────────────────────────────────── */
 .decide{
   display:flex;gap:8px;flex-wrap:wrap;align-items:center;
-  padding:0 var(--pad) clamp(26px,3.4vw,40px);
+  padding:0 var(--pad) clamp(12px,1.6vw,18px);
 }
 .decide[hidden]{display:none}
 .key{
@@ -322,6 +371,7 @@ h1{
   .boardhead .right{margin-left:0}
 
   /* 主操作永远够得着：决定键钉在底部，仪表条退回文档流末尾 */
+  .act{padding-bottom:0}
   .decide{
     position:sticky;bottom:0;z-index:var(--z-bar);
     background:var(--ground);border-top:1px solid var(--line-2);
