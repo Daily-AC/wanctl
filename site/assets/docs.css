@@ -106,20 +106,33 @@ body.docs{font-size:16px;line-height:1.65;letter-spacing:-.2px}
    标题一共就两三行，balance 的性能代价在这个规模上不存在。 */
 .dbody article h1{
   margin:0 0 6px;font-size:clamp(30px,3.4vw,38px);font-weight:600;
-  line-height:1.12;letter-spacing:-.5px;text-wrap:balance;
+  line-height:1.12;text-wrap:balance;
 }
 .dbody article h2{
   margin:44px 0 12px;font-size:24px;font-weight:600;line-height:1.2;
-  letter-spacing:-.4px;
 }
 .dbody article h3{
   margin:32px 0 10px;font-size:18px;font-weight:600;line-height:1.3;
-  letter-spacing:-.25px;
 }
 .dbody article h4{
   margin:26px 0 8px;font-size:16px;font-weight:600;color:var(--ink-2);
-  letter-spacing:-.2px;
 }
+
+/* 标题的负字距单独一条，而且**故意压到 0,0,1**。
+   这几个数是给拉丁字母调的（DESIGN.md §4 的字号阶）。中文不需要负字距，
+   而中文排版归 app.css 的 `:lang(zh)` 管 —— `h2:lang(zh)` 是 0,1,1，
+   要赢过 `.dbody article h2` 的 0,1,2 是赢不了的，就算 0,1,2 打平，
+   docs.css 后加载还是它赢。`:where()` 把这一条的权重清成 0，
+   于是一条最朴素的 `h2:lang(zh)` 就能接管，谁先加载都一样。
+   **别把这几行合回上面的块里。**
+
+   字距是唯一压权重的东西：`text-wrap:balance` 必须留在 0,1,2 那边，
+   因为本文件上头还有一条 `.docs h1,…{text-wrap:pretty}`（0,1,1），
+   压到 0,0,1 会被它盖掉，中文标题就又断回不匀的两行了。 */
+:where(.dbody article) h1{letter-spacing:-.5px}
+:where(.dbody article) h2{letter-spacing:-.4px}
+:where(.dbody article) h3{letter-spacing:-.25px}
+:where(.dbody article) h4{letter-spacing:-.2px}
 /* 吸顶条 48px：锚点跳过去时别把标题压在它底下。app.css 已经给了
    scroll-padding-top，这里再补一点呼吸。 */
 .dbody article :is(h1,h2,h3,h4){scroll-margin-top:64px}
