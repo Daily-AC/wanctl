@@ -65,6 +65,7 @@ type Relay struct {
 	acl         ACLChecker
 	audit       Auditor
 	admin       AdminStore
+	aliases     DeviceAliasStore
 	notifyStore NotifyStore
 	notifySend  webhookSender
 	docs        DocsStore
@@ -176,6 +177,11 @@ func (r *Relay) SetMCPHandler(h http.Handler) { r.mcpHandler = h }
 // SetAdmin installs the admin store backing the /admin/* endpoints.
 func (r *Relay) SetAdmin(a AdminStore) {
 	r.admin = a
+	if store, ok := a.(DeviceAliasStore); ok {
+		r.aliases = store
+	} else {
+		r.aliases = nil
+	}
 	if store, ok := a.(NotifyStore); ok {
 		r.notifyStore = store
 	} else {
@@ -217,6 +223,12 @@ func (r *Relay) dialAllowed(callerNS, target string) (targetKey string, auth ses
 	}
 	i := strings.Index(target, "/")
 	targetNS, device := target[:i], target[i+1:]
+	if r.aliases != nil {
+		if resolved, found := r.aliases.ResolveDeviceTarget(targetNS, device); found {
+			device = resolved
+			target = targetNS + "/" + device
+		}
+	}
 	auth = sessionauth.Open{CallerNamespace: callerNS, OwnerNamespace: targetNS, Device: device}
 	if r.portalNS != "" && callerNS == r.portalNS {
 		auth.Capabilities = sessionauth.FullCapabilities
@@ -388,8 +400,9 @@ func (r *Relay) handlePeers(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	devices, aliases := r.livePeers(ns)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"namespace": ns, "devices": r.liveDevices(ns)})
+	json.NewEncoder(w).Encode(map[string]any{"namespace": ns, "devices": devices, "aliases": aliases})
 }
 
 // pipe copies bytes both directions until either side closes, then tears down.

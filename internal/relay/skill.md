@@ -69,8 +69,9 @@ wanctl logs --target NAME [--type exec|file|connect] [--grep STR] [--since RFC33
 wanctl id                                 # this controller's fingerprint
 ```
 
-- `--target` is `DEVICE` (your namespace) or `NS/DEVICE` (shared). If exactly one
-  device is online you may omit `--target`.
+- `--target` is `DEVICE` or its owner-assigned alias (your namespace), or
+  `NS/DEVICE` / `NS/ALIAS` (shared). `wanctl peers` shows aliases in parentheses.
+  If exactly one device is online you may omit `--target`.
 - Persistent session: separate `exec` calls share working dir + env (like a real
   shell) unless `--oneshot`.
 - A device may be an **Android phone or tablet**; it behaves like any other

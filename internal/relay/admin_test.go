@@ -43,6 +43,53 @@ func (s adminTestStmt) Exec([]driver.Value) (driver.Result, error) {
 }
 func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
 	updated := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+	if strings.Contains(s.query, "ORDER BY CASE WHEN name = $2") {
+		if !strings.Contains(s.query, "alias IS NOT NULL") || !strings.Contains(s.query, "lower(alias) = lower($2)") {
+			return nil, errors.New("device target lookup must include case-insensitive aliases")
+		}
+		target := args[1].(string)
+		rows := &adminRows{columns: []string{"name"}}
+		switch target {
+		case "desk":
+			rows.values = [][]driver.Value{{"desk"}}
+		case "LAPTOP":
+			rows.values = [][]driver.Value{{"legion"}}
+		}
+		return rows, nil
+	}
+	if strings.Contains(s.query, "SELECT name, alias FROM devices") {
+		return &adminRows{
+			columns: []string{"name", "alias"},
+			values:  [][]driver.Value{{"legion", "laptop"}, {"desk", "office"}},
+		}, nil
+	}
+	if strings.Contains(s.query, "lower(name) = lower($3)") {
+		if !strings.Contains(s.query, "lower(alias) = lower($3)") {
+			return nil, errors.New("alias conflicts must be case-insensitive")
+		}
+		ns, device, alias := args[0].(string), args[1].(string), args[2].(string)
+		return &adminRows{
+			columns: []string{"exists", "shadows", "taken"},
+			values: [][]driver.Value{{
+				ns == "alice" && device == "legion",
+				strings.EqualFold(alias, "devbox"),
+				strings.EqualFold(alias, "home"),
+			}},
+		}, nil
+	}
+	if strings.Contains(s.query, "UPDATE devices SET alias") {
+		if args[0] != "alice" || args[1] != "legion" {
+			return &adminRows{columns: []string{"name", "alias"}}, nil
+		}
+		alias := ""
+		if len(args) == 3 {
+			alias = args[2].(string)
+		}
+		return &adminRows{
+			columns: []string{"name", "alias"},
+			values:  [][]driver.Value{{"legion", alias}},
+		}, nil
+	}
 	if strings.Contains(s.query, "INSERT INTO device_lark_approval") {
 		if !strings.Contains(s.query, "ON CONFLICT (namespace, device) DO UPDATE") {
 			return nil, errors.New("lark upsert must use namespace/device conflict target")
@@ -88,13 +135,13 @@ func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
 	rows := [][]driver.Value{}
 	switch ns {
 	case "bob":
-		rows = append(rows, []driver.Value{"devbox", "fp-devbox", seen, "bob", false, ""})
+		rows = append(rows, []driver.Value{"devbox", "office", "fp-devbox", seen, "bob", false, ""})
 	case "alice":
-		rows = append(rows, []driver.Value{"book", "fp-book", seen, "alice", false, ""})
-		rows = append(rows, []driver.Value{"devbox", "fp-devbox", seen, "bob", true, "exec"})
+		rows = append(rows, []driver.Value{"book", "", "fp-book", seen, "alice", false, ""})
+		rows = append(rows, []driver.Value{"devbox", "office", "fp-devbox", seen, "bob", true, "exec"})
 	}
 	return &adminRows{
-		columns: []string{"name", "fingerprint", "last_seen", "owner", "shared", "perms"},
+		columns: []string{"name", "alias", "fingerprint", "last_seen", "owner", "shared", "perms"},
 		values:  rows,
 	}, nil
 }
@@ -555,6 +602,9 @@ func TestPGStoreListDevicesIncludesOwnedAndSharedACLDevices(t *testing.T) {
 	if ownerView[0]["name"] != "devbox" || ownerView[0]["owner"] != "bob" || ownerView[0]["shared"] != false {
 		t.Fatalf("owner row missing owner/shared fields: %+v", ownerView[0])
 	}
+	if ownerView[0]["alias"] != "office" {
+		t.Fatalf("owner row alias = %#v, want office", ownerView[0]["alias"])
+	}
 
 	granteeView, err := p.ListDevices("alice")
 	if err != nil {
@@ -566,6 +616,9 @@ func TestPGStoreListDevicesIncludesOwnedAndSharedACLDevices(t *testing.T) {
 	shared := granteeView[1]
 	if shared["name"] != "devbox" || shared["owner"] != "bob" || shared["shared"] != true || shared["perms"] != "exec" {
 		t.Fatalf("shared row missing expected fields: %+v", shared)
+	}
+	if shared["alias"] != "office" {
+		t.Fatalf("shared row alias = %#v, want office", shared["alias"])
 	}
 }
 

@@ -317,7 +317,8 @@ func (r *Relay) handleHPeers(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	writeJSON(w, map[string]any{"namespace": ns, "devices": r.liveDevices(ns)})
+	devices, aliases := r.livePeers(ns)
+	writeJSON(w, map[string]any{"namespace": ns, "devices": devices, "aliases": aliases})
 }
 
 func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {

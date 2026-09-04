@@ -53,6 +53,7 @@ func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/tokens/issue", r.adminTokenIssue)
 	mux.HandleFunc("/admin/tokens/revoke", r.adminTokenRevoke)
 	mux.HandleFunc("/admin/devices", r.adminDevices)
+	mux.HandleFunc("/admin/devices/alias", r.adminDeviceAlias)
 	mux.HandleFunc("/admin/devices/lark", r.adminDevicesLark)
 	mux.HandleFunc("/admin/devices/notify", r.adminDeviceNotify)
 	mux.HandleFunc("/admin/notify", r.adminNotify)
@@ -380,6 +381,54 @@ func (r *Relay) adminDevices(w http.ResponseWriter, req *http.Request) {
 		d["online"] = r.deviceLive(owner, name)
 	}
 	writeJSON(w, map[string]any{"devices": out})
+}
+
+func (r *Relay) adminDeviceAlias(w http.ResponseWriter, req *http.Request) {
+	if !r.adminOK(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if !requireMethod(w, req, http.MethodPost) {
+		return
+	}
+	var body struct {
+		Namespace string `json:"namespace"`
+		Device    string `json:"device"`
+		Alias     string `json:"alias"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeErrorToken(w, http.StatusBadRequest, ErrAliasInvalid.Error())
+		return
+	}
+	if body.Namespace == "" || body.Device == "" {
+		writeErrorToken(w, http.StatusBadRequest, ErrAliasInvalid.Error())
+		return
+	}
+	alias, err := normalizeDeviceAlias(body.Alias)
+	if err != nil {
+		writeErrorToken(w, http.StatusBadRequest, ErrAliasInvalid.Error())
+		return
+	}
+	store, ok := r.admin.(DeviceAliasStore)
+	if !ok {
+		http.Error(w, "device aliases are not supported by the admin store", http.StatusServiceUnavailable)
+		return
+	}
+	out, err := store.SetDeviceAlias(body.Namespace, body.Device, alias)
+	switch {
+	case errors.Is(err, ErrAliasInvalid):
+		writeErrorToken(w, http.StatusBadRequest, ErrAliasInvalid.Error())
+	case errors.Is(err, ErrAliasTaken):
+		writeErrorToken(w, http.StatusConflict, ErrAliasTaken.Error())
+	case errors.Is(err, ErrAliasShadowsDevice):
+		writeErrorToken(w, http.StatusConflict, ErrAliasShadowsDevice.Error())
+	case errors.Is(err, ErrDeviceNotFound):
+		writeErrorToken(w, http.StatusNotFound, ErrDeviceNotFound.Error())
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	default:
+		writeJSON(w, out)
+	}
 }
 
 func (r *Relay) adminDevicesLark(w http.ResponseWriter, req *http.Request) {
@@ -928,9 +977,10 @@ func (p *PGStore) RevokeToken(namespace string, id int) error {
 
 func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 	rows, err := p.db.Query(
-		`SELECT name, fingerprint, last_seen, owner_namespace, shared, perms
+		`SELECT name, alias, fingerprint, last_seen, owner_namespace, shared, perms
 		   FROM (
 		     SELECT d.name,
+		            COALESCE(d.alias,'') AS alias,
 		            COALESCE(d.fingerprint,'') AS fingerprint,
 		            d.last_seen,
 		            d.owner_namespace,
@@ -940,6 +990,7 @@ func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 		      WHERE d.owner_namespace = $1
 		     UNION ALL
 		     SELECT d.name,
+		            COALESCE(d.alias,'') AS alias,
 		            COALESCE(d.fingerprint,'') AS fingerprint,
 		            d.last_seen,
 		            d.owner_namespace,
@@ -959,12 +1010,12 @@ func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var name, fp, owner, perms string
+		var name, alias, fp, owner, perms string
 		var seen sql.NullTime
 		var shared bool
-		rows.Scan(&name, &fp, &seen, &owner, &shared, &perms)
+		rows.Scan(&name, &alias, &fp, &seen, &owner, &shared, &perms)
 		row := map[string]any{
-			"name": name, "fingerprint": fp, "last_seen": nullTime(seen),
+			"name": name, "alias": alias, "fingerprint": fp, "last_seen": nullTime(seen),
 			"owner": owner, "shared": shared,
 		}
 		if shared {
