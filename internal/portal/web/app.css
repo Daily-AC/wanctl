@@ -97,6 +97,11 @@ a:hover{text-decoration:underline}
   display:flex;align-items:center;gap:8px;
   font-size:17px;font-weight:600;letter-spacing:-.4px;color:var(--ink);
   flex:none;cursor:pointer;background:none;border:0;padding:0;font-family:inherit;
+  /* 标记在自己那个 32 的 viewBox 里左右各留了 4.05 的边距（笔画 3.1、圆头），
+     19px 下就是 2.4px —— 盒子压着内容锁，墨迹却比底下的卡片往里缩 2.4px。
+     拉回 2px 而不是 2.4：圆头本来就该比直边多探出去一点点才看着齐。
+     **改了 .mk 的尺寸要重算这个数。** */
+  margin-left:-2px;
 }
 .mk{width:19px;height:19px;flex:none;display:block}
 .top .brand:hover{text-decoration:none}
@@ -132,6 +137,13 @@ a:hover{text-decoration:underline}
    那里是内容不是外壳，旁边还站着一个描边的 select。 */
 .top .chip{border-color:transparent}
 .top .chip:hover{border-color:transparent;background:var(--canvas-2)}
+/* 最后那个控件要把自己的内边距吐回去。描边还在的时候，那圈内边距的外沿就是
+   边框、边框压着内容锁，看着是齐的；边框一拿掉，内边距成了不可见的空白，
+   右端的墨迹就比内容锁往里缩了 5~10px —— 而底下的标题和卡片是**压着锁**的
+   （1728px 下实测：卡片右缘 1414，齿轮右缘 1408）。负外边距只挪盒子不挪墨迹，
+   悬停时那块浅灰底会探进 --pad 的留白里，那正是它该在的地方。 */
+.top .tools > .chip:last-child{margin-right:-10px}
+.top .tools > .chip.icon:last-child{margin-right:-5px}
 .chip.icon{padding:5px;display:grid;place-items:center}
 .chip.icon svg{width:16px;height:16px;display:block}
 @media (max-width:640px){

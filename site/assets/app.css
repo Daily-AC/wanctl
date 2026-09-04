@@ -159,6 +159,11 @@ h2{
 .nav .brand{
   display:flex;align-items:center;gap:8px;
   color:var(--ink);font-weight:600;font-size:17px;letter-spacing:-.4px;flex:none;
+  /* 标记在自己那个 32 的 viewBox 里左右各留了 4.05 的边距（笔画 3.1、圆头），
+     19px 下就是 2.4px —— 盒子压着内容锁，墨迹却比每一屏的内容往里缩 2.4px。
+     拉回 2px 而不是 2.4：圆头本来就该比直边多探出去一点点才看着齐。
+     **改了 .mk 的尺寸要重算这个数。** */
+  margin-left:-2px;
 }
 .nav .brand:hover{text-decoration:none}
 .mk{width:19px;height:19px;flex:none;display:block}
@@ -171,6 +176,11 @@ h2{
   flex:none;white-space:nowrap;
   font:inherit;font-size:13px;color:var(--ink);background:none;cursor:pointer;
   border:0;border-radius:999px;padding:4px 11px;line-height:1.2;
+  /* 把自己的内边距吐回去。描边还在的时候，那圈内边距的外沿就是边框、边框压着
+     内容锁，看着是齐的；边框一拿掉，内边距成了不可见的空白，「中文」两个字
+     就比内容锁往里缩了 11px —— 而首屏标题和每一屏的内容都是压着锁的。
+     负外边距只挪盒子不挪墨迹，悬停那块浅灰底探进 --pad 的留白，正是它该在的地方。 */
+  margin-right:-11px;
   transition:background .16s var(--ease);
 }
 .nav .lang:hover{background:var(--canvas-2)}
