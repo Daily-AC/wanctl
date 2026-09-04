@@ -119,6 +119,11 @@ def bi(en, zh, tag="span", cls=None):
 def substitute(body, origins):
     """Rewrite <name>.example.com placeholders, as scripts/sync-portal-docs.py does."""
     for name, origin in origins.items():
+        # An empty origin substitutes nothing, exactly as the sync script does.
+        # Deleting the domain instead would erase the placeholder and let the
+        # "still contains example.com" guard pass on a half-configured run.
+        if not origin:
+            continue
         origin = origin.rstrip("/")
         host = urllib.parse.urlsplit(origin).netloc or origin
         body = body.replace("https://%s.example.com" % name, origin)
