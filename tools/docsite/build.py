@@ -511,6 +511,10 @@ def head(titles, desc, canonical):
 <link rel="stylesheet" href="/assets/app.css">
 <link rel="stylesheet" href="/assets/docs.css">
 <link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<!-- 抽屉那一套 CSS 全挂在这个 class 上。它必须在首次绘制之前生效，
+     所以写在这儿，而不是等 </body> 前的 docs.js —— 否则手机上会先闪一屏
+     摊开的目录，再被收进抽屉。没有脚本时它不出现，导航就退回那份清单。 -->
+<script>document.documentElement.classList.add('js')</script>
 </head>
 <body class="docs">
 
@@ -560,12 +564,29 @@ FOOT = """
 
 
 def group_nav(groups, current=None):
-    """The left column: every group, every article, the current one marked."""
-    out = ['<details class="dnav" id="dnav" open>']
-    out.append(
-        "  <summary>%s</summary>"
-        % bi("All documentation", "全部文档", tag="span", cls="dnav-label")
-    )
+    """The left column on wide screens, the drawer on narrow ones.
+
+    One list serves both — the current article is marked in a single place.
+    What changes between the two is only CSS: a sticky column below 1100px
+    becomes a fixed panel that slides in over the page.
+
+    The trigger and the scrim ship in the markup but are `display:none` until
+    `docs.js` puts `js` on `<html>`. Without a script the drawer would be a
+    panel translated off-screen with no way to bring it back, so the no-script
+    page keeps what it has always had: the whole list, open, above the article.
+    """
+    out = [
+        '<button class="dnav-open" type="button" aria-controls="dnav" aria-expanded="false">'
+        "%s</button>" % bi("All documentation", "全部文档", tag="span", cls="dnav-label"),
+        '<div class="dscrim"></div>',
+        '<nav class="dnav" id="dnav" aria-label="All documentation">',
+        '  <div class="dnav-head">',
+        "    %s" % bi("All documentation", "全部文档", tag="span", cls="dnav-label"),
+        # aria-label stays English like the language button's does: applyLang
+        # rewrites innerHTML, not attributes, and this button has no text.
+        '    <button class="dnav-close" type="button" aria-label="Close"></button>',
+        "  </div>",
+    ]
     out.append('  <div class="dnav-in">')
     for g in groups:
         out.append(
@@ -588,7 +609,7 @@ def group_nav(groups, current=None):
             )
         out.append("    </ul>")
     out.append("  </div>")
-    out.append("</details>")
+    out.append("</nav>")
     return "\n".join(out)
 
 
