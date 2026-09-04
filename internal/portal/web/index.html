@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>wanctl</title>
+<link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css?v=__V__">
+</head>
+<body>
+
+<!-- 头部。字标、你是谁、三个次级控件。
+     以前这里还有一只卡通盾牌吉祥物、一个通用小人头像、和一行 "cream & cute"
+     的副标 —— 全部退役（DESIGN.md §6.2：没有图形标记，只有字标）。 -->
+<header class="top">
+  <button class="brand" id="home">wanctl</button>
+  <div class="who">
+    <span class="ns" id="ns">—</span>
+    <span class="fp" id="fp"></span>
+  </div>
+  <div class="tools">
+    <button class="chip" id="ver" hidden></button>
+    <button class="chip" id="lang">中文</button>
+    <button class="chip icon" id="gear" data-lbl-en="Settings" data-lbl-zh="设置" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<main>
+
+  <!-- ══ 主屏：设备。门户只做这一件事，其余全在齿轮后面 ══ -->
+  <section class="view show" data-view="devices">
+
+    <!-- 跨设备聚合的待审批。产品的命题是「你不点头，什么都不会跑」，
+         所以打开门户第一眼该是「有没有人在等我」，而不是「我有几台机器」。
+         没人等你时这块整个不出现（.asks:empty{display:none}）。 -->
+    <div class="asks" id="asks"></div>
+
+    <div class="vhead"><h1 data-en="Devices" data-zh="设备">Devices</h1></div>
+    <div class="grid" id="grid"></div>
+    <div id="onboard" hidden></div>
+  </section>
+
+  <!-- ══ 设备下钻 ══ -->
+  <section class="view" data-view="device">
+    <button class="back" id="back">
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m15 18-6-6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span data-en="Devices" data-zh="设备">Devices</span>
+    </button>
+
+    <div class="dhead">
+      <h1 id="dName">—</h1>
+      <!-- 执行模式是这台设备的一个属性，不是一个页面。以前它独占一个 tab。 -->
+      <select class="modesel" id="dMode">
+        <option value="normal" data-en="Ask me" data-zh="逐条确认">Ask me</option>
+        <option value="bypass" data-en="Allow all" data-zh="全放行">Allow all</option>
+      </select>
+      <button class="chip icon" id="dGear" data-lbl-en="Device settings" data-lbl-zh="设备设置" aria-label="Device settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <span class="fp" id="dFp"></span>
+    </div>
+
+    <p class="lead" id="dShared" hidden></p>
+
+    <div class="tabs">
+      <button class="tab on" data-tab="asks"><span data-en="Waiting" data-zh="待审批">Waiting</span><span class="n" id="nWait" hidden>0</span></button>
+      <button class="tab" data-tab="trust" data-en="Trust &amp; rules" data-zh="信任与规则">Trust &amp; rules</button>
+      <button class="tab" data-tab="log" data-en="Activity" data-zh="活动">Activity</button>
+    </div>
+
+    <div class="pane show" data-pane="asks">
+      <div class="asks" id="dAsks"></div>
+      <div class="blank" id="dBlank" hidden></div>
+    </div>
+
+    <div class="pane" data-pane="trust">
+      <!-- 「谁能进」和「进来能做什么」是同一件事的两半，以前拆成两个 tab。 -->
+      <h2 data-en="Trusted controllers" data-zh="已信任的控制端">Trusted controllers</h2>
+      <p class="tcap" data-en="Who can drive this device. Revoke at any time."
+                      data-zh="谁能远程控制这台设备。可随时撤销。">Who can drive this device. Revoke at any time.</p>
+      <table>
+        <thead><tr>
+          <th data-en="Controller" data-zh="控制端">Controller</th>
+          <th data-en="Fingerprint" data-zh="指纹">Fingerprint</th>
+          <th data-en="Last seen" data-zh="最近">Last seen</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="trusted"></tbody>
+      </table>
+
+      <div class="vhead" style="margin:34px 0 12px">
+        <h2 data-en="Rules" data-zh="规则">Rules</h2>
+        <button class="btn soft" id="rAdd" data-en="Add rule" data-zh="加规则">Add rule</button>
+      </div>
+      <p class="tcap" data-en="A rule covers one command, not one machine. Anything it matches runs without asking."
+                      data-zh="规则管的是一条命令，不是一台机器。命中的操作直接放行，不再问你。">A rule covers one command, not one machine.</p>
+      <table>
+        <thead><tr>
+          <th data-en="Kind" data-zh="类型">Kind</th>
+          <th data-en="Pattern" data-zh="模式">Pattern</th>
+          <th data-en="Scope" data-zh="作用域">Scope</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="rules"></tbody>
+      </table>
+    </div>
+
+    <div class="pane" data-pane="log">
+      <div class="vhead" style="margin-bottom:12px">
+        <h2 data-en="Activity" data-zh="活动">Activity</h2>
+        <button class="btn soft" id="logReload" data-en="Refresh" data-zh="刷新">Refresh</button>
+      </div>
+      <p class="tcap" data-en="Every command and file operation on this device, newest first."
+                      data-zh="这台设备每一次命令与文件操作的裁决与结果，从新到旧。">Every command and file operation on this device, newest first.</p>
+      <table>
+        <thead><tr>
+          <th data-en="When" data-zh="时间">When</th>
+          <th data-en="What" data-zh="内容">What</th>
+          <th data-en="From" data-zh="来源">From</th>
+          <th data-en="Verdict" data-zh="裁决">Verdict</th>
+          <th data-en="Exit" data-zh="退出码">Exit</th>
+        </tr></thead>
+        <tbody id="devlog"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ══ 设置。左分组右内容 —— 和文档站是同一个布局家族。
+       它是一个页面而不是覆盖层：覆盖层会把顶栏连同「你是谁」一起盖掉。 ══ -->
+  <section class="view" data-view="settings">
+    <div class="settings">
+    <nav>
+      <button class="back" id="sClose">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m15 18-6-6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-en="Done" data-zh="完成">Done</span>
+      </button>
+      <div class="sgroup">
+        <div class="t" data-en="Account" data-zh="账号">Account</div>
+        <button data-s="tokens" class="on" data-en="Access tokens" data-zh="访问令牌">Access tokens</button>
+        <button data-s="notify" data-en="Notifications" data-zh="通知">Notifications</button>
+        <button data-s="invites" id="sInvites" hidden data-en="Invites" data-zh="邀请">Invites</button>
+      </div>
+      <div class="sgroup">
+        <div class="t" data-en="Sharing" data-zh="共享">Sharing</div>
+        <button data-s="friends" data-en="Friends" data-zh="好友">Friends</button>
+        <button data-s="acl" data-en="Shared devices" data-zh="共享授权">Shared devices</button>
+      </div>
+      <div class="sgroup">
+        <div class="t" data-en="Reference" data-zh="参考">Reference</div>
+        <button data-s="downloads" data-en="Install" data-zh="下载安装">Install</button>
+        <button data-s="audit" data-en="Relay audit" data-zh="Relay 审计">Relay audit</button>
+        <!-- 文档不再由门户渲染。以前这里是一整套 CMS（分组管理、文章增删改、
+             内建编辑器），那是官网还不存在时的产物。 -->
+        <button id="docsLink" data-en="Docs ↗" data-zh="使用文档 ↗">Docs ↗</button>
+      </div>
+    </nav>
+
+    <div>
+      <!-- 令牌 -->
+      <section class="sview show" data-s="tokens">
+        <div class="vhead">
+          <h1 data-en="Access tokens" data-zh="访问令牌">Access tokens</h1>
+          <button class="btn" id="tAdd" data-en="Issue token" data-zh="签发令牌">Issue token</button>
+        </div>
+        <table>
+          <thead><tr>
+            <th data-en="Label" data-zh="标签">Label</th>
+            <th data-en="Created" data-zh="创建">Created</th>
+            <th data-en="Expires" data-zh="过期">Expires</th>
+            <th data-en="State" data-zh="状态">State</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="tokens"></tbody>
+        </table>
+        <div class="slip" id="tSlip">
+          <code id="tVal"></code>
+          <div class="once" data-en="Shown once. Set it as WANCTL_TOKEN on the controller."
+                            data-zh="只显示这一次。把它设为控制端的 WANCTL_TOKEN。">Shown once.</div>
+          <button class="btn soft" id="tCopy" data-en="Copy" data-zh="复制">Copy</button>
+        </div>
+      </section>
+
+      <!-- 通知 -->
+      <section class="sview" data-s="notify">
+        <div class="vhead"><h1 data-en="Notifications" data-zh="通知">Notifications</h1></div>
+        <p class="lead" data-en="One webhook for the account; each device opts in separately."
+                        data-zh="账号共用一个 webhook 出口，每台设备再单独开启。">One webhook for the account.</p>
+        <div class="card" style="margin-top:20px">
+          <div class="row"><span class="txt" id="nTxt">—</span></div>
+          <div class="form" style="margin-top:16px">
+            <div class="field">
+              <label data-en="Webhook URL" data-zh="Webhook URL">Webhook URL</label>
+              <input id="nURL" type="url" autocomplete="off" placeholder="https://...">
+            </div>
+            <div class="field">
+              <label data-en="Format" data-zh="格式">Format</label>
+              <select id="nFormat">
+                <option value="feishu">Feishu</option>
+                <option value="dingtalk">DingTalk</option>
+                <option value="json" data-en="Plain JSON" data-zh="通用 JSON">Plain JSON</option>
+              </select>
+            </div>
+            <div class="field">
+              <label data-en="Keyword" data-zh="安全关键词">Keyword</label>
+              <input id="nKeyword" autocomplete="off">
+            </div>
+            <div class="field">
+              <label data-en="Signing secret" data-zh="加签 secret">Signing secret</label>
+              <input id="nSecret" type="password" autocomplete="new-password">
+            </div>
+          </div>
+          <div class="checks" style="margin-top:16px">
+            <label class="check"><input type="checkbox" id="nApproval"><span data-en="Approvals" data-zh="审批事件">Approvals</span></label>
+            <label class="check"><input type="checkbox" id="nExec"><span data-en="Command finished" data-zh="执行结束">Command finished</span></label>
+            <label class="check"><input type="checkbox" id="nLifecycle"><span data-en="Device up / down" data-zh="设备上下线">Device up / down</span></label>
+            <label class="check"><input type="checkbox" id="nSecurity"><span data-en="Pairing &amp; security" data-zh="配对与安全">Pairing &amp; security</span></label>
+            <label class="check"><input type="checkbox" id="nFailures"><span data-en="Failures only" data-zh="只报失败">Failures only</span></label>
+            <label class="check"><input type="checkbox" id="nDetail"><span data-en="Include redacted command" data-zh="包含脱敏命令行">Include redacted command</span></label>
+            <label class="check"><input type="checkbox" id="nClear"><span data-en="Clear saved secret" data-zh="清除已存 secret">Clear saved secret</span></label>
+          </div>
+          <div class="row" style="margin-top:18px;gap:8px">
+            <button class="btn" id="nSave" data-en="Save" data-zh="保存">Save</button>
+            <button class="btn soft" id="nTest" data-en="Send a test" data-zh="发送测试">Send a test</button>
+            <button class="btn danger" id="nDelete" data-en="Clear" data-zh="清除配置">Clear</button>
+          </div>
+          <p class="note" id="nHealth"></p>
+        </div>
+      </section>
+
+      <!-- 邀请（仅管理员） -->
+      <section class="sview" data-s="invites">
+        <div class="vhead">
+          <h1 data-en="Invites" data-zh="邀请">Invites</h1>
+          <button class="btn" id="iAdd" data-en="New invite" data-zh="新建邀请">New invite</button>
+        </div>
+        <p class="lead" data-en="This instance is invite-only. Either hand out a one-time code, or pre-register a GitHub login so that account is admitted on first sign-in."
+                        data-zh="这个实例是邀请制的。可以发一次性邀请码，也可以预录对方的 GitHub 用户名，对方登录即自动获准。">This instance is invite-only.</p>
+        <table style="margin-top:20px">
+          <thead><tr>
+            <th data-en="Kind" data-zh="方式">Kind</th>
+            <th data-en="Created" data-zh="创建">Created</th>
+            <th data-en="State" data-zh="状态">State</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="invites"></tbody>
+        </table>
+        <div class="slip" id="iSlip">
+          <code id="iVal"></code>
+          <div class="once" data-en="Shown once. Your guest pastes it after signing in with GitHub."
+                            data-zh="只显示这一次。对方 GitHub 登录后粘贴。">Shown once.</div>
+          <button class="btn soft" id="iCopy" data-en="Copy" data-zh="复制">Copy</button>
+        </div>
+      </section>
+
+      <!-- 好友 -->
+      <section class="sview" data-s="friends">
+        <div class="vhead">
+          <h1 data-en="Friends" data-zh="好友">Friends</h1>
+          <button class="btn" id="fAdd" data-en="Add friend" data-zh="加好友">Add friend</button>
+        </div>
+        <p class="lead" data-en="Devices can only be shared between friends. Removing a friend takes back every share in both directions."
+                        data-zh="好友之间才能互相共享设备。删除好友会同时收回双方之间的全部共享。">Devices can only be shared between friends.</p>
+        <table style="margin-top:20px">
+          <thead><tr>
+            <th data-en="Namespace" data-zh="命名空间">Namespace</th>
+            <th data-en="State" data-zh="状态">State</th>
+            <th data-en="Since" data-zh="自">Since</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="friends"></tbody>
+        </table>
+      </section>
+
+      <!-- 共享授权 -->
+      <section class="sview" data-s="acl">
+        <div class="vhead">
+          <h1 data-en="Shared devices" data-zh="共享授权">Shared devices</h1>
+          <button class="btn" id="aAdd" data-en="Share a device" data-zh="新增授权">Share a device</button>
+        </div>
+        <p class="lead" data-en="Give a friend part of one device. Add them under Friends first."
+                        data-zh="把某台设备的部分权限分享给好友。先在「好友」里加上对方。">Give a friend part of one device.</p>
+        <table style="margin-top:20px">
+          <thead><tr>
+            <th data-en="Device" data-zh="设备">Device</th>
+            <th data-en="Granted to" data-zh="被授权">Granted to</th>
+            <th data-en="Permissions" data-zh="权限">Permissions</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="acl"></tbody>
+        </table>
+      </section>
+
+      <!-- 下载安装 -->
+      <section class="sview" data-s="downloads">
+        <div class="vhead"><h1 data-en="Install" data-zh="下载安装">Install</h1></div>
+        <div id="dl"></div>
+      </section>
+
+      <!-- Relay 审计 -->
+      <section class="sview" data-s="audit">
+        <div class="vhead"><h1 data-en="Relay audit" data-zh="Relay 审计">Relay audit</h1></div>
+        <!-- 这一条留着，它解释了为什么这张表这么穷 —— 是唯一有信息量的副标。 -->
+        <p class="lead" data-en="The relay only ever sees metadata and dial events. Your traffic goes through it encrypted; it cannot read commands, output, or file names."
+                        data-zh="中继只看得到元数据和拨号事件。流量加密穿过它，命令、输出和文件名它都读不到。">The relay only ever sees metadata and dial events.</p>
+        <table style="margin-top:20px">
+          <thead><tr>
+            <th data-en="When" data-zh="时间">When</th>
+            <th data-en="Device" data-zh="设备">Device</th>
+            <th data-en="Event" data-zh="事件">Event</th>
+          </tr></thead>
+          <tbody id="audit"></tbody>
+        </table>
+      </section>
+    </div>
+    </div>
+  </section>
+
+  <!-- ══ 设备设置。齿轮在哪一层就是哪一层的设置。 ══ -->
+  <section class="view" data-view="devsettings">
+    <div style="max-width:44rem">
+      <button class="back" id="dsClose">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m15 18-6-6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-en="Done" data-zh="完成">Done</span>
+      </button>
+      <div class="vhead"><h1 id="dsName">—</h1></div>
+
+      <div class="card" id="dsLan" hidden>
+        <div class="row">
+          <span class="txt" id="dsLanTxt"></span>
+          <button class="sw" id="dsLanSw"></button>
+        </div>
+        <p class="note" data-en="On the same LAN, an extra direct link carries the stream with lower latency. Same encryption, same approvals."
+                        data-zh="与控制端同内网时多挂一条直连通道，延迟更低。加密与审批和公网通道完全一致。"></p>
+      </div>
+
+      <div class="card" id="dsLark" hidden>
+        <div class="row">
+          <span class="txt" id="dsLarkTxt"></span>
+          <button class="sw" id="dsLarkSw"></button>
+        </div>
+        <!-- 这段以前是四行。留下的这一句是唯一有代价信息的那句。 -->
+        <p class="note" data-en="While this is on, an unmatched request waits up to 3 minutes for you instead of being refused straight away."
+                        data-zh="开着时，未命中规则的操作不再立刻拒绝，而是最多等你 3 分钟。"></p>
+        <div class="row" style="margin-top:14px">
+          <span class="txt" data-en="Trust new controllers from the card" data-zh="卡片里直接信任新控制端"></span>
+          <button class="sw" id="dsLarkPair"></button>
+        </div>
+        <p class="note" id="dsLarkHealth"></p>
+      </div>
+
+      <div class="card" id="dsNotify" hidden>
+        <div class="row">
+          <span class="txt" id="dsNotifyTxt"></span>
+          <button class="sw" id="dsNotifySw"></button>
+        </div>
+        <p class="note" id="dsNotifyHealth"></p>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <span class="txt">
+            <b data-en="Remove this device" data-zh="解除设备"></b><br>
+            <span class="dim" data-en="It leaves your namespace. Running wanctl on it again brings it back."
+                              data-zh="它会离开你的命名空间。在那台机器上重新运行 wanctl 可再次纳管。"></span>
+          </span>
+          <button class="btn danger" id="dsRemove" data-en="Remove" data-zh="解除"></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ══ 更新日志。以前它是一个顶级导航项 —— 一年看几次的东西不配。 ══ -->
+<div class="ov" id="clSheet">
+  <div class="modal wide">
+    <div class="vhead"><h1 data-en="Release notes" data-zh="更新日志">Release notes</h1></div>
+    <div id="cl"></div>
+    <div class="btns" style="margin-top:18px">
+      <button class="btn soft" id="clClose" data-en="Done" data-zh="完成">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 确认 / 表单 / 配对 ══ -->
+<div class="ov" id="ask">
+  <div class="modal">
+    <h2 id="askT"></h2>
+    <p id="askM"></p>
+    <div class="btns">
+      <button class="btn soft" id="askNo" data-en="Cancel" data-zh="取消">Cancel</button>
+      <button class="btn" id="askYes"></button>
+    </div>
+  </div>
+</div>
+
+<div class="ov" id="form">
+  <div class="modal">
+    <h2 id="formT"></h2>
+    <div class="form" id="formF"></div>
+    <div class="btns" style="margin-top:18px">
+      <button class="btn soft" id="formNo" data-en="Cancel" data-zh="取消">Cancel</button>
+      <button class="btn" id="formYes"></button>
+    </div>
+  </div>
+</div>
+
+<!-- 从 AI 的拒绝消息里点进来的配对确认。 -->
+<div class="ov" id="pair">
+  <div class="modal">
+    <h2 data-en="A controller wants in" data-zh="控制端想连进来">A controller wants in</h2>
+    <p id="pairM"></p>
+    <dl class="kv" id="pairKV" style="margin-bottom:20px"></dl>
+    <div class="btns">
+      <button class="btn soft" id="pairNo" data-en="Refuse" data-zh="拒绝">Refuse</button>
+      <button class="btn" id="pairYes" data-en="Trust it" data-zh="信任并继续">Trust it</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/assets/app.js?v=__V__"></script>
+</body>
+</html>

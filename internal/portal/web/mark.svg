@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- 标签页图标。字母画成路径而不是 <text>：favicon 的 SVG 由浏览器独立渲染，
+       拿不到页面的 @font-face，用 <text> 会掉到各平台自己的系统字体上，
+       同一个标记在三个操作系统上长三个样。 -->
+  <rect width="32" height="32" rx="7" fill="#1d1d1f"/>
+  <path d="M6.6 10.6 11.1 21.6 16 13.4 20.9 21.6 25.4 10.6"
+        fill="none" stroke="#ffffff" stroke-width="3.1"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -32,7 +32,13 @@ import (
 	"wanctl/internal/transport"
 )
 
-//go:embed index.html
+// The SPA and its assets. Multiple files rather than one blob: the old single
+// index.html carried a 77K single-line base64 PNG, which is what made it
+// unmaintainable. Fonts are self-hosted (the deployment may be somewhere
+// fonts.googleapis.com is not reachable) and are a copy of site/assets/fonts/ —
+// go:embed cannot reach outside its own package directory.
+//
+//go:embed web
 var assets embed.FS
 
 // changelogFS carries the user-facing release notes. They are embedded rather
@@ -151,6 +157,7 @@ func (s *Server) Handler() http.Handler {
 	// which makes those probes read as failures.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/assets/", s.handleAsset)
 	mux.HandleFunc("/whoami", s.handleWhoami)
 	mux.HandleFunc("/enroll", s.handleEnroll)
 	mux.HandleFunc("/auth/login", s.handleAuthLogin)
@@ -164,6 +171,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tokens", s.handleTokens)
 	mux.HandleFunc("/api/tokens/revoke", s.handleTokenRevoke)
 	mux.HandleFunc("/api/devices", s.handleDevices)
+	mux.HandleFunc("/api/pending", s.handleWaiting)
 	mux.HandleFunc("/api/devices/lark", s.handleDeviceLark)
 	mux.HandleFunc("/api/devices/notify", s.handleDeviceNotify)
 	mux.HandleFunc("/api/notify", s.handleNotify)
@@ -538,9 +546,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	b, _ := assets.ReadFile("index.html")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(b)
+	// The SPA shell changes only when the binary does, but it must never be
+	// paired with a stale stylesheet — hence no-cache here and a versioned
+	// URL on the assets it pulls.
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(indexPage)
 }
 
 // handleSkills 302's to the relay's public /skills (which serves the canonical
