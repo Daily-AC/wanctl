@@ -522,6 +522,21 @@ h2{
   .wireline{flex-direction:column;gap:12px;margin:20px 0}
   .wire{flex:none;width:100%;height:2px}
   .state{white-space:normal;text-align:left}
+  /* 那两条线在宽屏上是两端之间的链路，细、短、夹着一句话；竖过来之后它们变成两道
+     通栏的亮蓝横杠，成了这一屏最重的东西 —— 而蓝在这套系统里是「点我」的信号，
+     它们不可点。窄屏上链路由上下两端的排列本身说明，横杠减掉。 */
+  .wire{display:none}
+  .wireline{gap:0;margin:18px 0}
+  /* 收尾那两条命令原先在连字符处断开，`--format=csv` 被切成 `--` 和 `format=csv`，
+     读起来像两个参数 —— 和 HANDOFF 3.5 在手机屏里修过的是同一个坑，同一个解法。 */
+  .lesson code .tok{white-space:nowrap}
+  /* 左对齐的中文段落在窄屏上不能用 balance：汉字可以在任意两字之间断开，于是 balance
+     为了把几行拉齐会主动把行做短 —— 390 下实测一行只排到 13~14 字，而这一栏放得下 19 字，
+     左对齐时右边就恒定空出一条一指宽的白，一栏看着像浮在另一栏里。
+     居中的海报 lead（首屏、安全模型、安装）**不在此列**：那三处正是 balance 的本行，
+     三行等长居中是它该有的样子，实测也确实比填满好看。宽屏一律不动。 */
+  :lang(zh) .split .lead,
+  :lang(zh) #relay .lead{text-wrap:pretty}
 }
 
 /* 窄屏放不下一行 51 字的指纹：断成两行等长的，看着是有意为之而不是被挤爆的 */
@@ -534,7 +549,99 @@ h2{
   .nav{gap:12px}
   .nav .links a[href="#decide"]{display:none}
   .nav .brand{font-size:16px}
+
+  /* ── 手机上的减法 ────────────────────────────────────────────────
+     下面每一条都是「拿掉一件在 390px 上没有职务的东西」，不是加一套手机专用版式。 */
+
+  /* 首屏在手机上装不下自己：390 下它 1102px 高，视口只有 844。被折线切掉的正好是
+     场景的下半截，落地看到的是「一部手机加半台笔记本」—— DESIGN.md 第 5 节
+     「一屏一个主体」当场作废，而首屏本来就有 min-height:100svh 想守住这件事。
+     减掉笔记本而不是缩它，两个理由：
+       · DESIGN.md 第 7 节已经写下移动端「落地时只看得见手机那一份」秒表 ——
+         这半台笔记本本来就不承担信息，只承担被切掉；
+       · 手机屏里已经写全了整个故事：谁在请求（claude@workstation）、要跑什么
+         （python train.py …）、等谁（已等待 0:04）、以及那三个按钮。
+     减完 390 下首屏 827px，一屏装得下（844）。 */
+  .laptop{display:none}
+  /* 中文的 lead 行高 1.6，比英文那三行高出 11px，正好把首屏顶到 850 —— 差 6px。
+     底部内边距收 10px 补回来，两种语言都落在折线以内。 */
+  .tile.hero{padding-bottom:42px}
+
+  /* 「一行装完」那一行在手机上看不见：390 下胶囊里可视 264px、内容 762px，
+     命令有三分之二横向滚在框外，而框上没有任何在滚的提示。
+     竖排：命令整条摊开换行，复制键落到底下通栏。圆角 999 → 18 ——
+     多行的东西不是 pill，18 是 DESIGN.md 第 5 节三档圆角里「大面」那一档，
+     没有引入中间档。分隔靠蓝白色差，不加线。 */
+  .cmdline{flex-direction:column;align-items:stretch;width:100%;border-radius:18px}
+  .cmdline code{
+    flex:none;overflow-x:visible;white-space:pre-wrap;
+    word-break:normal;overflow-wrap:anywhere;padding:14px 18px;
+  }
+  .cmdline button{width:100%;padding:13px 0}
+
+  /* 两个分段控件各自居左居右都不是，是各自居中：实测左缘一个在 87 一个在 100，
+     彼此错开 13px，也都不压内容锁（22）。窄屏改成两条通栏，共用同一对左右缘，
+     顺便把两个选项做成一样宽的按压面。 */
+  .picker{flex-direction:column;align-items:stretch;gap:10px;margin-top:24px}
+  .seg button{flex:1 1 0;padding:8px 10px}
 }
+
+/* ── 中文 ────────────────────────────────────────────────────────────
+   上面那套排版是给 Schibsted Grotesk 的拉丁字母调的，原样套到汉字上有三处不对：
+     · 负字距是给大 x-height 的拉丁大字号调的，落到全宽方块的汉字上是把笔画互相压住；
+     · 1.47 的行高对没有升降部、字面占满全宽的汉字太紧；
+     · 一行里的汉字掉到系统 CJK 字体，而同一行的拉丁字母和数字仍留在 Schibsted，
+       两者的 x-height 和笔画粗细都不同，于是每一句混排都像是拼起来的。
+   lang 属性由 app.js 的 applyLang 翻（zh-CN / en），所以这一整块不需要 JS 配合。 */
+:lang(zh){
+  /* 一行只有一种字体：系统 CJK 无衬线**连同它自己的那套拉丁**。
+     macOS 走 -apple-system —— SF Pro 的拉丁配 PingFang 的汉字，苹果本来就是配套设计的；
+     Windows 落到微软雅黑，Linux / Android 落到思源黑体。三条路各自都自带拉丁，
+     所以「wanctl 0.3.4」这种混排里的字母和数字不会再是外来的。 */
+  --sans:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB',
+         'Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC',sans-serif;
+}
+/* 字标是品牌那一处例外：它只有拉丁，留在 Schibsted Grotesk 上，连同它的负字距。 */
+:lang(zh) .nav .brand{font-family:'Schibsted Grotesk',sans-serif}
+
+/* 字距归零。下面这份清单就是 app.css 里所有负 letter-spacing 的去处，两处故意不在里面：
+   .nav .brand（字标，见上）和 .door .addr（内容永远是 wanctl.z10.dev / docker compose up，
+   等宽拉丁，那 -.2px 是给 JetBrains Mono 调的）。等宽的其余各处本来就是 0。 */
+:lang(zh) body,
+:lang(zh) h1,
+:lang(zh) h2,
+:lang(zh) .tile.chapter h2,
+:lang(zh) .nav,
+:lang(zh) .ask .from,
+:lang(zh) .ask .host,
+:lang(zh) .ask button,
+:lang(zh) .ask .doneword,
+:lang(zh) .panel .head .t,
+:lang(zh) .rows .name,
+:lang(zh) .party .who,
+:lang(zh) .lesson .claim,
+:lang(zh) .seg button{letter-spacing:0}
+
+/* 行高：正文 1.6，标题 1.2。 */
+:lang(zh) body{line-height:1.6}
+:lang(zh) .lead,:lang(zh) .note,:lang(zh) .door .d{line-height:1.6}
+:lang(zh) h1,:lang(zh) h2,:lang(zh) .tile.chapter h2{line-height:1.2}
+
+/* 两扇门那两段收尾不留孤字（原先最后一行只剩一个「器。」）。
+   实测 pretty 在 390 与 1440 上都不比默认换行差，所以它是白捡的。
+   `.lead` 不在这里：它带着 text-wrap:balance，宽屏上 balance 更好，
+   窄屏上反过来 —— 那条只在上面的窄屏媒体查询里翻。 */
+:lang(zh) .door .d{text-wrap:pretty}
+
+/* 中文标题只在标点处换行。
+   浏览器允许在任意两个汉字之间断开，于是「你不点头，什么都不会跑。」这一句实测三种
+   换行模式全都难看：balance 断成「什 | 么」、pretty 断成「不 | 会」、默认换行留下孤字
+   「跑。」。word-break:auto-phrase 在 zh-CN 上是**空操作**（实测断点一个都没动，
+   Chrome 的分词换行目前只对日文生效），别加。
+   办法是把每个分句包成 inline-block：盒子是原子的，断点只能落在分句之间；
+   分句自己一行装不下时它照样会在内部换行，不会溢出。
+   只有实测断得难看的标题才包 —— 目前是 #decide 和 #relay 两条。 */
+.cl{display:inline-block}
 
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
