@@ -8,6 +8,56 @@ import (
 	"testing"
 )
 
+// The identity badge is the only third-party image the portal loads. img-src
+// must name that one host and nothing wider -- a bare `https:` or a `*` here
+// would let any injected markup pull an image from anywhere, which is a working
+// exfiltration channel out of a console holding device names, fingerprints and
+// commands.
+func TestCSPAllowsOnlyGitHubAvatarsAsThirdPartyImages(t *testing.T) {
+	rec := httptest.NewRecorder()
+	New(Config{}).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	csp := rec.Header().Get("Content-Security-Policy")
+
+	var imgSrc string
+	for _, d := range strings.Split(csp, ";") {
+		if d = strings.TrimSpace(d); strings.HasPrefix(d, "img-src ") {
+			imgSrc = d
+		}
+	}
+	if imgSrc == "" {
+		t.Fatalf("no img-src directive in %q", csp)
+	}
+	const want = "img-src 'self' data: https://avatars.githubusercontent.com"
+	if imgSrc != want {
+		t.Fatalf("img-src = %q, want %q", imgSrc, want)
+	}
+	if strings.Count(csp, "avatars.githubusercontent.com") != 1 {
+		t.Fatalf("the avatar host leaked outside img-src: %q", csp)
+	}
+}
+
+func TestGitHubAvatarURL(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		p    *principal
+		want string
+	}{
+		{"github session", &principal{Provider: providerGitHub, Subject: "8437", Login: "octocat"},
+			"https://avatars.githubusercontent.com/u/8437?s=96"},
+		{"header mode has no avatar", &principal{Provider: providerHeader, Subject: "alice@example.com"}, ""},
+		// A subject that is not a plain number never reaches the URL. In
+		// header(SSO) mode it is whatever the proxy put in the header, and that
+		// value must never be pasted into a URL the browser will fetch.
+		{"non-numeric subject", &principal{Provider: providerGitHub, Subject: "../../evil"}, ""},
+		{"empty subject", &principal{Provider: providerGitHub, Subject: ""}, ""},
+		{"nil principal", nil, ""},
+	} {
+		if got := githubAvatarURL(tc.p); got != tc.want {
+			t.Errorf("%s: githubAvatarURL = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestHandlerSetsSecurityHeaders(t *testing.T) {
 	rec := httptest.NewRecorder()
 	New(Config{}).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))

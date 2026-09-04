@@ -18,7 +18,10 @@
        不属于账号，挂在人名旁边会被读成「你的编号」。GitHub 登录本来就给了
        头像和名字，用那个。 -->
   <div class="who" id="who" hidden>
-    <span class="ava" id="ava"></span>
+    <!-- 字母章始终在底下，头像盖在它上面。这样图片没到、加载失败、或者
+         header(SSO) 模式压根没有头像时，露出来的就是字母 —— 不用等一次
+         onerror 再去补位，也就不会有任何位移。 -->
+    <span class="ava" id="ava"><i id="avaLtr"></i><img id="avaImg" alt="" decoding="async" referrerpolicy="no-referrer" hidden></span>
     <span class="nm" id="whoName">—</span>
     <span class="ns" id="ns" hidden></span>
   </div>

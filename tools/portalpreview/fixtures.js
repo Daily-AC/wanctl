@@ -19,6 +19,13 @@
   //   ?scene=down   /api/devices 503 → 「连不上中继」
   var scene = new URLSearchParams(location.search).get('scene') || '';
 
+  // 头像三态。真实端点只对 GitHub 会话返回 avatar_url，header(SSO) 模式不返回，
+  // 而图片本身还可能加载失败 —— 三条路在界面上是两种样子，工装要两种都摆得出来。
+  //   ?avatar=on      默认，一张真的 GitHub 头像
+  //   ?avatar=broken  同一个源、必定 404 的路径，走 onerror 那一路
+  //   ?avatar=off     不返回这个字段，等于 header(SSO) 模式
+  var avatar = new URLSearchParams(location.search).get('avatar') || 'on';
+
   // ?now=<毫秒> 把「现在」钉住。页面上每一个时间都是从它算出来的，不钉住的话
   // 两次截图之间光是钟走了几分钟就够让每一张都不一样，前后对比无从做起。
   var now = Number(new URLSearchParams(location.search).get('now')) || Date.now();
@@ -120,7 +127,11 @@
     '/api/me': {
       identity: 'ardith', login: 'ardith', name: 'Ardith Vale',
       namespace: 'acme', provider: 'github', role: 'admin',
-      lark: true, relay_origin: 'https://relay.example.com'
+      lark: true, relay_origin: 'https://relay.example.com',
+      // 形状照抄 githubAvatarURL：同一个源、u/<数字账号 id>、?s=96。
+      avatar_url: avatar === 'off' ? undefined
+        : avatar === 'broken' ? 'https://avatars.githubusercontent.com/u/0/nope?s=96'
+        : 'https://avatars.githubusercontent.com/u/583231?s=96'
     },
     '/api/devices': { devices: devices },
     '/api/pending': { items: waiting },

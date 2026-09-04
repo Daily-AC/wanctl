@@ -119,7 +119,14 @@ a:hover{text-decoration:underline}
   width:22px;height:22px;border-radius:50%;flex:none;
   display:grid;place-items:center;background:var(--canvas-2);
   font-size:11px;font-weight:600;color:var(--ink-2);text-transform:uppercase;
+  /* 头像叠在字母上，所以这里要成为定位上下文，并且自己把方角裁圆 —— 圆角
+     只作用在盒子上，里面那张方图不裁就会露出四个角。 */
+  position:relative;overflow:hidden;
 }
+.ava i{font-style:normal}
+/* 不写 display：浏览器默认表里 [hidden]{display:none} 只有 (0,1,0)，
+   这里随手写一句 display:block 就会把它盖掉，图没加载出来时留下一个碎图标。 */
+.ava img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .top .tools{display:flex;align-items:center;gap:6px;flex:none}
 /* 头部的三个次级控件（版本号 / 语言 / 齿轮）共用一个形状。
    圆角 999 在这套语法里本来只给主 CTA 和 pill —— 它们是 pill。 */

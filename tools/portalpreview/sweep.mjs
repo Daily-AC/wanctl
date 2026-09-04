@@ -115,6 +115,12 @@ const STATES = [
     open: `document.querySelector('.tab[data-tab="asks"]').click();window.__t=1;(function(){const s=document.querySelector('#dMode');s.disabled=false;s.value='bypass';s.dispatchEvent(new Event('change'))})()`,
     settle: 600 },
 
+  // 顶栏那枚身份章的两种样子。头像挂在外壳上，所以它其实出现在上面每一个
+  // 状态里 —— 这两条是把「图加载出来」和「退回字母」两条路各钉死一个状态，
+  // 好让它们也各自被量到每一个视口。
+  { id: 'avatar-img', q: '&avatar=on' },
+  { id: 'avatar-letter', q: '&avatar=broken' },
+
   // D. 认证页（Go 渲染，预览里是静态的）
   { id: 'login', page: 'login.html' },
   { id: 'pending', page: 'pending.html' },

@@ -1466,10 +1466,21 @@
     var differs = ns && login && ns.toLowerCase() !== login.toLowerCase();
     $('#ns').hidden = !differs;
     if (differs) $('#ns').textContent = ns;
-    // 字母章。这里曾经先试着加载 GitHub 头像、失败才退回字母 —— 而门户自己的
-    // CSP 是 img-src 'self' data:，那张图从来就没加载成功过，只是每次打开都在
-    // 控制台留一条违规（2026-09-04 用真浏览器对着真服务端测过）。
-    $('#ava').textContent = (login || ns || '?').charAt(0);
+    // 字母章 + 头像。09-05 甲方推翻了 #14 里「整块删掉」的决定，头像回来了：
+    // CSP 现在只多放行 avatars.githubusercontent.com 这一个源。
+    // 字母始终画在底下，头像盖上去 —— 图没到、加载失败、或者 header(SSO)
+    // 模式没有头像时，露出来的就是字母，中间不发生任何位移。
+    $('#avaLtr').textContent = (login || ns || '?').charAt(0);
+    var img = $('#avaImg');
+    img.hidden = true;
+    if (m.avatar_url) {
+      // 先藏后显：src 一赋值就开始加载，失败的那一路要连碎图标都不给看见。
+      img.onload = function () { img.hidden = false; };
+      img.onerror = function () { img.hidden = true; };
+      img.src = m.avatar_url;
+    } else {
+      img.removeAttribute('src');
+    }
   }
 
   // 版本徽章是外壳的一部分，不是更新日志页的一部分，所以在启动时填。
