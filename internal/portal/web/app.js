@@ -1253,10 +1253,15 @@
     };
     while (i < lines.length) {
       var l = lines[i];
-      if (l.indexOf('```') === 0) {
-        var code = ''; i++;
-        while (i < lines.length && lines[i].indexOf('```') !== 0) code += lines[i++] + '\n';
-        i++; out += '<pre>' + eH(code.replace(/\n$/, '')) + '</pre>'; continue;
+      // 围栏不认列首那一条：发布说明里的代码块几乎都缩在某个列表项底下，
+      // 而缩进过的围栏以前会掉进段落分支，被行内代码那条正则啃成
+      // 「两个字面反引号 + 一段行内 code」—— 甲方手机上看到的就是那个。
+      var f = /^[ \t]*```/.exec(l);
+      if (f) {
+        var pad = f[0].length - 3, code = ''; i++;
+        var strip = new RegExp('^[ \\t]{0,' + pad + '}');
+        while (i < lines.length && !/^[ \t]*```/.test(lines[i])) code += lines[i++].replace(strip, '') + '\n';
+        i++; out += '<pre><code>' + eH(code.replace(/\n$/, '')) + '</code></pre>'; continue;
       }
       if (/^---+\s*$/.test(l)) { out += '<hr>'; i++; continue; }
       var h = /^(#{1,4})\s+(.*)$/.exec(l);
@@ -1278,7 +1283,7 @@
       }
       if (l.trim() === '') { i++; continue; }
       var p = l; i++;
-      while (i < lines.length && lines[i].trim() !== '' && !/^(```|#{1,4}\s|>\s|[-*]\s|\d+\.\s|---+\s*$)/.test(lines[i])) p += '\n' + lines[i++];
+      while (i < lines.length && lines[i].trim() !== '' && !/^([ \t]*```|#{1,4}\s|>\s|[-*]\s|\d+\.\s|---+\s*$)/.test(lines[i])) p += '\n' + lines[i++];
       out += '<p>' + inl(p).replace(/\n/g, '<br>') + '</p>';
     }
     return out;
