@@ -123,8 +123,11 @@ try-it 面板是给 HTTP API 用的。wanctl 对用户的界面是 CLI，没有�
 - [x] **已上线**（09-04 晚，PR #14 + #15 合进 main `3ec5afd`）
       · 官网 wc.z10.dev 走 `tools/deploy.sh`
       · 门户 wanctl.z10.dev 只重建门户容器，relay 一根手指没动，见第 11 节
-- [ ] **← 下一步：文档站 `wc.z10.dev/docs`**
-- [ ] 砍 CMS + 端点 + 官网页脚改指向
+- [x] **文档站 `wc.z10.dev/docs`**（本轮）：`tools/docsite/build.py` 从 `docs/*.md`
+      和 `docs/portal/*.md` 生成 13 篇 + 目录页，三栏、双语外壳、正文不翻译；
+      样式 `site/assets/docs.css`；随 `tools/deploy.sh` 一起发。**官网页脚和顶栏已改指向。**
+      密度那一列已并进 `DESIGN.md` §9
+- [ ] 砍 CMS + 端点。**这条现在没有前置依赖了** —— 文档有地方去了
 
 ## 6. 施工中自己拍的板（甲方未逐条过目，要改说一声）
 
