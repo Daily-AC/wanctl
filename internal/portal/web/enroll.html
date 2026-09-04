@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Authorize this device · wanctl</title>
+<link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css?v={{.V}}">
+</head>
+
+<!-- 设备授权。在一台新机器上跑 wanctl，浏览器弹的就是它 —— 这是新设备接入时
+     人看到的第一个 wanctl 界面，不是配角。
+     顺序按站在终端前的人的需要排：先给码（他正等着粘贴），再说粘到哪、
+     会绑到哪个空间，然后是那个要逐字符核对的指纹，最后才是后果。 -->
+<body class="auth">
+
+<header class="top">
+  <span class="brand">wanctl</span>
+  <div class="tools">
+    <button class="chip" id="lang">中文</button>
+  </div>
+</header>
+
+<main>
+  <h1 data-en="Authorize this device" data-zh="设备授权">Authorize this device</h1>
+
+  <div class="code" id="acode" role="button" tabindex="0"
+       data-lbl-en="Copy the code" data-lbl-zh="复制授权码" aria-label="Copy the code">{{.Code}}</div>
+  <p class="meta">
+    <span id="hint" data-en="Click to copy" data-zh="点一下复制">Click to copy</span>
+    <span id="copied" hidden data-en="Copied" data-zh="已复制">Copied</span><span
+      data-en=" · single use · expires in" data-zh=" · 仅可用一次 · 有效期"> · single use · expires in</span>
+    <span class="mono">{{.Mins}}</span><span data-en=" min" data-zh=" 分钟"> min</span>
+  </p>
+
+  <p class="lead">
+    <span data-en="Paste it back into the terminal. This machine joins the space"
+          data-zh="回到终端粘贴。这台机器会加入空间">Paste it back into the terminal. This machine joins the space</span>
+    <b class="mono">{{.NS}}</b><span data-en="." data-zh="。">.</span>
+  </p>
+
+  <!-- 这一条是整页唯一一件人必须动手核对的事：门户的指纹经中继到达设备，
+       而这张页面是中继不在的那一条腿 —— 两边一致，终端打印的那串才是被核过的，
+       而不只是被声称的。 -->
+  <p class="lead"
+     data-en="The terminal then prints the portal identity it now trusts. It must match:"
+     data-zh="终端接着会打印它信任的门户身份，必须与这串一致：">The terminal then prints the portal identity it now trusts. It must match:</p>
+  <p class="fp">{{.FP}}</p>
+
+  <p class="fine"
+     data-en="From then on this machine can be driven remotely. <code>wanctl stop</code> ends that."
+     data-zh="从此这台机器可以被远程驱动。用 <code>wanctl stop</code> 结束。">From then on this machine can be driven remotely. <code>wanctl stop</code> ends that.</p>
+</main>
+
+<script src="/assets/auth.js?v={{.V}}"></script>
+</body>
+</html>

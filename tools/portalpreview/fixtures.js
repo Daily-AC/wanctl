@@ -80,7 +80,7 @@
     // 门户自己的指纹当成「你的编号」显示在人名旁边。别再这么干。
     '/api/me': {
       identity: 'ardith', login: 'ardith', name: 'Ardith Vale',
-      avatar: '', namespace: 'acme', provider: 'github', role: 'admin',
+      namespace: 'acme', provider: 'github', role: 'admin',
       lark: true, relay_origin: 'https://relay.example.com'
     },
     '/api/devices': { devices: devices },

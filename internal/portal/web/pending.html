@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Waiting for an invite · wanctl</title>
+<link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css?v={{.V}}">
+</head>
+
+<!-- 等待邀请。你已经把 GitHub 授权出去了，但这个实例还没放你进来。
+     在此之前这张页面是个死胡同：登错账号的人没有任何出口，只能自己去清 cookie。 -->
+<body class="auth">
+
+<header class="top">
+  <span class="brand">wanctl</span>
+  <div class="tools">
+    <button class="chip" id="lang">中文</button>
+  </div>
+</header>
+
+<main>
+  <h1 data-en="Waiting for an invite" data-zh="等待邀请">Waiting for an invite</h1>
+
+  <p class="lead">
+    <span data-en="You are signed in as" data-zh="你已登录为">You are signed in as</span>
+    <b class="mono">{{.Login}}</b><span
+      data-en=". This instance is invite-only."
+      data-zh="。这个实例是邀请制的。">. This instance is invite-only.</span>
+  </p>
+
+  <form id="redeem">
+    <input id="code" class="mono" placeholder="winv_…" autocomplete="off" spellcheck="false"
+           data-lbl-en="Invite code" data-lbl-zh="邀请码" aria-label="Invite code">
+    <button class="btn go" type="submit" data-en="Redeem" data-zh="兑换">Redeem</button>
+  </form>
+  <p class="err" id="err" role="alert"></p>
+
+  <p class="fine"
+     data-en="No code? Ask this instance's admin to create an invite for you, or to pre-register your GitHub username."
+     data-zh="没有邀请码？请这个实例的管理员为你创建一个，或者预先登记你的 GitHub 用户名。">No code? Ask this instance's admin to create an invite for you, or to pre-register your GitHub username.</p>
+
+  <!-- 出口。登错账号是这张页面上最容易发生的事，而它以前无解。 -->
+  <p class="fine">
+    <span data-en="Wrong account?" data-zh="登错账号了？">Wrong account?</span>
+    <button class="act" id="out" data-en="Sign out" data-zh="退出登录">Sign out</button>
+  </p>
+</main>
+
+<script src="/assets/auth.js?v={{.V}}"></script>
+</body>
+</html>

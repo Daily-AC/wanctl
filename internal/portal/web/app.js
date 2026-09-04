@@ -1331,16 +1331,10 @@
     var differs = ns && login && ns.toLowerCase() !== login.toLowerCase();
     $('#ns').hidden = !differs;
     if (differs) $('#ns').textContent = ns;
-    // 头像：拿得到就用，拉不动就退回字母章。onerror 是必须的 ——
-    // avatars.githubusercontent.com 不是每个部署地点都通。
-    var letter = (login || ns || '?').charAt(0);
-    $('#ava').textContent = letter;
-    if (m.avatar) {
-      var img = new Image();
-      img.alt = '';
-      img.onload = function () { $('#ava').textContent = ''; $('#ava').appendChild(img); };
-      img.src = m.avatar;
-    }
+    // 字母章。这里曾经先试着加载 GitHub 头像、失败才退回字母 —— 而门户自己的
+    // CSP 是 img-src 'self' data:，那张图从来就没加载成功过，只是每次打开都在
+    // 控制台留一条违规（2026-09-04 用真浏览器对着真服务端测过）。
+    $('#ava').textContent = (login || ns || '?').charAt(0);
   }
 
   // 版本徽章是外壳的一部分，不是更新日志页的一部分，所以在启动时填。

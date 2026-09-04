@@ -64,7 +64,10 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	// path.Clean collapses any ".." before it can leave the directory; the
 	// embedded FS would reject an escape anyway, but failing early is clearer.
 	name = path.Clean("/" + name)[1:]
-	if name == "" || strings.HasPrefix(name, "..") {
+	// HTML never comes out of here. web/ also holds index.html and the three
+	// page templates, and handing those out raw would serve a page with its
+	// placeholders still in it — /assets/index.html used to do exactly that.
+	if name == "" || strings.HasPrefix(name, "..") || strings.HasSuffix(name, ".html") {
 		http.NotFound(w, r)
 		return
 	}

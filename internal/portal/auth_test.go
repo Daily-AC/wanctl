@@ -66,16 +66,18 @@ func resolveOKAs(ns, role string) func(map[string]string, http.ResponseWriter) {
 	}
 }
 
-// loginThroughCallback drives /auth/login then /auth/callback and returns the
-// recorder of the callback response (whose cookies carry the session).
+// loginThroughCallback drives /auth/github then /auth/callback and returns the
+// recorder of the callback response (whose cookies carry the session). The
+// sign-in page at /auth/login is not on this path: it is a page with a button,
+// and the button points here.
 func loginThroughCallback(t *testing.T, s *Server, next string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	loginURL := "/auth/login"
+	loginURL := "/auth/github"
 	if next != "" {
 		loginURL += "?next=" + url.QueryEscape(next)
 	}
-	s.handleAuthLogin(rec, httptest.NewRequest("GET", loginURL, nil))
+	s.handleAuthStart(rec, httptest.NewRequest("GET", loginURL, nil))
 	if rec.Code != http.StatusFound {
 		t.Fatalf("login: status %d", rec.Code)
 	}
@@ -142,7 +144,7 @@ func TestOAuthCallbackFullFlow(t *testing.T) {
 func TestOAuthCallbackRejectsWrongState(t *testing.T) {
 	s := newOAuthPortal(t, resolveOKAs("octocat", "user"))
 	rec := httptest.NewRecorder()
-	s.handleAuthLogin(rec, httptest.NewRequest("GET", "/auth/login", nil))
+	s.handleAuthStart(rec, httptest.NewRequest("GET", "/auth/github", nil))
 	cb := httptest.NewRequest("GET", "/auth/callback?code=goodcode&state=forged", nil)
 	for _, c := range rec.Result().Cookies() {
 		cb.AddCookie(c)

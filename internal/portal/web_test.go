@@ -67,6 +67,43 @@ func TestIndexAsksForVersionedAssets(t *testing.T) {
 	}
 }
 
+// auth.js runs on three separate pages and each carries only part of what it
+// touches, so the rule is different from the SPA's: an id must exist on at
+// least one page, and the ids it reaches for unconditionally must exist on all
+// three. #lang is the unconditional one — losing it there kills the script
+// before the language switch is wired, on the very first page of the product.
+func TestAuthScriptMatchesItsPages(t *testing.T) {
+	js := readWeb(t, "web/auth.js")
+	pageNames := []string{"web/login.html", "web/pending.html", "web/enroll.html"}
+
+	id := regexp.MustCompile(`id="([A-Za-z0-9_-]+)"`)
+	anywhere := map[string]bool{}
+	for _, p := range pageNames {
+		html := readWeb(t, p)
+		for _, m := range id.FindAllStringSubmatch(html, -1) {
+			anywhere[m[1]] = true
+		}
+		for _, need := range []string{"lang"} {
+			if !strings.Contains(html, `id="`+need+`"`) {
+				t.Errorf("%s has no #%s; auth.js looks it up on every page", p, need)
+			}
+		}
+	}
+	var missing []string
+	seen := map[string]bool{}
+	for _, m := range regexp.MustCompile(`\$\('#([A-Za-z0-9_-]+)'\)`).FindAllStringSubmatch(js, -1) {
+		if seen[m[1]] || anywhere[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		missing = append(missing, m[1])
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Fatalf("auth.js looks up ids no auth page declares: %s", strings.Join(missing, ", "))
+	}
+}
+
 func readWeb(t *testing.T, name string) string {
 	t.Helper()
 	b, err := assets.ReadFile(name)

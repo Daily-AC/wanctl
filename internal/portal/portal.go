@@ -161,6 +161,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/whoami", s.handleWhoami)
 	mux.HandleFunc("/enroll", s.handleEnroll)
 	mux.HandleFunc("/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("/auth/github", s.handleAuthStart)
 	mux.HandleFunc("/auth/callback", s.handleAuthCallback)
 	mux.HandleFunc("/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("/auth/redeem", s.handleAuthRedeem)
@@ -321,7 +322,7 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 }
 
 func setSecurityHeaders(h http.Header) {
-	h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'")
+	h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Frame-Options", "DENY")
@@ -685,39 +686,10 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	// The fingerprint reaches the device through the relay, so show it here too:
 	// this page is the one leg the relay is not on, which is what makes the
 	// value the terminal prints checkable rather than merely asserted.
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, enrollPage, ns, out.Code, mins, s.fp)
+	s.render(w, "enroll.html", map[string]any{
+		"NS": ns, "Code": out.Code, "Mins": mins, "FP": s.fp,
+	})
 }
-
-// enrollPage: %[1]s namespace, %[2]s one-time code, %[3]d minutes-to-expiry,
-// %[4]s this portal's fingerprint (for the human to compare against what the
-// terminal prints).
-const enrollPage = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>wanctl 设备授权</title><style>
-:root{--cream:#FBF6EC;--ink:#2c2a26;--brand:#E08D3C;--soft:#efe7d6}
-*{box-sizing:border-box}body{margin:0;font-family:-apple-system,system-ui,"PingFang SC",sans-serif;
-background:var(--cream);color:var(--ink);display:flex;min-height:100vh;align-items:center;justify-content:center}
-.card{background:#fff;border:1px solid var(--soft);border-radius:18px;padding:40px 44px;max-width:440px;
-box-shadow:0 8px 30px rgba(0,0,0,.06);text-align:center}
-h1{font-size:20px;margin:0 0 6px;display:flex;align-items:center;justify-content:center;gap:8px}
-h1 .ico{width:22px;height:22px;color:var(--brand);flex:none}.sub{color:#8a857c;font-size:14px;margin-bottom:26px}
-.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:38px;letter-spacing:4px;font-weight:700;
-color:var(--brand);background:var(--cream);border:2px dashed var(--brand);border-radius:14px;padding:18px 10px;cursor:pointer;user-select:all}
-.copy{margin-top:14px;font-size:13px;color:#8a857c}.ns{font-weight:600}
-.steps{text-align:left;margin:26px 0 0;padding:18px;background:var(--cream);border-radius:12px;font-size:13px;line-height:1.7;color:#6b665d}
-.tip{margin-top:18px;font-size:12px;color:#aaa39a}b{color:var(--ink)}
-.fp{margin-top:14px;padding:12px 14px;background:var(--cream);border-radius:12px;text-align:left;font-size:12px;color:#6b665d;line-height:1.6}
-.fp code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--ink);word-break:break-all;user-select:all}
-</style></head><body><div class="card">
-<h1><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4.5 6v5.5c0 4.4 3.1 8.2 7.5 9.5 4.4-1.3 7.5-5.1 7.5-9.5V6Z"/><path d="m9.2 12.1 2 2 3.6-3.8"/></svg>设备授权</h1>
-<div class="sub">空间 <span class="ns">%[1]s</span> · 把下面的 code 贴回终端</div>
-<div class="code" onclick="navigator.clipboard&&navigator.clipboard.writeText(this.textContent.trim());document.querySelector('.copy').textContent='✓ 已复制'">%[2]s</div>
-<div class="copy">点一下复制 · %[3]d 分钟内有效 · 仅可用一次</div>
-<div class="steps">回到终端,在 <b>输入授权 code:</b> 后粘贴上面的 code,回车即可。<br>设备会自动绑定到空间 <b>%[1]s</b> 并转入后台运行。</div>
-<div class="fp">授权后终端会打印它信任的门户身份，请与这里的一致：<br><code>%[4]s</code></div>
-<div class="tip">这台机器就成了一个可被远程控制的设备。停止用 <b>wanctl stop</b>。</div>
-</div></body></html>`
 
 // requireNS authenticates an API request and resolves its namespace. Errors
 // are written as API responses; browser page handlers use pageAuth instead,
@@ -815,21 +787,18 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, detail, http.StatusBadGateway)
 		return
 	}
-	// The avatar needs no extra call and no extra stored field: GitHub serves
-	// it from the numeric account id, which the session already carries. Header
-	// (SSO) deployments have no avatar at all, so this is empty there and the
-	// SPA falls back to a monogram — which it must do anyway, since
-	// avatars.githubusercontent.com is not reliably reachable everywhere this
-	// portal gets deployed.
-	avatar := ""
-	if p.Provider == providerGitHub && p.Subject != "" {
-		avatar = "https://avatars.githubusercontent.com/u/" + url.PathEscape(p.Subject) + "?s=96"
-	}
+	// There is deliberately no avatar field. It used to hand the SPA an
+	// avatars.githubusercontent.com URL built from the account id — and this
+	// portal's own CSP is `img-src 'self' data:`, so the browser refused every
+	// one of them and logged a violation on each page load. Measured in Chrome
+	// against this server, 2026-09-04: the monogram fallback is what everybody
+	// has always seen. Widening the CSP instead would mean a security console
+	// fetching cross-origin from GitHub on every load, for a decoration.
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		// `identity` predates the split and is the login; kept so nothing that
-		// reads it breaks. `login`/`name`/`avatar` are what the header renders.
-		"identity": p.Login, "login": p.Login, "name": p.Name, "avatar": avatar,
+		// reads it breaks. `login`/`name` are what the header renders.
+		"identity": p.Login, "login": p.Login, "name": p.Name,
 		"namespace": ns, "provider": p.Provider, "role": role,
 		"lark": s.larkEnabled(),
 		// The SPA composes copy-pasteable `wanctl config set relay=…` lines,
