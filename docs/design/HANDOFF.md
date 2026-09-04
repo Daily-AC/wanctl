@@ -1,6 +1,11 @@
 # wanctl web 重构 · 交接
 
 last-reviewed: 2026-09-04
+
+## 0. 已上线
+
+**https://wc.z10.dev**（橙云，分享用）与 **https://wc.lab.z10.dev**（灰云，大陆直连）
+是同一个站，2026-09-04 14:40 上线。发布跑 `tools/deploy.sh`，不用手工 tar。
 状态：首屏与「安全模型」一屏都已获甲方认可（安全模型：「很对味，很干净，很极简」）。
 **09-04 下午重做了首屏的交互呈现**——起因是甲方落地时把那块活 demo 当成了一张图片。
 往下的章节（自部署 / 文档入口）没开工。
@@ -148,6 +153,35 @@ GitHub。机制在 `internal/relay/dist.go` 的 `installerHandler` + `WANCTL_PUB
 - **换标**：挂锁退役，改成纯字标；favicon 是画成路径的 `w`。理由见 `DESIGN.md` 6.2。
   **改了标记要重跑 `tools/og.sh`**（分享卡片里也有字标）。
 - 页脚跟着两扇门那屏（浅灰）翻成白底 + 一条发丝线。
+
+## 3.10 部署（09-04，已上线）
+
+按 `fleet-deploy`：静态文件在 **ls** `/srv/www/wc.z10.dev`，**hk 只做 TLS 终止 + 反代**。
+`wc` 是一级子域、`wc.lab` 是二级，两个都命中已有泛域名，**DNS 一条都没加、证书一张都没签**。
+两个名字写在同一个 server block 里（照抄邻居 `sifter.z10.dev` 的样板）：
+橙云那个分享出去有 CF 边缘缓存，灰云那个给大陆访客绕开 CF 免费版的阿姆斯特丹绕道。
+
+- ls：`/etc/nginx/sites-available/wc`（8443，证书 `/srv/hyakki/certs/`）
+- hk：`/etc/nginx/conf.d/30-wc.z10.dev.conf`（`proxy_pass https://49.232.31.177:8443`）
+- 发布：**`tools/deploy.sh`**
+
+**发布脚本为什么要改文件而不是直接 rsync**：实测 CF 会用自己的 Browser Cache TTL
+（免费版默认 4h）**改写浏览器看到的 `Cache-Control`，源站写 `no-cache` 也拦不住**——
+下次改版，回头客最多 4 小时还在跑旧 CSS 配新 HTML。所以脚本在发布副本上给
+`app.css` / `app.js` 打内容指纹（`?v=<md5 前 10 位>`），换内容就是换 URL，
+nginx 那边这两类因此可以放心 `immutable`。**本地开发不带指纹，不用跑构建。**
+
+两个实测到的坑：
+
+- **macOS 的 `tar` 会带 `._*` 影子文件**（扩展属性），那些会被公开服务出去。
+  脚本里 `COPYFILE_DISABLE=1` + `--no-xattrs` + 落地后再 `find -name '._*' -delete`。
+- **`chown -R www-data` 之后 ubuntu 就读不了那个目录了**，核验（`find | wc -l`、`du`）
+  必须排在 chown 之前，否则整条命令在最后一步 permission denied。
+
+实测缓存分布：字体 `cf-cache-status: HIT`（immutable 一年，116K 全走 CF 边缘不碰 hk），
+og.png / mark.svg HIT，指纹后的 css/js immutable，HTML `no-cache` + `DYNAMIC`
+（CF 免费版本来就不缓存 HTML，15K 而已）。橙云首字节 ~1.6s、灰云 ~0.69s，
+和 `fleet-deploy` 里记的阿姆斯特丹绕道口径一致。
 
 ## 4. 已验证的事实（别重测）
 
