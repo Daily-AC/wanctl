@@ -2,7 +2,10 @@
 
 last-reviewed: 2026-09-04
 
-工作区：worktree `~/projects/wanctl-oss-worktrees/portal-ui`，分支 `portal-ui`，从 `main@372082a` 开出。
+**门户这一轮已合进 main 并上线**（PR #14 + #15 → `3ec5afd`，09-04 晚）。
+剩下的是文档站，以及文档站上线之后才能做的 CMS 拆除。
+
+工作区：worktree `~/projects/wanctl-oss-worktrees/portal-ui`。
 主工作区 `~/projects/wanctl-oss` 保持只读。视觉真源仍是 `docs/design/DESIGN.md`，改视觉先改那里。
 
 ---
@@ -116,9 +119,12 @@ try-it 面板是给 HTTP API 用的。wanctl 对用户的界面是 CLI，没有�
 - [x] **甲方过目并认可**（09-04 傍晚，浏览器实看）。提了四条不适，全部已修（commit `8b68bfd`）
 - [x] **三张认证页**（登录 / 等待邀请 / 设备授权），见第 8 节。甲方中途看了一眼说
       「登录页不够极简」，参照 linux.do 又削了一轮
-- [ ] **← 下一步：文档站**
+- [x] 顶栏分隔线拿掉（官网同步）、加图形标记、顶栏两端按墨迹对齐 —— 见 `DESIGN.md` §5 §6.2 §8
+- [x] **已上线**（09-04 晚，PR #14 + #15 合进 main `3ec5afd`）
+      · 官网 wc.z10.dev 走 `tools/deploy.sh`
+      · 门户 wanctl.z10.dev 只重建门户容器，relay 一根手指没动，见第 11 节
+- [ ] **← 下一步：文档站 `wc.z10.dev/docs`**
 - [ ] 砍 CMS + 端点 + 官网页脚改指向
-- [ ] 部署
 
 ## 6. 施工中自己拍的板（甲方未逐条过目，要改说一声）
 
@@ -242,3 +248,36 @@ go run . portal -addr 127.0.0.1:8725
 （`handlePending` 解析不出命名空间时会照常渲染页面）。**09-04 就是这么验的**：
 双语切换、空码校验、兑换真打到 `/auth/redeem` 并通过 CSRF 双提交、退出登录清掉 cookie、
 以及那条头像的 CSP 违规。
+
+## 11. 上线记录（2026-09-04）
+
+**官网**：`tools/deploy.sh`。这次顺手修了脚本本身（PR #15）—— 换了 `mark.svg`
+之后源站秒级更新，而 Cloudflare 拿着一份 `age=13048` 的 HIT 在发旧 favicon
+（nginx 给图片的 `Cache-Control: public, max-age=86400`）。app.css / app.js
+本来就有内容指纹防这个，`mark.svg` 只是以前从没变过所以漏了，现在一起指纹化，
+并且指纹缺失会让发布直接失败。
+
+**门户**：**没有发新 release、没有换 dist**，所以只重建门户容器。
+详细步骤和「为什么必须 `--no-deps`」记在 ls 上的 `/srv/wanctl-smoke/DEPLOY-NOTES.md`
+（那份是运维真源）。要点：relay 和 portal 共用 `wanctl:local` 这个 tag，
+不加 `--no-deps` 会把 relay 一起重建，踢掉所有设备的 WebSocket。
+旧镜像已打 tag `wanctl:rollback-20260904`。
+
+**ls 仍然连不上 GitHub 的 git 端点**（实测 `git-upload-pack` 25 秒零字节，
+而同一台机器拉 GitHub 的 HTML 页面是 200 —— 别被那个 200 骗了）。
+代码仍走 `git bundle` + scp。**hk 拉 GitHub 是通的（0.39s / 200），
+而 hk 与 ls 同在一个 Tailscale 网里**（hk `100.69.190.32` / ls `100.65.98.121`，
+ICMP 通、平均 545ms 且抖动大，说明走的是 DERP 中继不是直连）——
+所以「在 hk 上开一个只绑 tailnet 地址的轻量 HTTP 代理给 ls 用」是可行的，
+公网面不用动，Tailscale 本身就做了两端认证。**尚未实施。**
+
+**甲方给了这条代理一个硬约束：按需用，不做全局代理。** 也就是 ls 上不设
+`HTTPS_PROXY` 环境变量、不写 `git config --global http.proxy`，只在真的要拉
+GitHub 的那一条命令上临时带（`git -c http.proxy=… fetch`）。
+理由是 ls 是生产机：全局代理会把 relay 自己的出站、apt、docker pull 全绕去香港，
+为了一年几次的 `git fetch` 去改一台生产机所有出站流量的路径，代价和收益不成比例。
+
+**上线后实测**：`/healthz` = ok；未登录打开 `/` 落在新登录页而不是被弹去 GitHub；
+`/enroll` 未登录 → `303 /auth/login?next=%2Fenroll`；`/assets/login.html`
+与 `/assets/index.html` = 404；`/assets/auth.js` = 200；CSP 里已无 Google Fonts。
+官网 `assets/mark.svg?v=aa1d37391b` 发的是新路径。
