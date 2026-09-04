@@ -575,7 +575,10 @@
     showView('device');
     selTab('asks');
     var h = '#device/' + encodeURIComponent(name);
-    if (location.hash !== h) history.pushState(null, '', h);
+    // 设置页是这台设备的子路由。以前这里无条件改写地址，于是直接打开
+    // #device/X/settings 会被换成 #device/X —— 页面对了，地址错了，
+    // 刷新或后退就掉回设备页，收藏和分享出去的链接也不再指向同一屏。
+    if (location.hash !== h && location.hash !== h + '/settings') history.pushState(null, '', h);
     if (m.shared) { $('#dAsks').innerHTML = ''; $('#dBlank').hidden = false; $('#dBlank').textContent = t().roConsole; return; }
     $('#dAsks').innerHTML = '';
     $('#dBlank').hidden = false;
