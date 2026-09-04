@@ -877,8 +877,9 @@
   /* ── 设置 ────────────────────────────────────────────────────────────
      设置和设备设置都是页面，顶栏因此一直在 —— 覆盖层会把「你是谁」盖掉。
      更新日志仍是浮层：它是只读速览，不值得一个地址。 */
-  $('#gear').onclick = function () { go('settings/' + curSet); };
+  $('#gear').onclick = function () { go('settings'); };
   $('#sClose').onclick = function () { go('devices'); };
+  $('#sBack').onclick = function () { go('settings'); };
   $('#dGear').onclick = function () { go('device/' + encodeURIComponent(cur) + '/settings'); };
   $('#dsClose').onclick = function () { go('device/' + encodeURIComponent(cur)); };
   $('#clClose').onclick = function () { $('#clSheet').classList.remove('show'); };
@@ -900,13 +901,19 @@
     if (s === 'invites' && !(me && me.role === 'admin')) return 'tokens';
     return s;
   }
+  // 设置有两级，空的那一级就是清单本身：`#settings` 是清单，
+  // `#settings/tokens` 是其中一节。窄屏上一次只显示一级（app.css 的 760 断点），
+  // 宽屏上两级永远同时在，所以那里两个地址渲染出来是同一张页面。
   function openSheet(s) {
-    s = allowedSet(s);
-    curSet = s;
-    $$('.sgroup button[data-s]').forEach(function (b) { b.classList.toggle('on', b.dataset.s === s); });
-    $$('.sview').forEach(function (v) { v.classList.toggle('show', v.dataset.s === s); });
+    var list = !s;
+    if (!list) curSet = allowedSet(s);
+    var k = curSet;
+    $$('.sgroup button[data-s]').forEach(function (b) { b.classList.toggle('on', b.dataset.s === k); });
+    $$('.sview').forEach(function (v) { v.classList.toggle('show', v.dataset.s === k); });
+    $('.settings').dataset.level = list ? 'list' : 'section';
     showView('settings');
-    if (setLoaders[s]) setLoaders[s]();
+    // 清单这一级也照样加载：宽屏上那一节就在旁边显示着，不加载它是空的。
+    if (setLoaders[k]) setLoaders[k]();
   }
   $$('.sgroup button[data-s]').forEach(function (b) {
     b.onclick = function () { go('settings/' + b.dataset.s); };
@@ -1347,7 +1354,8 @@
     // 设置有自己的地址：刷新、后退、把链接发给自己都该回到同一页。
     if (h.indexOf('#settings') === 0) {
       closeDevice();
-      openSheet(h.slice('#settings/'.length) || curSet);
+      // '#settings' 和 '#settings/' 切完都是空串，那就是清单那一级。
+      openSheet(h.slice('#settings/'.length));
       return;
     }
     closeDevice();
