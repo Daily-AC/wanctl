@@ -36,6 +36,7 @@
       nothingWaiting: 'Nothing is waiting for you.',
       noneOnDevice: 'Nothing waiting on this device.',
       cantReach: 'Cannot reach this device — it may be offline.',
+      cantList: 'Cannot reach the relay, so the device list is unavailable. Nothing has been removed.',
       kind: { exec: 'command', read: 'read a file', write: 'write a file' },
       wantsTo: function (d) { return d; },
       from: 'from', cwd: 'in',
@@ -129,6 +130,7 @@
       nothingWaiting: '没有人在等你。',
       noneOnDevice: '这台设备没有待审批。',
       cantReach: '连不上这台设备，它可能不在线。',
+      cantList: '连不上中继，暂时列不出设备。什么都没有丢。',
       kind: { exec: '命令', read: '读取文件', write: '写入文件' },
       wantsTo: function (d) { return d; },
       from: '来自', cwd: '工作目录',
@@ -510,9 +512,19 @@
   }
 
   var waitCount = {};   // device -> 待审批条数，用于设备卡上的角标
+  var devLoadFailed = false;   // 上一次拉设备清单失败了吗（空清单和拉不到是两回事）
 
   function renderDevices() {
     var xs = devices;
+    // 拉不到清单 ≠ 一台都没有。这两种「空」以前渲染成同一屏：loadDevices 的
+    // catch 先写上「连不上」，紧接着 refreshAsks → renderDevices 看见空数组，
+    // 把它换成了「装好 wanctl，然后在那儿运行它」—— 一次中继抖动于是长得像
+    // 「你的设备都没了，从头装一台吧」。
+    if (!xs.length && devLoadFailed) {
+      $('#onboard').hidden = true;
+      $('#grid').innerHTML = '<div class="blank">' + esc(t().cantList) + '</div>';
+      return;
+    }
     $('#onboard').hidden = xs.length > 0;
     if (!xs.length) {
       $('#onboard').innerHTML = '<div class="onboard"><p>' + esc(t().firstDevice) + '</p>' +
@@ -544,6 +556,7 @@
 
   function loadDevices() {
     return jget('/api/devices').then(function (d) {
+      devLoadFailed = false;
       noteDevices(d.devices);
       renderDevices();
       // route() can beat this request: setting a hash while the page is still
@@ -557,7 +570,8 @@
       }
     }).catch(function (e) {
       oops(e);
-      $('#grid').innerHTML = '<div class="blank">' + esc(t().cantReach) + '</div>';
+      devLoadFailed = true;
+      renderDevices();
     });
   }
 
