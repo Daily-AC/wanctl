@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22">
-  <rect width="22" height="22" fill="#F7F8F8"/>
-  <g fill="none" stroke="#22262A" stroke-width="1.6">
-    <rect x="1.8" y="4.8" width="18.4" height="14.4" rx="1.4"/>
-    <path d="M7.4 4.8V3.4a3.6 3.6 0 0 1 7.2 0v1.4"/>
-    <path d="M11 13.2v3"/>
+  <!-- 和导航条里那把锁是同一副几何，只是加粗了描边给 16px 的标签页用。
+       上一版这里还是 LOTO 世代的表盘锁，和站上的标识对不上。 -->
+  <rect width="22" height="22" rx="4.4" fill="#ffffff"/>
+  <g fill="none" stroke="#1d1d1f" stroke-width="2">
+    <path d="M6.6 9.4V6.4a4.4 4.4 0 0 1 8.8 0v3"/>
+    <rect x="3.4" y="9.4" width="15.2" height="10.8" rx="2.4"/>
   </g>
-  <circle cx="11" cy="11.2" r="2.1" fill="#22262A"/>
+  <circle cx="11" cy="14.1" r="1.7" fill="#1d1d1f"/>
 </svg>

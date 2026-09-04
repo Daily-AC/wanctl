@@ -5,6 +5,25 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>wanctl — your machines, your call</title>
 <meta name="description" content="wanctl gives an AI agent your machines across the public internet. Every command stops at the device and waits for you. The relay in the middle only ever sees ciphertext.">
+<link rel="canonical" href="https://wc.z10.dev/">
+<meta name="theme-color" content="#ffffff">
+
+<!-- 分享卡片。图由 tools/og.sh 从 tools/og.html 渲染，用的是站点自己的 CSS，
+     所以卡片上那块屏和首屏上那块永远是同一套样式。改了视觉记得重跑一次。 -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="wanctl">
+<meta property="og:url" content="https://wc.z10.dev/">
+<meta property="og:title" content="wanctl — your machines, your call">
+<meta property="og:description" content="wanctl gives an AI agent your machines across the public internet. Every command stops at the device and waits for you. The relay in the middle only ever sees ciphertext.">
+<meta property="og:image" content="https://wc.z10.dev/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A phone showing an approval request: claude@workstation wants to run python train.py on bench-02. Allow once, always allow this, or refuse.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="wanctl — your machines, your call">
+<meta name="twitter:description" content="An AI agent gets your machines across the public internet. Every command stops at the device and waits for you.">
+<meta name="twitter:image" content="https://wc.z10.dev/assets/og.png">
+
 <link rel="stylesheet" href="assets/app.css">
 <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
 </head>
@@ -186,9 +205,21 @@
 </main>
 
 <footer class="foot">
+  <!-- 文档入口。每条都实测 200 过，默认分支是 main（查过，不是猜的）。 -->
+  <nav class="flinks">
+    <a href="https://github.com/Daily-AC/wanctl#readme" data-en="Docs" data-zh="文档">Docs</a>
+    <a href="https://github.com/Daily-AC/wanctl/blob/main/docs/architecture.md"
+       data-en="Architecture" data-zh="架构">Architecture</a>
+    <a href="https://github.com/Daily-AC/wanctl/blob/main/docs/self-hosting.md"
+       data-en="Run your own" data-zh="自己部署一套">Run your own</a>
+    <a href="https://github.com/Daily-AC/wanctl/blob/main/SECURITY.md"
+       data-en="Security" data-zh="安全">Security</a>
+    <a href="https://github.com/Daily-AC/wanctl/releases"
+       data-en="Releases" data-zh="版本">Releases</a>
+    <a href="https://github.com/Daily-AC/wanctl">GitHub</a>
+  </nav>
   <div class="row">
     <span data-en="Open source, Apache-2.0." data-zh="开源，Apache-2.0。">Open source, Apache-2.0.</span>
-    <a href="https://github.com/Daily-AC/wanctl">github.com/Daily-AC/wanctl</a>
     <span class="end mono" data-en="Demo devices are fictional." data-zh="演示设备均为虚构。">Demo devices are fictional.</span>
   </div>
 </footer>

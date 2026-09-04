@@ -105,6 +105,23 @@ GitHub。机制在 `internal/relay/dist.go` 的 `installerHandler` + `WANCTL_PUB
 **副作用要知道**：官网公开推荐这个 URL 之后，陌生人会从甲方的个人生产 relay 拉安装包。
 它今天本来就对任何人返回 200，所以安全面没变，变的是流量。
 
+## 3.7 收尾打磨（09-04）
+
+- **安装命令的胶囊贴着内容走**，不是钉死在最长那条的宽度上。四条命令长短差一倍
+  （44 ~ 86 字），钉死就等于给短命令留一大片空当（甲方原话「会不会太空了？」）。
+  实测四态宽度 845 / 803 / 584 / 542，横向溢出全为 0。
+- **分享卡片** `site/assets/og.png`（1200×630，71K）+ 完整 og/twitter meta + canonical。
+  卡片本体是 `tools/og.html`，`tools/og.sh` 渲染时把它临时拷进 `site/`，
+  所以它吃的是站点自己的 `app.css` 和字体——**卡片上那块手机屏和首屏那块是同一套 CSS**。
+  改了视觉记得重跑 `tools/og.sh`。
+  踩过一个坑：卡片里用了 `.foot` 这个类名，被站点页脚的 `background:var(--canvas-2)` 套上灰底。
+- **锚点落点**：吸顶导航 48px 高，之前每一屏跳过去顶部都被压在导航条底下。
+  `html{scroll-padding-top:48px}` 修掉，实测四个锚点现在都停在 48。
+- **页脚补了文档入口**六条（Docs / Architecture / Run your own / Security / Releases / GitHub），
+  每条 `curl` 实测 200，默认分支查过是 `main`（没手写）。这就是原计划里的「文档入口」，
+  没单开一屏。
+- **favicon 换了**：`mark.svg` 原来还是 LOTO 世代的表盘锁，和导航条里那把锁不是同一副几何。
+
 ## 4. 已验证的事实（别重测）
 
 - **策略语义**忠实移植自 `internal/policy` 的 `matchCommand` + `ruleMatchesShell` exec 分支：
@@ -123,6 +140,16 @@ GitHub。机制在 `internal/relay/dist.go` 的 `installerHandler` + `WANCTL_PUB
 - **部署路径已查清，无需再研究**：`wc.z10.dev` 是一级子域，命中已有泛域名
   `*.z10.dev`（橙云 + CF Universal SSL）→ **不用加 DNS、不用签证书**。
   静态站按 2026-08-06 政策放 **ls**，hk 只做 TLS 终止 + 反代。见 `fleet-deploy` skill。
+
+## 4.5 已归档到 GitHub issue 的待办（09-04，甲方指定「UI 打磨完之后再搞」）
+
+- **#9** 提交申请与审核 —— `wanctl.z10.dev` 是邀请制，官网要把人送过去就得有个申请入口 +
+  审核队列。**申请是否公开这件事没定，它决定用什么机制，动手前先问甲方。**
+- **#10** 非管理员能通过 `#invites` 打开管理员视图 —— 纯 UI 泄漏，
+  服务端 `requireAdmin` 是好的（`TestInvitesRejectNonAdmin` 断言 403 且 relay 根本没被碰到），
+  所以敢开公开 issue。根因是 hash 路由不看角色，`applyView` 该拦。
+- **#11** 装完第一次启动让用户选官方 relay 还是自建 —— 注意从镜像装的人已经选过了
+  （脚本里烧着 `RELAY_SELF`），别再问一遍；也别在非 TTY 下阻塞无人值守安装。
 
 ## 5. 下一步（按甲方原排序）
 
