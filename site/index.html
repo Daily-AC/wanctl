@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wanctl — your machines, your call</title>
+<meta name="description" content="wanctl gives an AI agent your machines across the public internet. Every command stops at the device and waits for you. The relay in the middle only ever sees ciphertext.">
+<link rel="canonical" href="https://wc.z10.dev/">
+<meta name="theme-color" content="#ffffff">
+
+<!-- 分享卡片。图由 tools/og.sh 从 tools/og.html 渲染，用的是站点自己的 CSS，
+     所以卡片上那块屏和首屏上那块永远是同一套样式。改了视觉记得重跑一次。 -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="wanctl">
+<meta property="og:url" content="https://wc.z10.dev/">
+<meta property="og:title" content="wanctl — your machines, your call">
+<meta property="og:description" content="wanctl gives an AI agent your machines across the public internet. Every command stops at the device and waits for you. The relay in the middle only ever sees ciphertext.">
+<meta property="og:image" content="https://wc.z10.dev/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A phone showing an approval request: claude@workstation wants to run python train.py on bench-02. Allow once, always allow this, or refuse.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="wanctl — your machines, your call">
+<meta name="twitter:description" content="An AI agent gets your machines across the public internet. Every command stops at the device and waits for you.">
+<meta name="twitter:image" content="https://wc.z10.dev/assets/og.png">
+
+<link rel="stylesheet" href="assets/app.css">
+<link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+</head>
+<body>
+
+<header class="nav">
+  <!-- 字标单独站着。之前那把挂锁是安全类产品最不动脑子的选择，
+       换成另一个弱符号不如把它减掉 —— 字标本身已经有形。 -->
+  <a class="brand" href="/">wanctl</a>
+  <nav class="links">
+    <a href="#decide"  data-en="How it works" data-zh="怎么工作">How it works</a>
+    <a href="#fleet" data-opt data-en="Devices" data-zh="设备">Devices</a>
+    <a href="#private" data-en="Security" data-zh="安全">Security</a>
+    <a href="#install" data-en="Install" data-zh="安装">Install</a>
+    <a href="https://github.com/Daily-AC/wanctl">GitHub</a>
+  </nav>
+  <button class="lang" id="lang" type="button" aria-label="Switch language">中文</button>
+</header>
+
+<main>
+
+  <!-- 首屏：双屏真实场景。屏幕里跑的是活的产品界面，不是贴图。 -->
+  <section class="tile hero center">
+    <h1 data-en="Your machines. Your call." data-zh="你的机器，你说了算。">Your machines. Your call.</h1>
+    <p class="lead"
+       data-en="wanctl gives an AI agent your machines across the public internet. Every command stops at the device and waits for you."
+       data-zh="wanctl 把你的机器跨公网交给 AI agent 去用。它发的每一条命令都会停在设备上，等你。">
+      wanctl gives an AI agent your machines across the public internet.
+      Every command stops at the device and waits for you.
+    </p>
+    <div class="cta-row">
+      <a class="btn" href="#install" data-en="Install" data-zh="安装">Install</a>
+      <a class="link-arrow" href="#decide" data-en="See how it works" data-zh="看看它怎么工作">See how it works</a>
+    </div>
+
+    <div class="stage">
+      <div class="laptop">
+        <div class="lid">
+          <div class="notch"></div>
+          <div class="screen"><div class="term" id="term"></div></div>
+        </div>
+        <div class="base"></div>
+      </div>
+      <div class="phone" id="phone">
+        <div class="body">
+          <div class="screen">
+            <span class="island"></span>
+            <div class="ask" id="ask"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 深色屏：审批凭证。主体在右 —— 那是「你」的回答，落在首屏手机所在的那一侧 -->
+  <section class="tile dark split chapter" id="decide">
+    <div class="say">
+    <h2 data-en="Nothing runs until you say yes."
+        data-zh="你不点头，什么都不会跑。">Nothing runs until you say yes.</h2>
+    <p class="lead"
+       data-en="The device decides locally. A rule you signed can let a command through; anything else waits for a person. Every answer is written down."
+       data-zh="策略在设备本地判定。命中你签过的规则就放行，其余一律等人。每一次回答都会被记下来。">
+      The device decides locally. A rule you signed can let a command through;
+      anything else waits for a person. Every answer is written down.
+    </p>
+    </div>
+    <div class="see">
+    <div class="panel">
+      <div class="head">
+        <span class="t" data-en="Signed decision" data-zh="签过的决定">Signed decision</span>
+        <span class="s mono" id="credtime">—</span>
+      </div>
+      <div class="body" id="cred"></div>
+    </div>
+    </div>
+
+    <!-- 通栏收尾：这条是整个产品最常被误解的地方，而且首屏 demo 每次都在演它，
+         之前页面上却一个字都没写。移植自 internal/policy 的 matchCommand。 -->
+    <div class="lesson">
+      <p class="claim"
+         data-en="A rule covers a command, not a machine."
+         data-zh="规则管的是一条命令，不是一台机器。">A rule covers a command, not a machine.</p>
+      <ul>
+        <li>
+          <span class="k" data-en="Signed once" data-zh="签过一次">Signed once</span>
+          <code class="mono">python train.py --epochs 3 --resume --seed 7</code>
+          <span class="v" data-en="runs without asking" data-zh="以后直接放行">runs without asking</span>
+        </li>
+        <li>
+          <span class="k" data-en="Anything else" data-zh="换成别的">Anything else</span>
+          <code class="mono">nvidia-smi --query-gpu=memory.used --format=csv</code>
+          <span class="v" data-en="asks you again" data-zh="还是会来问你">asks you again</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 浅灰屏：设备列表。主体在左 —— 那是 wanctl peers 的输出，
+       控制端看的东西，落在首屏笔记本所在的那一侧 -->
+  <section class="tile grey split flip minor" id="fleet">
+    <div class="say">
+    <h2 data-en="Your fleet, in one list." data-zh="你的机器，一张表看完。">Your fleet, in one list.</h2>
+    <p class="lead"
+       data-en="Laptops, servers, phones and routers. One Go binary runs on all of them, over WebSocket or plain HTTP long-poll."
+       data-zh="笔记本、服务器、手机、路由器。同一个 Go 二进制跑在所有这些上面，走 WebSocket 或普通 HTTP 长轮询。">
+      Laptops, servers, phones and routers. One Go binary runs on all of them,
+      over WebSocket or plain HTTP long-poll.
+    </p>
+    </div>
+    <div class="see">
+    <div class="panel">
+      <div class="head">
+        <span class="t" data-en="Devices" data-zh="设备">Devices</span>
+        <span class="s" id="fleetcount">—</span>
+      </div>
+      <ul class="rows" id="rows"></ul>
+    </div>
+    </div>
+  </section>
+
+  <!-- 深色屏：两方指纹互钉被放大成主体。中转只留下一行元数据。 -->
+  <section class="tile dark center" id="private">
+    <h2 data-en="The relay never sees inside."
+        data-zh="中间那台机器看不见里面。">The relay never sees inside.</h2>
+    <p class="lead"
+       data-en="Controller and device each hold an Ed25519 key and run mutual TLS 1.3 inside the relayed pipe, pinned by fingerprint. The relay moves bytes it cannot open."
+       data-zh="控制端和设备各持一把 Ed25519 密钥，在穿过 relay 的那条管道内部再跑一层双向 TLS 1.3，两边按指纹互相钉住。relay 搬运的是它自己打不开的字节。">
+      Controller and device each hold an Ed25519 key and run mutual TLS 1.3
+      inside the relayed pipe, pinned by fingerprint. The relay moves bytes it
+      cannot open.
+    </p>
+
+    <div class="panel pin" id="pin">
+      <div class="head">
+        <span class="t" data-en="End-to-end identity" data-zh="端到端身份">End-to-end identity</span>
+        <span class="s mono">TLS 1.3 · Ed25519</span>
+      </div>
+      <div class="body">
+        <div class="party">
+          <span class="who">claude@workstation
+            <em data-en="controller" data-zh="控制端">controller</em></span>
+          <span class="fp mono">SHA256:fJoz5aAnHwQ/tPQ//WvDpG9XEEeEzOvQEZIlqODOAEo=</span>
+        </div>
+        <div class="wireline">
+          <span class="wire"></span>
+          <span class="state">
+            <span class="ring">
+              <svg width="13" height="13" viewBox="0 0 18 18" aria-hidden="true">
+                <path d="M3.5 9.4l3.4 3.4L14.5 5.2" fill="none" stroke="currentColor"
+                      stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
+            <b id="pinstate" data-en="Fingerprints matched — pinned on both sides"
+                             data-zh="指纹一致 —— 两端都已钉住">Fingerprints matched — pinned on both sides</b>
+          </span>
+          <span class="wire"></span>
+        </div>
+        <div class="party">
+          <span class="fp mono">SHA256:LELKNbJhYtSLwjFb9hc0iAl9p0JX5MTDEEEQqTofoPc=</span>
+          <span class="who">bench-02
+            <em data-en="device" data-zh="设备">device</em></span>
+        </div>
+      </div>
+      <div class="ledger">
+        <span class="cap" data-en="Everything the relay wrote down about this session"
+                          data-zh="这场会话在 relay 上留下的全部记录">Everything the relay wrote down about this session</span>
+        <code class="mono" id="ledger">—</code>
+      </div>
+    </div>
+  </section>
+
+  <!-- 白屏：安装。两个维度（系统 × 下载源）各一个分段控件，命令永远只有一条 -->
+  <section class="tile center" id="install">
+    <h2 data-en="One line to install." data-zh="一行装完。">One line to install.</h2>
+    <p class="lead"
+       data-en="Run it on the machine you want to reach. Nothing lands on disk until a signed release manifest checks out."
+       data-zh="在你想连的那台机器上跑。签名过的发布清单验过之前，什么都不会落盘。">
+      Run it on the machine you want to reach. Nothing lands on disk until a
+      signed release manifest checks out.
+    </p>
+
+    <div class="picker">
+      <div class="seg" id="osseg" role="group"
+           aria-label="Operating system" data-lbl-en="Operating system" data-lbl-zh="操作系统">
+        <button type="button" data-os="unix" class="on">macOS · Linux</button>
+        <button type="button" data-os="win">Windows</button>
+      </div>
+      <div class="seg" id="srcseg" role="group"
+           aria-label="Download source" data-lbl-en="Download source" data-lbl-zh="下载源">
+        <button type="button" data-src="gh" class="on">GitHub</button>
+        <button type="button" data-src="cn"
+                data-en="China mirror" data-zh="中国镜像">China mirror</button>
+      </div>
+    </div>
+
+    <div class="cmdline">
+      <code id="installcmd">curl -fsSL https://github.com/Daily-AC/wanctl/releases/latest/download/install.sh | sh</code>
+      <button id="copy" type="button" data-en="Copy" data-zh="复制">Copy</button>
+    </div>
+    <p class="note" id="srcnote">Straight from the GitHub release.</p>
+  </section>
+
+  <!-- 浅灰屏：装完连到哪儿。两扇门是真正等价的两个选择，所以这里用一次
+       诚实的 50/50 —— 而且它和上面的交替两栏是不同的形状，节奏不会延续成节拍器。 -->
+  <section class="tile grey" id="relay">
+    <div class="say">
+      <h2 data-en="One relay in the middle. Ours, or yours."
+          data-zh="中间那台 relay。我们的，或者你自己的。">One relay in the middle. Ours, or yours.</h2>
+      <p class="lead"
+         data-en="Every device dials one relay, and it never sees inside your sessions either way. We run one. The whole thing is also a compose file."
+         data-zh="每台设备都拨向一台 relay，而无论用哪台，它都看不见你会话的内容。我们跑了一台；整套东西也就是一个 compose 文件。">
+        Every device dials one relay, and it never sees inside your sessions
+        either way. We run one. The whole thing is also a compose file.
+      </p>
+    </div>
+
+    <div class="doors">
+      <div class="door">
+        <span class="k" data-en="Hosted" data-zh="我们跑的那台">Hosted</span>
+        <p class="addr mono"><a href="https://wanctl.z10.dev">wanctl.z10.dev</a></p>
+        <p class="d"
+           data-en="Invite-only while it is one person&#39;s server rather than a service. No SLA, no support queue, no charge."
+           data-zh="它现在还是一个人的服务器，不是一项服务，所以只能邀请进。没有 SLA，没有工单，也不收钱。">
+          Invite-only while it is one person's server rather than a service.
+          No SLA, no support queue, no charge.
+        </p>
+      </div>
+
+      <div class="door">
+        <span class="k" data-en="Your own" data-zh="你自己的那台">Your own</span>
+        <p class="addr mono">docker compose up</p>
+        <p class="d"
+           data-en="Relay, portal and Postgres in one compose file. Nothing about your fleet ever reaches a machine you do not own."
+           data-zh="relay、门户和 Postgres 在同一个 compose 文件里。你的设备信息不会到达任何一台不属于你的机器。">
+          Relay, portal and Postgres in one compose file. Nothing about your
+          fleet ever reaches a machine you do not own.
+        </p>
+        <a class="link-arrow" href="https://github.com/Daily-AC/wanctl/blob/main/docs/self-hosting.md"
+           data-en="Read the self-hosting guide" data-zh="看自部署指南">Read the self-hosting guide</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <!-- 文档入口。每条都实测 200 过，默认分支是 main（查过，不是猜的）。 -->
+  <nav class="flinks">
+    <a href="https://github.com/Daily-AC/wanctl#readme" data-en="Docs" data-zh="文档">Docs</a>
+    <a href="https://github.com/Daily-AC/wanctl/blob/main/docs/architecture.md"
+       data-en="Architecture" data-zh="架构">Architecture</a>
+    <a href="https://github.com/Daily-AC/wanctl/blob/main/docs/self-hosting.md"
+       data-en="Run your own" data-zh="自己部署一套">Run your own</a>
+    <a href="https://github.com/Daily-AC/wanctl/blob/main/SECURITY.md"
+       data-en="Security" data-zh="安全">Security</a>
+    <a href="https://github.com/Daily-AC/wanctl/releases"
+       data-en="Releases" data-zh="版本">Releases</a>
+    <a href="https://github.com/Daily-AC/wanctl">GitHub</a>
+  </nav>
+  <div class="row">
+    <span data-en="Open source, Apache-2.0." data-zh="开源，Apache-2.0。">Open source, Apache-2.0.</span>
+    <span class="end mono" data-en="Demo devices are fictional." data-zh="演示设备均为虚构。">Demo devices are fictional.</span>
+  </div>
+</footer>
+
+<script src="assets/app.js"></script>
+</body>
+</html>

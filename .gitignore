@@ -9,3 +9,5 @@
 /build/
 /artifacts/
 .DS_Store
+.shots/
+site/_shell-*.html
