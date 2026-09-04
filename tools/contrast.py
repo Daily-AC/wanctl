@@ -3,8 +3,12 @@
 真源是每个表面自己的 :root —— 这里只读它们，不再抄一份色值，
 省得像 LOTO 那版一样：调色板换了，校验工具还在验早就下线的颜色。
 
-两个表面共用一套 token，但各自用到的组合不同（门户多一个语义红、
+三个表面共用一套 token，但各自用到的组合不同（门户多一个语义红、
 一个当前项底色，也没有深色整幅屏），所以配对表分开写。
+
+文档站没有自己的调色板：它先加载官网的 app.css 再加载 docs.css，
+docs.css 的 :root 只补一个当前项底色。所以它的 token 是两个文件叠出来的，
+一个表面可以给多份样式表，按加载顺序合并——跟浏览器看到的一样。
 
   python3 tools/contrast.py
 """
@@ -15,12 +19,16 @@ import pathlib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
-def tokens(path: pathlib.Path) -> dict:
-    css = path.read_text(encoding='utf-8')
-    root = re.search(r':root\s*\{(.*?)\}', css, re.S)
-    if not root:
-        sys.exit('no :root block in %s' % path)
-    return dict(re.findall(r'--([\w-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\s*;', root.group(1)))
+def tokens(*paths: pathlib.Path) -> dict:
+    """合并若干张样式表的 :root，后加载的覆盖先加载的。"""
+    out = {}
+    for path in paths:
+        css = path.read_text(encoding='utf-8')
+        root = re.search(r':root\s*\{(.*?)\}', css, re.S)
+        if not root:
+            sys.exit('no :root block in %s' % path)
+        out.update(re.findall(r'--([\w-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\s*;', root.group(1)))
+    return out
 
 
 def srgb(h: str):
@@ -79,17 +87,33 @@ PORTAL = [
     ('ink-3',     'canvas',    4.5, 'ink-3 — DECORATION ONLY, expected to fail'),
 ]
 
+# 文档站：官网的 token + docs.css 补的当前项底色。没有深色整幅屏，
+# 也没有按钮 —— 它只有正文、链接、代码块底和两处浅蓝。
+DOCS = [
+    ('ink',       'canvas',    4.5, 'body on white'),
+    ('ink',       'canvas-2',  4.5, 'code, inline and in blocks, on its grey'),
+    ('ink-2',     'canvas',    4.5, 'group names, breadcrumbs, on-page contents'),
+    ('ink-2',     'canvas-2',  4.5, 'the same, hovered onto grey'),
+    ('blue',      'canvas',    4.5, 'links on white'),
+    ('blue',      'canvas-2',  4.5, 'links hovered onto grey'),
+    ('blue',      'blue-wash', 4.5, "current article, and the last breadcrumb"),
+    ('hairline',  'canvas',    1.0, 'hairline — the only thing separating the columns'),
+    ('ink-3',     'canvas',    4.5, 'ink-3 — DECORATION ONLY, expected to fail'),
+]
+
 SURFACES = [
-    ('site',   ROOT / 'site' / 'assets' / 'app.css',           SITE),
-    ('portal', ROOT / 'internal' / 'portal' / 'web' / 'app.css', PORTAL),
+    ('site',   [ROOT / 'site' / 'assets' / 'app.css'],           SITE),
+    ('portal', [ROOT / 'internal' / 'portal' / 'web' / 'app.css'], PORTAL),
+    ('docs',   [ROOT / 'site' / 'assets' / 'app.css',
+                ROOT / 'site' / 'assets' / 'docs.css'],           DOCS),
 ]
 
 EXPECTED_FAIL = {'ink-3'}
 
 bad = 0
-for name, path, pairs in SURFACES:
-    t = tokens(path)
-    print('\n=== %s — %s' % (name, path.relative_to(ROOT)))
+for name, paths, pairs in SURFACES:
+    t = tokens(*paths)
+    print('\n=== %s — %s' % (name, ' + '.join(str(p.relative_to(ROOT)) for p in paths)))
     print('%-42s %6s  %s' % ('pair', 'ratio', 'verdict'))
     for fg, bg, need, note in pairs:
         if fg not in t or bg not in t:
