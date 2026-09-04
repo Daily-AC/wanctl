@@ -19,6 +19,7 @@ last-reviewed: 2026-09-04
 | 设备下钻 tab | **5 → 3**：待审批 / 信任与规则 / 活动。模式开关挪到设备标题行 |
 | 更新日志 | 不做顶级视图。留 header 版本号，点开是浮层 |
 | 文档 CMS | 编辑器、分组管理、文章增删改查全砍。读走静态站 |
+| **登录页** | **要加一个**（09-04 傍晚拍板）。今天没有：匿名访客打开 `/` 直接 303 到 `/auth/login`，那个端点不渲染任何东西、立刻 302 去 GitHub，全程看不到一个 wanctl 界面 |
 
 **施工顺序上的依赖**：门户的 CMS 不能先砍——得等文档站上线才有地方去。所以视觉语言先在门户
 定稿，文档站继承它，最后才拆 CMS 和改官网页脚指向。
@@ -112,10 +113,10 @@ try-it 面板是给 HTTP API 用的。wanctl 对用户的界面是 CLI，没有�
 - [x] 预览工装 `tools/portalpreview/`
 - [x] 门户外壳 + 设备列表 + 设备下钻 + 设置 + 设备设置 + 双语（commit `5e2b092`）
 - [x] 跨设备聚合待审批 `GET /api/pending`
-- [ ] **给甲方看，点头再往下**
+- [x] **甲方过目并认可**（09-04 傍晚，浏览器实看）。提了四条不适，全部已修（commit `8b68bfd`）
+- [ ] **← 下一步：三张认证页**（登录 / 等待邀请 / 设备授权），见第 8 节
 - [ ] 文档站
 - [ ] 砍 CMS + 端点 + 官网页脚改指向
-- [ ] 等待邀请页 / 设备授权页（两个内联 HTML，仍是奶油风）
 - [ ] 部署
 
 ## 6. 施工中自己拍的板（甲方未逐条过目，要改说一声）
@@ -144,3 +145,49 @@ try-it 面板是给 HTTP API 用的。wanctl 对用户的界面是 CLI，没有�
   下一句属性访问就抛，在模块作用域抛就是整个脚本死掉，页面渲染成一个「未登录的空态」
   ——**那看起来像后端坏了**。本轮真踩了一次（`repaint` 里的 `#sheet`）。
 - `tools/contrast.py` 改成同时读两个表面的 `:root`，不再只验官网那份。
+
+## 8. 下一步：三张认证页（甲方已同意，未开工）
+
+三张一起做：**登录（新建）· 等待邀请（`pendingPage`）· 设备授权（`enrollPage`）**。
+后两张现在是 `auth.go` / `portal.go` 里的内联 Go 字符串常量，仍是奶油风
+（`--cream:#FBF6EC` / `--brand:#E08D3C`）、纯中文、挂着那把已经退役的橙色锁。
+
+**要点**
+
+- 三张都进新视觉 + 双语，**共用 `/assets/app.css`**。它已经是免登录可取的
+  （`handleAsset` 故意不鉴权），就是为了这个。
+- **设备授权页是新设备接入时人看到的第一个 wanctl 界面** —— 在一台新机器上跑
+  `wanctl`，浏览器弹的就是它。它不是配角。
+- 渲染现状用 `scratchpad/render_pages.py` 那套办法：常量是 Go format 串
+  （`pendingPage` 用 `%s`、CSS 里的 `%` 写成 `%%`；`enrollPage` 用 `%[n]s`/`%[n]d`），
+  抽出来替换掉占位符就能在浏览器里看。
+
+**为什么要加登录页**（甲方认可的三条理由，别再重议）
+
+1. `wanctl.z10.dev` 已经公开印在官网「两扇门」那一屏上。从 wc.z10.dev 点过来的人
+   落地就是一个瞬间跳去 GitHub 的白屏，不知道自己被送去授权给谁。
+2. 「这是邀请制」现在要等你**已经授权完 GitHub 应用之后**，才在等待邀请页上第一次说。
+   顺序反了。
+3. 授权一个 OAuth 应用是一次真实的权限授予；零上下文把人弹过去，形状上跟钓鱼一样。
+
+**认证流程的事实**（已核）
+
+- `handleIndex` → `pageAuth`：无 principal 且开了 OAuth → `303 /auth/login?next=…`
+- `handleAuthLogin`：只种 state cookie，然后 `302` 去 `github.com/login/oauth/authorize`。
+  **它不渲染任何 HTML**，登录页要新建
+- 回调后 `resolveNamespace`：`resolveOK` → SPA；`resolvePending` → `303 /pending`
+- header(SSO) 模式没有 OAuth，无 principal 时直接 401 文本，**登录页在那个模式下不出现**
+
+## 9. 预览工装怎么用
+
+```sh
+tools/portalpreview/serve.sh          # 默认 8724，绑全网卡（手机可开）
+```
+
+数据全虚构，写操作一律假装成功。直达状态：`?lang=zh`、`?view=device/bench-02`、
+`?view=device/bench-02/settings`、`#settings/downloads`。
+`assets/` 是软链，改 CSS/JS 刷新即可；**改了 `index.html` 要重启服务**。
+
+**纪律**：`fixtures.js` 的形状必须跟真实端点一致。本轮它撒过一次谎——把 `/api/me`
+的 `identity` 填成 SHA256 指纹，而真实端点返回的是登录名，于是 UI 照着假数据把
+门户自己的指纹当成「你的编号」显示在人名旁边，甲方一眼看出不对。别再让工装替真代码说话。
