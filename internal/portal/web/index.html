@@ -413,7 +413,7 @@
     <!-- 只有这一层滚。标题和「完成」钉住 —— 以前整块浮层是内容高的，
          于是手机上「完成」压在十几张版本卡底下，要滚到最后才够得着。 -->
     <div class="sbody" id="cl"></div>
-    <div class="btns" style="margin-top:18px">
+    <div class="btns">
       <button class="btn soft" id="clClose" data-en="Done" data-zh="完成">Done</button>
     </div>
   </div>
@@ -423,7 +423,10 @@
 <div class="ov" id="ask">
   <div class="modal">
     <h2 id="askT"></h2>
-    <p id="askM"></p>
+    <!-- 只有 .mbody 会滚。标题和那排按钮钉住 —— 更新日志那张浮层已经是这个形状，
+         其余三张以前是整块一起滚，于是正文一长（一个 32 字的设备名、一段中文说明），
+         「取消 / 确定」就被推到看不见的地方，而人是来按那两个键的。 -->
+    <div class="mbody"><p id="askM"></p></div>
     <div class="btns">
       <button class="btn soft" id="askNo" data-en="Cancel" data-zh="取消">Cancel</button>
       <button class="btn" id="askYes"></button>
@@ -434,8 +437,8 @@
 <div class="ov" id="form">
   <div class="modal">
     <h2 id="formT"></h2>
-    <div class="form" id="formF"></div>
-    <div class="btns" style="margin-top:18px">
+    <div class="mbody"><div class="form" id="formF"></div></div>
+    <div class="btns">
       <button class="btn soft" id="formNo" data-en="Cancel" data-zh="取消">Cancel</button>
       <button class="btn" id="formYes"></button>
     </div>
@@ -446,8 +449,10 @@
 <div class="ov" id="pair">
   <div class="modal">
     <h2 data-en="A controller wants in" data-zh="控制端想连进来">A controller wants in</h2>
-    <p id="pairM"></p>
-    <dl class="kv" id="pairKV" style="margin-bottom:20px"></dl>
+    <div class="mbody">
+      <p id="pairM"></p>
+      <dl class="kv" id="pairKV"></dl>
+    </div>
     <div class="btns">
       <button class="btn soft" id="pairNo" data-en="Refuse" data-zh="拒绝">Refuse</button>
       <button class="btn" id="pairYes" data-en="Trust it" data-zh="信任并继续">Trust it</button>

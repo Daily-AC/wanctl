@@ -9,6 +9,13 @@
   var $ = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
+  /* 截断要留个记号。门户里三处切字符串都是裸 slice ——「指纹」「来源」这类
+     东西被无声地切掉，读者看到的是一串看起来完整的 base64，而它不是。 */
+  function cut(s, n) {
+    s = '' + (s == null ? '' : s);
+    return s.length > n ? s.slice(0, n) + '…' : s;
+  }
+
   function esc(s) {
     return ('' + (s == null ? '' : s)).replace(/[&<>"]/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
@@ -223,6 +230,9 @@
     });
     try { localStorage.setItem('wanctl.lang', l); } catch (_) {}
     repaint();
+    // <th> 的文字刚换过，格子上的列名要跟着换 —— repaint() 只重画一部分表，
+    // 活动日志那张就不在里面。
+    relabel();
   }
 
   /* ── 时间 ────────────────────────────────────────────────────────── */
@@ -301,6 +311,27 @@
   }
   function oops(e) { toast(t().failed(e && e.message ? e.message : e), true); }
 
+  /* ── 表 ──────────────────────────────────────────────────────────────
+     手机上表头那一行不在了（每行竖着排，见 app.css 的 640 断点），所以每个
+     格子得自己带上它的列名。标签从表自己的 <th> 里取，不另开一份字典 ——
+     两份就会漂，而这些列名是双语的、跟着 data-en/data-zh 走。
+
+     顺带给有表头的表打上 .stack：下载表没有表头（平台 + 文件名，不需要），
+     它不参与竖排。 */
+  function relabel() {
+    $$('table').forEach(function (tb) {
+      var ths = $$('thead th', tb).map(function (h) { return (h.textContent || '').trim(); });
+      tb.classList.toggle('stack', ths.length > 0);
+      $$('tbody tr', tb).forEach(function (tr) {
+        $$('td', tr).forEach(function (td, i) {
+          var h = ths[i] || '';
+          if (h && !td.hasAttribute('colspan')) td.setAttribute('data-l', h);
+          else td.removeAttribute('data-l');
+        });
+      });
+    });
+  }
+
   /* ── 确认 / 表单 ─────────────────────────────────────────────────── */
   function confirmBox(title, msg, okLabel) {
     return new Promise(function (res) {
@@ -375,7 +406,7 @@
      （过滤到这一台）。 */
   function askCard(p, dev, readOnly, hideHost) {
     var isExec = p.kind === 'exec';
-    var kv = '<dt>' + esc(t().from) + '</dt><dd>' + esc((p.peer || '—').slice(0, 40)) + '</dd>';
+    var kv = '<dt>' + esc(t().from) + '</dt><dd>' + esc(cut(p.peer || '—', 40)) + '</dd>';
     if (p.cwd) kv += '<dt>' + esc(t().cwd) + '</dt><dd>' + esc(p.cwd) + '</dd>';
     // 层级按后果排。三个次级动作等重，作用域写在标签旁边让后果看得见。
     var acts = readOnly
@@ -650,6 +681,7 @@
         '<td>' + (r.scope === 'dir' ? esc(r.dir || 'dir') : 'global') + '</td>' +
         '<td><button class="act danger" data-i="' + i + '">' + esc(t().del) + '</button></td></tr>';
     }).join('') : '<tr><td colspan="4" class="tempty">' + esc(t().noRules) + '</td></tr>';
+    relabel();
     $$('#rules .act').forEach(function (b) {
       b.onclick = function () {
         if (roGuard(cur)) return;
@@ -663,11 +695,15 @@
       var isPortal = x.name === 'portal';
       return '<tr><td><b>' + esc(x.label || x.name || '—') + '</b>' +
         (x.name && x.label ? '<span class="sub">' + esc(x.name) + '</span>' : '') + '</td>' +
-        '<td class="mono">' + esc((x.fp || '').slice(0, 30)) + '</td>' +
+        // 整串。这张表的职责就是核对控制端的身份，而 30 个字符的 base64
+        // 前缀既核对不了、又看不出被切过（以前连省略号都没有）。
+        // 它在手机上竖排、在宽屏上自己折行，都不会顶破布局。
+        '<td class="mono">' + esc(x.fp || '') + '</td>' +
         '<td>' + (x.last_seen ? esc(ago(x.last_seen)) : '—') + '</td>' +
         '<td>' + (isPortal ? '<span class="dim">' + esc(t().webConsole) + '</span>'
           : '<button class="act danger" data-fp="' + esc(x.fp) + '">' + esc(t().revoke) + '</button>') + '</td></tr>';
     }).join('') : '<tr><td colspan="4" class="tempty">' + esc(t().noTrusted) + '</td></tr>';
+    relabel();
     $$('#trusted .act').forEach(function (b) {
       b.onclick = function () {
         if (roGuard(cur)) return;
@@ -756,10 +792,11 @@
         return '<tr><td>' + esc(fmt(e.ts)) + '</td>' +
           '<td class="mono">' + esc(e.detail || '—') +
             (e.cwd ? '<span class="sub">' + esc(e.cwd) + '</span>' : '') + '</td>' +
-          '<td>' + esc(('' + (e.peer_name || e.peer_fp || '—')).slice(0, 20)) + '</td>' +
+          '<td>' + esc(cut(e.peer_name || e.peer_fp || '—', 20)) + '</td>' +
           '<td' + (/den/i.test(dec) ? ' class="no"' : '') + '>' + esc(dec || '—') + '</td>' +
           '<td class="num">' + exit + '</td></tr>';
       }).join('') : '<tr><td colspan="5" class="tempty">' + esc(t().noLog) + '</td></tr>';
+      relabel();
     }).catch(function (e) {
       $('#devlog').innerHTML = '<tr><td colspan="5" class="tempty">' + esc(t().cantReach) + '</td></tr>';
       oops(e);
@@ -935,6 +972,7 @@
           '<td>' + esc(rev ? t().revoked : t().active) + '</td>' +
           '<td>' + (rev ? '' : '<button class="act danger" data-i="' + x.id + '">' + esc(t().revoke) + '</button>') + '</td></tr>';
       }).join('') : '<tr><td colspan="5" class="tempty">' + esc(t().noTokens) + '</td></tr>';
+      relabel();
       $$('#tokens .act').forEach(function (b) {
         b.onclick = function () {
           jpost('/api/tokens/revoke', { id: Number(b.dataset.i) }).then(loadTokens).catch(oops);
@@ -1020,6 +1058,7 @@
           '<td>' + esc(state) + '</td>' +
           '<td>' + (i.used_at ? '' : '<button class="act danger" data-i="' + i.id + '">' + esc(t().revoke) + '</button>') + '</td></tr>';
       }).join('') : '<tr><td colspan="4" class="tempty">' + esc(t().noInvites) + '</td></tr>';
+      relabel();
       $$('#invites .act').forEach(function (b) {
         b.onclick = function () {
           confirmBox(t().revokeInviteT, t().revokeInviteM, t().revoke).then(function (ok) {
@@ -1066,6 +1105,7 @@
           '<td>' + esc(day(f.since)) + '</td>' +
           '<td>' + act + '</td></tr>';
       }).join('') : '<tr><td colspan="4" class="tempty">' + esc(t().noFriends) + '</td></tr>';
+      relabel();
       $$('#friends .act').forEach(function (b) {
         b.onclick = function () {
           var run = function () {
@@ -1100,6 +1140,7 @@
           '<td class="mono">' + esc(a.perms) + '</td>' +
           '<td><button class="act danger" data-i="' + a.id + '">' + esc(t().revoke) + '</button></td></tr>';
       }).join('') : '<tr><td colspan="4" class="tempty">' + esc(t().noACL) + '</td></tr>';
+      relabel();
       $$('#acl .act').forEach(function (b) {
         b.onclick = function () {
           jpost('/api/acl/revoke', { id: Number(b.dataset.i) }).then(loadACL).catch(oops);
@@ -1135,6 +1176,7 @@
         return '<tr><td>' + esc(fmt(a.ts)) + '</td><td>' + esc(a.device) + '</td>' +
           '<td class="mono">' + esc(a.event) + '</td></tr>';
       }).join('') : '<tr><td colspan="3" class="tempty">' + esc(t().noAudit) + '</td></tr>';
+      relabel();
     }).catch(oops);
   }
 
