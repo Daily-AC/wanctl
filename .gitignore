@@ -11,3 +11,5 @@
 .DS_Store
 .shots/
 site/_shell-*.html
+# 文档站是构建产物：tools/docsite/build.py 从 docs/*.md 生成，别提交。
+/site/docs/

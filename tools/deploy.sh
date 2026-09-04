@@ -16,24 +16,49 @@ STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 
 cp -R "$ROOT/site/." "$STAGE/"
+# 截图工装（tools/shot.sh 和 visual-acceptance 的 shot-mobile.sh）会在 site/ 里
+# 临时放一个 500px 壳页。跑崩了会留下来，那种东西不该被公开服务出去。
+rm -f "$STAGE"/_shell-*.html
+
+# 文档站从 docs/*.md 生成，不进仓库（site/docs/ 在 .gitignore 里）。
+# 生成到发布副本里，所以本地那份是新是旧都不影响发出去的东西。
+rm -rf "$STAGE/docs"
+uv run "$ROOT/tools/docsite/build.py" --out "$STAGE/docs"
 
 # 内容指纹：md5 前 10 位，够用且短。
 # mark.svg 也在里面：2026-09-04 换标记那次它被漏下了 —— 源站换了新文件，
 # 而 Cloudflare 拿着一份 age=13048 的 HIT 在发旧的（nginx 给图片的
 # Cache-Control 是 public, max-age=86400），标签页里整整一天还是旧标记。
-for f in app.css app.js mark.svg; do
+#
+# 指纹要写进每一个页面，不只是首页：文档站有 14 个 .html，漏掉任何一个
+# 就等于那一页永远在拿 Cloudflare 缓存里的旧样式表。
+PAGES=$(find "$STAGE" -name '*.html')
+for f in app.css app.js mark.svg docs.css docs.js; do
   h=$(md5 -q "$STAGE/assets/$f" 2>/dev/null || md5sum "$STAGE/assets/$f" | cut -c1-32)
   h=$(echo "$h" | cut -c1-10)
-  # BSD 和 GNU sed 的 -i 用法不同，走临时文件绕开
-  sed "s|assets/$f\"|assets/$f?v=$h\"|g" "$STAGE/index.html" > "$STAGE/index.html.new"
-  mv "$STAGE/index.html.new" "$STAGE/index.html"
+  for p in $PAGES; do
+    # BSD 和 GNU sed 的 -i 用法不同，走临时文件绕开
+    sed "s|assets/$f\"|assets/$f?v=$h\"|g" "$p" > "$p.new"
+    mv "$p.new" "$p"
+  done
   echo "  $f -> ?v=$h"
 done
-for f in app.css app.js mark.svg; do
-  grep -q "assets/$f?v=[0-9a-f]" "$STAGE/index.html" || {
-    echo "$f 的指纹没写进 index.html —— 别发这一版" >&2; exit 1; }
+
+# 每一页都必须只剩带指纹的引用。href/src 之外的 assets/ 出现（og:image 那些
+# 绝对 URL）不算 —— 浏览器不拿它们当样式或脚本。
+missed=$(grep -oE '(href|src)="/?assets/[A-Za-z0-9._-]+"' $PAGES || true)
+if [ -n "$missed" ]; then
+  echo "还有没打上指纹的引用 —— 别发这一版：" >&2
+  grep -nE '(href|src)="/?assets/[A-Za-z0-9._-]+"' $PAGES >&2
+  exit 1
+fi
+for p in $PAGES; do
+  grep -q '?v=[0-9a-f]' "$p" || {
+    echo "${p#$STAGE} 一个指纹都没有 —— 别发这一版" >&2; exit 1; }
 done
-grep -o 'assets/[a-z.]*?v=[0-9a-f]*' "$STAGE/index.html"
+echo "  $(echo "$PAGES" | wc -l | tr -d ' ') 个页面，引用全部带指纹："
+grep -ohE '(href|src)="/?assets/[A-Za-z0-9._-]+\?v=[0-9a-f]+"' $PAGES \
+  | sed 's|^[a-z]*="||; s|"$||; s|^|    |' | sort -u
 
 if [ "$1" = "--dry-run" ]; then echo "dry run，未上传"; exit 0; fi
 
