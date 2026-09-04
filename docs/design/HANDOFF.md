@@ -84,6 +84,27 @@ last-reviewed: 2026-09-04
 - 手机放大后整个舞台掉到折线以下，那颗蓝按钮反而看不见了。首屏上留白收窄
   （`.tile.hero`）+ 舞台上边距收窄，现在 1440×900 下按钮落在 613–649px。
 
+## 3.6 安装屏的真实 URL（09-04）
+
+上一版页面上写的 `https://wanctl.dev/install.sh` **是我编的，那个域名不存在**。
+现在四条命令全部核过，其中镜像那条是 `curl` 实测 200 的：
+
+| | GitHub | 中国镜像（官方 relay） |
+|---|---|---|
+| macOS · Linux | `curl -fsSL https://github.com/Daily-AC/wanctl/releases/latest/download/install.sh \| sh` | `curl -fsSL https://wanctl-relay.z10.dev/install.sh \| sh` |
+| Windows | `irm https://github.com/Daily-AC/wanctl/releases/latest/download/install.ps1 \| iex` | `irm https://wanctl-relay.z10.dev/install.ps1 \| iex` |
+
+镜像不是"另一个下载站"，而是**同一个 relay 发的脚本里烧着它自己的地址**：
+实测 `https://wanctl-relay.z10.dev/install.sh` 第 14 行是
+`RELAY_SELF="https://wanctl-relay.z10.dev"`，于是二进制也从它的 `/dl` 取，整条链路不碰
+GitHub。机制在 `internal/relay/dist.go` 的 `installerHandler` + `WANCTL_PUBLIC_ORIGIN`。
+
+页面上用两个分段控件（系统 × 下载源）把四条收成一条：
+系统按 UA 猜初值，下载源跟着页面语言（中文默认镜像），**用户手点过就不再替他改主意**。
+
+**副作用要知道**：官网公开推荐这个 URL 之后，陌生人会从甲方的个人生产 relay 拉安装包。
+它今天本来就对任何人返回 200，所以安全面没变，变的是流量。
+
 ## 4. 已验证的事实（别重测）
 
 - **策略语义**忠实移植自 `internal/policy` 的 `matchCommand` + `ruleMatchesShell` exec 分支：

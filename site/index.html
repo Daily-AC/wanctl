@@ -152,24 +152,35 @@
     </div>
   </section>
 
-  <!-- 白屏：安装 -->
+  <!-- 白屏：安装。两个维度（系统 × 下载源）各一个分段控件，命令永远只有一条 -->
   <section class="tile center" id="install">
     <h2 data-en="One line to install." data-zh="一行装完。">One line to install.</h2>
     <p class="lead"
-       data-en="Run it on the machine you want to reach. The installer verifies a signed release manifest before anything touches disk."
-       data-zh="在你想连的那台机器上跑。安装器先验证签名过的发布清单，验过了才落盘。">
-      Run it on the machine you want to reach. The installer verifies a signed
-      release manifest before anything touches disk.
+       data-en="Run it on the machine you want to reach. Nothing lands on disk until a signed release manifest checks out."
+       data-zh="在你想连的那台机器上跑。签名过的发布清单验过之前，什么都不会落盘。">
+      Run it on the machine you want to reach. Nothing lands on disk until a
+      signed release manifest checks out.
     </p>
+
+    <div class="picker">
+      <div class="seg" id="osseg" role="group"
+           aria-label="Operating system" data-lbl-en="Operating system" data-lbl-zh="操作系统">
+        <button type="button" data-os="unix" class="on">macOS · Linux</button>
+        <button type="button" data-os="win">Windows</button>
+      </div>
+      <div class="seg" id="srcseg" role="group"
+           aria-label="Download source" data-lbl-en="Download source" data-lbl-zh="下载源">
+        <button type="button" data-src="gh" class="on">GitHub</button>
+        <button type="button" data-src="cn"
+                data-en="China mirror" data-zh="中国镜像">China mirror</button>
+      </div>
+    </div>
+
     <div class="cmdline">
-      <code id="installcmd">curl -fsSL https://wanctl.dev/install.sh | sh</code>
+      <code id="installcmd">curl -fsSL https://github.com/Daily-AC/wanctl/releases/latest/download/install.sh | sh</code>
       <button id="copy" type="button" data-en="Copy" data-zh="复制">Copy</button>
     </div>
-    <p class="lead"
-       data-en="Windows uses &lt;code class=&quot;mono&quot;&gt;install.ps1&lt;/code&gt; — no OpenSSL needed."
-       data-zh="Windows 走 &lt;code class=&quot;mono&quot;&gt;install.ps1&lt;/code&gt;，不需要装 OpenSSL。">
-      Windows uses <code class="mono">install.ps1</code> — no OpenSSL needed.
-    </p>
+    <p class="note" id="srcnote">Straight from the GitHub release.</p>
   </section>
 
 </main>

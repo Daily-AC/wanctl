@@ -305,15 +305,30 @@ h2{
 .ledger code{font-size:15px;color:var(--ink);white-space:pre;overflow-x:auto;display:block;min-width:0}
 
 /* ── 安装 ──────────────────────────────────────────────────────────── */
+/* 分段控件：选中项填蓝。蓝是这套系统里唯一的「这个是活的」信号，
+   而这里选中与否直接决定下面那条命令，含糊不得。 */
+.picker{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:28px}
+.seg{display:inline-flex;gap:2px;background:var(--canvas-2);border-radius:999px;padding:3px}
+.seg button{
+  font:inherit;font-size:14px;letter-spacing:-.2px;white-space:nowrap;
+  color:var(--ink-2);background:none;border:0;border-radius:999px;
+  padding:6px 15px;cursor:pointer;
+  transition:background .18s var(--ease),color .18s var(--ease);
+}
+.seg button:hover{color:var(--ink)}
+.seg button.on{background:var(--blue);color:#fff}
+.seg button.on:hover{background:var(--blue-hi);color:#fff}
+.seg button:active{transform:scale(.95)}
+
 .cmdline{
-  display:flex;align-items:stretch;max-width:600px;margin:28px auto 0;
+  display:flex;align-items:stretch;max-width:880px;margin:22px auto 0;
   border:1px solid var(--hairline);border-radius:999px;overflow:hidden;background:var(--canvas);
 }
 .dark .cmdline{background:#000;border-color:#3a3a3c}
 .cmdline code{
   flex:1 1 auto;min-width:0;overflow-x:auto;white-space:nowrap;
-  font-family:var(--mono);font-size:15px;letter-spacing:0;color:var(--ink);
-  padding:13px 20px;text-align:left;
+  font-family:var(--mono);font-size:14px;letter-spacing:0;color:var(--ink);
+  padding:14px 20px;text-align:left;
 }
 .dark .cmdline code{color:var(--on-dark)}
 .cmdline button{
@@ -322,6 +337,11 @@ h2{
 }
 .cmdline button:hover{background:var(--blue-hi)}
 .cmdline button:active{transform:scale(.95)}
+
+.note{
+  margin:14px auto 0;max-width:52ch;font-size:15px;color:var(--ink-2);
+  line-height:1.45;text-wrap:pretty;
+}
 
 /* ── 页脚 ──────────────────────────────────────────────────────────── */
 .foot{background:var(--canvas-2);padding:40px var(--pad);font-size:14px;

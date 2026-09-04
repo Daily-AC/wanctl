@@ -70,7 +70,12 @@
       nudge: 'still waiting \u2014 it\u2019s your call',
       pending: 'pending',
       finale: 'Three commands. Three answers. Nothing you did not allow.',
-      replay: 'Run the demo again'
+      replay: 'Run the demo again',
+      src: {
+        gh: 'Straight from the GitHub release.',
+        cn: 'Served from the official relay, which runs in mainland China \u2014 for when GitHub is slow to reach. Same binaries, same signature.'
+      },
+      os: { unix: '', win: ' PowerShell 5.1 and up; no OpenSSL needed.' }
     },
     zh: {
       from: '想在这台上跑', once: '允许一次', always: '这条命令一直允许', refuse: '拒绝',
@@ -86,11 +91,30 @@
       nudge: '还在等 —— 这事得你点头',
       pending: '已等待',
       finale: '三条命令，三个回答。没有一件是你没允许的。',
-      replay: '再跑一遍演示'
+      replay: '再跑一遍演示',
+      src: {
+        gh: '直接从 GitHub release 拉。',
+        cn: '从官方 relay 拉，它在国内 —— GitHub 拉不动的时候走这条。同样的二进制，同样的签名。'
+      },
+      os: { unix: '', win: ' 需要 PowerShell 5.1 以上；不需要装 OpenSSL。' }
     }
   };
   var lang = 'en';
   var t = function () { return T[lang]; };
+
+  /* ── 装它 ───────────────────────────────────────────────────────
+     两条真实的路：GitHub release，和官方 relay。后者服务在国内，
+     而且它发出去的脚本里烧着自己的地址（RELAY_SELF），
+     所以从镜像拉的脚本会从镜像装二进制，整条链路不碰 GitHub。
+     见 internal/relay/dist.go 的 installerHandler 与 WANCTL_PUBLIC_ORIGIN。 */
+  var GH = 'https://github.com/Daily-AC/wanctl/releases/latest/download';
+  var CN = 'https://wanctl-relay.z10.dev';
+  var INSTALL = {
+    'unix-gh': 'curl -fsSL ' + GH + '/install.sh | sh',
+    'unix-cn': 'curl -fsSL ' + CN + '/install.sh | sh',
+    'win-gh':  'irm ' + GH + '/install.ps1 | iex',
+    'win-cn':  'irm ' + CN + '/install.ps1 | iex'
+  };
 
   /* ── 剧本 ──────────────────────────────────────────────────────── */
   var SCRIPT = [
@@ -381,11 +405,45 @@
       var v = el.getAttribute('data-' + l);
       if (v != null) el.innerHTML = v;
     });
+    $$('[data-lbl-en]').forEach(function (el) {
+      el.setAttribute('aria-label', el.getAttribute('data-lbl-' + l));
+    });
+    if (!pick.srcTouched) pick.src = l === 'zh' ? 'cn' : 'gh';
+    renderInstall();
     renderFleet();
     boot(!!animate);
     try { localStorage.setItem('wanctl.lang', l); } catch (_) {}
   }
   $('#lang').addEventListener('click', function () { applyLang(lang === 'en' ? 'zh' : 'en', false); });
+
+  /* ── 分段控件：系统 × 下载源，命令永远只有一条 ─────────────────
+     系统按 UA 猜一个初值，下载源跟着页面语言给一个初值（中文默认走镜像）；
+     一旦用户自己点过，就再也不替他改主意了。 */
+  var pick = { os: /Windows/i.test(navigator.userAgent || '') ? 'win' : 'unix',
+               src: 'gh', srcTouched: false };
+  var osseg = $('#osseg'), srcseg = $('#srcseg'),
+      installcmd = $('#installcmd'), srcnote = $('#srcnote');
+
+  function renderInstall() {
+    installcmd.textContent = INSTALL[pick.os + '-' + pick.src];
+    srcnote.textContent = t().src[pick.src] + t().os[pick.os];
+    $$('[data-os]', osseg).forEach(function (b) {
+      b.classList.toggle('on', b.dataset.os === pick.os);
+      b.setAttribute('aria-pressed', b.dataset.os === pick.os);
+    });
+    $$('[data-src]', srcseg).forEach(function (b) {
+      b.classList.toggle('on', b.dataset.src === pick.src);
+      b.setAttribute('aria-pressed', b.dataset.src === pick.src);
+    });
+  }
+  osseg.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-os]');
+    if (b) { pick.os = b.dataset.os; renderInstall(); }
+  });
+  srcseg.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-src]');
+    if (b) { pick.src = b.dataset.src; pick.srcTouched = true; renderInstall(); }
+  });
 
   var copy = $('#copy');
   copy.addEventListener('click', function () {
@@ -443,7 +501,7 @@
   var saved = null;
   try { saved = localStorage.getItem('wanctl.lang'); } catch (_) {}
   if (saved === 'zh' || (!saved && /^zh/i.test(navigator.language || ''))) applyLang('zh', true);
-  else { renderFleet(); boot(true); }
+  else { renderInstall(); renderFleet(); boot(true); }
 
   window.__demo = {
     state: function () {
