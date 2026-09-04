@@ -576,17 +576,21 @@ h2{
      底部内边距收 10px 补回来，两种语言都落在折线以内。 */
   .tile.hero{padding-bottom:42px}
 
-  /* 「一行装完」那一行在手机上看不见：390 下胶囊里可视 264px、内容 762px，
-     命令有三分之二横向滚在框外，而框上没有任何在滚的提示。
-     竖排：命令整条摊开换行，复制键落到底下通栏。圆角 999 → 18 ——
-     多行的东西不是 pill，18 是 DESIGN.md 第 5 节三档圆角里「大面」那一档，
-     没有引入中间档。分隔靠蓝白色差，不加线。 */
-  .cmdline{flex-direction:column;align-items:stretch;width:100%;border-radius:18px}
+  /* 这里曾经有一块把安装胶囊竖排的规则（#20 / HANDOFF 3.11）：命令摊开换行、
+     复制键落到底下通栏、圆角 999 → 18。甲方看了真机之后要求撤回（issue #25）——
+     换行之后那条命令不再是「一行装完」，而整页最重的蓝色大块落在了一个次级动作上。
+     手机上照样用桌面那一份：单行、胶囊内横向滚、复制键在右。别再竖排回去。
+
+     撤回之后要补的只有一件：框上得有「还有」这个信号，否则命令就是被硬切在
+     复制键上。DESIGN.md 第 8 节禁装饰性渐变 —— 这里用的不是渐变，是遮罩：
+     它把元素自己的末 24px 擦成透明，露出胶囊本来的底（深色下露出的就是黑），
+     不引入任何一层新的颜色。它也只挂在**确实在滚**的宽度上：四条命令在 ≤560
+     全部溢出（实测最小溢出 27px，在 560 的 Windows + 中国镜像那条），
+     640 起最短的两条就装得下了，那里挂个淡出就成了装饰。 */
   .cmdline code{
-    flex:none;overflow-x:visible;white-space:pre-wrap;
-    word-break:normal;overflow-wrap:anywhere;padding:14px 18px;
+    -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);
+            mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);
   }
-  .cmdline button{width:100%;padding:13px 0}
 
   /* 两个分段控件各自居左居右都不是，是各自居中：实测左缘一个在 87 一个在 100，
      彼此错开 13px，也都不压内容锁（22）。窄屏改成两条通栏，共用同一对左右缘，
