@@ -1,0 +1,524 @@
+/* wanctl 门户
+   视觉真源 docs/design/DESIGN.md。改这里之前先改那里。
+   与官网 site/assets/app.css 同一套 token、同一套字体、同一套语法，两种密度：
+   官网极疏（一屏一个主体、正文 17px），门户中密（一屏看完六台、正文 15px）。
+
+   门户没有「产品渲染」，所以这里**一处阴影都没有**——官网那道唯一的投影
+   只属于停在桌面上的那两块屏。 */
+
+/* ── fonts ─────────────────────────────────────────────────────────── */
+/* 自托管，不走 Google Fonts。ls 在大陆，访客拉不稳。
+   与 site/assets/fonts/ 是同一批文件的副本：go:embed 不支持 `..`，
+   跨不出包目录，所以只能各存一份。字体几乎不变，这份重复可接受。 */
+@font-face{
+  font-family:'Schibsted Grotesk';font-style:normal;font-weight:400 800;font-display:swap;
+  src:url(fonts/schibsted-var-latin.woff2) format('woff2');
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face{
+  font-family:'Schibsted Grotesk';font-style:normal;font-weight:400 800;font-display:swap;
+  src:url(fonts/schibsted-var-latin-ext.woff2) format('woff2');
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face{
+  font-family:'JetBrains Mono';font-style:normal;font-weight:400 700;font-display:swap;
+  src:url(fonts/jbmono-var-latin.woff2) format('woff2');
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+/* ── tokens ────────────────────────────────────────────────────────── */
+:root{
+  --canvas:#ffffff;
+  --canvas-2:#f5f5f7;
+  --ink:#1d1d1f;
+  --ink-2:#6e6e73;      /* 白底 5.07:1，浅灰底 4.66:1 */
+  --ink-3:#86868b;      /* 3.62:1 —— 仅装饰笔画与分隔，不承载文字 */
+  --hairline:#d2d2d7;
+  --blue:#0066cc;       /* Action Blue：一切「可点」，且仅此一色 */
+  --blue-hi:#0071e3;
+  --blue-wash:#eaf2fc;  /* 当前项底色。承载的是 --blue 文字，不承载正文 */
+
+  /* 语义红。它**不是第二个强调色**：任何「点我」信号仍然只能是 --blue。
+     红只陈述状态——裁决 denied、投递失败、危险命令的首词。
+     白底 5.38:1、浅灰底 4.94:1，两处都过（tools/contrast.py 验）。
+     在线 / 离线故意不引入绿：实心点 vs 空心圈，颜色不参与。 */
+  --red:#d70015;
+
+  --sans:'Schibsted Grotesk','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
+  --mono:'JetBrains Mono','PingFang SC',ui-monospace,SFMono-Regular,Menlo,monospace;
+
+  /* 内容锁比官网的 1440 窄。官网是海报，要用掉整幅宽度；门户是工具，
+     一行摊到 1440 宽会让设备卡稀释成一条，眼睛横扫的距离也过长。 */
+  --maxw:1100px;
+  --pad:max(clamp(20px,4vw,40px), calc((100vw - var(--maxw)) / 2));
+  --ease:cubic-bezier(.22,.61,.36,1);
+  --z-sticky:5;
+  --z-overlay:20;
+  --z-modal:30;
+  --z-toast:40;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--canvas);color:var(--ink);
+  font-family:var(--sans);font-size:15px;font-weight:400;line-height:1.47;
+  letter-spacing:-.2px;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+}
+a{color:var(--blue);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--blue-hi);outline-offset:3px;border-radius:4px}
+/* 命令、指纹、路径要能被逐字符读准：等宽处一律关连字，别让 -- 连成一道长划 */
+.mono,code,pre,.cmd,.fp,.kv dd{
+  font-family:var(--mono);letter-spacing:0;
+  font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0;
+}
+
+/* ── 头部 ──────────────────────────────────────────────────────────────
+   48px，与官网同高。backdrop-filter 是 DESIGN.md §8 里那个有理由的例外：
+   吸顶条压在内容上必须半透，它承担功能而不是装饰。 */
+.top{
+  position:sticky;top:0;z-index:var(--z-sticky);
+  display:flex;align-items:center;gap:14px;height:48px;padding:0 var(--pad);
+  background:rgba(255,255,255,.86);backdrop-filter:saturate(180%) blur(20px);
+}
+/* 顶栏底下没有分隔线（2026-09-04 甲方拍板，官网同时也拿掉了）。
+   之前那条是收在内容锁以内的一条发丝线，试过全幅也试过内缩，两种都不对：
+   它在一个只放着字标和两三个 chip 的横条底下横过整页，把页面切成两截，
+   而上半截并没有需要被隔开的东西。
+
+   吸顶时的边界交给 backdrop-filter —— 内容从底下滑过去会被抹成一片柔光，
+   那本来就是这层半透的职责（DESIGN.md §8 里唯一那个有理由的玻璃例外）。
+   页面停在顶部时顶栏就应该化进页面里，那正是想要的。 */
+/* 标记 + 字标。标记是那个末笔上扬的 w（site/assets/mark.svg 同一条路径），
+   currentColor 描边 —— 它跟着字标的颜色走，不引入第二种墨色。 */
+.top .brand{
+  display:flex;align-items:center;gap:8px;
+  font-size:17px;font-weight:600;letter-spacing:-.4px;color:var(--ink);
+  flex:none;cursor:pointer;background:none;border:0;padding:0;font-family:inherit;
+  /* 标记在自己那个 32 的 viewBox 里左右各留了 4.05 的边距（笔画 3.1、圆头），
+     19px 下就是 2.4px —— 盒子压着内容锁，墨迹却比底下的卡片往里缩 2.4px。
+     拉回 2px 而不是 2.4：圆头本来就该比直边多探出去一点点才看着齐。
+     **改了 .mk 的尺寸要重算这个数。** */
+  margin-left:-2px;
+}
+.mk{width:19px;height:19px;flex:none;display:block}
+.top .brand:hover{text-decoration:none}
+.top .who{
+  margin-left:auto;display:flex;align-items:center;gap:8px;min-width:0;
+  font-size:13px;color:var(--ink-2);
+}
+.top .who .nm{color:var(--ink);font-weight:600;white-space:nowrap}
+/* 命名空间只在它跟登录名不一样时才出现 —— 一样的时候显示两遍是复述。 */
+.top .who .ns{white-space:nowrap}
+.top .who .ns::before{content:"· "}
+/* 字母章。这里从来就只有字母：GitHub 头像被门户自己的 CSP 挡着，
+   而 header(SSO) 模式压根没有头像。 */
+.ava{
+  width:22px;height:22px;border-radius:50%;flex:none;
+  display:grid;place-items:center;background:var(--canvas-2);
+  font-size:11px;font-weight:600;color:var(--ink-2);text-transform:uppercase;
+}
+.top .tools{display:flex;align-items:center;gap:6px;flex:none}
+/* 头部的三个次级控件（版本号 / 语言 / 齿轮）共用一个形状。
+   圆角 999 在这套语法里本来只给主 CTA 和 pill —— 它们是 pill。 */
+.chip{
+  font:inherit;font-size:12.5px;line-height:1.2;color:var(--ink);
+  background:none;border:1px solid var(--hairline);border-radius:999px;
+  padding:4px 10px;cursor:pointer;white-space:nowrap;
+  transition:background .16s var(--ease);
+}
+.chip:hover{background:var(--canvas-2)}
+.chip:active{transform:scale(.95)}
+/* 顶栏里的那几个不画边框。分隔线拿掉之后，一条只放着字标和三个描边胶囊的
+   横带里，最重的东西成了那三个框 —— 它们是次级控件，不该比字标显眼。
+   悬停时的浅灰底仍然说明它们能点。设备标题行里那个齿轮保留边框：
+   那里是内容不是外壳，旁边还站着一个描边的 select。 */
+.top .chip{border-color:transparent}
+.top .chip:hover{border-color:transparent;background:var(--canvas-2)}
+/* 最后那个控件要把自己的内边距吐回去。描边还在的时候，那圈内边距的外沿就是
+   边框、边框压着内容锁，看着是齐的；边框一拿掉，内边距成了不可见的空白，
+   右端的墨迹就比内容锁往里缩了 5~10px —— 而底下的标题和卡片是**压着锁**的
+   （1728px 下实测：卡片右缘 1414，齿轮右缘 1408）。负外边距只挪盒子不挪墨迹，
+   悬停时那块浅灰底会探进 --pad 的留白里，那正是它该在的地方。 */
+.top .tools > .chip:last-child{margin-right:-10px}
+.top .tools > .chip.icon:last-child{margin-right:-5px}
+.chip.icon{padding:5px;display:grid;place-items:center}
+.chip.icon svg{width:16px;height:16px;display:block}
+@media (max-width:640px){
+  .top .who .nm,.top .who .ns{display:none}
+}
+
+/* ── 页面骨架 ──────────────────────────────────────────────────────── */
+main{padding:clamp(26px,4vw,44px) var(--pad) 88px}
+.view{display:none}
+.view.show{display:block}
+
+h1{margin:0;font-size:clamp(26px,3.2vw,32px);font-weight:600;line-height:1.1;letter-spacing:-.4px}
+h2{margin:0;font-size:20px;font-weight:600;line-height:1.2;letter-spacing:-.3px}
+.lead{margin:8px 0 0;color:var(--ink-2);max-width:60ch}
+.vhead{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:20px}
+.vhead h1{flex:1 1 auto;min-width:0}
+
+/* ── 按钮 ────────────────────────────────────────────────────────────
+   蓝色实心 pill 只给主 CTA。次级一律浅灰实心、等重。
+   破坏性动作用红字而不是红底：红底会把「删除」做成页面上最亮的东西。 */
+.btn{
+  font:inherit;font-size:14px;font-weight:400;letter-spacing:-.2px;
+  background:var(--blue);color:#fff;border:0;border-radius:999px;
+  padding:8px 18px;cursor:pointer;white-space:nowrap;
+  transition:background .16s var(--ease);
+}
+.btn:hover{background:var(--blue-hi);text-decoration:none}
+.btn:active{transform:scale(.95)}
+.btn[disabled]{opacity:.45;pointer-events:none}
+.btn.soft{background:var(--canvas-2);color:var(--ink)}
+.btn.soft:hover{background:#e8e8ed}
+.btn.ghost{background:none;color:var(--blue);padding:8px 10px}
+.btn.ghost:hover{background:var(--canvas-2)}
+.btn.danger{background:none;color:var(--red);padding:8px 10px}
+.btn.danger:hover{background:var(--canvas-2)}
+/* 表格行尾那种最小动作 */
+.act{
+  font:inherit;font-size:13px;color:var(--blue);background:none;border:0;
+  /* 负外边距把 padding 撑出来的那几像素收回去，让按钮的字跟同一行的
+     单元格文字对齐 —— 红色本来就抢眼，差 3px 看着就是歪的。 */
+  padding:3px 6px;margin:-3px -6px;border-radius:6px;cursor:pointer;white-space:nowrap;
+}
+.act:hover{background:var(--canvas-2)}
+.act.danger{color:var(--red)}
+/* 上面那个负外边距是为了让按钮的字跟同行文字对齐，但它也把相邻的两个动作
+   吸到了一起（「接受拒绝」）。相邻时补回来。 */
+.act + .act{margin-left:6px}
+
+/* ── 待审批：门户的主体 ────────────────────────────────────────────────
+   DESIGN.md §2 —— 留白中央必须有一个东西镇得住。有人在等你的时候，
+   镇场的就是这张卡；没人等的时候，主体是设备清单。
+
+   它在两处挂载、是同一个组件：主屏顶部（跨设备聚合）与设备下钻的待审批页
+   （过滤到这一台）。 */
+.asks{display:grid;gap:14px;margin-bottom:clamp(30px,4vw,46px)}
+.asks:empty{display:none}
+.ask{
+  border:1px solid var(--hairline);border-radius:18px;overflow:hidden;
+  background:var(--canvas);
+}
+.ask.gone{opacity:0;transform:translateY(-4px);transition:opacity .3s var(--ease),transform .3s var(--ease)}
+.ask .head{
+  display:flex;align-items:center;gap:10px;
+  padding:13px 20px;border-bottom:1px solid var(--hairline);
+  font-size:13px;color:var(--ink-2);
+}
+.ask .head .host{color:var(--ink);font-weight:600;font-size:14px;flex:none}
+/* 中间那格（种类 / 配对说明）吃掉剩余宽度并在必要时省略号，
+   否则它一长就把秒表挤到第二行去。 */
+.ask .head .what{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 秒表。它是真的 —— `wanctl exec` 就阻塞在那儿等人回答，所以走字的是等待本身。 */
+.ask .head .wait{margin-left:auto;flex:none;white-space:nowrap;font-variant-numeric:tabular-nums}
+.ask .body{padding:20px}
+.ask .cmd{
+  font-size:14px;line-height:1.6;color:var(--ink);
+  word-break:normal;overflow-wrap:break-word;margin:0 0 16px;
+}
+.ask .cmd .tok{white-space:nowrap}
+.ask .cmd .tok.split{white-space:normal;word-break:break-all}
+/* 危险命令的首词。红在这儿是陈述，不是按钮。 */
+.ask .cmd .rm{color:var(--red);font-weight:700}
+/* 键值表：左列固定窄，右列自己折行。数据是记录，所以左对齐、左缘对齐。 */
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;margin:0;font-size:13px}
+.kv dt{color:var(--ink-2);white-space:nowrap}
+.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-size:12.5px}
+.ask .acts{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:14px 20px;border-top:1px solid var(--hairline);background:var(--canvas-2);
+}
+/* 层级按后果排，不按语气排（DESIGN.md §6.5）。
+   「记住本目录」「全局都行」是持久授权 —— 这个产品里后果最重的动作 ——
+   所以它们不能比「允许一次」轻。三个次级动作等重，作用域写在标签里，
+   让后果看得见而不是藏在措辞里。
+   「拒绝」不上红：拒绝是安全的那一侧，把它染成警告色是在劝人别拒绝。 */
+.ask .acts .btn{font-size:13.5px;padding:7px 15px}
+.ask .acts .spacer{margin-left:auto}
+/* 窄屏上动作会换行，这时 margin-left:auto 把「拒绝」单独甩到第二行最右边，
+   看着像它被隔离出去了。挤不下就让它跟着排。 */
+@media (max-width:560px){
+  .ask .acts .spacer{margin-left:0}
+}
+.ask .scope{font-size:11.5px;color:var(--ink-2);margin-left:2px}
+
+/* 空态。99% 的时间没人等你 —— 这是常态，不是错误页，所以它一行就够，
+   不加插画、不加第二行安慰。 */
+.blank{
+  padding:clamp(34px,6vw,60px) 0;text-align:center;color:var(--ink-2);font-size:14px;
+}
+
+/* ── 设备 ──────────────────────────────────────────────────────────── */
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+.dev{
+  display:block;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;
+  background:var(--canvas);border:1px solid var(--hairline);border-radius:18px;
+  padding:14px 16px;transition:border-color .16s var(--ease),background .16s var(--ease);
+}
+.dev:hover{border-color:var(--ink-3);background:var(--canvas-2)}
+.dev:active{transform:scale(.995)}
+.dev .nm{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:600;letter-spacing:-.3px}
+/* 在线 = 实心墨点，离线 = 空心发丝圈。实心 vs 空心是无色的强区分，
+   不必为「活着」发明一个绿色。 */
+.dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ink)}
+.dot.off{background:none;border:1.5px solid var(--ink-3)}
+.dev.offline{color:var(--ink-2)}
+.dev.offline .nm{color:var(--ink-2);font-weight:400}
+/* 「最近」只在离线时出现。在线设备这一行永远是「刚刚」，等于空转。 */
+.dev .seen{display:block;margin-top:8px;font-size:12px;color:var(--ink-2)}
+.dev .badge{
+  margin-left:auto;font-size:11.5px;color:var(--ink-2);font-weight:400;
+  border:1px solid var(--hairline);border-radius:999px;padding:1px 8px;white-space:nowrap;
+}
+/* 有人在等这台设备。数字比任何图标都直接。 */
+.dev .badge.waiting{color:var(--blue);border-color:var(--blue)}
+.dev .shared{display:block;margin-top:8px;font-size:12px;color:var(--ink-2)}
+
+/* 首台设备的引导。只在一台都没有时出现——有设备之后它就是常驻噪声。 */
+.onboard{
+  border:1px solid var(--hairline);border-radius:18px;padding:22px 24px;
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+}
+.onboard p{margin:0;flex:1 1 20rem;min-width:0;color:var(--ink-2)}
+
+/* ── 设备下钻 ──────────────────────────────────────────────────────── */
+.back{
+  font:inherit;font-size:13px;color:var(--ink-2);background:none;border:0;
+  padding:0 0 14px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;
+}
+.back:hover{color:var(--ink)}
+.dhead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+.dhead h1{flex:0 0 auto}
+.dhead .fp{font-size:12px;color:var(--ink-2);flex:1 1 100%;order:9;margin-top:2px}
+/* 执行模式是这台设备的一个属性，不是一个页面 —— 所以它住在标题行，
+   而不是像以前那样独占一个 tab。 */
+.dhead .modesel{
+  width:auto;flex:none;font:inherit;font-size:13px;color:var(--ink);background:var(--canvas);
+  border:1px solid var(--hairline);border-radius:999px;padding:5px 11px;cursor:pointer;
+}
+.dhead .modesel.bypass{border-color:var(--red);color:var(--red)}
+
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--hairline);margin:20px 0 22px}
+.tab{
+  font:inherit;font-size:14px;color:var(--ink-2);background:none;border:0;
+  padding:9px 14px;cursor:pointer;position:relative;white-space:nowrap;
+  display:inline-flex;align-items:center;gap:7px;
+}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--ink);font-weight:600}
+/* 当前项的下划线压在容器那条发丝线上 —— 颜色变化就是分隔，不另加边框 */
+.tab.on::after{content:"";position:absolute;left:14px;right:14px;bottom:-1px;height:2px;background:var(--ink)}
+.tab .n{
+  font-size:11.5px;font-weight:400;color:#fff;background:var(--blue);
+  border-radius:999px;padding:0 6px;min-width:17px;text-align:center;
+}
+.pane{display:none}
+.pane.show{display:block}
+
+/* ── 表 ────────────────────────────────────────────────────────────────
+   表是用来扫的，扫需要固定的左缘。只有横向发丝线，没有外框、没有斑马纹、
+   没有卡片包裹 —— 行与行之间的那条线已经是全部需要的分隔。 */
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{
+  text-align:left;font-weight:400;color:var(--ink-2);font-size:12.5px;
+  padding:0 12px 8px 0;border-bottom:1px solid var(--hairline);white-space:nowrap;
+}
+td{padding:11px 12px 11px 0;border-bottom:1px solid var(--hairline);vertical-align:top}
+th:last-child,td:last-child{padding-right:0;text-align:right}
+tr:last-child td{border-bottom:0}
+td .sub{display:block;font-size:11.5px;color:var(--ink-2);margin-top:2px}
+td.num{font-variant-numeric:tabular-nums}
+.tcap{margin:0 0 12px;color:var(--ink-2);font-size:13px}
+.dim{color:var(--ink-2)}
+.no{color:var(--red)}
+/* 全表空态：一行字，与 .blank 同一个声音 */
+.tempty{padding:26px 0;color:var(--ink-2);font-size:13.5px}
+
+/* ── 设置：左分组右内容 ────────────────────────────────────────────────
+   与文档站是同一个布局家族（左导航 + 内容），两个表面因此共用一套肌肉记忆。
+
+   它是一个**页面**，不是覆盖层。覆盖层会把顶栏一起盖掉，于是「我现在是哪个
+   命名空间、指纹是多少」在进设置时消失 —— 一个安全工具不该这样。 */
+.settings{
+  display:grid;grid-template-columns:212px minmax(0,1fr);
+  gap:clamp(24px,4vw,52px);
+}
+.settings > nav{position:sticky;top:64px;align-self:start}
+.sview{display:none}
+.sview.show{display:block}
+.sgroup{margin-bottom:22px}
+.sgroup .t{font-size:12px;color:var(--ink-2);padding:0 10px 6px}
+.sgroup button{
+  display:block;width:100%;text-align:left;font:inherit;font-size:14px;
+  color:var(--ink-2);background:none;border:0;border-radius:8px;
+  padding:6px 10px;cursor:pointer;
+}
+.sgroup button:hover{background:var(--canvas-2);color:var(--ink)}
+.sgroup button.on{background:var(--blue-wash);color:var(--blue);font-weight:600}
+@media (max-width:760px){
+  .settings{grid-template-columns:minmax(0,1fr)}
+  .settings > nav{position:static}
+  .sgroup{margin-bottom:14px}
+}
+
+/* ── 表单 ──────────────────────────────────────────────────────────── */
+.form{display:grid;gap:14px;max-width:34rem}
+.field{display:grid;gap:5px}
+.field label{font-size:13px;color:var(--ink-2)}
+input,select,textarea{
+  font:inherit;font-size:14px;color:var(--ink);background:var(--canvas);
+  border:1px solid var(--hairline);border-radius:8px;padding:8px 11px;width:100%;
+}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue-hi);box-shadow:0 0 0 3px var(--blue-wash)}
+.check{display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer}
+.check input{width:auto;flex:none}
+.checks{display:grid;gap:9px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+
+/* 开关。整套东西里唯一的「状态即形状」控件。 */
+.sw{
+  width:40px;height:24px;border-radius:999px;background:var(--hairline);
+  border:0;padding:0;cursor:pointer;position:relative;flex:none;
+  transition:background .18s var(--ease);
+}
+.sw::after{
+  content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;
+  background:#fff;transition:transform .18s var(--ease);
+}
+.sw.on{background:var(--blue)}
+.sw.on::after{transform:translateX(16px)}
+.sw.danger.on{background:var(--red)}
+.row{display:flex;align-items:center;gap:12px}
+.row .txt{flex:1;min-width:0}
+.row .txt b{font-weight:600}
+
+/* 命令与代码块。之前 pre 一条样式都没有，只继承了等宽字体 ——
+   于是「电脑：一行装好」那页上，说明文字和要你复制的那条命令长得一样重，
+   一眼看不出哪条是命令。 */
+pre{
+  margin:6px 0 14px;padding:12px 14px;
+  background:var(--canvas-2);border-radius:8px;
+  font-size:13px;line-height:1.6;color:var(--ink);
+  overflow-x:auto;white-space:pre;
+}
+/* 能点就得说自己能点。老版有一句「点一下命令可以复制」，我把它当噪声砍了
+   却没留替代物 —— 于是这块变成了一个没有任何提示的可点区域。
+   标签平时不在，悬停才出现；没有悬停的设备（触屏）上一直显示。 */
+pre[data-copy]{cursor:pointer;position:relative;padding-right:64px;transition:background .16s var(--ease)}
+pre[data-copy]:hover{background:#ececf0}
+pre[data-copy]::after{
+  content:attr(data-copy);position:absolute;top:11px;right:13px;
+  font-family:var(--sans);font-size:11.5px;letter-spacing:-.2px;color:var(--ink-2);
+  opacity:0;transition:opacity .16s var(--ease);pointer-events:none;
+}
+pre[data-copy]:hover::after{opacity:1}
+@media (hover:none){ pre[data-copy]::after{opacity:1} }
+code{background:var(--canvas-2);border-radius:5px;padding:1px 5px;font-size:.92em}
+pre code{background:none;padding:0;font-size:1em}
+
+/* 卡片：设置页里那些成组的开关与表单 */
+.card{border:1px solid var(--hairline);border-radius:18px;padding:20px}
+.card + .card{margin-top:14px}
+.card .note{margin:10px 0 0;font-size:12.5px;color:var(--ink-2)}
+.card .note.warn{color:var(--red)}
+
+/* 一次性凭据。三句话说同一件事已经砍掉，只剩码和一句。 */
+.slip{
+  display:none;margin-top:18px;border:1px solid var(--hairline);border-radius:18px;padding:18px 20px;
+}
+.slip.show{display:block}
+.slip code{display:block;font-size:14px;word-break:break-all;margin-bottom:10px}
+.slip .once{font-size:12.5px;color:var(--ink-2);margin-bottom:12px}
+
+/* ── 模态 ──────────────────────────────────────────────────────────── */
+.ov{
+  position:fixed;inset:0;z-index:var(--z-modal);background:rgba(0,0,0,.32);
+  display:none;align-items:center;justify-content:center;padding:20px;
+}
+.ov.show{display:flex}
+.modal{
+  background:var(--canvas);border-radius:18px;padding:24px;width:100%;max-width:26rem;
+  max-height:calc(100vh - 40px);overflow-y:auto;
+}
+.modal.wide{max-width:44rem}
+.modal h2{margin:0 0 8px}
+.modal p{margin:0 0 18px;color:var(--ink-2);font-size:14px}
+.modal .btns{display:flex;justify-content:flex-end;gap:8px}
+
+/* ── toast ─────────────────────────────────────────────────────────── */
+/* 反馈只有这一套。以前顶上还挂着一条 6 秒的错误条，两套机制做同一件事。 */
+.toast{
+  position:fixed;left:50%;bottom:26px;transform:translate(-50%,14px);z-index:var(--z-toast);
+  background:var(--ink);color:var(--canvas);border-radius:999px;padding:9px 18px;font-size:13.5px;
+  opacity:0;pointer-events:none;transition:opacity .2s var(--ease),transform .2s var(--ease);
+  max-width:calc(100vw - 40px);
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast.no{background:var(--red)}
+
+/* ── 认证页 ──────────────────────────────────────────────────────────
+   登录 / 等待邀请 / 设备授权。三张不是 SPA 的一部分（由 Go 渲染 web/*.html），
+   但共用这份样式表 —— handleAsset 故意不鉴权就是为了这个。
+
+   一列锁到 25rem，段落一律左对齐（DESIGN.md §5：居中的可读上限是 1–3 行）。
+   整页只有那块要复制的授权码是居中的：它是个物件，不是句子。
+   没有卡片外框 —— 页面上再没有别的东西，一圈边框不分隔任何两样东西。 */
+/* 竖向居中。这三张页面各自只有一件事，页面上再没有别的东西 —— 顶对齐会把
+   那一件事挂在上三分之一、下面空掉半屏。底部内边距比顶部大，让内容落在
+   正中略偏上（视觉中心比几何中心高）。min-height 不是 height：内容长过一屏
+   时容器自己长，不会被裁掉。 */
+.auth main{
+  display:flex;flex-direction:column;justify-content:center;
+  min-height:calc(100vh - 48px);min-height:calc(100dvh - 48px);
+  max-width:25rem;margin:0 auto;padding:36px 20px 76px;
+}
+.auth .top .brand{cursor:default}       /* 三张页都无处可去，字标不是链接 */
+.auth .top .tools{margin-left:auto}     /* SPA 里靠 .who 顶开，这里没有 .who */
+.auth .host{margin:6px 0 0;font-size:13px;color:var(--ink-2)}
+/* 这几行都是两三行以内的短句。balance 把它们摊成等长的几行，
+   而不是留一个「you in.」那样的两字孤行。 */
+.auth .lead{margin:18px 0 0;text-wrap:balance}
+.auth b{font-weight:600;color:var(--ink)}
+.auth .fine{margin:16px 0 0;font-size:12.5px;color:var(--ink-2);line-height:1.6;text-wrap:balance}
+.auth .fine .act{font-size:inherit}
+
+/* 主 CTA 通栏。这套语法里 999px 只给主 CTA 和 pill —— 这就是主 CTA，
+   而且是整页唯一一个可点的东西。 */
+.auth .go{
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  width:100%;margin-top:26px;padding:11px 18px;font-size:15px;
+}
+.auth .go svg{width:17px;height:17px;flex:none}
+
+/* 授权码。新设备接入时人看到的第一个 wanctl 界面，这块就是那一屏的主体。 */
+.auth .code{
+  margin-top:26px;padding:22px 14px;border-radius:18px;background:var(--canvas-2);
+  font-family:var(--mono);font-size:clamp(26px,7vw,38px);font-weight:600;letter-spacing:2px;
+  line-height:1.2;text-align:center;color:var(--ink);word-break:break-all;
+  cursor:pointer;user-select:all;transition:background .16s var(--ease);
+}
+.auth .code:hover{background:#ececf0}
+.auth .code:active{transform:scale(.99)}
+.auth .meta{margin:10px 0 0;font-size:12.5px;color:var(--ink-2);text-align:center}
+/* 指纹是拿来逐字符核对的，所以整串可见、可整选，不截断。
+   11.5px 是为了让 SHA256: 加 44 个 base64 字符（恒定 51 字）在这个列宽里
+   落成一行：断成两行时最后只剩一个 "="，看着像渲染坏了，而这一串正是
+   人要拿去跟终端里的那串比对的。 */
+.auth .fp{margin:8px 0 0;font-size:min(11.5px,2.85vw);color:var(--ink);word-break:break-all;user-select:all}
+
+/* 等待邀请页的兑换表单 */
+.auth form{display:grid;gap:10px;margin-top:24px}
+.auth form input{font-family:var(--mono);text-align:center;padding:11px 12px}
+.auth form .go{margin-top:0}
+.auth .err{margin:10px 0 0;font-size:13px;color:var(--red);min-height:1.3em}
+
+/* ── 动效降级 ──────────────────────────────────────────────────────── */
+/* 内容可见性不绑在 transition 上：无 JS、无头渲染、reduced-motion
+   三条路看到的都是终局。 */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
