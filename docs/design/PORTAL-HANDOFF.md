@@ -138,6 +138,17 @@ try-it 面板是给 HTTP API 用的。wanctl 对用户的界面是 CLI，没有�
       这是防两半漂移的那道闸。术语真源取自门户的 `data-en`/`data-zh` 对照（待审批=Waiting、
       指纹=Fingerprint、命名空间=Namespace、共享授权=Shared devices），relay 在中文里不译成「中继」，
       跟官网一致。写法见 `docs/portal/README.md` 新增的「每篇文章都是一对」一节
+- [x] **文档站三栏与手机导航（issue #26，分支 `docs-layout`）**：吸顶从 `.dnav-in` / `.dtoc nav`
+      挪到两个 grid item 自己身上 —— `.dpage` 是 `align-items:start`，栏高只等于自己内容
+      （实测 902 / 201px），sticky 出不了包含块，读者一滚两栏就跟着走了；grid item 做 sticky
+      时包含块是那一格，跟整行一样高。手机上「全部文档」从就地展开的 `<details>` 改成左侧抽屉
+      （遮罩、关闭键、Esc / 点遮罩 / 返回键都关得掉、开着时锁 body 滚动，选文章走
+      `location.replace` 免得留一条幽灵历史）；抽屉规则全挂在 `<head>` 里种下的
+      `<html class="js">` 上，无脚本时退回原来那份清单。右栏另加「读到哪一节」高亮 ——
+      **没用 IntersectionObserver**：它只在越线那一刻回调，而锚点跳转停在 112px 是最后一次
+      越线之后，实测点第三条亮的还是第二条；改成 rAF 节流的 scroll。1440 初绘对 `origin/main`
+      差 93 px，全在左栏底部 y890–899：裁切从 `.dnav-in`（890 收）挪到 `.dnav`（900 收），
+      最后一条目录的第二行从截半个字变成显示完整
 - [ ] 砍 CMS + 端点。**这条现在没有前置依赖了** —— 文档有地方去了
 - [ ] **别名（issue #6，PR #19 评审中）** —— worktree `device-alias`。后端半从被关的 PR #8 第一个 commit
       `87c276f` cherry-pick，门户半按新 UI 重做：设备设置页一行字段，列表与详情显示别名、原名副显。**要随下一个 release 才到线上**
