@@ -82,6 +82,7 @@ import urllib.parse
 
 import markdown
 from markdown.extensions.toc import slugify_unicode
+from markdown.treeprocessors import Treeprocessor
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 DOCS = ROOT / "docs"
@@ -363,6 +364,114 @@ def load(relay_origin, portal_origin, errors):
 
 
 # ── render ────────────────────────────────────────────────────────────────
+#
+# 中文正文里那些句子中间的空格是怎么来的：markdown 源文件按 80 列硬换行，
+# HTML 里那个换行原样保留，浏览器再把它折叠成一个空格。对英文这是对的
+# ——单词之间本来就要空格；对中文这是错的，两个汉字中间凭空多一个空。
+#
+# 判据只看换行两边各一个字符：两边都是中日韩字符（汉字、、。「」这类标点、
+# 全角标点）就直接接上；只要有一边是拉丁字母或数字就把空格留着
+# ——中文排版里「由 relay 转发」那两个空格本来就该有。
+CJK = r"一-鿿　-〿＀-￯"
+CJK_WRAP = re.compile(r"(?<=[%s])[ \t]*\n[ \t]*(?=[%s])" % (CJK, CJK))
+# 同一件事发生在行内元素边界上时的两半：换行落在 **粗体** 或 [链接] 的
+# 前面，或者落在它后面。
+CJK_TRAIL = re.compile(r"(?<=[%s])[ \t]*\n[ \t]*$" % CJK)
+CJK_LEAD = re.compile(r"^[ \t]*\n[ \t]*(?=[%s])" % CJK)
+IS_CJK = re.compile(r"[%s]" % CJK).match
+# 只跨这些标签接字。块级元素之间的空白是排版缩进，接了没意义，
+# 而且 <p>甲</p> 和 <p>乙</p> 本来就不在一行上。
+INLINE = {
+    "a", "abbr", "b", "code", "del", "em", "i", "ins", "kbd", "mark",
+    "q", "s", "small", "span", "strong", "sub", "sup", "u",
+}
+
+
+def _first_char(el):
+    """这个元素渲染出来的第一个字符。"""
+    if el.text:
+        return el.text[0]
+    for kid in el:
+        c = _first_char(kid)
+        if c:
+            return c
+        if kid.tail:
+            return kid.tail[0]
+    return ""
+
+
+def _last_char(el):
+    """这个元素渲染出来的最后一个字符。"""
+    for kid in reversed(list(el)):
+        if kid.tail:
+            return kid.tail[-1]
+        c = _last_char(kid)
+        if c:
+            return c
+    return el.text[-1] if el.text else ""
+
+
+class CJKSoftBreak(Treeprocessor):
+    """把中日韩字符之间的软换行接上。
+
+    做在元素树上，不是在源文本上，也不是在成品 HTML 上，因为这一层的边界
+    正好是对的：
+
+      * 块结构已经切开了 —— 标题、列表项、表格单元格各是各的元素，
+        一次替换绝不可能把两个块粘到一起（在源文本上做就会）。
+      * 围栏代码块此时已经被 fenced_code 收进 htmlStash，树里只剩一个纯
+        ASCII 占位符；行内代码是真正的 <code> 元素，跳过它的 text 即可。
+        所以代码一个字节都不会被动到（在成品 HTML 上做就得自己躲标签）。
+
+    两遍。第一遍处理一个字符串内部的换行，这是绝大多数。第二遍处理换行正好
+    落在行内元素接缝上的情况 —— 「干的事。\\n**在国产 OEM ROM 上**」里那个
+    换行是前一个文本节点的结尾，而「在」在 <strong> 里面，两边不在同一个
+    字符串里，第一遍看不见。全站这样的有 8 处。
+    """
+
+    def run(self, root):
+        for el in root.iter():
+            if el.text and el.tag not in ("code", "pre"):
+                el.text = CJK_WRAP.sub("", el.text)
+            # tail 是元素**后面**的正文，即使元素本身是 <code> 也要处理。
+            if el.tail:
+                el.tail = CJK_WRAP.sub("", el.tail)
+
+        for el in root.iter():
+            if el.tag in ("code", "pre"):
+                continue
+            kids = list(el)
+            for i, kid in enumerate(kids):
+                if kid.tag not in INLINE:
+                    continue
+                # 换行在行内元素之前：「…干的事。\n」 + <strong>在国产…
+                before = el.text if i == 0 else kids[i - 1].tail
+                if before and CJK_TRAIL.search(before) and IS_CJK(_first_char(kid)):
+                    joined = CJK_TRAIL.sub("", before)
+                    if i == 0:
+                        el.text = joined
+                    else:
+                        kids[i - 1].tail = joined
+                # 换行在行内元素之后：<strong>…结束</strong> + 「\n后面的字」
+                if kid.tail and CJK_LEAD.search(kid.tail) and IS_CJK(_last_char(kid)):
+                    kid.tail = CJK_LEAD.sub("", kid.tail)
+
+
+# 一道栅栏：渲染完再回头看一眼成品，三种形状一个都不许剩下 ——
+# 同一段文字里的、行内标签前面的、行内标签后面的。上面那个 treeprocessor
+# 哪天被重构掉了，这里会让构建当场失败，而不是等甲方在手机上看出来。
+# 块级边界上的换行不算：浏览器把它渲染成断行，不是一个空格。
+_INLINE_RE = "|".join(sorted(INLINE))
+CJK_STRAY = re.compile(
+    r"[%s](?:[ \t]*\n[ \t]*|[ \t]*\n[ \t]*<(?:%s)\b[^>]*>|</(?:%s)>[ \t]*\n[ \t]*)[%s]"
+    % (CJK, _INLINE_RE, _INLINE_RE, CJK)
+)
+STRIP_CODE = re.compile(r"<pre\b.*?</pre>|<code\b.*?</code>", re.S)
+
+
+def strip_code(body):
+    """代码里的换行不归这条规矩管，先把它们拿掉。"""
+    return STRIP_CODE.sub("§", body)
 
 
 def render_one(text):
@@ -377,6 +486,9 @@ def render_one(text):
             }
         },
     )
+    # 15：晚于 inline（20，行内代码这时才成为 <code> 元素），早于 prettify（10）
+    # 和 toc（5），所以目录里的标题跟正文里的标题是同一份文字。
+    md.treeprocessors.register(CJKSoftBreak(md), "cjk_softbreak", 15)
     body = md.convert(text)
     # A wide table must scroll inside itself; the page never scrolls sideways.
     body = body.replace("<table>", '<div class="tw"><table>').replace(
@@ -822,6 +934,18 @@ def main():
         print("broken links:", file=sys.stderr)
         for e in errors:
             print("  " + e, file=sys.stderr)
+        sys.exit(1)
+
+    strays = []
+    for a in articles:
+        for l in LANGS:
+            for m in CJK_STRAY.finditer(strip_code(a["html"][l])):
+                strays.append("%s (%s): %r" % (a["slug"], l, m.group(0)))
+    if strays:
+        print("a soft line break survived between two CJK characters — it will "
+              "render as a space:", file=sys.stderr)
+        for s in strays:
+            print("  " + s, file=sys.stderr)
         sys.exit(1)
 
     untranslated = [a["slug"] for a in articles if a["only"]]
