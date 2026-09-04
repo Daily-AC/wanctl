@@ -185,11 +185,11 @@
   function type(text, instant, done) {
     if (typer) { clearTimeout(typer); typer = null; }
     var d = line('cmd', '');
-    if (instant) { d.textContent = text; if (done) done(); return; }
+    if (instant) { d.innerHTML = cmdHTML(text); if (done) done(); return; }
     var i = 0;
     d.innerHTML = '<span class="caret"></span>';
     (function step() {
-      if (i >= text.length) { d.textContent = text; if (done) done(); return; }
+      if (i >= text.length) { d.innerHTML = cmdHTML(text); if (done) done(); return; }
       i++;
       d.innerHTML = esc(text.slice(0, i)) + '<span class="caret"></span>';
       typer = setTimeout(step, 15);

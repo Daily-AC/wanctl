@@ -110,7 +110,7 @@ h2{
 }
 .lead{
   margin:16px auto 0;font-size:clamp(18px,1.6vw,21px);font-weight:400;line-height:1.4;
-  color:var(--ink-2);max-width:44ch;text-wrap:pretty;
+  color:var(--ink-2);max-width:44ch;text-wrap:balance;
 }
 .dark .lead{color:var(--on-dark-2)}
 .center{text-align:center}
@@ -161,7 +161,7 @@ h2{
   gap:clamp(12px,2.6vw,44px);
 }
 .laptop{flex:1 1 auto;min-width:0;max-width:580px;filter:drop-shadow(3px 5px 30px rgba(0,0,0,.22))}
-.laptop .lid{background:#1d1d1f;border-radius:14px 14px 4px 4px;padding:11px 11px 14px}
+.laptop .lid{background:#2b2b2d;border-radius:14px 14px 4px 4px;padding:11px 11px 14px}
 .laptop .notch{width:76px;height:5px;margin:0 auto 7px;border-radius:0 0 4px 4px;background:#000}
 .laptop .screen{
   background:#000;border-radius:5px;overflow:hidden;aspect-ratio:16/10;
@@ -171,17 +171,19 @@ h2{
               background:linear-gradient(#c8c9cc,#a9abb0)}
 
 .phone{
-  flex:0 0 auto;width:clamp(124px,13.4vw,184px);margin-bottom:clamp(6px,1.4vw,16px);
+  /* 不再抬离地面：两台机器摆在同一张桌上就该共一条地平线，
+     悬空 16px 是把它们从一张照片变成两张贴图。 */
+  flex:0 0 auto;width:clamp(124px,13.4vw,184px);margin-bottom:0;
   filter:drop-shadow(3px 5px 30px rgba(0,0,0,.22));
 }
-.phone .body{background:#1d1d1f;border-radius:32px;padding:8px}
+.phone .body{background:#2b2b2d;border-radius:32px;padding:8px}
 .phone .screen{
   background:#fff;border-radius:25px;overflow:hidden;aspect-ratio:9/19.5;
   display:flex;flex-direction:column;position:relative;
   transition:background .45s var(--ease);
 }
 .phone .island{position:absolute;top:7px;left:50%;transform:translateX(-50%);
-               width:33%;height:13px;border-radius:999px;background:#1d1d1f}
+               width:33%;height:13px;border-radius:999px;background:#2b2b2d}
 
 /* 开场时手机是黑的，然后亮一下 —— DESIGN.md 第 1 节那句场景句。
    醒着是默认状态；.asleep 只由 JS 临时加，所以无 JS / 无头渲染看到的都是醒着的。 */
@@ -210,6 +212,8 @@ h2{
 @keyframes ask-rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 .ask.rise{animation:ask-rise .42s var(--ease) both}
 .ask .from{font-size:clamp(8px,.86vw,11px);color:var(--ink-2);letter-spacing:-.1px}
+.ask .from:first-child{margin-top:auto}
+.ask .what{margin-bottom:auto}
 /* 请求方的短指纹。设备端真会显示它，也把首屏和「端到端身份」那一屏系在一起 */
 .ask .fp{
   font-family:var(--mono);font-size:clamp(6.5px,.7vw,9px);line-height:1.3;
@@ -251,12 +255,13 @@ h2{
 .ask .yes.breathe{animation:breathe 3.4s var(--ease) 1.1s infinite}
 .ask .yes.breathe:active{animation:none}
 .ask button:active{transform:scale(.95)}
+/* 层级按后果排，不按语气排。
+   「一直允许」是一次持久授权 —— 这个产品里后果最重的动作 —— 之前它是三个里最轻的
+   一行蓝字，而后果最轻的「拒绝」反倒是一块厚灰板。两个次级动作现在等重。 */
 .ask .yes{background:var(--blue);color:#fff}
 .ask .yes:hover{background:var(--blue-hi)}
-.ask .alt{background:transparent;color:var(--blue)}
-.ask .alt:hover{background:var(--canvas-2)}
-.ask .no{background:var(--canvas-2);color:var(--ink)}
-.ask .no:hover{background:#e8e8ed}
+.ask .alt,.ask .no{background:var(--canvas-2);color:var(--ink)}
+.ask .alt:hover,.ask .no:hover{background:#e8e8ed}
 .ask .done{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px}
 .ask .tickring{
   width:clamp(30px,3.7vw,50px);height:clamp(30px,3.7vw,50px);border-radius:50%;
@@ -273,14 +278,17 @@ h2{
   background:var(--canvas);color:var(--ink);border-radius:18px;overflow:hidden;text-align:left;
   filter:drop-shadow(3px 5px 30px rgba(0,0,0,.22));
 }
+/* 白卡压在近黑整幅屏上，色差本身就是抬升；那道投影在这儿肉眼为零，只是白烧一次重绘 */
+.dark .panel{filter:none}
 .panel .head{
   display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
   padding:19px 26px;border-bottom:1px solid var(--hairline);
 }
 .panel .head .t{font-size:17px;font-weight:600;letter-spacing:-.374px}
 .panel .head .s{margin-left:auto;font-size:14px;color:var(--ink-2)}
-.panel .body{padding:20px 26px 24px}
-.kv{display:flex;gap:14px;padding:9px 0;font-size:15px;margin:0}
+.panel .body{padding:8px 0 12px}
+/* 内边距挂在行上而不是容器上，分隔线才能和设备表一样通栏 —— 同一个组件不该有两套规矩 */
+.kv{display:flex;gap:14px;padding:9px 26px;font-size:15px;margin:0}
 .kv+.kv{border-top:1px solid var(--hairline)}
 .kv dt{flex:0 0 104px;color:var(--ink-2);margin:0}
 .kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
@@ -343,7 +351,7 @@ h2{
 /* ── 安装 ──────────────────────────────────────────────────────────── */
 /* 分段控件：选中项填蓝。蓝是这套系统里唯一的「这个是活的」信号，
    而这里选中与否直接决定下面那条命令，含糊不得。 */
-.picker{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:28px}
+.picker{display:flex;gap:30px;justify-content:center;flex-wrap:wrap;margin-top:28px}
 .seg{display:inline-flex;gap:2px;background:var(--canvas-2);border-radius:999px;padding:3px}
 .seg button{
   font:inherit;font-size:14px;letter-spacing:-.2px;white-space:nowrap;
@@ -402,6 +410,8 @@ h2{
   .ask .host{font-size:16px}
   .ask .what{font-size:11.5px}
   .ask button,.ask .doneword,.ask .idle{font-size:13px}
+  /* 终端字号按 vw 算，390px 下会掉到 8px 的地板价 —— 那不是小，那是读不了 */
+  .term{font-size:10px;line-height:1.65;padding:13px 14px}
   .ask .pend{font-size:10px}
   .ask .tickring{width:46px;height:46px}
   .nav .links a[data-opt]{display:none}
