@@ -535,8 +535,8 @@ h2{
      左对齐时右边就恒定空出一条一指宽的白，一栏看着像浮在另一栏里。
      居中的海报 lead（首屏、安全模型、安装）**不在此列**：那三处正是 balance 的本行，
      三行等长居中是它该有的样子，实测也确实比填满好看。宽屏一律不动。 */
-  :lang(zh) .split .lead,
-  :lang(zh) #relay .lead{text-wrap:pretty}
+  .split .lead:lang(zh),
+  #relay .lead:lang(zh){text-wrap:pretty}
 }
 
 /* 窄屏放不下一行 51 字的指纹：断成两行等长的，看着是有意为之而不是被挤爆的 */
@@ -592,46 +592,73 @@ h2{
      · 1.47 的行高对没有升降部、字面占满全宽的汉字太紧；
      · 一行里的汉字掉到系统 CJK 字体，而同一行的拉丁字母和数字仍留在 Schibsted，
        两者的 x-height 和笔画粗细都不同，于是每一句混排都像是拼起来的。
-   lang 属性由 app.js 的 applyLang 翻（zh-CN / en），所以这一整块不需要 JS 配合。 */
-:lang(zh){
+   lang 属性由 app.js 的 applyLang 翻（zh-CN / en），所以这一整块不需要 JS 配合。
+
+   **每一条都挂在元素自己的 :lang(zh) 上，一条后代选择器都不写。**
+   这份 CSS 有两个消费方，语言边界落的位置不一样：官网整页是 <html lang="zh-CN">，
+   文档站是英文页里嵌一段 <article lang="zh-CN">（tools/docsite/build.py）。
+   写成 `:lang(zh) body` 那种后代形式，在文档站上一条都不命中 —— body 的语言是 en ——
+   于是中文文章拿到的是英文那套负字距和拼接字体。写成 `body:lang(zh)` 两处都命中。
+
+   加新的负字距时：同时在下面补一条**多一个 :lang 伪类**的重置，
+   靠权重取胜而不是靠源码顺序，否则 docs.css 后加载就会盖回去。 */
+:root{
   /* 一行只有一种字体：系统 CJK 无衬线**连同它自己的那套拉丁**。
      macOS 走 -apple-system —— SF Pro 的拉丁配 PingFang 的汉字，苹果本来就是配套设计的；
      Windows 落到微软雅黑，Linux / Android 落到思源黑体。三条路各自都自带拉丁，
      所以「wanctl 0.3.4」这种混排里的字母和数字不会再是外来的。 */
-  --sans:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB',
-         'Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC',sans-serif;
+  --sans-zh:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB',
+            'Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC',sans-serif;
 }
+
+/* 字体和字距落在**声明了语言的那个元素**上，后代照常继承。
+   为什么不能只换 --sans：body 上的 font-family:var(--sans) 是在 body 那里算完的，
+   后代继承到的是算好的字体名单而不是 var() 引用，只改变量传不进英文页里的那段中文。
+   为什么不写成命中每个中文元素的 :lang(zh){...}：那会把等宽块内部那些自己没有
+   字体声明的 span（.tok）从等宽里拽出来 —— 声明永远强过继承。
+   为什么这里不设行高：这条会命中侧栏里 lang="zh-CN" 的文章标题那类**行内**元素，
+   给它们单独一个行高会让中英混排的列表行高不齐。行高只给块级正文，见下。 */
+[lang]:lang(zh),
+body:lang(zh){font-family:var(--sans-zh);letter-spacing:0}
+/* body 单列一条：它自己声明了这三样，继承压不过它。 */
+body:lang(zh){line-height:1.6}
 /* 字标是品牌那一处例外：它只有拉丁，留在 Schibsted Grotesk 上，连同它的负字距。 */
-:lang(zh) .nav .brand{font-family:'Schibsted Grotesk',sans-serif}
+.nav .brand:lang(zh){font-family:'Schibsted Grotesk',sans-serif}
 
-/* 字距归零。下面这份清单就是 app.css 里所有负 letter-spacing 的去处，两处故意不在里面：
+/* 字距归零。逐条对上 app.css 里每一处负 letter-spacing，两处故意不在里面：
    .nav .brand（字标，见上）和 .door .addr（内容永远是 wanctl.z10.dev / docker compose up，
-   等宽拉丁，那 -.2px 是给 JetBrains Mono 调的）。等宽的其余各处本来就是 0。 */
-:lang(zh) body,
-:lang(zh) h1,
-:lang(zh) h2,
-:lang(zh) .tile.chapter h2,
-:lang(zh) .nav,
-:lang(zh) .ask .from,
-:lang(zh) .ask .host,
-:lang(zh) .ask button,
-:lang(zh) .ask .doneword,
-:lang(zh) .panel .head .t,
-:lang(zh) .rows .name,
-:lang(zh) .party .who,
-:lang(zh) .lesson .claim,
-:lang(zh) .seg button{letter-spacing:0}
+   等宽拉丁，那 -.2px 是给 JetBrains Mono 调的）。等宽的其余各处本来就是 0。
+   h3~h6 官网没有，是给文档站备的：docs.css 故意把标题字距压到了 0,0,1
+   （见那个文件里的说明），就等这几条来接管。 */
+h1:lang(zh),
+h2:lang(zh),
+h3:lang(zh),
+h4:lang(zh),
+h5:lang(zh),
+h6:lang(zh),
+.tile.chapter h2:lang(zh),
+.nav:lang(zh),
+.ask .from:lang(zh),
+.ask .host:lang(zh),
+.ask button:lang(zh),
+.ask .doneword:lang(zh),
+.panel .head .t:lang(zh),
+.rows .name:lang(zh),
+.party .who:lang(zh),
+.lesson .claim:lang(zh),
+.seg button:lang(zh){letter-spacing:0}
 
-/* 行高：正文 1.6，标题 1.2。 */
-:lang(zh) body{line-height:1.6}
-:lang(zh) .lead,:lang(zh) .note,:lang(zh) .door .d{line-height:1.6}
-:lang(zh) h1,:lang(zh) h2,:lang(zh) .tile.chapter h2{line-height:1.2}
+/* 行高：正文 1.6（上面 body 那条给的），官网的展示级标题 1.2。
+   文档站的标题不在此列 —— .dbody article h1 是 0,1,2，它的 1.12 该留着。
+   等宽块（.term 1.75 / .ask .what 1.45 / .ask .fp 1.3）也不动，它们自己声明着。 */
+h1:lang(zh),h2:lang(zh),.tile.chapter h2:lang(zh){line-height:1.2}
+.lead:lang(zh),.note:lang(zh),.door .d:lang(zh){line-height:1.6}
 
 /* 两扇门那两段收尾不留孤字（原先最后一行只剩一个「器。」）。
    实测 pretty 在 390 与 1440 上都不比默认换行差，所以它是白捡的。
    `.lead` 不在这里：它带着 text-wrap:balance，宽屏上 balance 更好，
    窄屏上反过来 —— 那条只在上面的窄屏媒体查询里翻。 */
-:lang(zh) .door .d{text-wrap:pretty}
+.door .d:lang(zh){text-wrap:pretty}
 
 /* 中文标题只在标点处换行。
    浏览器允许在任意两个汉字之间断开，于是「你不点头，什么都不会跑。」这一句实测三种

@@ -21,6 +21,11 @@
 /* ── 密度 ──────────────────────────────────────────────────────────
    官网 17px、门户 15px、文档 16px。文档是长文，比工具松、比海报紧。 */
 body.docs{font-size:16px;line-height:1.65;letter-spacing:-.2px}
+/* 这一条的中文重置只能写在这里。app.css 的 `body:lang(zh)` 是 0,1,1，
+   跟 `body.docs` 打平，而本文件后加载，打平就是它赢 —— 于是读者切到中文之后，
+   顶栏、面包屑、翻页那些不在 <article lang> 里的中文照样带着 -.2px。
+   0,2,1 才压得住。行高 1.65 不动：对汉字来说它本来就比 1.6 还松一点。 */
+body.docs:lang(zh){letter-spacing:0}
 .docs h1,.docs h2,.docs h3,.docs h4{text-wrap:pretty}
 
 /* 顶栏：跟官网同一份 .nav，只多一个「你现在在文档里」的标签。
@@ -29,6 +34,8 @@ body.docs{font-size:16px;line-height:1.65;letter-spacing:-.2px}
 .docs .nav .here{
   color:var(--ink-2);font-size:14px;font-weight:400;letter-spacing:-.2px;flex:none;
 }
+/* 「文档」两个字，同上：0,3,0 得由 0,4,0 来重置。 */
+.docs .nav .here:lang(zh){letter-spacing:0}
 .docs .nav .here:hover{color:var(--ink);text-decoration:none}
 
 /* ── 三栏 ──────────────────────────────────────────────────────────
@@ -192,7 +199,10 @@ body.docs{font-size:16px;line-height:1.65;letter-spacing:-.2px}
 
 /* ── 目录页 ────────────────────────────────────────────────────────── */
 .dindex{padding:56px var(--pad) 76px}
-.dindex h1{font-size:clamp(32px,4vw,44px);letter-spacing:-.4px}
+/* 字距按本文件上头那条约定压到 0,0,1，好让 app.css 的 `h1:lang(zh)` 接管；
+   字号留在 0,1,1，它跟语言无关。 */
+.dindex h1{font-size:clamp(32px,4vw,44px)}
+:where(.dindex) h1{letter-spacing:-.4px}
 .dindex .lead{margin:14px 0 0;max-width:56ch;font-size:18px}
 /* 六个分组落成 3×2 而不是 4+2：四栏那版第二行只填了两格，右半边空着，
    看起来像少了两组东西。三栏两行是满的。 */
