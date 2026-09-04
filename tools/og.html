@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="assets/app.css">
+<style>
+  /* 分享卡片：1200×630，复用站点的 token 和 .phone/.ask 的真实样式，
+     所以卡片上那块屏和官网上那块是同一套 CSS，不会各画各的。 */
+  html,body{margin:0;width:1200px;height:630px;overflow:hidden;background:var(--canvas)}
+  .card{display:flex;align-items:center;gap:56px;padding:0 76px;height:630px}
+  .col{flex:1 1 auto;min-width:0}
+  .brand{display:flex;align-items:center;gap:11px;font-size:25px;font-weight:600;
+         letter-spacing:-.4px;color:var(--ink);margin-bottom:34px}
+  .brand svg{display:block}
+  .card h1{font-size:66px;line-height:1.04;letter-spacing:-.9px;font-weight:600;margin:0}
+  .card p{font-size:26px;line-height:1.4;letter-spacing:-.4px;color:var(--ink-2);
+          margin:26px 0 0;max-width:25ch}
+  .card .tag{margin-top:40px;font-size:19px;color:var(--ink-2);letter-spacing:-.2px}
+  .card .tag b{font-weight:400;color:var(--ink)}
+  .shot{flex:0 0 auto}
+  .shot .phone{width:250px;margin:0;filter:drop-shadow(3px 5px 30px rgba(0,0,0,.22))}
+  .shot .ask{padding:38px 17px 17px;gap:6px}
+  .shot .ask .from{font-size:14px}
+  .shot .ask .fp{font-size:11.5px}
+  .shot .ask .host{font-size:21px}
+  .shot .ask .what{font-size:15px}
+  .shot .ask .pend{font-size:13px;padding-bottom:12px}
+  .shot .ask .pend .dot{width:8px;height:8px}
+  .shot .ask .acts{margin:0 -17px;padding:13px 17px 0}
+  .shot .ask button{font-size:17px;padding:11px 6px}
+</style></head>
+<body>
+<div class="card">
+  <div class="col">
+    <div class="brand">wanctl</div>
+    <h1>Your machines.<br>Your call.</h1>
+    <p>An AI agent gets your machines. Every command stops and waits for you.</p>
+    <div class="tag"><b>Open source</b> · Apache-2.0 · end-to-end encrypted</div>
+  </div>
+  <div class="shot">
+    <div class="phone">
+      <div class="body">
+        <div class="screen">
+          <span class="island"></span>
+          <div class="ask">
+            <div class="from">claude@workstation</div>
+            <div class="fp">SHA256:fJoz5aA…DOAEo=</div>
+            <div class="from">wants to run on</div>
+            <div class="host">bench-02</div>
+            <div class="what"><span class="tok">python</span> <span class="tok">train.py</span>
+              <span class="tok">--epochs</span> <span class="tok">3</span> <span class="tok">--resume</span></div>
+            <div class="pend mono"><span class="dot"></span><span class="pt">pending 0:07</span></div>
+            <div class="acts">
+              <button class="yes">Allow once</button>
+              <button class="alt">Always allow this</button>
+              <button class="no">Refuse</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body></html>
