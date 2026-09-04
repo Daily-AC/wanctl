@@ -38,6 +38,9 @@
     <a href="#fleet" data-opt data-en="Devices" data-zh="设备">Devices</a>
     <a href="#private" data-en="Security" data-zh="安全">Security</a>
     <a href="#install" data-en="Install" data-zh="安装">Install</a>
+    <!-- 文档站是第二个表面，不是页脚里的一条外链。它在 760px 以下也留着：
+         这一栏里先掉的是 Devices 和 How it works，它们在页面上滚一下就到。 -->
+    <a href="/docs/" data-en="Docs" data-zh="文档">Docs</a>
     <a href="https://github.com/Daily-AC/wanctl">GitHub</a>
   </nav>
   <button class="lang" id="lang" type="button" aria-label="Switch language">中文</button>
@@ -261,7 +264,7 @@
           Relay, portal and Postgres in one compose file. Nothing about your
           fleet ever reaches a machine you do not own.
         </p>
-        <a class="link-arrow" href="https://github.com/Daily-AC/wanctl/blob/main/docs/self-hosting.md"
+        <a class="link-arrow" href="/docs/self-hosting/"
            data-en="Read the self-hosting guide" data-zh="看自部署指南">Read the self-hosting guide</a>
       </div>
     </div>
@@ -270,12 +273,14 @@
 </main>
 
 <footer class="foot">
-  <!-- 文档入口。每条都实测 200 过，默认分支是 main（查过，不是猜的）。 -->
+  <!-- 前三条以前指向 GitHub 上的 markdown blob，现在指向文档站自己的页面：
+       同一份 markdown，排过版、双语外壳、不用先看懂一个仓库。
+       SECURITY.md / releases / 仓库首页仍旧留在 GitHub —— 那三样本来就是 GitHub 的东西。 -->
   <nav class="flinks">
-    <a href="https://github.com/Daily-AC/wanctl#readme" data-en="Docs" data-zh="文档">Docs</a>
-    <a href="https://github.com/Daily-AC/wanctl/blob/main/docs/architecture.md"
+    <a href="/docs/" data-en="Docs" data-zh="文档">Docs</a>
+    <a href="/docs/architecture/"
        data-en="Architecture" data-zh="架构">Architecture</a>
-    <a href="https://github.com/Daily-AC/wanctl/blob/main/docs/self-hosting.md"
+    <a href="/docs/self-hosting/"
        data-en="Run your own" data-zh="自己部署一套">Run your own</a>
     <a href="https://github.com/Daily-AC/wanctl/blob/main/SECURITY.md"
        data-en="Security" data-zh="安全">Security</a>
