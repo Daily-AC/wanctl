@@ -76,6 +76,10 @@ h2{
 .dark .lead{color:var(--on-dark-2)}
 .center{text-align:center}
 .mono{font-family:var(--mono);letter-spacing:0}
+/* 命令要能被逐字符读准：等宽处一律关连字，别让 -- 连成一道长划。 */
+.mono,.term,.ask .what,.cmdline code,.party .fp,.ledger code,.rows .host{
+  font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0;
+}
 
 /* ── 导航 ──────────────────────────────────────────────────────────── */
 .nav{
@@ -211,6 +215,52 @@ h2{
 .rows .host{font-family:var(--mono);font-size:14px;color:var(--ink-2);letter-spacing:0}
 .rows .meta{margin-left:auto;font-size:14px;color:var(--ink-2);white-space:nowrap}
 
+/* ── 端到端身份：两端对称，中间那道链路就是主体 ────────────────────
+   默认状态就是终局（headless / 无 JS 下看到的是已钉住的真相）。
+   JS 只在滚进视口时短暂加 .verifying 再摘掉，让它当着你的面钉一次。 */
+.pin .body{padding:30px 26px 28px;text-align:center}
+.party{display:flex;flex-direction:column;gap:5px;align-items:center}
+.party .who{font-size:15px;font-weight:600;letter-spacing:-.374px}
+.party .who em{font-style:normal;font-weight:400;color:var(--ink-2);margin-left:7px}
+.party .fp{
+  font-size:clamp(12px,1.45vw,15px);color:var(--ink);word-break:break-all;
+  transition:color .55s var(--ease);
+}
+.wireline{display:flex;align-items:center;gap:16px;margin:22px 0}
+.wire{
+  flex:1 1 auto;height:2px;border-radius:1px;background:var(--hairline);
+  position:relative;overflow:hidden;
+}
+.wire::after{
+  content:"";position:absolute;inset:0;background:var(--blue);
+  transform:scaleX(1);transition:transform .75s var(--ease);
+}
+/* 两端各自向中间画过来，在徽标处会合 —— 这才是「互相核对」的顺序 */
+.wireline .wire:first-child::after{transform-origin:left}
+.wireline .wire:last-child::after{transform-origin:right}
+.state{
+  flex:none;display:flex;align-items:center;gap:9px;
+  font-size:14px;color:var(--ink-2);white-space:nowrap;
+}
+.state .ring{
+  width:22px;height:22px;flex:none;border-radius:50%;
+  border:1.5px solid var(--blue);color:var(--blue);
+  display:grid;place-items:center;
+  transition:opacity .3s var(--ease) .55s,transform .35s var(--ease) .55s;
+}
+.state b{font-weight:400}
+
+.pin.verifying .party .fp{color:var(--ink-2)}
+.pin.verifying .wire::after{transform:scaleX(0)}
+.pin.verifying .state .ring{opacity:0;transform:scale(.5);transition-delay:0s}
+
+.ledger{
+  background:var(--canvas-2);border-top:1px solid var(--hairline);
+  padding:15px 26px 17px;display:flex;flex-direction:column;gap:5px;text-align:left;
+}
+.ledger .cap{font-size:14px;color:var(--ink-2)}
+.ledger code{font-size:15px;color:var(--ink);white-space:pre;overflow-x:auto;display:block;min-width:0}
+
 /* ── 安装 ──────────────────────────────────────────────────────────── */
 .cmdline{
   display:flex;align-items:stretch;max-width:600px;margin:28px auto 0;
@@ -246,9 +296,20 @@ h2{
   .kv dt{flex:none}
   .rows li{flex-wrap:wrap;gap:8px 12px}
   .rows .meta{margin-left:0;width:100%}
+  .party .who em{margin-left:6px}
+  .ledger code{font-size:13.5px;white-space:pre-wrap}
+  .wireline{flex-direction:column;gap:12px;margin:20px 0}
+  .wire{flex:none;width:100%;height:2px}
+  .state{white-space:normal;text-align:left}
+}
+
+/* 窄屏放不下一行 51 字的指纹：断成两行等长的，看着是有意为之而不是被挤爆的 */
+@media (max-width:499px){
+  .party .fp{font-size:13.5px;max-width:26ch;margin:0 auto}
 }
 
 @media (max-width:560px){
+  .panel .head .s{margin-left:0}
   .nav{gap:12px}
   .nav .links a[href="#decide"]{display:none}
   .nav .brand{font-size:16px}

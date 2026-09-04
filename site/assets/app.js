@@ -44,6 +44,7 @@
       you: 'you', scopeOnce: 'once', scopeAlways: 'always, this command',
       scopeRule: 'matched a signed rule', offline: 'offline',
       count: function (n, m) { return n + ' devices · ' + m + ' online'; },
+      verifying: 'Reading the other side\u2019s fingerprint\u2026',
       finale: 'Three commands. Three answers. Nothing you did not allow.',
       replay: 'Run the demo again'
     },
@@ -57,6 +58,7 @@
       you: '你', scopeOnce: '仅此一次', scopeAlways: '这条命令一直允许',
       scopeRule: '命中已签规则', offline: '离线',
       count: function (n, m) { return n + ' 台 · ' + m + ' 台在线'; },
+      verifying: '正在读取对方的指纹…',
       finale: '三条命令，三个回答。没有一件是你没允许的。',
       replay: '再跑一遍演示'
     }
@@ -87,7 +89,8 @@
   var st = { phase: 'asking', round: 0, rules: [], answers: 0, retried: false };
 
   var term = $('#term'), ask = $('#ask'), cred = $('#cred'),
-      credtime = $('#credtime'), rows = $('#rows'), fleetcount = $('#fleetcount');
+      credtime = $('#credtime'), rows = $('#rows'), fleetcount = $('#fleetcount'),
+      ledger = $('#ledger'), pin = $('#pin'), pinstate = $('#pinstate');
 
   function job() { return st.retried ? SAFER : SCRIPT[st.round]; }
 
@@ -181,6 +184,9 @@
     cred.innerHTML = row(k.by, t().you) + row(k.device, j.host, 1) +
                      row(k.from2, j.by, 1) + row(k.cmd, j.raw, 1) +
                      row(k.scope, ok ? scope : t().refusedWord);
+    /* 中转那边的一整条记录：INSERT INTO audit (namespace, device, event)。
+       没有命令、没有输出、没有文件名——就这四格。 */
+    if (ledger) ledger.textContent = 'acme   ' + j.host + '   dial   ' + credtime.textContent;
   }
 
   /* ── 决定 ──────────────────────────────────────────────────────── */
@@ -261,6 +267,29 @@
     }).join('');
     var on = DEVICES.filter(function (d) { return d.on; }).length;
     fleetcount.textContent = t().count(DEVICES.length, on);
+  }
+
+  /* ── 指纹当着你的面钉一次 ──────────────────────────────────────
+     CSS 里的默认状态就是终局，这里只是短暂退回未钉状态再放开。
+     无 JS、无头渲染、reduced-motion 三种情况下看到的都是已钉住的真相。 */
+  function playPin() {
+    if (!pin || !pinstate) return;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var settled = pinstate.innerHTML;
+    pin.classList.add('verifying');
+    pinstate.textContent = t().verifying;
+    setTimeout(function () {
+      pin.classList.remove('verifying');
+      setTimeout(function () { pinstate.innerHTML = settled; }, 620);
+    }, 620);
+  }
+  if (pin && 'IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (es) {
+      es.forEach(function (e) {
+        if (e.isIntersecting) { io.disconnect(); playPin(); }
+      });
+    }, { threshold: .35 });
+    io.observe(pin);
   }
 
   /* ── 语言 ──────────────────────────────────────────────────────── */

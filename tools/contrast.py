@@ -1,60 +1,85 @@
-import math
+"""对比度是算的，不是估的。
 
-def oklch_to_srgb(L, C, h):
-    hr = math.radians(h); a = C*math.cos(hr); b = C*math.sin(hr)
-    l_ = L + 0.3963377774*a + 0.2158037573*b
-    m_ = L - 0.1055613458*a - 0.0638541728*b
-    s_ = L - 0.0894841775*a - 1.2914855480*b
-    l, m, s = l_**3, m_**3, s_**3
-    r =  4.0767416621*l - 3.3077115913*m + 0.2309699292*s
-    g = -1.2684380046*l + 2.6097574011*m - 0.3413193965*s
-    bb=-0.0041960863*l - 0.7034186147*m + 1.7076147010*s
-    def enc(x):
-        x = max(0.0, min(1.0, x))
-        return 12.92*x if x <= 0.0031308 else 1.055*(x**(1/2.4)) - 0.055
-    return tuple(enc(v) for v in (r, g, bb))
+真源是 site/assets/app.css 的 :root —— 这里只读它，不再抄一份色值，
+省得像 LOTO 那版一样：调色板换了，校验工具还在验早就下线的颜色。
 
-def lum(srgb):
-    def lin(c):
-        return c/12.92 if c <= 0.04045 else ((c+0.055)/1.055)**2.4
-    r,g,b = (lin(c) for c in srgb)
-    return 0.2126*r + 0.7152*g + 0.0722*b
+  python3 tools/contrast.py
+"""
+import re
+import sys
+import pathlib
 
-def ratio(c1, c2):
-    a, b = lum(c1), lum(c2)
-    hi, lo = max(a,b), min(a,b)
-    return (hi+0.05)/(lo+0.05)
+CSS = pathlib.Path(__file__).resolve().parent.parent / 'site' / 'assets' / 'app.css'
 
-def hexs(srgb):
-    return '#' + ''.join('%02X' % round(max(0,min(1,c))*255) for c in srgb)
 
-T = {
- 'ground':  (0.972, 0.002,  250),
- 'surface': (0.988, 0.0015, 250),
- 'ink':     (0.185, 0.004,  250),
- 'ink-2':   (0.485, 0.006,  250),
- 'ink-3':   (0.640, 0.005,  250),
- 'line':    (0.885, 0.004,  250),
- 'line-2':  (0.815, 0.005,  250),
- 'tag':     (0.874, 0.184,  92),
- 'vermil':  (0.552, 0.196,  30),
- 'live':    (0.605, 0.155,  150),
-}
-rgb = {k: oklch_to_srgb(*v) for k,v in T.items()}
-for k in T: print('%-8s %s' % (k, hexs(rgb[k])))
+def tokens(css: str) -> dict:
+    root = re.search(r':root\s*\{(.*?)\}', css, re.S)
+    if not root:
+        sys.exit('no :root block in %s' % CSS)
+    out = {}
+    for name, value in re.findall(r'--([\w-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\s*;', root.group(1)):
+        out[name] = value
+    return out
 
-print('\n%-34s %6s  %s' % ('pair', 'ratio', 'verdict (body>=4.5, large>=3)'))
-pairs = [
- ('ink   on ground',  'ink','ground', 4.5),
- ('ink-2 on ground',  'ink-2','ground', 4.5),
- ('ink-3 on ground',  'ink-3','ground', 4.5),
- ('ink-2 on surface', 'ink-2','surface', 4.5),
- ('ink-3 on surface', 'ink-3','surface', 4.5),
- ('ink   on tag',     'ink','tag', 4.5),
- ('vermil on ground', 'vermil','ground', 4.5),
- ('vermil on surface','vermil','surface', 4.5),
- ('live  on ground',  'live','ground', 3.0),
+
+def srgb(h: str):
+    h = h.lstrip('#')
+    if len(h) == 3:
+        h = ''.join(c * 2 for c in h)
+    return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def lum(c):
+    def lin(x):
+        return x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4
+    r, g, b = (lin(v) for v in c)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def ratio(a, b):
+    la, lb = lum(srgb(a)), lum(srgb(b))
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+# (前景, 背景, 门槛, 说明)。门槛 4.5 = 正文，3.0 = 大字与图形。
+# 承载文字的每一对都必须在这张表里；只做装饰的那对要写清楚它不承载文字。
+PAIRS = [
+    ('ink',       'canvas',   4.5, 'body on white'),
+    ('ink',       'canvas-2', 4.5, 'body on grey tile'),
+    ('ink-2',     'canvas',   4.5, 'secondary on white'),
+    ('ink-2',     'canvas-2', 4.5, 'secondary on grey tile'),
+    ('blue',      'canvas',   4.5, 'links on white'),
+    ('blue',      'canvas-2', 4.5, 'links on grey tile'),
+    ('on-dark',   'dark',     4.5, 'body on dark tile'),
+    ('on-dark-2', 'dark',     4.5, 'secondary on dark tile'),
+    ('canvas',    'blue',     4.5, 'button label on Action Blue'),
+    ('blue',      'canvas',   3.0, 'the wire and the ring, as graphics'),
+    ('hairline',  'canvas',   1.0, 'hairline — a rule, not text'),
+    ('ink-3',     'canvas',   4.5, 'ink-3 — DECORATION ONLY, expected to fail'),
 ]
-for name,a,b,need in pairs:
-    r = ratio(rgb[a], rgb[b])
-    print('%-34s %6.2f  %s' % (name, r, 'PASS' if r >= need else 'FAIL (need %.1f)' % need))
+EXPECTED_FAIL = {'ink-3'}
+
+t = tokens(CSS.read_text(encoding='utf-8'))
+print('tokens read from %s\n' % CSS.relative_to(CSS.parents[2]))
+for k in sorted(t):
+    print('  --%-10s %s' % (k, t[k]))
+
+print('\n%-38s %6s  %s' % ('pair', 'ratio', 'verdict'))
+bad = 0
+for fg, bg, need, note in PAIRS:
+    if fg not in t or bg not in t:
+        sys.exit('unknown token in pair: %s on %s' % (fg, bg))
+    r = ratio(t[fg], t[bg])
+    ok = r >= need
+    if ok:
+        verdict = 'PASS  (%s)' % note
+    elif fg in EXPECTED_FAIL:
+        verdict = 'fails by design  (%s)' % note
+    else:
+        verdict = 'FAIL need %.1f  (%s)' % (need, note)
+        bad += 1
+    print('%-38s %6.2f  %s' % ('%s on %s' % (fg, bg), r, verdict))
+
+print('\n%d unexpected failure(s)' % bad)
+sys.exit(1 if bad else 0)
