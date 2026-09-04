@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in · wanctl</title>
+<link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css?v={{.V}}">
+</head>
+
+<!-- 登录页。在此之前它不存在：匿名访客打开 / 会被 303 到 /auth/login，
+     而那个端点不渲染任何东西、立刻 302 去 GitHub —— 全程看不到一个 wanctl
+     界面，却被要求把一个 OAuth 应用授权给一个自己没见过的东西，
+     而「这是邀请制」要等授权完了才在下一张页面上第一次说。
+     这一页要在跳走之前说清三件事：你在哪个实例、它是邀请制、GitHub 会被要走什么。 -->
+<body class="auth">
+
+<header class="top">
+  <span class="brand"><svg class="mk" viewBox="0 0 32 32" aria-hidden="true"><path d="M5.6 12.4 10.2 21.8 15.2 14.6 19.6 21.8 26.4 7.6" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"/></svg>wanctl</span>
+  <div class="tools">
+    <button class="chip" id="lang">中文</button>
+  </div>
+</header>
+
+<main>
+  <h1 data-en="Sign in" data-zh="登录">Sign in</h1>
+  <!-- 这一行就是「你被送去授权给谁」的答案，所以它紧跟标题，不是页脚小字。 -->
+  <p class="host mono">{{.Host}}</p>
+
+  <!-- 这一句必须在按钮之前。以前它在下一张页面上，也就是你已经把 OAuth
+       应用授权出去之后 —— 顺序反了。产品是什么这里一个字都不说：来的人
+       要么从官网点过来（已经看过），要么是被人邀请来的（邀请他的人说过）。 -->
+  <p class="lead"
+     data-en="This instance is invite-only — an admin still has to let you in."
+     data-zh="这个实例是邀请制的 —— 还需要管理员放你进来。">This instance is invite-only — an admin still has to let you in.</p>
+
+  <!-- GitHub 的标记不是装饰：这一页存在的理由就是让人看清自己要被送到哪去，
+       而那个形状比任何一行字都快。 -->
+  <a class="btn go" href="{{.Start}}">
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+    <span data-en="Continue with GitHub" data-zh="用 GitHub 继续">Continue with GitHub</span>
+  </a>
+
+  <!-- 授权一个 OAuth 应用是一次真实的权限授予。说清索取范围，是这一页
+       跟一封钓鱼邮件之间的差别。请求里没有 scope 参数，所以这句是真的。 -->
+  <p class="fine"
+     data-en="No GitHub permissions are requested — only your public profile."
+     data-zh="不向 GitHub 申请任何权限，只读你的公开资料。">No GitHub permissions are requested — only your public profile.</p>
+</main>
+
+<script src="/assets/auth.js?v={{.V}}"></script>
+</body>
+</html>

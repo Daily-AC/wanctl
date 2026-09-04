@@ -159,7 +159,36 @@ func safeNext(next string) string {
 	return next
 }
 
+// handleAuthLogin renders the sign-in page. Until 2026-09-04 this path *was*
+// the redirect: an anonymous visitor to / got a 303 here and this handler
+// bounced them straight to github.com without rendering anything, so they were
+// asked to authorize an OAuth application for a product they had never been
+// shown — and only learned the instance was invite-only on the next page,
+// after granting it. The page names the instance, says invite-only before the
+// button rather than after it, and states what GitHub is asked for.
+// /auth/github is the leg that actually starts the flow.
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.oauthEnabled() {
+		http.NotFound(w, r)
+		return
+	}
+	next := safeNext(r.URL.Query().Get("next"))
+	// Already signed in: the page would offer to do what is already done.
+	if s.principalFrom(r) != nil {
+		http.Redirect(w, r, next, http.StatusSeeOther)
+		return
+	}
+	s.render(w, "login.html", map[string]any{
+		"Host":  s.publicHost(r),
+		"Start": "/auth/github?next=" + url.QueryEscape(next),
+	})
+}
+
+// handleAuthStart mints the CSRF state and hands the visitor to GitHub. It is
+// a separate path from the page so the state cookie is minted when the button
+// is pressed: state lives ten minutes, and a login page left open longer than
+// that would otherwise fail on a click that looks perfectly ordinary.
+func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
 	if !s.oauthEnabled() {
 		http.NotFound(w, r)
 		return
@@ -438,8 +467,7 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, pendingPage, htmlEscape(p.Login))
+	s.render(w, "pending.html", map[string]any{"Login": p.Login})
 }
 
 func (s *Server) handleAuthRedeem(w http.ResponseWriter, r *http.Request) {
@@ -474,44 +502,3 @@ func (s *Server) handleAuthRedeem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, detail, http.StatusBadGateway)
 	}
 }
-
-func htmlEscape(s string) string {
-	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;")
-	return r.Replace(s)
-}
-
-// pendingPage matches the enroll page's cream styling: same product, same room.
-const pendingPage = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>等待邀请 · wanctl</title><style>
-:root{--cream:#FBF6EC;--ink:#2c2a26;--brand:#E08D3C;--soft:#efe7d6}
-*{box-sizing:border-box}body{margin:0;font-family:-apple-system,system-ui,"PingFang SC",sans-serif;
-background:var(--cream);color:var(--ink);display:flex;min-height:100vh;align-items:center;justify-content:center}
-.card{background:#fff;border:1px solid var(--soft);border-radius:18px;padding:40px 44px;max-width:440px;
-box-shadow:0 8px 30px rgba(0,0,0,.06);text-align:center}
-h1{font-size:20px;margin:0 0 6px}
-.sub{color:#8a857c;font-size:14px;margin-bottom:26px}
-input{width:100%%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:16px;padding:12px 14px;
-border:2px dashed var(--brand);border-radius:12px;background:var(--cream);color:var(--ink);text-align:center;outline:none}
-button{margin-top:14px;width:100%%;padding:12px;border:0;border-radius:12px;background:var(--brand);color:#fff;
-font-size:15px;font-weight:600;cursor:pointer}
-.err{margin-top:12px;font-size:13px;color:#c0392b;min-height:18px}
-.tip{margin-top:18px;font-size:12px;color:#aaa39a;line-height:1.7}
-a{color:var(--brand)}</style></head><body><div class="card">
-<h1>等待邀请</h1>
-<div class="sub">你已用 GitHub 账号 <b>%s</b> 登录，但这个 wanctl 实例是邀请制的。</div>
-<input id="code" placeholder="粘贴邀请码 winv_…" autocomplete="off">
-<button id="go">兑换邀请码</button>
-<div class="err" id="err"></div>
-<div class="tip">没有邀请码？请联系这个实例的管理员为你创建邀请，<br>或预先登记你的 GitHub 用户名。</div>
-</div><script>
-function csrf(){var m=document.cookie.match(/(?:^|; )wanctl_csrf=([^;]*)/);return m?decodeURIComponent(m[1]):""}
-document.getElementById('go').onclick=function(){
-  var code=document.getElementById('code').value.trim();
-  var err=document.getElementById('err');
-  if(!code){err.textContent='请先粘贴邀请码';return}
-  fetch('/auth/redeem',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf()},
-    body:JSON.stringify({code:code})}).then(function(r){
-    if(r.ok){location.href='/'}else{r.text().then(function(t){err.textContent=t||('兑换失败 ('+r.status+')')})}
-  }).catch(function(){err.textContent='网络错误，请重试'});
-};
-</script></body></html>`

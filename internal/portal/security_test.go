@@ -176,7 +176,7 @@ func TestWhoamiDisabledByDefaultAndRedactsDebugHeaders(t *testing.T) {
 }
 
 func TestMarkdownLinksAllowSafeRelativeOrHTTPURLs(t *testing.T) {
-	b, err := assets.ReadFile("index.html")
+	b, err := assets.ReadFile("web/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
