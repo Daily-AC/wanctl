@@ -167,7 +167,14 @@ h2{
 }
 .nav .brand:hover{text-decoration:none}
 .mk{width:19px;height:19px;flex:none;display:block}
-.nav .links{display:flex;gap:clamp(13px,2vw,26px);margin-left:auto}
+/* min-width:0 + overflow:hidden 是最后一道保险，不是版式的一部分。断点该掉的链接
+   已经掉干净了（760 / 560 / 440 / 360 四档），正常情况下这里一个字也不会被裁。
+   但访客的字号不归我们管：甲方那台 412px 的安卓实测把每个字渲宽 10%（字标 76.4 → 84），
+   于是 388px 的一栏胀到 427，整条顶栏溢出，被挤出屏幕的正好是最右边的语言开关 ——
+   中文访客第一个要按的那个键。没有这一行，链接栏拒绝收缩（nowrap 的 min-content
+   就是它的下限），溢出只能由整条 header 承担；有了这一行，超出的部分在链接栏自己
+   那里被裁掉，开关原地不动。**要被牺牲的永远是链接，不是开关。** */
+.nav .links{display:flex;gap:clamp(13px,2vw,26px);margin-left:auto;min-width:0;overflow:hidden}
 .nav .links a{color:var(--ink-2);white-space:nowrap}
 .nav .links a:hover{color:var(--ink);text-decoration:none}
 /* 不画边框：分隔线拿掉之后，一条描边胶囊会成为整条导航里最重的东西，
@@ -548,6 +555,8 @@ h2{
   .panel .head .s{margin-left:0}
   .nav{gap:12px}
   .nav .links a[href="#decide"]{display:none}
+  /* 安全是页内锚点，往下滚一屏就到；在这个宽度上它是这一栏里最先该让位的一条。 */
+  .nav .links a[href="#private"]{display:none}
   .nav .brand{font-size:16px}
 
   /* ── 手机上的减法 ────────────────────────────────────────────────
@@ -584,6 +593,24 @@ h2{
      顺便把两个选项做成一样宽的按压面。 */
   .picker{flex-direction:column;align-items:stretch;gap:10px;margin-top:24px}
   .seg button{flex:1 1 0;padding:8px 10px}
+}
+
+/* ── 顶栏的落链梯 ────────────────────────────────────────────────────
+   一条横带装不下的时候，掉的永远是链接，语言开关一步都不让。窄下去的顺序是
+   设备（760）→ 怎么工作、安全（560）→ GitHub（440）→ 文档（360），安装留到最后：
+   访客来这个站就为那一件事。开关也从不掉：中文访客第一个要按的就是它。
+
+   断点不是照着 iPhone 的分辨率排的，是照着「英文那一栏的自然宽度不超过视口的
+   八成」排的 —— 留下的两成给访客自己的字号设置。甲方那台 412px 的安卓把每个字
+   渲宽约 10%（实测：字标 76.4 → 84、GitHub 45.3 → 50），四条链接那一栏 388 胀到
+   427，超出 412 十五个像素，被推出屏幕的正是最右边的开关（issue #25）。
+   自然宽（英文，实测）：安全+安装+文档+GitHub 388、安装+文档+GitHub 322、
+   安装+文档 266、安装 220 —— 每一档除以断点都落在 0.74 以下。 */
+@media (max-width:440px){
+  .nav .links a[href^="https://github.com"]{display:none}
+}
+@media (max-width:360px){
+  .nav .links a[href="/docs/"]{display:none}
 }
 
 /* ── 中文 ────────────────────────────────────────────────────────────
