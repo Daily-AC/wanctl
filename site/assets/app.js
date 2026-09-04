@@ -4,6 +4,13 @@
  * 两端都是页内模拟；官网上不声称这是真机，措辞一律「demo / 演示」。
  * 所有设备名、域名、路径都是虚构示例——这是公开页面，不渲染任何真实部署信息。
  *
+ * 开场（这一段是 09-04 加的，起因：静止的首屏被当成一张图片）
+ *   落地时手机屏是黑的 —— DESIGN.md 第 1 节那句「旁边手机亮了一下，它在问你」，
+ *   现在真的亮一下：笔记本带光标敲出命令 → 终端开始**计时**等待 → 手机亮起，请求升上来。
+ *   会走字的东西不可能是一张图片，所以那个秒表是主要的活体证明，不是装饰。
+ *   醒着是 CSS 的默认状态，睡着只是 JS 临时加的一件事 ——
+ *   无 JS / 无头渲染 / prefers-reduced-motion 三种情况看到的都是醒着的样子。
+ *
  * 状态机
  *   asking   手机上挂着一条请求，等 allow / always / refuse
  *   running  命令在跑，输出流进笔记本
@@ -15,8 +22,23 @@
 (function () {
   'use strict';
 
+  var REDUCED = !!(window.matchMedia &&
+                   window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
   var $ = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+  /* 手机屏窄，命令必然要折行。浏览器允许在连字符后断开，于是
+     `--epochs` 会被断成 `--` / `epochs` —— 读起来像两个不同的参数。
+     每个 token 各自 nowrap，折行就只发生在空格处；
+     长到一行装不下的 token（如 --query-gpu=memory.used）才放开内部断行，
+     那时断点已经离开头的 -- 很远，不会再造出一个假参数。 */
+  var TOK_FITS = 16;
+  function cmdHTML(s) {
+    return String(s).split(' ').map(function (w) {
+      return '<span class="tok' + (w.length > TOK_FITS ? ' split' : '') + '">' + esc(w) + '</span>';
+    }).join(' ');
+  }
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
@@ -45,6 +67,8 @@
       scopeRule: 'matched a signed rule', offline: 'offline',
       count: function (n, m) { return n + ' devices · ' + m + ' online'; },
       verifying: 'Reading the other side\u2019s fingerprint\u2026',
+      nudge: 'still waiting \u2014 it\u2019s your call',
+      pending: 'pending',
       finale: 'Three commands. Three answers. Nothing you did not allow.',
       replay: 'Run the demo again'
     },
@@ -59,6 +83,8 @@
       scopeRule: '命中已签规则', offline: '离线',
       count: function (n, m) { return n + ' 台 · ' + m + ' 台在线'; },
       verifying: '正在读取对方的指纹…',
+      nudge: '还在等 —— 这事得你点头',
+      pending: '已等待',
       finale: '三条命令，三个回答。没有一件是你没允许的。',
       replay: '再跑一遍演示'
     }
@@ -81,6 +107,10 @@
       raw: 'nvidia-smi --query-gpu=memory.used --format=csv',
       out: ['memory.used [MiB]', '21344 MiB'] }
   ];
+  /* transport.ShortFingerprint 的形状：fp[:14] + … + fp[-6:]。
+     指纹是虚构的，格式是真的，和「端到端身份」那一屏同源。 */
+  var CTRL_FP = 'SHA256:fJoz5aA\u2026DOAEo=';
+
   var SAFER = { host: 'bench-02', by: 'claude@workstation',
     cmd: 'wanctl exec --target bench-02 "python train.py --dry-run"',
     raw: 'python train.py --dry-run',
@@ -90,7 +120,16 @@
 
   var term = $('#term'), ask = $('#ask'), cred = $('#cred'),
       credtime = $('#credtime'), rows = $('#rows'), fleetcount = $('#fleetcount'),
-      ledger = $('#ledger'), pin = $('#pin'), pinstate = $('#pinstate');
+      ledger = $('#ledger'), pin = $('#pin'), pinstate = $('#pinstate'),
+      phone = $('#phone');
+
+  /* 重放一段动画：先摘类再强制重排，否则同名 animation 不会重新开始 */
+  function replay(el, cls) {
+    if (!el || REDUCED) return;
+    el.classList.remove(cls);
+    void el.offsetWidth;
+    el.classList.add(cls);
+  }
 
   function job() { return st.retried ? SAFER : SCRIPT[st.round]; }
 
@@ -141,20 +180,58 @@
     })();
   }
 
+  /* ── 等待是有时长的 ────────────────────────────────────────────
+     秒表每秒跳一次。这既是活体证明（照片不会走字），也是真的：
+     wanctl exec 就是阻塞在那儿等人回答。 */
+  var waitEl = null, waitAt = 0, waitTick = null, nudged = false;
+
+  function clock(s) { return Math.floor(s / 60) + ':' + (s % 60 < 10 ? '0' : '') + (s % 60); }
+  function waited() { return waitAt ? Math.floor((Date.now() - waitAt) / 1000) : 0; }
+  /* 手机上也挂一份秒表：移动端终端在折线以下，落地时看不见那一份 */
+  function pendText() { return t().pending + ' ' + clock(waited()); }
+
+  function startWait() {
+    stopWait();
+    waitEl = line('wait', t().waiting + '  0:00');
+    waitAt = Date.now();
+    waitTick = setInterval(function () {
+      if (!waitEl || !waitEl.parentNode) { stopWait(); return; }
+      var n = waited();
+      waitEl.textContent = t().waiting + '  ' + clock(n);
+      /* 只改那颗时钟的文本 —— 早先写成 pend.textContent，第一次跳动就把
+         那颗活体指示点一起抹掉了。 */
+      var pt = ask.querySelector('.pend .pt');
+      if (pt) pt.textContent = pendText();
+      /* 十秒还没人动，让 agent 自己再说一句 —— 不给页面加新元素 */
+      if (n >= 10 && !nudged) { nudged = true; line('wait', t().nudge); }
+    }, 1000);
+  }
+  function stopWait() {
+    if (waitTick) { clearInterval(waitTick); waitTick = null; }
+    waitEl = null;
+  }
+
   /* ── 手机屏 ────────────────────────────────────────────────────── */
   function renderAsk() {
     var j = job();
     if (st.phase !== 'asking' || !j) return;
     ask.innerHTML =
       '<div class="from">' + esc(j.by) + '</div>' +
+      '<div class="fp">' + esc(CTRL_FP) + '</div>' +
       '<div class="from">' + esc(t().from) + '</div>' +
       '<div class="host">' + esc(j.host) + '</div>' +
-      '<div class="what">' + esc(j.raw) + '</div>' +
+      '<div class="what">' + cmdHTML(j.raw) + '</div>' +
+      '<div class="pend mono"><span class="dot"></span>' +
+        '<span class="pt">' + esc(pendText()) + '</span></div>' +
       '<div class="acts">' +
-        '<button class="yes"  data-act="y">' + esc(t().once) + '</button>' +
+        '<button class="yes breathe" data-act="y">' + esc(t().once) + '</button>' +
         '<button class="alt"  data-act="a">' + esc(t().always) + '</button>' +
         '<button class="no"   data-act="n">' + esc(t().refuse) + '</button>' +
       '</div>';
+    /* 「需要你」= 内容升上来 + 手机抬一下。命中已签规则那轮走 renderIdle，
+       什么都不动 —— 动=需要你，不动=不需要你，这个区别本身就在讲产品。 */
+    replay(ask, 'rise');
+    replay(phone, 'attn');
   }
   function renderDone(ok) {
     ask.innerHTML =
@@ -195,6 +272,7 @@
     var j = job();
     if (!j) return;
 
+    stopWait();
     if (v === 'n') {
       st.phase = 'refused';
       renderDone(false);
@@ -203,7 +281,7 @@
       setTimeout(function () {
         if (st.retried) { st.round++; st.retried = false; next(); return; }
         st.retried = true; st.phase = 'asking';
-        type(SAFER.cmd, false, function () { line('wait', t().waiting); renderAsk(); });
+        type(SAFER.cmd, false, function () { startWait(); renderAsk(); });
       }, 1300);
       return;
     }
@@ -219,6 +297,7 @@
   }
 
   function next() {
+    stopWait();
     var cur = SCRIPT[st.round];
     if (!cur) { finale(); return; }
     var hit = ruleHit(cur);
@@ -235,12 +314,13 @@
     st.phase = 'asking';
     type(cur.cmd, false, function () {
       if (cur.lesson && st.rules.length) line('wait', t().lesson);
-      line('wait', t().waiting);
+      startWait();
       renderAsk();
     });
   }
 
   function finale() {
+    stopWait();
     st.phase = 'done';
     line('', '');
     line('cmd', t().finale);
@@ -293,7 +373,7 @@
   }
 
   /* ── 语言 ──────────────────────────────────────────────────────── */
-  function applyLang(l) {
+  function applyLang(l, animate) {
     lang = l;
     document.documentElement.lang = l === 'zh' ? 'zh-CN' : 'en';
     $('#lang').textContent = l === 'en' ? '中文' : 'EN';
@@ -302,10 +382,10 @@
       if (v != null) el.innerHTML = v;
     });
     renderFleet();
-    boot(true);
+    boot(!!animate);
     try { localStorage.setItem('wanctl.lang', l); } catch (_) {}
   }
-  $('#lang').addEventListener('click', function () { applyLang(lang === 'en' ? 'zh' : 'en'); });
+  $('#lang').addEventListener('click', function () { applyLang(lang === 'en' ? 'zh' : 'en', false); });
 
   var copy = $('#copy');
   copy.addEventListener('click', function () {
@@ -323,8 +403,13 @@
     }
   });
 
-  /* ── 启动：首屏一次画满，不靠动画才可见 ────────────────────────── */
-  function boot(instant) {
+  /* ── 启动 ──────────────────────────────────────────────────────
+     boot(true) 播开场，boot(false) 直接落到终局（切语言时用，
+     没人想为了换个语言再看一遍四秒的开场）。
+     两条路的**终局完全相同**，所以无头渲染和 reduced-motion 走短路也不缺内容。 */
+  function boot(animate) {
+    stopWait();
+    if (typer) { clearTimeout(typer); typer = null; }
     st = { phase: 'asking', round: 0, rules: [], answers: 0, retried: false };
     term.innerHTML = '';
     cred.innerHTML = '';
@@ -337,18 +422,35 @@
       line('out', '  ' + d.host + (d.on ? '   online   ' + d.via : '   offline'));
     });
     line('out', '');
-    type(j.cmd, instant !== false, function () { line('wait', t().waiting); renderAsk(); });
+
+    if (!animate || REDUCED) {
+      if (phone) phone.classList.remove('asleep');
+      type(j.cmd, true, function () { startWait(); renderAsk(); });
+      return;
+    }
+    if (phone) phone.classList.add('asleep');
+    setTimeout(function () {
+      type(j.cmd, false, function () {
+        startWait();
+        setTimeout(function () {
+          if (phone) phone.classList.remove('asleep');
+          renderAsk();
+        }, 240);
+      });
+    }, 420);
   }
 
   var saved = null;
   try { saved = localStorage.getItem('wanctl.lang'); } catch (_) {}
-  if (saved === 'zh' || (!saved && /^zh/i.test(navigator.language || ''))) applyLang('zh');
+  if (saved === 'zh' || (!saved && /^zh/i.test(navigator.language || ''))) applyLang('zh', true);
   else { renderFleet(); boot(true); }
 
   window.__demo = {
     state: function () {
       return { phase: st.phase, round: st.round, rules: st.rules.slice(),
-               answers: st.answers, retried: st.retried, lang: lang };
+               answers: st.answers, retried: st.retried, lang: lang,
+               asleep: !!(phone && phone.classList.contains('asleep')),
+               waiting: waitEl ? waitEl.textContent : null, nudged: nudged };
     },
     act: act, reset: function () { location.reload(); }
   };
