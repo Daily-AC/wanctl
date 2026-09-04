@@ -81,8 +81,10 @@
   <!-- 深色屏：审批凭证。主体在右 —— 那是「你」的回答，落在首屏手机所在的那一侧 -->
   <section class="tile dark split chapter" id="decide">
     <div class="say">
+    <!-- 中文标题里的 .cl 是分句盒子：浏览器可以在任意两个汉字之间断行，不包的话这句会
+         被断成「什 / 么」。理由和实测见 app.css 的「中文」一节。 -->
     <h2 data-en="Nothing runs until you say yes."
-        data-zh="你不点头，什么都不会跑。">Nothing runs until you say yes.</h2>
+        data-zh="&lt;span class=&quot;cl&quot;&gt;你不点头，&lt;/span&gt;&lt;span class=&quot;cl&quot;&gt;什么都不会跑。&lt;/span&gt;">Nothing runs until you say yes.</h2>
     <p class="lead"
        data-en="The device decides locally. A rule you signed can let a command through; anything else waits for a person. Every answer is written down."
        data-zh="策略在设备本地判定。命中你签过的规则就放行，其余一律等人。每一次回答都会被记下来。">
@@ -231,7 +233,7 @@
   <section class="tile grey" id="relay">
     <div class="say">
       <h2 data-en="One relay in the middle. Ours, or yours."
-          data-zh="中间那台 relay。我们的，或者你自己的。">One relay in the middle. Ours, or yours.</h2>
+          data-zh="&lt;span class=&quot;cl&quot;&gt;中间那台 relay。&lt;/span&gt;&lt;span class=&quot;cl&quot;&gt;我们的，或者你自己的。&lt;/span&gt;">One relay in the middle. Ours, or yours.</h2>
       <p class="lead"
          data-en="Every device dials one relay, and it never sees inside your sessions either way. We run one. The whole thing is also a compose file."
          data-zh="每台设备都拨向一台 relay，而无论用哪台，它都看不见你会话的内容。我们跑了一台；整套东西也就是一个 compose 文件。">

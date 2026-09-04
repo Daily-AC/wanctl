@@ -522,6 +522,13 @@ h2{
   .wireline{flex-direction:column;gap:12px;margin:20px 0}
   .wire{flex:none;width:100%;height:2px}
   .state{white-space:normal;text-align:left}
+  /* 左对齐的中文段落在窄屏上不能用 balance：汉字可以在任意两字之间断开，于是 balance
+     为了把几行拉齐会主动把行做短 —— 390 下实测一行只排到 13~14 字，而这一栏放得下 19 字，
+     左对齐时右边就恒定空出一条一指宽的白，一栏看着像浮在另一栏里。
+     居中的海报 lead（首屏、安全模型、安装）**不在此列**：那三处正是 balance 的本行，
+     三行等长居中是它该有的样子，实测也确实比填满好看。宽屏一律不动。 */
+  :lang(zh) .split .lead,
+  :lang(zh) #relay .lead{text-wrap:pretty}
 }
 
 /* 窄屏放不下一行 51 字的指纹：断成两行等长的，看着是有意为之而不是被挤爆的 */
@@ -535,6 +542,63 @@ h2{
   .nav .links a[href="#decide"]{display:none}
   .nav .brand{font-size:16px}
 }
+
+/* ── 中文 ────────────────────────────────────────────────────────────
+   上面那套排版是给 Schibsted Grotesk 的拉丁字母调的，原样套到汉字上有三处不对：
+     · 负字距是给大 x-height 的拉丁大字号调的，落到全宽方块的汉字上是把笔画互相压住；
+     · 1.47 的行高对没有升降部、字面占满全宽的汉字太紧；
+     · 一行里的汉字掉到系统 CJK 字体，而同一行的拉丁字母和数字仍留在 Schibsted，
+       两者的 x-height 和笔画粗细都不同，于是每一句混排都像是拼起来的。
+   lang 属性由 app.js 的 applyLang 翻（zh-CN / en），所以这一整块不需要 JS 配合。 */
+:lang(zh){
+  /* 一行只有一种字体：系统 CJK 无衬线**连同它自己的那套拉丁**。
+     macOS 走 -apple-system —— SF Pro 的拉丁配 PingFang 的汉字，苹果本来就是配套设计的；
+     Windows 落到微软雅黑，Linux / Android 落到思源黑体。三条路各自都自带拉丁，
+     所以「wanctl 0.3.4」这种混排里的字母和数字不会再是外来的。 */
+  --sans:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB',
+         'Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC',sans-serif;
+}
+/* 字标是品牌那一处例外：它只有拉丁，留在 Schibsted Grotesk 上，连同它的负字距。 */
+:lang(zh) .nav .brand{font-family:'Schibsted Grotesk',sans-serif}
+
+/* 字距归零。下面这份清单就是 app.css 里所有负 letter-spacing 的去处，两处故意不在里面：
+   .nav .brand（字标，见上）和 .door .addr（内容永远是 wanctl.z10.dev / docker compose up，
+   等宽拉丁，那 -.2px 是给 JetBrains Mono 调的）。等宽的其余各处本来就是 0。 */
+:lang(zh) body,
+:lang(zh) h1,
+:lang(zh) h2,
+:lang(zh) .tile.chapter h2,
+:lang(zh) .nav,
+:lang(zh) .ask .from,
+:lang(zh) .ask .host,
+:lang(zh) .ask button,
+:lang(zh) .ask .doneword,
+:lang(zh) .panel .head .t,
+:lang(zh) .rows .name,
+:lang(zh) .party .who,
+:lang(zh) .lesson .claim,
+:lang(zh) .seg button{letter-spacing:0}
+
+/* 行高：正文 1.6，标题 1.2。 */
+:lang(zh) body{line-height:1.6}
+:lang(zh) .lead,:lang(zh) .note,:lang(zh) .door .d{line-height:1.6}
+:lang(zh) h1,:lang(zh) h2,:lang(zh) .tile.chapter h2{line-height:1.2}
+
+/* 两扇门那两段收尾不留孤字（原先最后一行只剩一个「器。」）。
+   实测 pretty 在 390 与 1440 上都不比默认换行差，所以它是白捡的。
+   `.lead` 不在这里：它带着 text-wrap:balance，宽屏上 balance 更好，
+   窄屏上反过来 —— 那条只在上面的窄屏媒体查询里翻。 */
+:lang(zh) .door .d{text-wrap:pretty}
+
+/* 中文标题只在标点处换行。
+   浏览器允许在任意两个汉字之间断开，于是「你不点头，什么都不会跑。」这一句实测三种
+   换行模式全都难看：balance 断成「什 | 么」、pretty 断成「不 | 会」、默认换行留下孤字
+   「跑。」。word-break:auto-phrase 在 zh-CN 上是**空操作**（实测断点一个都没动，
+   Chrome 的分词换行目前只对日文生效），别加。
+   办法是把每个分句包成 inline-block：盒子是原子的，断点只能落在分句之间；
+   分句自己一行装不下时它照样会在内部换行，不会溢出。
+   只有实测断得难看的标题才包 —— 目前是 #decide 和 #relay 两条。 */
+.cl{display:inline-block}
 
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
