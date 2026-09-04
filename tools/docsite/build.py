@@ -334,10 +334,11 @@ FOOT = """
        data-en="Releases" data-zh="版本">Releases</a>
     <a href="https://github.com/Daily-AC/wanctl">GitHub</a>
   </nav>
+  <!-- 右边那句「本站由仓库里的 markdown 生成」已经砍掉：它是说给没人听的，
+       想找源码的人去仓库就是了。官网页脚右边那句留着，它讲的是页面上的演示数据是假的
+       —— 那句对读者有用。 -->
   <div class="row">
     <span data-en="Open source, Apache-2.0." data-zh="开源，Apache-2.0。">Open source, Apache-2.0.</span>
-    <span class="end mono" data-en="Every page here is generated from the markdown in the repository."
-          data-zh="这里的每一页都由仓库里的 markdown 生成。">Every page here is generated from the markdown in the repository.</span>
   </div>
 </footer>
 

@@ -100,9 +100,13 @@ body.docs{font-size:16px;line-height:1.65;letter-spacing:-.2px}
 
 /* ── 正文排版 ──────────────────────────────────────────────────────
    大而紧排的标题，但比官网小一档：这里的标题是导航，不是主张。 */
+/* balance 而不是 pretty：中文标题在这个宽度上会断成很不匀的两行
+   （「把一台设备变成「可远程控制」（Mac」/「/ Linux）」——第二行只剩一个尾巴）。
+   pretty 只管最后一行不落单，匀不匀它不管；balance 才会把几行拉到差不多长。
+   标题一共就两三行，balance 的性能代价在这个规模上不存在。 */
 .dbody article h1{
   margin:0 0 6px;font-size:clamp(30px,3.4vw,38px);font-weight:600;
-  line-height:1.12;letter-spacing:-.5px;
+  line-height:1.12;letter-spacing:-.5px;text-wrap:balance;
 }
 .dbody article h2{
   margin:44px 0 12px;font-size:24px;font-weight:600;line-height:1.2;
