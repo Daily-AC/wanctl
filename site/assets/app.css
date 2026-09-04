@@ -96,6 +96,17 @@ a:hover{text-decoration:underline}
 /* 首屏顶上已经有导航条了，不需要再来一整份上留白 ——
    省下来的高度给舞台，好让手机上那个蓝按钮落在折线以上（它是要人去点的东西）。 */
 .tile.hero{padding-top:clamp(32px,3.6vw,52px)}
+
+/* 三档配额，不是五段等权。之前每一段的上下内边距都是 88px，于是产品的命题
+   （「你不点头，什么都不会跑」）和一张设备清单拿到完全相同的视觉权重。
+     chapter 命题   —— 双倍空间，标题接近 hero 尺度，下面还有一条通栏的收尾
+     （默认）二级   —— 消解疑虑的那一屏，维持原样
+     minor   清单   —— 压紧，标题降一档；它只是在说「有哪些机器」 */
+.tile.chapter{padding-top:clamp(72px,8.6vw,124px);padding-bottom:clamp(58px,6.4vw,88px)}
+.tile.chapter h2{font-size:clamp(34px,4.8vw,52px);line-height:1.06;letter-spacing:-.3px}
+.tile.minor{padding:clamp(38px,4.4vw,60px) var(--pad)}
+.tile.minor h2{font-size:clamp(24px,2.6vw,32px)}
+.tile.minor .lead{font-size:clamp(17px,1.35vw,18px);max-width:36ch}
 .tile.dark{background:var(--dark);color:var(--on-dark)}
 .tile.grey{background:var(--canvas-2)}
 
@@ -129,9 +140,8 @@ h2{
   border-bottom:1px solid var(--hairline);
   font-size:14px;letter-spacing:-.2px;
 }
-.nav .brand{display:flex;align-items:center;gap:8px;color:var(--ink);font-weight:600;font-size:17px}
+.nav .brand{color:var(--ink);font-weight:600;font-size:17px;letter-spacing:-.4px;flex:none}
 .nav .brand:hover{text-decoration:none}
-.nav .brand svg{display:block;flex:none}
 .nav .links{display:flex;gap:clamp(13px,2vw,26px);margin-left:auto}
 .nav .links a{color:var(--ink-2);white-space:nowrap}
 .nav .links a:hover{color:var(--ink);text-decoration:none}
@@ -348,6 +358,35 @@ h2{
 .ledger .cap{font-size:14px;color:var(--ink-2)}
 .ledger code{font-size:15px;color:var(--ink);white-space:pre;overflow-x:auto;display:block;min-width:0}
 
+/* ── 章节收尾：通栏的两行，讲策略的语义 ──────────────────────────────
+   两列文字撑不满 1440，但这条能 —— 而且它讲的是首屏 demo 每一轮都在演、
+   页面上却从没写出来的那件事。 */
+.lesson{
+  margin-top:clamp(30px,3.2vw,44px);padding-top:clamp(22px,2.3vw,30px);
+  border-top:1px solid rgba(255,255,255,.14);grid-column:1 / -1;
+}
+.lesson .claim{margin:0 0 20px;font-size:clamp(19px,1.9vw,24px);font-weight:600;
+               letter-spacing:-.374px;color:var(--on-dark)}
+/* 表格自己收窄。撑满 1440 会把判定推到 600px 开外，
+   于是刚在整页上治好的「两边空」在这一小块里原样复发。 */
+.lesson ul{list-style:none;margin:0;padding:0;max-width:860px}
+.lesson li{
+  display:flex;align-items:baseline;gap:clamp(14px,2vw,28px);
+  padding:13px 0;font-size:15px;
+}
+.lesson li+li{border-top:1px solid rgba(255,255,255,.09)}
+.lesson .k{flex:0 0 clamp(88px,9vw,132px);color:var(--on-dark-2)}
+.lesson code{flex:1 1 auto;min-width:0;color:var(--on-dark);letter-spacing:0;
+             overflow-wrap:break-word}
+.lesson .v{flex:0 0 auto;color:var(--on-dark-2);text-align:right;white-space:nowrap}
+
+@media (max-width:760px){
+  .lesson li{flex-wrap:wrap;gap:4px 14px;padding:12px 0}
+  .lesson .k{flex:0 0 auto}
+  .lesson code{flex:1 0 100%;order:3;font-size:13.5px}
+  .lesson .v{margin-left:auto}
+}
+
 /* ── 安装 ──────────────────────────────────────────────────────────── */
 /* 分段控件：选中项填蓝。蓝是这套系统里唯一的「这个是活的」信号，
    而这里选中与否直接决定下面那条命令，含糊不得。 */
@@ -389,8 +428,31 @@ h2{
   line-height:1.45;text-wrap:pretty;
 }
 
+/* ── 两扇门 ────────────────────────────────────────────────────────
+   不用卡片：那道投影按 DESIGN.md 只归「产品渲染」。两扇门用发丝线分隔，
+   读起来像一份规格表，而不是两张促销卡。 */
+#relay .say{max-width:46rem}
+#relay .lead{margin-left:0;max-width:52ch}
+.doors{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:clamp(30px,4.4vw,72px);margin-top:clamp(34px,4vw,56px);
+}
+.door{border-top:1px solid var(--hairline);padding-top:20px;display:flex;flex-direction:column}
+.door .k{font-size:14px;color:var(--ink-2)}
+.door .addr{margin:9px 0 0;font-size:clamp(19px,1.7vw,22px);letter-spacing:-.2px;color:var(--ink)}
+.door .addr a{color:var(--ink)}
+.door .addr a:hover{color:var(--blue);text-decoration:none}
+.door .d{margin:12px 0 0;font-size:16px;line-height:1.5;color:var(--ink-2);max-width:38ch}
+.door .link-arrow{margin-top:18px;align-self:flex-start;font-size:16px}
+
+@media (max-width:760px){
+  .doors{grid-template-columns:minmax(0,1fr);gap:26px}
+  #relay .say{max-width:none}
+}
+
 /* ── 页脚 ──────────────────────────────────────────────────────────── */
-.foot{background:var(--canvas-2);padding:40px var(--pad) 44px;font-size:14px;
+.foot{background:var(--canvas);border-top:1px solid var(--hairline);
+      padding:40px var(--pad) 44px;font-size:14px;
       color:var(--ink-2);line-height:1.6}
 /* 页脚链接跟随导航条的语法（灰→黑），不是蓝：它们是路标，不是号召 */
 .foot .flinks{display:flex;flex-wrap:wrap;gap:9px 26px;margin-bottom:22px}

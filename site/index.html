@@ -30,14 +30,9 @@
 <body>
 
 <header class="nav">
-  <a class="brand" href="/">
-    <svg width="20" height="20" viewBox="0 0 22 22" aria-hidden="true">
-      <path d="M6.5 9.2V6.1a4.5 4.5 0 0 1 9 0v3.1" fill="none" stroke="currentColor" stroke-width="1.7"/>
-      <rect x="3.2" y="9.2" width="15.6" height="11.3" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.7"/>
-      <circle cx="11" cy="13.9" r="1.6" fill="currentColor"/>
-    </svg>
-    wanctl
-  </a>
+  <!-- 字标单独站着。之前那把挂锁是安全类产品最不动脑子的选择，
+       换成另一个弱符号不如把它减掉 —— 字标本身已经有形。 -->
+  <a class="brand" href="/">wanctl</a>
   <nav class="links">
     <a href="#decide"  data-en="How it works" data-zh="怎么工作">How it works</a>
     <a href="#fleet" data-opt data-en="Devices" data-zh="设备">Devices</a>
@@ -84,7 +79,7 @@
   </section>
 
   <!-- 深色屏：审批凭证。主体在右 —— 那是「你」的回答，落在首屏手机所在的那一侧 -->
-  <section class="tile dark split" id="decide">
+  <section class="tile dark split chapter" id="decide">
     <div class="say">
     <h2 data-en="Nothing runs until you say yes."
         data-zh="你不点头，什么都不会跑。">Nothing runs until you say yes.</h2>
@@ -104,11 +99,31 @@
       <div class="body" id="cred"></div>
     </div>
     </div>
+
+    <!-- 通栏收尾：这条是整个产品最常被误解的地方，而且首屏 demo 每次都在演它，
+         之前页面上却一个字都没写。移植自 internal/policy 的 matchCommand。 -->
+    <div class="lesson">
+      <p class="claim"
+         data-en="A rule covers a command, not a machine."
+         data-zh="规则管的是一条命令，不是一台机器。">A rule covers a command, not a machine.</p>
+      <ul>
+        <li>
+          <span class="k" data-en="Signed once" data-zh="签过一次">Signed once</span>
+          <code class="mono">python train.py --epochs 3 --resume --seed 7</code>
+          <span class="v" data-en="runs without asking" data-zh="以后直接放行">runs without asking</span>
+        </li>
+        <li>
+          <span class="k" data-en="Anything else" data-zh="换成别的">Anything else</span>
+          <code class="mono">nvidia-smi --query-gpu=memory.used --format=csv</code>
+          <span class="v" data-en="asks you again" data-zh="还是会来问你">asks you again</span>
+        </li>
+      </ul>
+    </div>
   </section>
 
   <!-- 浅灰屏：设备列表。主体在左 —— 那是 wanctl peers 的输出，
        控制端看的东西，落在首屏笔记本所在的那一侧 -->
-  <section class="tile grey split flip" id="fleet">
+  <section class="tile grey split flip minor" id="fleet">
     <div class="say">
     <h2 data-en="Your fleet, in one list." data-zh="你的机器，一张表看完。">Your fleet, in one list.</h2>
     <p class="lead"
@@ -209,6 +224,47 @@
       <button id="copy" type="button" data-en="Copy" data-zh="复制">Copy</button>
     </div>
     <p class="note" id="srcnote">Straight from the GitHub release.</p>
+  </section>
+
+  <!-- 浅灰屏：装完连到哪儿。两扇门是真正等价的两个选择，所以这里用一次
+       诚实的 50/50 —— 而且它和上面的交替两栏是不同的形状，节奏不会延续成节拍器。 -->
+  <section class="tile grey" id="relay">
+    <div class="say">
+      <h2 data-en="One relay in the middle. Ours, or yours."
+          data-zh="中间那台 relay。我们的，或者你自己的。">One relay in the middle. Ours, or yours.</h2>
+      <p class="lead"
+         data-en="Every device dials one relay, and it never sees inside your sessions either way. We run one. The whole thing is also a compose file."
+         data-zh="每台设备都拨向一台 relay，而无论用哪台，它都看不见你会话的内容。我们跑了一台；整套东西也就是一个 compose 文件。">
+        Every device dials one relay, and it never sees inside your sessions
+        either way. We run one. The whole thing is also a compose file.
+      </p>
+    </div>
+
+    <div class="doors">
+      <div class="door">
+        <span class="k" data-en="Hosted" data-zh="我们跑的那台">Hosted</span>
+        <p class="addr mono"><a href="https://wanctl.z10.dev">wanctl.z10.dev</a></p>
+        <p class="d"
+           data-en="Invite-only while it is one person&#39;s server rather than a service. No SLA, no support queue, no charge."
+           data-zh="它现在还是一个人的服务器，不是一项服务，所以只能邀请进。没有 SLA，没有工单，也不收钱。">
+          Invite-only while it is one person's server rather than a service.
+          No SLA, no support queue, no charge.
+        </p>
+      </div>
+
+      <div class="door">
+        <span class="k" data-en="Your own" data-zh="你自己的那台">Your own</span>
+        <p class="addr mono">docker compose up</p>
+        <p class="d"
+           data-en="Relay, portal and Postgres in one compose file. Nothing about your fleet ever reaches a machine you do not own."
+           data-zh="relay、门户和 Postgres 在同一个 compose 文件里。你的设备信息不会到达任何一台不属于你的机器。">
+          Relay, portal and Postgres in one compose file. Nothing about your
+          fleet ever reaches a machine you do not own.
+        </p>
+        <a class="link-arrow" href="https://github.com/Daily-AC/wanctl/blob/main/docs/self-hosting.md"
+           data-en="Read the self-hosting guide" data-zh="看自部署指南">Read the self-hosting guide</a>
+      </div>
+    </div>
   </section>
 
 </main>

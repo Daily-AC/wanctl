@@ -1,10 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22">
-  <!-- 和导航条里那把锁是同一副几何，只是加粗了描边给 16px 的标签页用。
-       上一版这里还是 LOTO 世代的表盘锁，和站上的标识对不上。 -->
-  <rect width="22" height="22" rx="4.4" fill="#ffffff"/>
-  <g fill="none" stroke="#1d1d1f" stroke-width="2">
-    <path d="M6.6 9.4V6.4a4.4 4.4 0 0 1 8.8 0v3"/>
-    <rect x="3.4" y="9.4" width="15.2" height="10.8" rx="2.4"/>
-  </g>
-  <circle cx="11" cy="14.1" r="1.7" fill="#1d1d1f"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- 标签页图标。字母画成路径而不是 <text>：favicon 的 SVG 由浏览器独立渲染，
+       拿不到页面的 @font-face，用 <text> 会掉到各平台自己的系统字体上，
+       同一个标记在三个操作系统上长三个样。 -->
+  <rect width="32" height="32" rx="7" fill="#1d1d1f"/>
+  <path d="M6.6 10.6 11.1 21.6 16 13.4 20.9 21.6 25.4 10.6"
+        fill="none" stroke="#ffffff" stroke-width="3.1"
+        stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
