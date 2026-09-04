@@ -211,6 +211,8 @@ h2{margin:0;font-size:20px;font-weight:600;line-height:1.2;letter-spacing:-.3px}
   font-size:13px;color:var(--ink-2);
 }
 .ask .head .host{color:var(--ink);font-weight:600;font-size:14px;flex:none}
+/* 别名后面那一小截真名。和设备卡同一条规则，只是这里排在行内。 */
+.ask .head .real{margin-left:6px;font-weight:400;font-size:13px;color:var(--ink-2)}
 /* 中间那格（种类 / 配对说明）吃掉剩余宽度并在必要时省略号，
    否则它一长就把秒表挤到第二行去。 */
 .ask .head .what{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -256,7 +258,10 @@ h2{margin:0;font-size:20px;font-weight:600;line-height:1.2;letter-spacing:-.3px}
 /* ── 设备 ──────────────────────────────────────────────────────────── */
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
 .dev{
-  display:block;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;
+  /* 网格把同一行的卡片拉成等高；button 默认把内容垂直居中，于是有别名的
+     那张（两行）和没有的（一行）名字不在同一条基线上。列排从顶开始。 */
+  display:flex;flex-direction:column;justify-content:flex-start;
+  width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;
   background:var(--canvas);border:1px solid var(--hairline);border-radius:18px;
   padding:14px 16px;transition:border-color .16s var(--ease),background .16s var(--ease);
 }
@@ -270,7 +275,7 @@ h2{margin:0;font-size:20px;font-weight:600;line-height:1.2;letter-spacing:-.3px}
 .dev.offline{color:var(--ink-2)}
 .dev.offline .nm{color:var(--ink-2);font-weight:400}
 /* 「最近」只在离线时出现。在线设备这一行永远是「刚刚」，等于空转。 */
-.dev .seen{display:block;margin-top:8px;font-size:12px;color:var(--ink-2)}
+.dev .seen,.dev .real{display:block;margin-top:8px;font-size:12px;color:var(--ink-2)}
 .dev .badge{
   margin-left:auto;font-size:11.5px;color:var(--ink-2);font-weight:400;
   border:1px solid var(--hairline);border-radius:999px;padding:1px 8px;white-space:nowrap;
@@ -295,6 +300,7 @@ h2{margin:0;font-size:20px;font-weight:600;line-height:1.2;letter-spacing:-.3px}
 .dhead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px}
 .dhead h1{flex:0 0 auto}
 .dhead .fp{font-size:12px;color:var(--ink-2);flex:1 1 100%;order:9;margin-top:2px}
+.dhead .real{font-size:13px;color:var(--ink-2);min-width:0;overflow-wrap:anywhere}
 /* 执行模式是这台设备的一个属性，不是一个页面 —— 所以它住在标题行，
    而不是像以前那样独占一个 tab。 */
 .dhead .modesel{
@@ -395,6 +401,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue-hi)
 .row{display:flex;align-items:center;gap:12px}
 .row .txt{flex:1;min-width:0}
 .row .txt b{font-weight:600}
+.row.fieldrow{margin-top:12px}
+.row.fieldrow input{flex:1;min-width:0;max-width:20rem}
 
 /* 命令与代码块。之前 pre 一条样式都没有，只继承了等宽字体 ——
    于是「电脑：一行装好」那页上，说明文字和要你复制的那条命令长得一样重，

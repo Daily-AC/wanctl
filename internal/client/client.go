@@ -179,23 +179,40 @@ func (c *Client) Peers(ctx context.Context) ([]string, error) {
 	return info.Devices, nil
 }
 
-// PeerAliases lists every exact spelling accepted for an online target: the
-// short device name and its namespace-qualified form.
+// PeersWithAliases lists online device names and the owner-assigned aliases
+// keyed by real device name.
+func (c *Client) PeersWithAliases(ctx context.Context) ([]string, map[string]string, error) {
+	info, err := c.peerInfo(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if info.Aliases == nil {
+		info.Aliases = map[string]string{}
+	}
+	return info.Devices, info.Aliases, nil
+}
+
+// PeerAliases lists every exact spelling accepted for an online target: real
+// names and owner-assigned aliases, both short and namespace-qualified.
 func (c *Client) PeerAliases(ctx context.Context) ([]string, error) {
 	info, err := c.peerInfo(ctx)
 	if err != nil {
 		return nil, err
 	}
-	aliases := make([]string, 0, len(info.Devices)*2)
+	aliases := make([]string, 0, len(info.Devices)*4)
 	for _, device := range info.Devices {
 		aliases = append(aliases, device, info.Namespace+"/"+device)
+		if alias := info.Aliases[device]; alias != "" {
+			aliases = append(aliases, alias, info.Namespace+"/"+alias)
+		}
 	}
 	return aliases, nil
 }
 
 type peerInfo struct {
-	Namespace string   `json:"namespace"`
-	Devices   []string `json:"devices"`
+	Namespace string            `json:"namespace"`
+	Devices   []string          `json:"devices"`
+	Aliases   map[string]string `json:"aliases"`
 }
 
 func (c *Client) peerInfo(ctx context.Context) (peerInfo, error) {
@@ -245,7 +262,7 @@ func (c *Client) resolve(ctx context.Context, target string) (string, error) {
 		return "", err
 	}
 	if target != "" {
-		return info.Namespace + "/" + target, nil
+		return info.Namespace + "/" + canonicalDevice(info, target), nil
 	}
 	if len(info.Devices) == 1 {
 		return info.Namespace + "/" + info.Devices[0], nil
@@ -254,6 +271,28 @@ func (c *Client) resolve(ctx context.Context, target string) (string, error) {
 		return "", fmt.Errorf("no devices online for this token")
 	}
 	return "", fmt.Errorf("multiple devices online; pass --target: %s", strings.Join(info.Devices, ", "))
+}
+
+// canonicalDevice maps an owner-assigned alias back to the device's real name,
+// the way the relay resolves it: a real name always wins over an alias.
+//
+// Without this the pin store, which is keyed by the target string as typed,
+// holds "ns/客厅" and "ns/bench-02" as two separate identities — so the first
+// dial by alias asks the operator to confirm a fingerprint they already
+// confirmed for the same machine. Aliases only exist inside the caller's own
+// namespace, which is exactly what /peers reports, so this needs no extra call.
+func canonicalDevice(info peerInfo, target string) string {
+	for _, device := range info.Devices {
+		if device == target {
+			return target
+		}
+	}
+	for device, alias := range info.Aliases {
+		if strings.EqualFold(alias, target) {
+			return device
+		}
+	}
+	return target
 }
 
 // PinServer records an explicitly verified fingerprint for a canonical target.

@@ -173,6 +173,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tokens/revoke", s.handleTokenRevoke)
 	mux.HandleFunc("/api/devices", s.handleDevices)
 	mux.HandleFunc("/api/pending", s.handleWaiting)
+	mux.HandleFunc("/api/devices/alias", s.handleDeviceAlias)
 	mux.HandleFunc("/api/devices/lark", s.handleDeviceLark)
 	mux.HandleFunc("/api/devices/notify", s.handleDeviceNotify)
 	mux.HandleFunc("/api/notify", s.handleNotify)
@@ -258,6 +259,7 @@ var mutationPaths = map[string]bool{
 	"/api/devices/pair":            true,
 	"/api/devices/untrust":         true,
 	"/api/devices/remove":          true,
+	"/api/devices/alias":           true,
 	"/api/devices/identity/accept": true,
 	"/api/devices/rules":           true,
 	"/api/devices/mode":            true,
@@ -1527,6 +1529,41 @@ func (s *Server) handleDeviceRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleDeviceAlias(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Device string `json:"device"`
+		Alias  string `json:"alias"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	ns, shared, ok := s.requireDevice(w, r, body.Device)
+	if !ok {
+		return
+	}
+	if shared {
+		http.Error(w, "只能修改自己设备的别名", http.StatusForbidden)
+		return
+	}
+	resp, err := s.adminReq("POST", "/admin/devices/alias", nil, map[string]string{
+		"namespace": ns,
+		"device":    body.Device,
+		"alias":     body.Alias,
+	})
+	if err != nil {
+		http.Error(w, "relay unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	copyResp(w, resp)
 }
 
 func (s *Server) handleDeviceRules(w http.ResponseWriter, r *http.Request) {

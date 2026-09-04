@@ -16,12 +16,12 @@
   var ago = function (s) { return new Date(now - s * 1000).toISOString(); };
 
   var devices = [
-    { name: 'bench-02', fingerprint: 'SHA256:fJoz5aAqXxK1r0LmT9vQe8YhCwPd3NuBiGs7DOAEo=', online: true, last_seen: ago(4) },
-    { name: 'atlas', fingerprint: 'SHA256:Kq2mVb7ThLnW4xRc0PjZa9eYsDgU6iBoM1XfNvQtEr=', online: true, last_seen: ago(9) },
-    { name: 'kestrel', fingerprint: 'SHA256:9WpLmXc3RtYb8QnZk1FvJaHe5UgSoD2iN7xMrTqBEw=', online: true, last_seen: ago(31) },
-    { name: 'mill-01', fingerprint: 'SHA256:3TzQrK8mBvNc5XwPd1LhJf7YaGeSoU9iR2xMtCqDEn=', online: false, last_seen: ago(7 * 3600) },
-    { name: 'orchard', fingerprint: 'SHA256:Vb6NmXq2RtZc9WpLk4FvJa1He8UgSoD5iN3xMrTqEy=', online: false, last_seen: ago(4 * 86400) },
-    { name: 'slate', fingerprint: 'SHA256:Hq4LmZb8TvNc2XwRd6PjKf3YaGeSoU1iM9xNtCrDEp=', online: true, last_seen: ago(12), shared: true, owner: 'rowan', perms: 'exec,read' }
+    { name: 'bench-02', alias: 'workshop', fingerprint: 'SHA256:fJoz5aAqXxK1r0LmT9vQe8YhCwPd3NuBiGs7DOAEo=', online: true, last_seen: ago(4) },
+    { name: 'atlas', alias: '', fingerprint: 'SHA256:Kq2mVb7ThLnW4xRc0PjZa9eYsDgU6iBoM1XfNvQtEr=', online: true, last_seen: ago(9) },
+    { name: 'kestrel', alias: '', fingerprint: 'SHA256:9WpLmXc3RtYb8QnZk1FvJaHe5UgSoD2iN7xMrTqBEw=', online: true, last_seen: ago(31) },
+    { name: 'mill-01', alias: '', fingerprint: 'SHA256:3TzQrK8mBvNc5XwPd1LhJf7YaGeSoU9iR2xMtCqDEn=', online: false, last_seen: ago(7 * 3600) },
+    { name: 'orchard', alias: '', fingerprint: 'SHA256:Vb6NmXq2RtZc9WpLk4FvJa1He8UgSoD5iN3xMrTqEy=', online: false, last_seen: ago(4 * 86400) },
+    { name: 'slate', alias: '', fingerprint: 'SHA256:Hq4LmZb8TvNc2XwRd6PjKf3YaGeSoU1iM9xNtCrDEp=', online: true, last_seen: ago(12), shared: true, owner: 'rowan', perms: 'exec,read' }
   ];
 
   var waiting = [
@@ -134,6 +134,9 @@
     if (p === '/api/devices/lark') return { approval_enabled: true, pairing_from_card: false, notify_email: 'you@example.com', delivery_health: { result: 'success', attempted_at: ago(300) } };
     if (p === '/api/devices/notify') return { enabled: false };
     if (p === '/api/users/lookup') return {};
+    // POST-only endpoints still need an entry here: match() returning undefined
+    // is what produces the preview's 404, before the write branch is reached.
+    if (p === '/api/devices/alias') return {};
     return db[p];
   }
 
@@ -151,6 +154,12 @@
       // 写操作一律成功。工装不模拟状态机 —— 它是给眼睛看的，
       // 真正的裁决路径由 go test 覆盖。
       var out = { ok: true };
+      if (url.indexOf('/api/devices/alias') === 0) {
+        var want = JSON.parse((opts && opts.body) || '{}');
+        var row = devices.filter(function (x) { return x.name === want.device; })[0];
+        if (row) row.alias = ('' + (want.alias || '')).trim();
+        out = { name: want.device, alias: row ? row.alias : '' };
+      }
       if (url.indexOf('/api/tokens') === 0) out = { token: 'wanctl_9fQ2mXbLpR7tZv4NcKwJaHe1UgSoD5iM3xNrTqCEy' };
       if (url.indexOf('/api/invites') === 0) out = { code: 'winv_4TmQb9RvNc7WpLd2FjKa5Y' };
       return Promise.resolve(new Response(JSON.stringify(out), { status: 200, headers: { 'Content-Type': 'application/json' } }));

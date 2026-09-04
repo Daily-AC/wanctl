@@ -300,6 +300,71 @@ func TestHandleDeviceRemoveAllowsOwnedDevice(t *testing.T) {
 	}
 }
 
+func TestHandleDeviceAliasRejectsSharedDevice(t *testing.T) {
+	var aliasCalled bool
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "bob"})
+		case "/admin/devices":
+			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{
+				{"name": "devbox", "owner": "alice", "shared": true},
+			}})
+		case "/admin/devices/alias":
+			aliasCalled = true
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/alias", strings.NewReader(`{"device":"devbox","alias":"office"}`))
+	req.Header.Set("X-User", "bob@corp")
+	rr := httptest.NewRecorder()
+	s.handleDeviceAlias(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %s; want 403", rr.Code, rr.Body.String())
+	}
+	if aliasCalled {
+		t.Fatal("shared-device alias update was forwarded to relay")
+	}
+}
+
+func TestHandleDeviceAliasForOwnedDevicePassesThroughRelayResponse(t *testing.T) {
+	var forwarded struct {
+		Namespace string `json:"namespace"`
+		Device    string `json:"device"`
+		Alias     string `json:"alias"`
+	}
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "alice"})
+		case "/admin/devices":
+			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{
+				{"name": "legion", "owner": "alice", "shared": false},
+			}})
+		case "/admin/devices/alias":
+			json.NewDecoder(r.Body).Decode(&forwarded)
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte("alias_taken"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/alias", strings.NewReader(`{"device":"legion","alias":"desk"}`))
+	req.Header.Set("X-User", "alice@corp")
+	rr := httptest.NewRecorder()
+	s.handleDeviceAlias(rr, req)
+	if rr.Code != http.StatusConflict || rr.Body.String() != "alias_taken" {
+		t.Fatalf("response = %d %q; want relay's 409 alias_taken", rr.Code, rr.Body.String())
+	}
+	if forwarded.Namespace != "alice" || forwarded.Device != "legion" || forwarded.Alias != "desk" {
+		t.Fatalf("forwarded body = %+v", forwarded)
+	}
+}
+
 func TestConsoleWriteEndpointsRejectSharedDevice(t *testing.T) {
 	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

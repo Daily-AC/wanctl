@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -129,5 +130,74 @@ func TestResolveUnqualifiedTargetUsesRelayNamespace(t *testing.T) {
 	}
 	if got, ok := c.known.GetByName("alice/build"); !ok || got.Fingerprint != fp {
 		t.Fatalf("canonical pin missing: %+v, ok=%v", got, ok)
+	}
+}
+
+func TestPeersWithAliasesAndAcceptedTargetSpellings(t *testing.T) {
+	c := NewWith(nil, transport.NewMemStore(), "https://relay.test", "tok", "http")
+	c.httpc = &http.Client{Transport: peerRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := `{"namespace":"alice","devices":["legion","plain"],"aliases":{"legion":"desk"}}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    r,
+		}, nil
+	})}
+
+	devices, aliases, err := c.PeersWithAliases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(devices, ",") != "legion,plain" || aliases["legion"] != "desk" {
+		t.Fatalf("peers = %v, aliases = %#v", devices, aliases)
+	}
+	spellings, err := c.PeerAliases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "legion,alice/legion,desk,alice/desk,plain,alice/plain"
+	if got := strings.Join(spellings, ","); got != want {
+		t.Fatalf("target spellings = %q, want %q", got, want)
+	}
+}
+
+type peerRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f peerRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// Dialing by alias must land on the pin the hostname already has. The store is
+// keyed by the target string as typed, so without alias→name resolution the
+// first `--target 客厅` re-asks for a fingerprint the operator already accepted
+// for that exact machine — a confirmation prompt that can only ever say yes.
+func TestResolveMapsAliasOntoTheDeviceItsHostnamePinned(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"namespace": "alice",
+			"devices":   []string{"bench-02", "atlas"},
+			"aliases":   map[string]string{"bench-02": "客厅"},
+		})
+	}))
+	defer srv.Close()
+	c := NewWith(nil, transport.NewMemStore(), srv.URL, "tok", "http")
+	fp := transport.Fingerprint([]byte("device cert"))
+
+	if _, err := c.PinServer(context.Background(), "bench-02", fp, false); err != nil {
+		t.Fatal(err)
+	}
+	target, err := c.resolve(context.Background(), "客厅")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "alice/bench-02" {
+		t.Fatalf("alias resolved to %q, want alice/bench-02", target)
+	}
+	if got, ok := c.known.GetByName(target); !ok || got.Fingerprint != fp {
+		t.Fatalf("alias dial missed the hostname pin: %+v, ok=%v", got, ok)
+	}
+
+	// A real device name outranks an alias, matching how the relay resolves it.
+	if got, err := c.resolve(context.Background(), "atlas"); err != nil || got != "alice/atlas" {
+		t.Fatalf("resolve(atlas) = %q, %v", got, err)
 	}
 }

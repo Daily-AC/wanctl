@@ -520,17 +520,17 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpLogout)
 
 	s.AddTool(mcpapi.NewTool("wanctl_peers",
-		mcpapi.WithDescription("List devices currently reachable by the active controller token. Returns one device name per line. Use this FIRST when the user asks 'what devices are available' or before guessing a target name."),
+		mcpapi.WithDescription("List devices currently reachable by the active controller token. Returns each real device name, plus its owner-assigned alias when present; structured content contains backward-compatible devices and aliases fields. Use this FIRST when the user asks 'what devices are available' or before guessing a target."),
 	), mcpPeers)
 
 	s.AddTool(mcpapi.NewTool("wanctl_pair",
 		mcpapi.WithDescription("Check whether the target device already trusts this MCP session's controller identity, and if not, return the device-side pairing URL up front. On first contact this may instead return DEVICE IDENTITY CONFIRMATION REQUIRED; a human must independently verify its exact target and fingerprint, then call wanctl_trust_server before retrying. Once the server identity is pinned, returns '✓ already trusted' OR 'PAIRING REQUIRED' with a URL to relay VERBATIM to the user."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE for shared devices.")),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name or alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS for shared devices.")),
 	), mcpPair)
 
 	s.AddTool(mcpapi.NewTool("wanctl_exec",
 		mcpapi.WithDescription("Run a shell command, or a whole script, on a remote wanctl-enrolled device over the encrypted relay. Returns the device's stdout, stderr, and exit code. Pass EITHER 'command' (a one-liner) OR 'script' (multi-line source) — prefer 'script' for anything with a $, a quote inside a quote, or more than one statement, because a script is transported encoded and is never parsed by the device's shell. If the device hasn't paired this controller yet, the result is isError=true with a 'PAIRING REQUIRED' message that carries a URL — surface that URL VERBATIM to the user; do not paraphrase."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE for shared devices. If exactly one device is online for this token, you may pass empty string.")),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name or alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS for shared devices. If exactly one device is online for this token, you may pass empty string.")),
 		mcpapi.WithString("command", mcpapi.Description("A one-liner for the device's default shell (sh on Unix, powershell on Windows). WARNING: this string is SOURCE CODE for that shell and is parsed there. On Windows that means writing `powershell -Command \"...$x...\"` gets parsed TWICE — the outer shell expands $x to nothing and the inner script fails with a misleading 'term is not recognized'. Use 'script' instead of nesting an interpreter here.")),
 		mcpapi.WithString("script", mcpapi.Description("Script SOURCE to run on the device (not a file path). Sent encoded, so quoting and character-set rules do not apply: $, backticks, nested quotes and non-ASCII text all arrive literally. Requires 'interp'. Use this for multi-statement work; it is the same single call as 'command'. Scripts over ~9KB must be pushed as a file and run by path instead.")),
 		mcpapi.WithString("interp", mcpapi.Description("Interpreter for 'script': 'powershell' for Windows devices, 'sh' for Unix/macOS/Android. Required when 'script' is set.")),
@@ -542,28 +542,28 @@ func registerMCPTools(s *server.MCPServer) {
 
 	s.AddTool(mcpapi.NewTool("wanctl_exec_async",
 		mcpapi.WithDescription("Start a shell command as a BACKGROUND job on the device and return a job_id IMMEDIATELY, without waiting for it to finish. Use this for anything that may run longer than a single tool call comfortably tolerates — package installs, builds, large downloads, `wsl --shutdown` then a long build, etc. The command keeps running on the device even after this call returns; fetch its output and exit code later with wanctl_exec_poll(job_id). Always runs in a FRESH shell (no shared cwd/env with wanctl_exec's persistent session). Same pairing/policy rules as wanctl_exec. Jobs run for at most 30 minutes, retain at most 8 MiB output each, and finished results remain pollable for up to 1h subject to device-wide retention budgets."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name or alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
 		mcpapi.WithString("command", mcpapi.Required(), mcpapi.Description("Shell command to run in the device's default shell (sh on Unix, powershell on Windows).")),
 		mcpapi.WithString("cwd", mcpapi.Description("Working directory on the device for this command (also the policy scope).")),
 	), mcpExecAsync)
 
 	s.AddTool(mcpapi.NewTool("wanctl_exec_poll",
 		mcpapi.WithDescription("Fetch a background job's new output and status (started via wanctl_exec_async). Call repeatedly until state is 'done'. Pass the 'next_offset' from the previous poll as 'offset' to receive only NEW output each time; omit or 0 to get everything from the start. The response carries a status header (state: running|done, exit code when done, next_offset) followed by the output."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE — the same device the job was started on.")),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name or alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS — the same device the job was started on.")),
 		mcpapi.WithString("job_id", mcpapi.Required(), mcpapi.Description("The job id returned by wanctl_exec_async.")),
 		mcpapi.WithNumber("offset", mcpapi.Description("Bytes of output already seen; return only output past this point. Use the previous poll's next_offset. Default 0 = from the start.")),
 	), mcpExecPoll)
 
 	s.AddTool(mcpapi.NewTool("wanctl_push",
 		mcpapi.WithDescription("Upload a local file to a remote path on the target device. Same pairing/policy rules as wanctl_exec. Available in stdio mode only (on a shared HTTP MCP server 'local' would be a path on the server itself). Paths under a dot-directory of the operator's home (~/.ssh, ~/.config, …) are refused; WANCTL_MCP_LOCAL_ROOT confines the tool to one tree."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name or alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
 		mcpapi.WithString("local", mcpapi.Required(), mcpapi.Description("Absolute path on the MCP-server machine (or your local machine in stdio mode) to upload.")),
 		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to write to.")),
 	), mcpPush)
 
 	s.AddTool(mcpapi.NewTool("wanctl_push_blob",
 		mcpapi.WithDescription("Upload INLINE base64 content to a remote path on the target device — the file-push tool that works in HTTP (remote) MCP mode, where the AI host has no file on the MCP server for wanctl_push to read. Encode the bytes you want written as base64 and pass them in 'content_b64'. Same pairing/policy rules as wanctl_exec. Size cap: 8 MiB of raw (decoded) bytes; for larger payloads, split or have the device fetch the file itself."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name or alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
 		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to write to (overwrites if it exists).")),
 		mcpapi.WithString("content_b64", mcpapi.Required(), mcpapi.Description("Standard-base64-encoded file content (the RAW bytes to write, not text).")),
 		mcpapi.WithString("mode", mcpapi.Description("Optional octal file mode, e.g. \"0755\" for an executable. Default 0644.")),
@@ -571,14 +571,14 @@ func registerMCPTools(s *server.MCPServer) {
 
 	s.AddTool(mcpapi.NewTool("wanctl_pull",
 		mcpapi.WithDescription("Download a remote file from the target device to a local path. Same pairing/policy rules as wanctl_exec. Available in stdio mode only; the same local-path limits as wanctl_push apply. On a shared HTTP MCP server read remote files with wanctl_exec instead."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name or alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
 		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to read.")),
 		mcpapi.WithString("local", mcpapi.Required(), mcpapi.Description("Absolute path on the MCP-server machine (or your local machine in stdio mode) to write to.")),
 	), mcpPull)
 
 	s.AddTool(mcpapi.NewTool("wanctl_logs",
 		mcpapi.WithDescription("Pull JSONL activity events from the target device's local log (every connect/exec/file with its decision and exit code). Useful for auditing what happened, including past pairing/approval outcomes."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name (DEVICE) or NS/DEVICE.")),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device name or alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
 		mcpapi.WithString("type", mcpapi.Description("Filter: 'connect', 'exec', or 'file'.")),
 		mcpapi.WithString("grep", mcpapi.Description("Filter: substring of the detail field.")),
 		mcpapi.WithString("since", mcpapi.Description("Filter: RFC3339 timestamp lower bound.")),
@@ -767,18 +767,30 @@ func mcpPeers(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolRe
 	if hint != nil {
 		return hint, nil
 	}
-	devs, err := c.Peers(ctx)
+	devs, aliases, err := c.PeersWithAliases(ctx)
 	if err != nil {
 		return mcpapi.NewToolResultError(err.Error()), nil
 	}
+	return peerToolResult(devs, aliases), nil
+}
+
+func peerToolResult(devs []string, aliases map[string]string) *mcpapi.CallToolResult {
 	if len(devs) == 0 {
-		return mcpapi.NewToolResultText("no devices online for this token"), nil
+		result := mcpapi.NewToolResultText("no devices online for this token")
+		result.StructuredContent = map[string]any{"devices": devs, "aliases": aliases}
+		return result
 	}
 	out := "online devices:\n"
 	for _, d := range devs {
-		out += "  " + d + "\n"
+		if alias := aliases[d]; alias != "" {
+			out += "  " + d + "  (" + alias + ")\n"
+		} else {
+			out += "  " + d + "\n"
+		}
 	}
-	return mcpapi.NewToolResultText(out), nil
+	result := mcpapi.NewToolResultText(out)
+	result.StructuredContent = map[string]any{"devices": devs, "aliases": aliases}
+	return result
 }
 
 func mcpPair(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
