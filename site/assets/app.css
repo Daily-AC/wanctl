@@ -95,7 +95,19 @@ a:hover{text-decoration:underline}
 }
 /* 首屏顶上已经有导航条了，不需要再来一整份上留白 ——
    省下来的高度给舞台，好让手机上那个蓝按钮落在折线以上（它是要人去点的东西）。 */
-.tile.hero{padding-top:clamp(32px,3.6vw,52px)}
+.tile.hero{
+  padding-top:clamp(32px,3.6vw,52px);
+  /* 首屏就只放首屏。窗口高一点，下一屏那块深色就会从底下探进来半截 ——
+     那半截既读不出内容，又把「一屏一个主体」直接作废。48px 是导航条的高度。
+     svh 而不是 dvh：dvh 会随移动端浏览器工具条的伸缩跳数，svh 取的是工具条
+     展开时的高度，也就是「保证不被切到」的那一档。
+     min-height 不是 height：窗口矮的时候内容照样自己撑开。 */
+  min-height:calc(100vh - 48px);
+  min-height:calc(100svh - 48px);
+  display:flex;flex-direction:column;justify-content:center;
+}
+/* 上面那个 flex 会把子元素拉满宽（stretch），段落自身的居中靠 .center 的
+   text-align，不受影响；舞台本来就有 margin:auto。 */
 
 /* 三档配额，不是五段等权。之前每一段的上下内边距都是 88px，于是产品的命题
    （「你不点头，什么都不会跑」）和一张设备清单拿到完全相同的视觉权重。
@@ -136,20 +148,32 @@ h2{
   position:sticky;top:0;z-index:var(--z-nav);
   display:flex;align-items:center;gap:clamp(14px,2.4vw,30px);
   height:48px;padding:0 var(--pad);
+  /* 没有下边框。吸顶条压在内容上要半透，那层 backdrop-filter 本身就是边界：
+     深色 tile 从底下滑过去，这条 .86 的白就成了一道明显的浅带。停在顶部时
+     它化进白底里 —— 一条横穿整幅的发丝线在那种时候只是把首屏切成两截。 */
   background:rgba(255,255,255,.86);backdrop-filter:saturate(180%) blur(20px);
-  border-bottom:1px solid var(--hairline);
   font-size:14px;letter-spacing:-.2px;
 }
-.nav .brand{color:var(--ink);font-weight:600;font-size:17px;letter-spacing:-.4px;flex:none}
+/* 标记 + 字标。标记是那个末笔上扬的 w（assets/mark.svg 同一条路径），
+   currentColor 描边 —— 它跟着字标的颜色走，不引入第二种墨色。 */
+.nav .brand{
+  display:flex;align-items:center;gap:8px;
+  color:var(--ink);font-weight:600;font-size:17px;letter-spacing:-.4px;flex:none;
+}
 .nav .brand:hover{text-decoration:none}
+.mk{width:19px;height:19px;flex:none;display:block}
 .nav .links{display:flex;gap:clamp(13px,2vw,26px);margin-left:auto}
 .nav .links a{color:var(--ink-2);white-space:nowrap}
 .nav .links a:hover{color:var(--ink);text-decoration:none}
+/* 不画边框：分隔线拿掉之后，一条描边胶囊会成为整条导航里最重的东西，
+   而它只是个次级开关。悬停的浅灰底照样说明它能点。 */
 .nav .lang{
   flex:none;white-space:nowrap;
   font:inherit;font-size:13px;color:var(--ink);background:none;cursor:pointer;
-  border:1px solid var(--hairline);border-radius:999px;padding:4px 11px;line-height:1.2;
+  border:0;border-radius:999px;padding:4px 11px;line-height:1.2;
+  transition:background .16s var(--ease);
 }
+.nav .lang:hover{background:var(--canvas-2)}
 .nav .lang:active{transform:scale(.95)}
 
 /* ── 按钮：pill 只给主 CTA，蓝色是唯一的「点我」信号 ───────────────── */

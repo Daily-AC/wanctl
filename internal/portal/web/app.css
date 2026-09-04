@@ -83,17 +83,22 @@ a:hover{text-decoration:underline}
   display:flex;align-items:center;gap:14px;height:48px;padding:0 var(--pad);
   background:rgba(255,255,255,.86);backdrop-filter:saturate(180%) blur(20px);
 }
-/* 分隔线收到内容锁以内，不做全幅。官网可以全幅，因为它那些整幅 tile 是
-   edge-to-edge 的，线读起来是 tile 的边界；门户没有整幅色块，一条横穿两侧
-   空白的线就只是一条比内容长出几百像素的线，把顶栏和页面切成两截。 */
-.top::after{
-  content:"";position:absolute;left:var(--pad);right:var(--pad);bottom:0;
-  height:1px;background:var(--hairline);
-}
+/* 顶栏底下没有分隔线（2026-09-04 甲方拍板，官网同时也拿掉了）。
+   之前那条是收在内容锁以内的一条发丝线，试过全幅也试过内缩，两种都不对：
+   它在一个只放着字标和两三个 chip 的横条底下横过整页，把页面切成两截，
+   而上半截并没有需要被隔开的东西。
+
+   吸顶时的边界交给 backdrop-filter —— 内容从底下滑过去会被抹成一片柔光，
+   那本来就是这层半透的职责（DESIGN.md §8 里唯一那个有理由的玻璃例外）。
+   页面停在顶部时顶栏就应该化进页面里，那正是想要的。 */
+/* 标记 + 字标。标记是那个末笔上扬的 w（site/assets/mark.svg 同一条路径），
+   currentColor 描边 —— 它跟着字标的颜色走，不引入第二种墨色。 */
 .top .brand{
+  display:flex;align-items:center;gap:8px;
   font-size:17px;font-weight:600;letter-spacing:-.4px;color:var(--ink);
   flex:none;cursor:pointer;background:none;border:0;padding:0;font-family:inherit;
 }
+.mk{width:19px;height:19px;flex:none;display:block}
 .top .brand:hover{text-decoration:none}
 .top .who{
   margin-left:auto;display:flex;align-items:center;gap:8px;min-width:0;
@@ -121,6 +126,12 @@ a:hover{text-decoration:underline}
 }
 .chip:hover{background:var(--canvas-2)}
 .chip:active{transform:scale(.95)}
+/* 顶栏里的那几个不画边框。分隔线拿掉之后，一条只放着字标和三个描边胶囊的
+   横带里，最重的东西成了那三个框 —— 它们是次级控件，不该比字标显眼。
+   悬停时的浅灰底仍然说明它们能点。设备标题行里那个齿轮保留边框：
+   那里是内容不是外壳，旁边还站着一个描边的 select。 */
+.top .chip{border-color:transparent}
+.top .chip:hover{border-color:transparent;background:var(--canvas-2)}
 .chip.icon{padding:5px;display:grid;place-items:center}
 .chip.icon svg{width:16px;height:16px;display:block}
 @media (max-width:640px){
