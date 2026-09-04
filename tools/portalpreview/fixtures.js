@@ -75,7 +75,14 @@
   ];
 
   var db = {
-    '/api/me': { namespace: 'acme', identity: 'SHA256:e+gYUIcZfC7HcEGiQyMhimwE8LK+67ocG7pUKYrw4TI=', role: 'admin', lark: true, relay_origin: 'https://relay.example.com' },
+    // 形状照抄 handleMe。这里曾经把 identity 填成一串 SHA256 指纹，
+    // 而真实端点返回的是登录名 —— 工装替真代码撒了谎，页面照着假数据把
+    // 门户自己的指纹当成「你的编号」显示在人名旁边。别再这么干。
+    '/api/me': {
+      identity: 'ardith', login: 'ardith', name: 'Ardith Vale',
+      avatar: '', namespace: 'acme', provider: 'github', role: 'admin',
+      lark: true, relay_origin: 'https://relay.example.com'
+    },
     '/api/devices': { devices: devices },
     '/api/pending': { items: waiting },
     '/api/tokens': {

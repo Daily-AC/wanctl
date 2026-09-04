@@ -1127,10 +1127,13 @@
                 '<td><a href="' + esc(url(p[0])) + '">↓</a></td></tr>';
             }).join('') + '</tbody></table></details>';
         $$('#dl pre[data-copy]').forEach(function (p) {
-          p.style.cursor = 'pointer';
+          // 标签内容就存在 data-copy 上，CSS 的 ::after 读它 —— 这样切语言
+          // 和「已复制」回执都只是改一个属性。
+          p.setAttribute('data-copy', t().copy);
           p.onclick = function () {
             if (navigator.clipboard) navigator.clipboard.writeText(p.textContent.trim());
-            toast(t().copied);
+            p.setAttribute('data-copy', t().copied);
+            setTimeout(function () { p.setAttribute('data-copy', t().copy); }, 1400);
           };
         });
         dlDone = true;
@@ -1310,10 +1313,35 @@
   // #settings/invites 会被放行，那正是 issue #10 那个洞。
   var whoami = jget('/api/me').then(function (m) {
     me = m;
-    $('#ns').textContent = m.namespace || '—';
-    $('#fp').textContent = m.identity || '';
+    paintWho(m);
     if (m.role === 'admin') $('#sInvites').hidden = false;
-  }).catch(function () { $('#ns').textContent = t().notSignedIn; });
+  }).catch(function () {
+    $('#who').hidden = false;
+    $('#whoName').textContent = t().notSignedIn;
+  });
+
+  function paintWho(m) {
+    var login = m.login || m.identity || '';
+    $('#who').hidden = false;
+    // 显示名优先（GitHub 的 name），没有就用登录名。
+    $('#whoName').textContent = m.name || login || '—';
+    $('#whoName').title = login;
+    // 命名空间是从登录名推出来的，通常就是它。只有不一致时才值得占一格。
+    var ns = m.namespace || '';
+    var differs = ns && login && ns.toLowerCase() !== login.toLowerCase();
+    $('#ns').hidden = !differs;
+    if (differs) $('#ns').textContent = ns;
+    // 头像：拿得到就用，拉不动就退回字母章。onerror 是必须的 ——
+    // avatars.githubusercontent.com 不是每个部署地点都通。
+    var letter = (login || ns || '?').charAt(0);
+    $('#ava').textContent = letter;
+    if (m.avatar) {
+      var img = new Image();
+      img.alt = '';
+      img.onload = function () { $('#ava').textContent = ''; $('#ava').appendChild(img); };
+      img.src = m.avatar;
+    }
+  }
 
   // 版本徽章是外壳的一部分，不是更新日志页的一部分，所以在启动时填。
   jget('/api/releases').then(function (d) {

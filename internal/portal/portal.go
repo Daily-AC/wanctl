@@ -815,9 +815,22 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, detail, http.StatusBadGateway)
 		return
 	}
+	// The avatar needs no extra call and no extra stored field: GitHub serves
+	// it from the numeric account id, which the session already carries. Header
+	// (SSO) deployments have no avatar at all, so this is empty there and the
+	// SPA falls back to a monogram — which it must do anyway, since
+	// avatars.githubusercontent.com is not reliably reachable everywhere this
+	// portal gets deployed.
+	avatar := ""
+	if p.Provider == providerGitHub && p.Subject != "" {
+		avatar = "https://avatars.githubusercontent.com/u/" + url.PathEscape(p.Subject) + "?s=96"
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"identity": p.Login, "namespace": ns, "provider": p.Provider, "role": role,
+		// `identity` predates the split and is the login; kept so nothing that
+		// reads it breaks. `login`/`name`/`avatar` are what the header renders.
+		"identity": p.Login, "login": p.Login, "name": p.Name, "avatar": avatar,
+		"namespace": ns, "provider": p.Provider, "role": role,
 		"lark": s.larkEnabled(),
 		// The SPA composes copy-pasteable `wanctl config set relay=…` lines,
 		// which need the public relay origin this instance runs on.

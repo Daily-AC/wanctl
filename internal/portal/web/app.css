@@ -82,7 +82,13 @@ a:hover{text-decoration:underline}
   position:sticky;top:0;z-index:var(--z-sticky);
   display:flex;align-items:center;gap:14px;height:48px;padding:0 var(--pad);
   background:rgba(255,255,255,.86);backdrop-filter:saturate(180%) blur(20px);
-  border-bottom:1px solid var(--hairline);
+}
+/* 分隔线收到内容锁以内，不做全幅。官网可以全幅，因为它那些整幅 tile 是
+   edge-to-edge 的，线读起来是 tile 的边界；门户没有整幅色块，一条横穿两侧
+   空白的线就只是一条比内容长出几百像素的线，把顶栏和页面切成两截。 */
+.top::after{
+  content:"";position:absolute;left:var(--pad);right:var(--pad);bottom:0;
+  height:1px;background:var(--hairline);
 }
 .top .brand{
   font-size:17px;font-weight:600;letter-spacing:-.4px;color:var(--ink);
@@ -90,14 +96,21 @@ a:hover{text-decoration:underline}
 }
 .top .brand:hover{text-decoration:none}
 .top .who{
-  margin-left:auto;display:flex;align-items:baseline;gap:8px;min-width:0;
+  margin-left:auto;display:flex;align-items:center;gap:8px;min-width:0;
   font-size:13px;color:var(--ink-2);
 }
-.top .who .ns{color:var(--ink);font-weight:600;white-space:nowrap}
-.top .who .fp{
-  font-size:11.5px;color:var(--ink-2);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:34ch;
+.top .who .nm{color:var(--ink);font-weight:600;white-space:nowrap}
+/* 命名空间只在它跟登录名不一样时才出现 —— 一样的时候显示两遍是复述。 */
+.top .who .ns{white-space:nowrap}
+.top .who .ns::before{content:"· "}
+/* 头像拿不到就退回字母章。GitHub 的 avatars 域名不是每个部署地点都拉得动，
+   而且 header(SSO) 模式压根没有头像。 */
+.ava{
+  width:22px;height:22px;border-radius:50%;flex:none;overflow:hidden;
+  display:grid;place-items:center;background:var(--canvas-2);
+  font-size:11px;font-weight:600;color:var(--ink-2);text-transform:uppercase;
 }
+.ava img{width:100%;height:100%;object-fit:cover;display:block}
 .top .tools{display:flex;align-items:center;gap:6px;flex:none}
 /* 头部的三个次级控件（版本号 / 语言 / 齿轮）共用一个形状。
    圆角 999 在这套语法里本来只给主 CTA 和 pill —— 它们是 pill。 */
@@ -112,7 +125,7 @@ a:hover{text-decoration:underline}
 .chip.icon{padding:5px;display:grid;place-items:center}
 .chip.icon svg{width:16px;height:16px;display:block}
 @media (max-width:640px){
-  .top .who .fp{display:none}
+  .top .who .nm,.top .who .ns{display:none}
 }
 
 /* ── 页面骨架 ──────────────────────────────────────────────────────── */
@@ -153,6 +166,9 @@ h2{margin:0;font-size:20px;font-weight:600;line-height:1.2;letter-spacing:-.3px}
 }
 .act:hover{background:var(--canvas-2)}
 .act.danger{color:var(--red)}
+/* 上面那个负外边距是为了让按钮的字跟同行文字对齐，但它也把相邻的两个动作
+   吸到了一起（「接受拒绝」）。相邻时补回来。 */
+.act + .act{margin-left:6px}
 
 /* ── 待审批：门户的主体 ────────────────────────────────────────────────
    DESIGN.md §2 —— 留白中央必须有一个东西镇得住。有人在等你的时候，
@@ -357,6 +373,30 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue-hi)
 .row{display:flex;align-items:center;gap:12px}
 .row .txt{flex:1;min-width:0}
 .row .txt b{font-weight:600}
+
+/* 命令与代码块。之前 pre 一条样式都没有，只继承了等宽字体 ——
+   于是「电脑：一行装好」那页上，说明文字和要你复制的那条命令长得一样重，
+   一眼看不出哪条是命令。 */
+pre{
+  margin:6px 0 14px;padding:12px 14px;
+  background:var(--canvas-2);border-radius:8px;
+  font-size:13px;line-height:1.6;color:var(--ink);
+  overflow-x:auto;white-space:pre;
+}
+/* 能点就得说自己能点。老版有一句「点一下命令可以复制」，我把它当噪声砍了
+   却没留替代物 —— 于是这块变成了一个没有任何提示的可点区域。
+   标签平时不在，悬停才出现；没有悬停的设备（触屏）上一直显示。 */
+pre[data-copy]{cursor:pointer;position:relative;padding-right:64px;transition:background .16s var(--ease)}
+pre[data-copy]:hover{background:#ececf0}
+pre[data-copy]::after{
+  content:attr(data-copy);position:absolute;top:11px;right:13px;
+  font-family:var(--sans);font-size:11.5px;letter-spacing:-.2px;color:var(--ink-2);
+  opacity:0;transition:opacity .16s var(--ease);pointer-events:none;
+}
+pre[data-copy]:hover::after{opacity:1}
+@media (hover:none){ pre[data-copy]::after{opacity:1} }
+code{background:var(--canvas-2);border-radius:5px;padding:1px 5px;font-size:.92em}
+pre code{background:none;padding:0;font-size:1em}
 
 /* 卡片：设置页里那些成组的开关与表单 */
 .card{border:1px solid var(--hairline);border-radius:18px;padding:20px}

@@ -39,6 +39,10 @@ if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/
   exit 1
 fi
 
+# 绑全网卡而不是 127.0.0.1：手机要能走局域网 IP 打开。
+# 数据全是虚构的，也没有任何凭据，暴露在局域网里没有代价。
+LAN=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')
 echo "预览： http://127.0.0.1:$PORT/"
+[ -n "$LAN" ] && echo "手机： http://$LAN:$PORT/"
 echo "目录： $OUT"
-cd "$OUT" && exec python3 -m http.server "$PORT" --bind 127.0.0.1
+cd "$OUT" && exec python3 -m http.server "$PORT"

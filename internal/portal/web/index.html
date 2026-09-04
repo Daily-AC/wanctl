@@ -14,9 +14,13 @@
      的副标 —— 全部退役（DESIGN.md §6.2：没有图形标记，只有字标）。 -->
 <header class="top">
   <button class="brand" id="home">wanctl</button>
-  <div class="who">
-    <span class="ns" id="ns">—</span>
-    <span class="fp" id="fp"></span>
+  <!-- 谁在用。以前这里是命名空间 + 一串指纹 —— 指纹属于机器和控制端，
+       不属于账号，挂在人名旁边会被读成「你的编号」。GitHub 登录本来就给了
+       头像和名字，用那个。 -->
+  <div class="who" id="who" hidden>
+    <span class="ava" id="ava"></span>
+    <span class="nm" id="whoName">—</span>
+    <span class="ns" id="ns" hidden></span>
   </div>
   <div class="tools">
     <button class="chip" id="ver" hidden></button>
