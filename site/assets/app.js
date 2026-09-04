@@ -439,7 +439,22 @@
       b.classList.toggle('on', b.dataset.src === pick.src);
       b.setAttribute('aria-pressed', b.dataset.src === pick.src);
     });
+    markScroll();
   }
+
+  /* 「还有」这个信号（app.css 的 .cmdline.more，一道 24px 的遮罩）。
+     它以前挂在 ≤560 上，理由是那个宽度下四条命令全都溢出。但溢出跟不跟得上
+     宽度不是同一件事：实测 768 下英文那条 GitHub 命令 762px 装进 624px 的框，
+     还有 138px 在外面，而遮罩早在 560 就下线了 —— 命令被硬切在复制键上，
+     一点提示都没有。宽度是猜，scrollWidth 是量的，所以改成量。
+     顺带把 1440 那一档还原成没有遮罩：那里本来就不溢出。 */
+  function markScroll() {
+    var box = installcmd.parentNode;
+    box.classList.toggle('more', installcmd.scrollWidth - installcmd.clientWidth > 1);
+  }
+  if (window.ResizeObserver) new ResizeObserver(markScroll).observe(installcmd);
+  /* 字体是 font-display:swap 的：换字之前量到的宽度是回退字体的宽度。 */
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(markScroll);
   osseg.addEventListener('click', function (e) {
     var b = e.target.closest('[data-os]');
     if (b) { pick.os = b.dataset.os; renderInstall(); }
