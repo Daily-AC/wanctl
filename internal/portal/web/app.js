@@ -385,8 +385,10 @@
           '<span class="scope">' + esc(t().scopeDir(p.cwd)) + '</span></button>' +
         '<button class="btn soft" data-v="g">' + esc(t().global) + '</button>' +
         '<button class="btn soft spacer" data-v="n">' + esc(t().refuse) + '</button>';
+    var dn = devName(dev);
     return '<div class="ask" data-pid="' + esc(p.id) + '" data-dev="' + esc(dev) + '">' +
-      '<div class="head">' + (hideHost ? '' : '<span class="host">' + esc(dev) + '</span>') +
+      '<div class="head">' +
+        (hideHost ? '' : '<span class="host">' + esc(dn.label) + realHTML(dn) + '</span>') +
         '<span class="what">' + esc(t().kind[p.kind] || p.kind) + '</span>' +
         '<span class="wait" data-since="' + esc(p.created || '') + '">' + esc(clock(p.created)) + '</span></div>' +
       '<div class="body"><p class="cmd">' + (isExec ? cmdHTML(p.cmd) : esc(p.path || '—')) + '</p>' +
@@ -402,9 +404,11 @@
       ? '<span class="dim">' + esc(t().roConsole) + '</span>'
       : '<button class="btn" data-pv="y">' + esc(t().trustIt) + '</button>' +
         '<button class="btn soft spacer" data-pv="n">' + esc(t().refuse) + '</button>';
+    var dn = devName(dev);
     return '<div class="ask" data-fp="' + esc(pr.fp) + '" data-dev="' + esc(dev) + '">' +
       '<div class="head"><span class="host">' + esc(pr.label || pr.name || '—') + '</span>' +
-        '<span class="what">' + esc(t().pairing) + (hideHost ? '' : ' · ' + esc(dev)) + '</span>' +
+        '<span class="what">' + esc(t().pairing) +
+          (hideHost ? '' : ' · ' + esc(dn.label) + realHTML(dn)) + '</span>' +
         '<span class="wait" data-since="' + esc(pr.created || '') + '">' + esc(clock(pr.created)) + '</span></div>' +
       '<div class="body"><p class="cmd" style="font-family:inherit">' + esc(t().pairMsg) + '</p>' +
         '<dl class="kv">' + kv + '</dl></div>' +
@@ -452,6 +456,14 @@
   var devices = [];
   var me = null;
 
+  /* 一台设备在门户里只有一种叫法：别名当显示名，机器自己报的那个名字跟在旁边。
+     设备卡、设备页标题、聚合待审批、设备待审批四处都从这里取 —— 各写各的就会各漂各的。 */
+  function devName(name) {
+    var a = aliasOf(name);
+    return { label: a || name, real: a ? name : '' };
+  }
+  function realHTML(d) { return d.real ? '<span class="real">' + esc(d.real) + '</span>' : ''; }
+
   function roGuard(dev) {
     var m = devMeta[dev];
     if (m && m.shared) { toast(t().roGuard, true); return true; }
@@ -481,13 +493,13 @@
     $('#grid').innerHTML = xs.map(function (x) {
       var on = x.online;
       var n = waitCount[x.name] || 0;
-      var label = x.alias || x.name;
-      var name = x.ambiguous ? (label + ' · ' + (x.owner || '')) : label;
+      var d = devName(x.name);
+      var name = x.ambiguous ? (d.label + ' · ' + (x.owner || '')) : d.label;
       return '<button class="dev' + (on ? '' : ' offline') + '" data-dev="' + esc(x.name) + '">' +
         '<span class="nm"><span class="dot' + (on ? '' : ' off') + '"></span>' + esc(name) +
           (n ? '<span class="badge waiting">' + n + ' ' + esc(t().waiting) + '</span>' : '') + '</span>' +
         // 别名是显示名，不是替身：机器自己报的名字始终在旁边。
-        (x.alias ? '<span class="real">' + esc(x.name) + '</span>' : '') +
+        realHTML(d) +
         // 「最近」只在离线时出现：在线设备这一行永远是「刚刚」，等于空转。
         (on ? '' : '<span class="seen">' + esc(t().offline) + ' · ' + esc(ago(x.last_seen)) + '</span>') +
         (x.shared ? '<span class="shared">' + esc(t().shared) + ' ' + esc(x.owner || '—') +
@@ -544,10 +556,10 @@
   function aliasOf(name) { var d = devRow(name); return (d && d.alias) || ''; }
 
   function paintDeviceName(name) {
-    var a = aliasOf(name);
-    $('#dName').textContent = a || name;
-    $('#dReal').textContent = name;
-    $('#dReal').hidden = !a;
+    var d = devName(name);
+    $('#dName').textContent = d.label;
+    $('#dReal').textContent = d.real;
+    $('#dReal').hidden = !d.real;
   }
 
   function openDevice(name) {

@@ -211,6 +211,8 @@ h2{margin:0;font-size:20px;font-weight:600;line-height:1.2;letter-spacing:-.3px}
   font-size:13px;color:var(--ink-2);
 }
 .ask .head .host{color:var(--ink);font-weight:600;font-size:14px;flex:none}
+/* 别名后面那一小截真名。和设备卡同一条规则，只是这里排在行内。 */
+.ask .head .real{margin-left:6px;font-weight:400;font-size:13px;color:var(--ink-2)}
 /* 中间那格（种类 / 配对说明）吃掉剩余宽度并在必要时省略号，
    否则它一长就把秒表挤到第二行去。 */
 .ask .head .what{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -256,7 +258,10 @@ h2{margin:0;font-size:20px;font-weight:600;line-height:1.2;letter-spacing:-.3px}
 /* ── 设备 ──────────────────────────────────────────────────────────── */
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
 .dev{
-  display:block;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;
+  /* 网格把同一行的卡片拉成等高；button 默认把内容垂直居中，于是有别名的
+     那张（两行）和没有的（一行）名字不在同一条基线上。列排从顶开始。 */
+  display:flex;flex-direction:column;justify-content:flex-start;
+  width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;
   background:var(--canvas);border:1px solid var(--hairline);border-radius:18px;
   padding:14px 16px;transition:border-color .16s var(--ease),background .16s var(--ease);
 }
