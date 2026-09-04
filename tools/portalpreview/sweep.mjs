@@ -149,6 +149,7 @@ const AUDIT = (REF) => String.raw`(() => {
     (r.width > 0 || r.height > 0);
 
   const over = [], trunc = [], small = [], unbreak = [], scroll = [];
+  let maxRight = 0;
   const all = [...document.querySelectorAll('body *')];
   const overSet = new Set();
 
@@ -157,6 +158,7 @@ const AUDIT = (REF) => String.raw`(() => {
     const cs = getComputedStyle(el);
     if (!vis(el, cs, r)) continue;
 
+    if (r.right > maxRight) maxRight = r.right;
     if (r.right > vw + 1 || r.left < -1) { over.push(el); overSet.add(el); }
 
     // 截断：装得下才算数，装不下且是有意义的内容（名字/指纹/命令/路径）才上报
@@ -233,9 +235,32 @@ const AUDIT = (REF) => String.raw`(() => {
   return {
     vw, vh, innerWidth,
     scrollWidth: document.documentElement.scrollWidth,
-    overflowX: Math.max(document.documentElement.scrollWidth, innerWidth) - REF,
+    // 三个信号取最大，绝不少报：最右的那条墨迹、文档的滚动宽度、以及被撑宽的
+    // 布局视口。前一个是纯几何、稳定；后两个受 Chrome 移动端模拟的影响，
+    // 同一个页面排在不同状态后面跑，答案会变。
+    overflowX: Math.max(0, Math.round(maxRight) - REF,
+                        document.documentElement.scrollWidth - REF, innerWidth - REF),
+    maxRight: Math.round(maxRight),
     over: overLeaf, trunc, small, unbreak, scroll, modal,
   };
+})()`;
+
+/* 这一屏画完了吗。判据是「地址要求的那个视图正在显示」，设备页还要多问一句
+   指纹填上了没有 —— 它是 route() 里最后落下的那一笔。 */
+const READY = String.raw`return (() => {
+  const g = document.querySelector('#grid');
+  if (!g) return false;
+  const listed = g.children.length || document.querySelector('#onboard').children.length || g.querySelector('.blank');
+  if (!listed) return false;
+  const shown = document.querySelector('.view.show');
+  if (!shown) return false;
+  const h = location.hash;
+  const want = h.indexOf('#device/') === 0 ? (/\/settings$/.test(h) ? 'devsettings' : 'device')
+             : h.indexOf('#settings') === 0 ? 'settings' : 'devices';
+  if (shown.dataset.view !== want) return false;
+  if (want === 'device') return !!document.querySelector('#dFp').textContent;
+  if (want === 'devsettings') return !!document.querySelector('#dsName').textContent.replace('—','');
+  return true;
 })()`;
 
 /* 冻结活的东西，好让截图可比：秒表、相对时间、以及正在滑出的 toast。 */
@@ -344,7 +369,11 @@ for (const vp of VIEWPORTS) {
         : st.hash ? `${BASE}/?lang=${lang}&_s=${st.id}${NOW ? '&now=' + NOW : ''}`
                   : `${BASE}/?lang=${lang}&_s=${st.id}${NOW ? '&now=' + NOW : ''}${st.q || ''}`;
 
-      await cdp.send('Page.navigate', { url });
+      // 45s 而不是默认的 20s：机器上同时跑着别的浏览器时，一次导航偶尔会超时。
+      // 超时了就记一行接着往下跑 —— 一次瞬时失败不该把整轮普查烧掉。
+      let navErr = null;
+      try { await cdp.send('Page.navigate', { url }, 45000); }
+      catch (e) { navErr = String(e).slice(0, 120); }
       await sleep(500);
       if (st.page && lang === 'zh') {
         // 三张认证页由 auth.js 自己读 localStorage，导航后切一次即可
@@ -352,17 +381,26 @@ for (const vp of VIEWPORTS) {
         await sleep(600);
       }
       if (!st.page) {
-        // 等真实数据落地，别量一个还在加载的骨架
-        for (let i = 0; i < 24; i++) {
-          const ready = await cdp.eval(`return !!(document.querySelector('#grid')&&(document.querySelector('#grid').children.length||document.querySelector('#onboard').children.length||document.querySelector('#grid .blank')))`).catch(() => false);
+        // 等到**这个状态那一屏真的画出来**，不是等「有数据了」。
+        // 以前的判据是 #grid 里有卡片 —— 而那只说明 loadDevices 回来了。
+        // route() 等的是 Promise.all([loadDevices(), whoami])，所以设备页
+        // 有可能还没渲染，#dFp 还是空的。空指纹不撑宽页面，于是同一个缺陷
+        // 在 dev-asks 上量到、在 ask-bypass 上量不到 —— 一台时灵时不灵的
+        // 量具比没有量具更坏。
+        for (let i = 0; i < 30; i++) {
+          const ready = await cdp.eval(READY).catch(() => false);
           if (ready) break;
           await sleep(200);
         }
-        if (st.hash) { await cdp.eval(`location.hash = ${JSON.stringify(st.q)}; return 1`); await sleep(400); }
+        if (st.hash) {
+          await cdp.eval(`location.hash = ${JSON.stringify(st.q)}; return 1`);
+          await sleep(400);
+        }
       }
       await sleep(st.settle ?? 350);
       if (st.open) { await cdp.eval(st.open).catch(() => {}); await sleep(st.settle ?? 450); }
       await cdp.eval(FREEZE).catch(() => {});
+
 
       let audit;
       try { audit = await cdp.eval(AUDIT(vp.w)); }
@@ -370,8 +408,11 @@ for (const vp of VIEWPORTS) {
       const errors = cdp.takeErrors().filter((e) => !/favicon|ERR_/.test(e));
 
       const row = { state: st.id, w: vp.w, h: vp.h, lang, ...audit, errors };
+      if (navErr) row.navErr = navErr;
       rows.push(row);
       n++;
+      // 每一行都落盘。以前只在最后写一次，于是任何一次崩溃都把整轮的量测扔掉。
+      writeFileSync(join(OUT, 'sweep.json'), JSON.stringify(rows, null, 1));
 
       if (SHOT_WIDTHS.includes(vp.w)) {
         const f = join(OUT, 'shots', `${st.id}-${vp.w}-${lang}.png`);
