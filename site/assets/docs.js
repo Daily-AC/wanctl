@@ -3,8 +3,11 @@
 
    语言用的是官网那套 data-en / data-zh + localStorage 'wanctl.lang'，
    同一个键，所以从官网切过来切过去是一件事而不是两件。
-   只切外壳（顶栏、分组名、面包屑、目录标题、页脚）—— 正文这一轮不翻译，
-   每篇文章自己带 lang 属性，读屏和断词按它走。 */
+   切的是整页：外壳（顶栏、分组名、面包屑、目录标题、翻页、页脚、<title>）走
+   data-en / data-zh，正文和本页目录各有两份、由 data-lang 挑一份出来
+   （tools/docsite/build.py 生成）。两件事在同一次 applyLang 里做完，
+   所以不会出现外壳已经中文、正文还是英文的中间态。
+   URL 不动：一页两份正文，切语言不跳转、不刷新。 */
 (function () {
   'use strict';
   var $ = function (s) { return document.querySelector(s); };
@@ -20,6 +23,12 @@
     $$('[data-en]').forEach(function (el) {
       var v = el.getAttribute('data-' + l);
       if (v != null) el.innerHTML = v;
+    });
+    /* 两份正文、两份目录，露出对得上的那一份。
+       用 hidden 而不是 style.display：它是「这份内容现在不适用」的语义，
+       读屏和页内查找都跟着走，CSS 那边一条 [hidden] 就够。 */
+    $$('[data-lang]').forEach(function (el) {
+      el.hidden = el.getAttribute('data-lang') !== l;
     });
     try { localStorage.setItem('wanctl.lang', l); } catch (_) {}
   }
