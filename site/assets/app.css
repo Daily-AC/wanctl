@@ -419,6 +419,8 @@ h2{
   .kv dt{flex:none}
   .rows li{flex-wrap:wrap;gap:8px 12px}
   .rows .meta{margin-left:0;width:100%}
+  /* 窄屏上这句会换到第二行，margin-left:auto 让它孤零零吊在右边 */
+  .foot .row .end{margin-left:0}
   .party .who em{margin-left:6px}
   .ledger code{font-size:13.5px;white-space:pre-wrap}
   .wireline{flex-direction:column;gap:12px;margin:20px 0}
