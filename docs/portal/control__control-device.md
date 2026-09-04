@@ -7,10 +7,10 @@ wanctl config set relay=https://relay.example.com portal=https://portal.example.
 `wanctl login` 登录一次拿到身份（浏览器门户登录 → 一次性 code 贴回终端）。然后直接用：
 
 ```
-wanctl peers                                  # 看有哪些设备在线
-wanctl exec --target 设备名 "uname -a"        # 在它上面跑命令
-wanctl push --target 设备名 ./本地 /远程       # 传文件上去
-wanctl pull --target 设备名 /远程 ./本地       # 拉文件下来
+wanctl peers                                  # which devices are online
+wanctl exec --target DEVICE "uname -a"        # run a command on it
+wanctl push --target DEVICE ./local /remote   # send a file up
+wanctl pull --target DEVICE /remote ./local   # pull a file down
 ```
 
 设备主人可以给设备起一个别名：在门户里打开这台设备，点标题行的齿轮，「别名」那一栏填好保存；清空再保存就是取消。别名在你的命名空间内唯一，不能和某台设备的真实名字重名。

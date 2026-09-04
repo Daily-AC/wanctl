@@ -124,13 +124,20 @@ try-it 面板是给 HTTP API 用的。wanctl 对用户的界面是 CLI，没有�
       · 官网 wc.z10.dev 走 `tools/deploy.sh`
       · 门户 wanctl.z10.dev 只重建门户容器，relay 一根手指没动，见第 11 节
 - [x] **文档站 `wc.z10.dev/docs`**（PR #18，09-04 夜合并并上线）：`tools/docsite/build.py`（uv + PEP 723）从 `docs/*.md`
-      和 `docs/portal/*.md` 生成 13 篇 + 目录页，三栏、双语外壳、正文不翻译（6 篇中文指南 + 7 篇英文技术文档，翻译后补）；
+      和 `docs/portal/*.md` 生成 13 篇 + 目录页，三栏、双语外壳；**正文已于 09-05 全部翻译**（见下一条）；
       输出 `site/docs/` 不进 git，`tools/deploy.sh` 发布前先构建；样式 `site/assets/docs.css`。**官网页脚和顶栏已改指向。**
       密度那一列已并进 `DESIGN.md` §9。文章标题字距选择器降到 `:where()`，好让 app.css 的 `h2:lang(zh)` 赢
 - [x] **官网中文字体 + 手机布局（issue #17，PR #20，09-04 夜合并并上线）**：中文走 `:lang(zh)` 元素作用域规则
       （字距归零、系统中文栈、行高放开），手机 560px 以下首屏只留手机、760px 以下去掉两根蓝线，桌面 1440 像素零差异。
       细节在 `HANDOFF.md` §3.11。**#20 的规则是后代形式 `:lang(zh) h1`，文档站的中文只声明在 `<article>` 上，一条都不命中**；
       PR #22 改成元素形式 `h1:lang(zh)` 并把 docs.css 里三处会赢的声明降级，上线后在真浏览器读回 computed 值核过
+- [x] **文档站正文双语（分支 `docs-i18n`）**：13 篇全部译完，每个源文件旁边一份 `.en.md` / `.zh.md` 译文，
+      URL 不动、一页两份正文，语言开关（`wanctl.lang`，跟官网同一个键）连正文、本页目录、`<title>`、
+      面包屑、侧栏和翻页一起切，两种模式下都没有另一种语言的残留。构建里加了一道**结构对齐检查**：
+      每一对的代码块要逐字节相同、标题层级/链接目标/表格形状要一一对上，对不上就让构建失败 ——
+      这是防两半漂移的那道闸。术语真源取自门户的 `data-en`/`data-zh` 对照（待审批=Waiting、
+      指纹=Fingerprint、命名空间=Namespace、共享授权=Shared devices），relay 在中文里不译成「中继」，
+      跟官网一致。写法见 `docs/portal/README.md` 新增的「每篇文章都是一对」一节
 - [ ] 砍 CMS + 端点。**这条现在没有前置依赖了** —— 文档有地方去了
 - [ ] **别名（issue #6，PR #19 评审中）** —— worktree `device-alias`。后端半从被关的 PR #8 第一个 commit
       `87c276f` cherry-pick，门户半按新 UI 重做：设备设置页一行字段，列表与详情显示别名、原名副显。**要随下一个 release 才到线上**
