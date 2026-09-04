@@ -169,7 +169,14 @@
       </div>
     </nav>
 
-    <div>
+    <div class="spane">
+      <!-- 回到清单。只有窄屏的两级形态里它才有对应的动作 —— 宽屏上清单一直在左边，
+           没有「回去」这回事，所以它在那里根本不出现。 -->
+      <button class="back" id="sBack">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m15 18-6-6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-en="Settings" data-zh="设置">Settings</span>
+      </button>
+
       <!-- 令牌 -->
       <section class="sview show" data-s="tokens">
         <div class="vhead">
@@ -401,9 +408,11 @@
 
 <!-- ══ 更新日志。以前它是一个顶级导航项 —— 一年看几次的东西不配。 ══ -->
 <div class="ov" id="clSheet">
-  <div class="modal wide">
+  <div class="modal sheet">
     <div class="vhead"><h1 data-en="Release notes" data-zh="更新日志">Release notes</h1></div>
-    <div id="cl"></div>
+    <!-- 只有这一层滚。标题和「完成」钉住 —— 以前整块浮层是内容高的，
+         于是手机上「完成」压在十几张版本卡底下，要滚到最后才够得着。 -->
+    <div class="sbody" id="cl"></div>
     <div class="btns" style="margin-top:18px">
       <button class="btn soft" id="clClose" data-en="Done" data-zh="完成">Done</button>
     </div>

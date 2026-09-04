@@ -877,8 +877,9 @@
   /* ── 设置 ────────────────────────────────────────────────────────────
      设置和设备设置都是页面，顶栏因此一直在 —— 覆盖层会把「你是谁」盖掉。
      更新日志仍是浮层：它是只读速览，不值得一个地址。 */
-  $('#gear').onclick = function () { go('settings/' + curSet); };
+  $('#gear').onclick = function () { go('settings'); };
   $('#sClose').onclick = function () { go('devices'); };
+  $('#sBack').onclick = function () { go('settings'); };
   $('#dGear').onclick = function () { go('device/' + encodeURIComponent(cur) + '/settings'); };
   $('#dsClose').onclick = function () { go('device/' + encodeURIComponent(cur)); };
   $('#clClose').onclick = function () { $('#clSheet').classList.remove('show'); };
@@ -900,13 +901,19 @@
     if (s === 'invites' && !(me && me.role === 'admin')) return 'tokens';
     return s;
   }
+  // 设置有两级，空的那一级就是清单本身：`#settings` 是清单，
+  // `#settings/tokens` 是其中一节。窄屏上一次只显示一级（app.css 的 760 断点），
+  // 宽屏上两级永远同时在，所以那里两个地址渲染出来是同一张页面。
   function openSheet(s) {
-    s = allowedSet(s);
-    curSet = s;
-    $$('.sgroup button[data-s]').forEach(function (b) { b.classList.toggle('on', b.dataset.s === s); });
-    $$('.sview').forEach(function (v) { v.classList.toggle('show', v.dataset.s === s); });
+    var list = !s;
+    if (!list) curSet = allowedSet(s);
+    var k = curSet;
+    $$('.sgroup button[data-s]').forEach(function (b) { b.classList.toggle('on', b.dataset.s === k); });
+    $$('.sview').forEach(function (v) { v.classList.toggle('show', v.dataset.s === k); });
+    $('.settings').dataset.level = list ? 'list' : 'section';
     showView('settings');
-    if (setLoaders[s]) setLoaders[s]();
+    // 清单这一级也照样加载：宽屏上那一节就在旁边显示着，不加载它是空的。
+    if (setLoaders[k]) setLoaders[k]();
   }
   $$('.sgroup button[data-s]').forEach(function (b) {
     b.onclick = function () { go('settings/' + b.dataset.s); };
@@ -1246,10 +1253,15 @@
     };
     while (i < lines.length) {
       var l = lines[i];
-      if (l.indexOf('```') === 0) {
-        var code = ''; i++;
-        while (i < lines.length && lines[i].indexOf('```') !== 0) code += lines[i++] + '\n';
-        i++; out += '<pre>' + eH(code.replace(/\n$/, '')) + '</pre>'; continue;
+      // 围栏不认列首那一条：发布说明里的代码块几乎都缩在某个列表项底下，
+      // 而缩进过的围栏以前会掉进段落分支，被行内代码那条正则啃成
+      // 「两个字面反引号 + 一段行内 code」—— 甲方手机上看到的就是那个。
+      var f = /^[ \t]*```/.exec(l);
+      if (f) {
+        var pad = f[0].length - 3, code = ''; i++;
+        var strip = new RegExp('^[ \\t]{0,' + pad + '}');
+        while (i < lines.length && !/^[ \t]*```/.test(lines[i])) code += lines[i++].replace(strip, '') + '\n';
+        i++; out += '<pre><code>' + eH(code.replace(/\n$/, '')) + '</code></pre>'; continue;
       }
       if (/^---+\s*$/.test(l)) { out += '<hr>'; i++; continue; }
       var h = /^(#{1,4})\s+(.*)$/.exec(l);
@@ -1271,7 +1283,7 @@
       }
       if (l.trim() === '') { i++; continue; }
       var p = l; i++;
-      while (i < lines.length && lines[i].trim() !== '' && !/^(```|#{1,4}\s|>\s|[-*]\s|\d+\.\s|---+\s*$)/.test(lines[i])) p += '\n' + lines[i++];
+      while (i < lines.length && lines[i].trim() !== '' && !/^([ \t]*```|#{1,4}\s|>\s|[-*]\s|\d+\.\s|---+\s*$)/.test(lines[i])) p += '\n' + lines[i++];
       out += '<p>' + inl(p).replace(/\n/g, '<br>') + '</p>';
     }
     return out;
@@ -1347,7 +1359,8 @@
     // 设置有自己的地址：刷新、后退、把链接发给自己都该回到同一页。
     if (h.indexOf('#settings') === 0) {
       closeDevice();
-      openSheet(h.slice('#settings/'.length) || curSet);
+      // '#settings' 和 '#settings/' 切完都是空串，那就是清单那一级。
+      openSheet(h.slice('#settings/'.length));
       return;
     }
     closeDevice();
