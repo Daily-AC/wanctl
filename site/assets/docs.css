@@ -16,6 +16,9 @@
      三栏 232 + 正文 + 196，正文落在 70 字符左右。
      --pad 在 app.css 里是 var(--maxw) 的函数，改这一个值顶栏也跟着收。 */
   --maxw:1240px;
+  /* app.css 的吸顶条高度，写死在那边的 `.nav{height:48px}`。
+     两根侧栏吸在它底下，所以这个数在这里要有个名字。 */
+  --dhead:48px;
 }
 
 /* ── 密度 ──────────────────────────────────────────────────────────
@@ -51,13 +54,32 @@ body.docs:lang(zh){letter-spacing:0}
 }
 .dpage.no-toc{grid-template-columns:232px minmax(0,1fr)}
 
+/* 两根侧栏都吸在顶栏底下，各自滚各自的，只有正文跟着页面走。
+
+   吸顶必须落在**栏本身**，不能落在栏里面那个盒子上 —— 这是 issue #26 的根因：
+   `.dpage` 是 `align-items:start`，于是 `.dnav` / `.dtoc` 这两个 grid item
+   的高度等于自己内容的高度（实测 902px 和 201px），而一个 sticky 元素只能在
+   它的**包含块**里挪动。包含块就那么高，正文有 4000px，读者滚过去两栏就出画了。
+   grid item 自己做 sticky 时包含块是它的 grid area —— 那一格跟整行一样高，
+   所以两栏能一直吸着。栏高被 max-height 收进视口，超出的部分栏内自己滚。
+
+   `top` 只写顶栏高度、不再补 22px：两栏本来就有 34px / 30px 的上内边距，
+   那口气它们自己带着，补了反而比原来低一截。 */
+.dnav,.dtoc{
+  position:sticky;top:var(--dhead);max-height:calc(100vh - var(--dhead));
+  overflow-y:auto;
+  /* 滚动条安静下来：细、用发丝线那个灰、槽透明。不写 `::-webkit-scrollbar`
+     —— 那条会把 macOS 的覆盖式滚动条换成占位的经典滚动条，凭空吃掉栏宽。 */
+  scrollbar-width:thin;scrollbar-color:var(--hairline) transparent;
+}
+
 /* 左栏 */
 .dnav{
   border-right:1px solid var(--hairline);
   padding:34px 26px 60px 0;font-size:14px;line-height:1.5;
 }
-.dnav>summary{display:none}
-.dnav-in{position:sticky;top:70px;max-height:calc(100vh - 92px);overflow-y:auto}
+/* 抽屉的三件套（触发钮、遮罩、抽屉自己的标题行）只在窄屏存在。 */
+.dnav-open,.dscrim,.dnav-head{display:none}
 .dnav .g{
   margin:22px 0 7px;font-size:12px;font-weight:600;color:var(--ink-2);
   letter-spacing:.04em;text-transform:uppercase;
@@ -98,7 +120,6 @@ body.docs:lang(zh){letter-spacing:0}
   border-left:1px solid var(--hairline);
   padding:30px 0 60px 24px;font-size:13px;line-height:1.5;
 }
-.dtoc nav{position:sticky;top:70px;max-height:calc(100vh - 92px);overflow-y:auto}
 .dtoc .t{
   margin:0 0 10px;font-size:12px;font-weight:600;color:var(--ink-2);
   letter-spacing:.04em;text-transform:uppercase;
@@ -108,6 +129,10 @@ body.docs:lang(zh){letter-spacing:0}
 .dtoc li{margin:0 0 2px}
 .dtoc a{display:block;padding:3px 0;color:var(--ink-2)}
 .dtoc a:hover{color:var(--blue);text-decoration:none}
+/* 读到哪一节，右栏就标哪一条。跟左栏的当前项同一个语法（--blue），
+   但**不上底色** —— 左栏说的是「你在哪一页」，右栏说的是「你读到哪儿了」，
+   后者随着滚动一直在动，给它一块会跟着跳的底色是页面上最吵的东西。 */
+.dtoc a.now{color:var(--blue)}
 
 /* ── 正文排版 ──────────────────────────────────────────────────────
    大而紧排的标题，但比官网小一档：这里的标题是导航，不是主张。 */
@@ -230,34 +255,100 @@ body.docs:lang(zh){letter-spacing:0}
 .dindex .g a{color:var(--ink)}
 .dindex .g a:hover{color:var(--blue);text-decoration:none}
 
-/* ── 窄屏：一栏 ────────────────────────────────────────────────────
-   分组导航收成顶部一个可展开的清单（docs.js 在窄屏上把它合上）；
+/* ── 窄屏：一栏 + 抽屉 ─────────────────────────────────────────────
    本页目录整块退场 —— 它是给有富余宽度的屏幕用的旁注，
-   在一栏里它只是把同一批标题在正文上方再念一遍。 */
+   在一栏里它只是把同一批标题在正文上方再念一遍。
+
+   分组导航以前是顶部一个 `<details>`：展开就把十三条目录顶在正文前面，
+   「菜单和内容挤在同一屏」—— 门户上被甲方否掉的同一个毛病（issue #26）。
+   现在它是一块覆盖层：正文一步都不动，选完一篇就退场。 */
 @media (max-width:1099px){
   .dpage,.dpage.no-toc{grid-template-columns:minmax(0,1fr)}
   .dtoc{display:none}
-  .dnav{border-right:0;border-bottom:1px solid var(--hairline);padding:0 0 4px}
-  .dnav>summary{
-    display:flex;align-items:center;gap:7px;
-    padding:14px 0;cursor:pointer;color:var(--ink-2);font-size:14px;
-    list-style:none;
-  }
-  .dnav>summary::-webkit-details-marker{display:none}
-  /* 折叠指示：一个跟着开合转的角标，不是图标库。 */
-  .dnav>summary::after{
-    content:"";width:6px;height:6px;flex:none;
-    border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
-    transform:rotate(45deg) translate(-2px,-2px);
-    transition:transform .18s var(--ease);
-  }
-  .dnav[open]>summary::after{transform:rotate(225deg) translate(-1px,-1px)}
-  .dnav>summary:hover{color:var(--ink)}
-  .dnav-in{position:static;max-height:none;overflow:visible;padding-bottom:16px}
   .dbody{padding:22px 0 56px}
   .dpage.no-toc .dbody{padding-right:0}
   .dbody article h1{font-size:clamp(27px,6vw,34px)}
   .dbody article h2{font-size:21px;margin-top:36px}
+
+  /* 没有脚本时到此为止：导航还是正文上面那一整份清单，跟以前一样能用。
+     下面每一条都挂在 `.js` 上，抽屉是脚本兑现得起的那部分。 */
+  .dnav{
+    position:static;max-height:none;overflow:visible;
+    border-right:0;border-bottom:1px solid var(--hairline);padding:0 0 4px;
+  }
+  .dnav-in{padding-bottom:16px}
+
+  /* 触发钮站在正文最上面，长得就是以前那条 summary —— 关着的时候
+     这一屏跟以前逐像素一样，变的只是点下去之后发生什么。 */
+  .js .dnav-open{
+    display:flex;align-items:center;gap:7px;width:100%;
+    padding:14px 0;border:0;background:none;cursor:pointer;
+    font:inherit;font-size:14px;color:var(--ink-2);text-align:left;
+    border-bottom:1px solid var(--hairline);
+  }
+  /* 角标：一个朝下的角，跟以前那条 summary 上的是同一笔，不是图标库。 */
+  .js .dnav-open::after{
+    content:"";width:6px;height:6px;flex:none;
+    border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
+    transform:rotate(45deg) translate(-2px,-2px);
+  }
+  .js .dnav-open:hover{color:var(--ink)}
+
+  /* 遮罩。黑不是新颜色，是 --ink 压到三成 —— 它在这儿的职责是让底下那页
+     退后，不是自己成为一个色块。 */
+  .js .dscrim{
+    display:block;position:fixed;inset:0;z-index:6;
+    background:rgba(29,29,31,.34);
+    opacity:0;pointer-events:none;transition:opacity .24s var(--ease);
+  }
+  .js.dnav-on .dscrim{opacity:1;pointer-events:auto}
+
+  /* 抽屉本体：从左边滑进来，盖住顶栏 —— 它是这一刻屏幕上唯一的事。
+     关着的时候 `visibility:hidden` 把里面十三个链接一起从 tab 序里拿掉，
+     不用再写一行 JS 去 inert 它们。 */
+  .js .dnav{
+    position:fixed;inset:0 auto 0 0;z-index:7;
+    width:min(320px,86vw);max-width:100%;
+    padding:0 22px 28px;border:0;
+    background:var(--canvas);border-right:1px solid var(--hairline);
+    overflow-y:auto;overscroll-behavior:contain;
+    transform:translateX(-100%);visibility:hidden;
+    transition:transform .26s var(--ease),visibility .26s var(--ease);
+  }
+  .js.dnav-on .dnav{transform:none;visibility:visible}
+
+  /* 抽屉自己的标题行：一个「全部文档」加一个叉。 */
+  .js .dnav-head{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    position:sticky;top:0;z-index:1;margin:0 -22px 6px;padding:13px 22px;
+    background:var(--canvas);border-bottom:1px solid var(--hairline);
+    font-size:14px;color:var(--ink-2);
+  }
+  /* 叉也是画出来的：两笔发丝，跟角标同一套手法。 */
+  .js .dnav-close{
+    position:relative;flex:none;width:34px;height:34px;margin-right:-9px;
+    border:0;border-radius:8px;background:none;cursor:pointer;color:var(--ink-2);
+  }
+  .js .dnav-close::before,.js .dnav-close::after{
+    content:"";position:absolute;left:11px;top:16px;width:12px;height:1.5px;
+    background:currentColor;
+  }
+  .js .dnav-close::before{transform:rotate(45deg)}
+  .js .dnav-close::after{transform:rotate(-45deg)}
+  .js .dnav-close:hover{color:var(--ink);background:var(--canvas-2)}
+
+  .js .dnav .g:first-child{margin-top:16px}
+  .js .dnav li a{margin-left:-10px}
+
+  /* 抽屉开着时页面不滚。两个元素都写：iOS Safari 只认 body 上那一条。
+     这一条留在窄屏断点里 —— 抽屉开着时把窗口拉宽，抽屉本身随断点退场，
+     锁要是留在外头，桌面那一版就再也滚不动了。 */
+  html.dnav-on,html.dnav-on body{overflow:hidden}
+}
+
+/* 动效是这里唯一一处动的东西，关掉它抽屉照样能用。 */
+@media (prefers-reduced-motion:reduce){
+  .js .dnav,.js .dscrim{transition:none}
 }
 
 @media (max-width:640px){
