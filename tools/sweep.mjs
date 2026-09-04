@@ -27,7 +27,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -197,16 +197,33 @@ const PROBE = `(() => {
      are held to 40x40: the header buttons, the segmented picker, the copy key,
      the drawer trigger, and every link that is laid out as its own row. */
   const CONTROL = '.nav, .picker, .cmdline, .dnav, .dtoc, .crumbs, .foot .flinks, .pager, .dindex .g, .dnav-head, .doors, .cta-row';
+  /* The box is not the target: a transparent ::after can extend the reachable
+     area without moving a pixel of ink, and .nav .lang does exactly that. So
+     hit-test outward from the centre instead of reading the rect. */
+  const reach = (el, r, dx, dy) => {
+    let n = 0;
+    for (; n <= 24; n += 2) {
+      const x = r.left + r.width / 2 + dx * (n + 1);
+      const y = r.top + r.height / 2 + dy * (n + 1);
+      if (x < 0 || y < 0 || x > vw || y > vh) break;
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || (hit !== el && !el.contains(hit))) break;
+    }
+    return n;
+  };
   const taps = [];
   for (const el of all) {
     if (el.closest('.stage')) continue;
     if (!el.matches('a, button, [role="button"], input, select, summary')) continue;
     const r = el.getBoundingClientRect();
-    if (r.width >= 40 && r.height >= 40) continue;
+    const w = Math.max(r.width, reach(el, r, 1, 0) + reach(el, r, -1, 0));
+    const h = Math.max(r.height, reach(el, r, 0, 1) + reach(el, r, 0, -1));
+    if (w >= 40 && h >= 40) continue;
     const disp = getComputedStyle(el).display;
     const control = el.matches('button, [role="button"], input, select, summary')
       || !!el.closest(CONTROL) || disp === 'block' || disp === 'flex' || disp === 'grid';
-    taps.push({ el: name(el), w: +r.width.toFixed(1), h: +r.height.toFixed(1), control, text: text(el) });
+    taps.push({ el: name(el), w: +w.toFixed(1), h: +h.toFixed(1),
+                box: (+r.width.toFixed(1)) + '×' + (+r.height.toFixed(1)), control, text: text(el) });
   }
 
   /* 7. tables: wider than the box that is meant to scroll them */
@@ -222,9 +239,12 @@ const PROBE = `(() => {
     };
   });
 
-  /* 8. anything that sits on top of the text */
+  /* 8. anything that sits on top of the text.
+     Only at scroll 0: the sticky bar is *meant* to have content slide under it
+     (DESIGN.md §8 keeps the backdrop-filter for exactly that), so measuring it
+     mid-scroll reports the design as a defect. */
   const overlaps = [];
-  if (navBox) {
+  if (navBox && scrollY < 1) {
     const main = document.querySelector('main, .dpage, .dindex');
     if (main) {
       for (const el of Array.from(main.querySelectorAll('h1, h2, h3, p, li, code')).filter(vis)) {
@@ -273,6 +293,11 @@ async function connect(port) {
     if (!tabs) await sleep(400);
   }
   if (!tabs) throw new Error(`CDP port ${port} never came up`);
+  /* Attaching to the wrong browser is silent and total: the run finishes, the
+     numbers are real, and they describe somebody else's page. It happened once
+     here — another agent's headless Chrome held the guessed port, our spawn
+     failed to bind, and a whole sweep came back measuring the device portal.
+     Hence: the port is read out of our own profile, never guessed. */
   const page = tabs.find(t => t.type === "page");
   const ws = new WebSocket(page.webSocketDebuggerUrl.replace("localhost", page.host));
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
@@ -336,13 +361,25 @@ mkdirSync(OUT, { recursive: true });
 if (SHOTS) mkdirSync(join(OUT, "shots"), { recursive: true });
 
 const CHROME = process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const PORT = 9741 + (process.pid % 200);
-const profile = join(tmpdir(), `wanctl-sweep-${process.pid}`);
+/* Port 0 lets Chrome pick a free one and write it into our own profile, so a
+   sweep can never end up driving another agent's browser (see connect()). */
+const profile = join(tmpdir(), `wanctl-sweep-${process.pid}-${Date.now()}`);
 const chrome = spawn(CHROME, [
   "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
   "--no-default-browser-check", "--disable-extensions", "--force-device-scale-factor=1",
-  `--user-data-dir=${profile}`, `--remote-debugging-port=${PORT}`, "about:blank",
+  `--user-data-dir=${profile}`, "--remote-debugging-port=0", "about:blank",
 ], { stdio: "ignore" });
+
+const portFile = join(profile, "DevToolsActivePort");
+let PORT = null;
+for (let i = 0; i < 80 && !PORT; i++) {
+  if (existsSync(portFile)) {
+    const first = readFileSync(portFile, "utf8").split("\n")[0].trim();
+    if (/^\d+$/.test(first)) PORT = Number(first);
+  }
+  if (!PORT) await sleep(250);
+}
+if (!PORT) { chrome.kill(); throw new Error("Chrome never wrote DevToolsActivePort"); }
 
 const cdp = await connect(PORT);
 
