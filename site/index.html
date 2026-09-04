@@ -83,8 +83,9 @@
     </div>
   </section>
 
-  <!-- 深色屏：审批凭证被放大成主体 -->
-  <section class="tile dark center" id="decide">
+  <!-- 深色屏：审批凭证。主体在右 —— 那是「你」的回答，落在首屏手机所在的那一侧 -->
+  <section class="tile dark split" id="decide">
+    <div class="say">
     <h2 data-en="Nothing runs until you say yes."
         data-zh="你不点头，什么都不会跑。">Nothing runs until you say yes.</h2>
     <p class="lead"
@@ -93,6 +94,8 @@
       The device decides locally. A rule you signed can let a command through;
       anything else waits for a person. Every answer is written down.
     </p>
+    </div>
+    <div class="see">
     <div class="panel">
       <div class="head">
         <span class="t" data-en="Signed decision" data-zh="签过的决定">Signed decision</span>
@@ -100,10 +103,13 @@
       </div>
       <div class="body" id="cred"></div>
     </div>
+    </div>
   </section>
 
-  <!-- 浅灰屏：设备列表被放大成主体 -->
-  <section class="tile grey center" id="fleet">
+  <!-- 浅灰屏：设备列表。主体在左 —— 那是 wanctl peers 的输出，
+       控制端看的东西，落在首屏笔记本所在的那一侧 -->
+  <section class="tile grey split flip" id="fleet">
+    <div class="say">
     <h2 data-en="Your fleet, in one list." data-zh="你的机器，一张表看完。">Your fleet, in one list.</h2>
     <p class="lead"
        data-en="Laptops, servers, phones and routers. One Go binary runs on all of them, over WebSocket or plain HTTP long-poll."
@@ -111,12 +117,15 @@
       Laptops, servers, phones and routers. One Go binary runs on all of them,
       over WebSocket or plain HTTP long-poll.
     </p>
+    </div>
+    <div class="see">
     <div class="panel">
       <div class="head">
         <span class="t" data-en="Devices" data-zh="设备">Devices</span>
         <span class="s" id="fleetcount">—</span>
       </div>
       <ul class="rows" id="rows"></ul>
+    </div>
     </div>
   </section>
 

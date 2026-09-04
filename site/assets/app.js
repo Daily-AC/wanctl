@@ -282,8 +282,12 @@
     var row = function (a, b, mono) {
       return '<dl class="kv"><dt>' + esc(a) + '</dt><dd' + (mono ? ' class="mono"' : '') + '>' + esc(b) + '</dd></dl>';
     };
+    /* 命令这一格走 cmdHTML，不走 esc：窄屏上 dd 会折行，
+       而浏览器允许在连字符后断开，`--epochs` 就成了 `--` / `epochs`。 */
+    var cmdRow = '<dl class="kv"><dt>' + esc(k.cmd) + '</dt>' +
+                 '<dd class="mono cmd">' + cmdHTML(j.raw) + '</dd></dl>';
     cred.innerHTML = row(k.by, t().you) + row(k.device, j.host, 1) +
-                     row(k.from2, j.by, 1) + row(k.cmd, j.raw, 1) +
+                     row(k.from2, j.by, 1) + cmdRow +
                      row(k.scope, ok ? scope : t().refusedWord);
     /* 中转那边的一整条记录：INSERT INTO audit (namespace, device, event)。
        没有命令、没有输出、没有文件名——就这四格。 */

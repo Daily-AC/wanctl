@@ -38,7 +38,10 @@
   --mono:'JetBrains Mono','PingFang SC',ui-monospace,SFMono-Regular,Menlo,monospace;
 
   --maxw:1440px;
-  --pad:max(22px, calc((100vw - var(--maxw)) / 2));
+  /* 侧边留白：窄屏 22px 就够，宽屏最多 56px。
+     居中的海报永远够不到边，但两栏章节里的面板会一直顶到 --pad，
+     只留 22px 会让它看着要掉出屏幕。超过 1552px 之后由内容锁接手。 */
+  --pad:max(clamp(22px, 4vw, 56px), calc((100vw - var(--maxw)) / 2));
   --ease:cubic-bezier(.22,.61,.36,1);
   --z-nav:5;
 }
@@ -59,6 +62,37 @@ a:hover{text-decoration:underline}
 
 /* ── 整幅屏：颜色变化本身就是分隔线 ────────────────────────────────── */
 .tile{padding:clamp(52px,6.4vw,88px) var(--pad)}
+
+/* ── 两栏章节 ────────────────────────────────────────────────────────
+   规则：海报（首屏、安装）居中，章节走左脊。主体落在哪一侧不是为了不单调，
+   是**位置在说这东西属于谁** —— 首屏已经定了笔记本在左（控制端）、手机在右（你）。
+     · 凭证是你的回答      → 主体在右
+     · 设备表是 peers 的输出 → 主体在左（.flip）
+     · 身份核对是两端之间的链路，不站边 → 保持整幅居中，顺便打断节拍
+   两条纪律：文字列跑到哪边，段落自身永远左对齐（右对齐段落的锯齿左缘不可读）；
+   两行的分栏比例故意不同，不做镜像 50/50。 */
+.tile.split{
+  display:grid;align-items:center;text-align:left;
+  gap:clamp(34px,5vw,78px);
+}
+#decide.split{grid-template-columns:minmax(0,42fr) minmax(0,58fr)}
+#fleet.split{grid-template-columns:minmax(0,61fr) minmax(0,39fr)}
+.split.flip .see{order:-1}
+.split .say{max-width:36rem}
+.split .lead{margin-left:0;margin-right:0;max-width:40ch}
+.split .panel{margin:0;max-width:100%}
+/* 面板该不该长满自己那一栏，看它有没有东西填。
+   凭证是五行短键值，拉宽只会在每行后面拖出一大片空 —— 封顶，贴外缘站。
+   设备表有右对齐的 meta 列，宽度越大它越像一张真表 —— 让它长满。 */
+#decide .panel{max-width:620px;margin-left:auto}
+
+@media (max-width:900px){
+  .tile.split{grid-template-columns:minmax(0,1fr)!important;gap:clamp(26px,4vw,38px)}
+  .split.flip .see{order:0}      /* 窄屏一律先说话再给东西看 */
+  .split .say{max-width:none}
+  .split .lead{max-width:52ch}
+  #decide .panel{max-width:100%;margin-left:0}
+}
 /* 首屏顶上已经有导航条了，不需要再来一整份上留白 ——
    省下来的高度给舞台，好让手机上那个蓝按钮落在折线以上（它是要人去点的东西）。 */
 .tile.hero{padding-top:clamp(32px,3.6vw,52px)}
@@ -188,8 +222,8 @@ h2{
   /* 优先在空格处折行：break-all 会把 --epochs 拦腰断成 --epoc / hs */
   word-break:normal;overflow-wrap:break-word;
 }
-.ask .what .tok{white-space:nowrap}
-.ask .what .tok.split{white-space:normal;word-break:break-all}
+.ask .what .tok,.kv dd.cmd .tok{white-space:nowrap}
+.ask .what .tok.split,.kv dd.cmd .tok.split{white-space:normal;word-break:break-all}
 /* 手机上的那份秒表。移动端终端在折线以下，这一份才是落地时看得见的活体证明 */
 .ask .pend{
   margin-top:auto;display:flex;align-items:center;justify-content:center;gap:6px;
