@@ -183,6 +183,11 @@ og.png / mark.svg HIT，指纹后的 css/js immutable，HTML `no-cache` + `DYNAM
 （CF 免费版本来就不缓存 HTML，15K 而已）。橙云首字节 ~1.6s、灰云 ~0.69s，
 和 `fleet-deploy` 里记的阿姆斯特丹绕道口径一致。
 
+**09-04 夜补：目录重定向会泄漏源站端口。** `wc.z10.dev/docs`（不带斜杠）曾被 301 到 `wc.z10.dev:8443/docs/`：
+hk 反代到 ls 的 8443，nginx 给目录补斜杠时把自己监听的端口写进了 Location。修法是在 ls 的
+`/etc/nginx/sites-available/wc` 加 `absolute_redirect off;`（备份在同目录 `.bak-20260904`），已重载并实测三条 URL 都 301 到干净路径。
+以后加任何有子目录的静态站都要带这一行。
+
 ## 3.11 中文排版 + 手机版式（09-04 晚，issue #17，分支 `site-mobile-cjk`）
 
 甲方在手机上报了两件事：中文一切过去**每台设备上都难看**；手机版「适配了，但看着别扭」。
