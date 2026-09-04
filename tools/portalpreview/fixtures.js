@@ -121,7 +121,7 @@
     '/api/releases': {
       current: 'v0.3.4',
       releases: [
-        { version: 'v0.3.4', body: '## Fixed\n\n- The installer served by a relay now points at that relay, so a machine behind a firewall can install without reaching GitHub.\n- `wanctl update` no longer reports success when it could not replace the binary.\n' },
+        { version: 'v0.3.4', body: '# v0.3.4\n\n**The install script a relay serves now installs from that relay.**\n\n## Install\n\n- A relay rewrites its own `/install.sh` and `/install.ps1` to download from its own `/dl` mirror, so nothing extra has to be set:\n\n  ```bash\n  curl -fsSL https://relay.example.com/install.sh | sh\n  ```\n  ```powershell\n  irm https://relay.example.com/install.ps1 | iex\n  ```\n\n  Until now a relay served the script baked in at release time, whose download base pointed at GitHub — and the people who fetch a script from a relay are usually exactly the ones who cannot reach that page.\n\n## Upgrade\n\n- New `wanctl config set release_base=…`, which picks where `wanctl update` fetches signed artefacts from:\n\n  ```bash\n  wanctl config set release_base=https://relay.example.com/dl\n  ```\n\n  `WANCTL_RELEASE_BASE` still wins over it.\n' },
         { version: 'v0.3.3', body: '## Security\n\n- Release artefacts are verified against their signature, size and SHA-256 before anything is written to disk.\n' }
       ]
     }

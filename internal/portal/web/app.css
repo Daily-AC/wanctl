@@ -357,6 +357,8 @@ td.num{font-variant-numeric:tabular-nums}
 .settings > nav{position:sticky;top:64px;align-self:start}
 .sview{display:none}
 .sview.show{display:block}
+/* 「回到清单」只属于窄屏的两级形态。宽屏上清单一直在左边，没有「回去」可回。 */
+.spane > .back{display:none}
 .sgroup{margin-bottom:22px}
 .sgroup .t{font-size:12px;color:var(--ink-2);padding:0 10px 6px}
 .sgroup button{
@@ -364,12 +366,38 @@ td.num{font-variant-numeric:tabular-nums}
   color:var(--ink-2);background:none;border:0;border-radius:8px;
   padding:6px 10px;cursor:pointer;
 }
-.sgroup button:hover{background:var(--canvas-2);color:var(--ink)}
-.sgroup button.on{background:var(--blue-wash);color:var(--blue);font-weight:600}
+/* 用 background-color 而不是 background 简写：窄屏那一级要在同一个盒子上
+   再挂一枚人字形背景图，简写会把它一起清掉。 */
+.sgroup button:hover{background-color:var(--canvas-2);color:var(--ink)}
+.sgroup button.on{background-color:var(--blue-wash);color:var(--blue);font-weight:600}
+
+/* ── 窄屏：设置是两级，不是一屏 ────────────────────────────────────────
+   以前一列塞不下就直接把导航摞到内容上面，于是手机上要滚过整张菜单才够得着
+   你点的那一节，而菜单自己读起来像是页面的一部分。iOS 设置那套：
+   清单是一屏（`#settings`），点进去那一节是另一屏（`#settings/tokens`），
+   顶上一枚人字形回清单。两级都在地址里，所以系统返回键是对的。
+
+   宽屏一个字都不改 —— 下面全部条款都关在这个断点里面。 */
 @media (max-width:760px){
   .settings{grid-template-columns:minmax(0,1fr)}
   .settings > nav{position:static}
   .sgroup{margin-bottom:14px}
+  .settings[data-level="list"] > .spane{display:none}
+  .settings[data-level="section"] > nav{display:none}
+  .settings[data-level="section"] .spane > .back{display:inline-flex}
+  /* 清单这一屏上没有「当前项」：高亮的是你上次去过的地方，不是你此刻在的地方。 */
+  .settings[data-level="list"] .sgroup button.on{
+    background-color:transparent;color:var(--ink-2);font-weight:400;
+  }
+  /* 手指的靶子。14px 行高 1.47 配 6px 内边距只有 34px 高。 */
+  .sgroup button{padding:11px 10px}
+  /* 每一行都会推开一屏，就得说自己会。同一枚人字形（.back 那条路径），
+     指向它去的那个方向。文档那条是外链，它的 ↗ 已经在标签里了。 */
+  .sgroup button[data-s]{
+    padding-right:34px;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2386868b' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 10px center;background-size:13px 13px;
+  }
 }
 
 /* ── 表单 ──────────────────────────────────────────────────────────── */
@@ -450,9 +478,26 @@ pre code{background:none;padding:0;font-size:1em}
 .ov.show{display:flex}
 .modal{
   background:var(--canvas);border-radius:18px;padding:24px;width:100%;max-width:26rem;
-  max-height:calc(100vh - 40px);overflow-y:auto;
+  /* svh 而不是 vh。手机浏览器的 vh 是地址栏收起之后的那个大视口，
+     按它算出来的浮层比你眼前看得见的那块高，底下那排按钮正好落在屏幕外面。
+     两条都留着：不认 svh 的浏览器读第一条。 */
+  max-height:calc(100vh - 40px);
+  max-height:calc(100svh - 40px);
+  overflow-y:auto;
 }
-.modal.wide{max-width:44rem}
+/* 更新日志那张。它是浮层里唯一会长过一屏的，所以只有它分三段：
+   标题与「完成」钉住，中间那层自己滚。整块一起滚的话，手机上「完成」
+   压在十几张版本卡底下 —— 想关掉它得先把它整个读完一遍。 */
+.modal.sheet{
+  max-width:44rem;
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.modal.sheet > .vhead,.modal.sheet > .btns{flex:none}
+.modal.sheet .sbody{
+  flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+  /* 版本说明里有 URL 和环境变量名，断不开的长串会顶破浮层的右缘。 */
+  overflow-wrap:break-word;
+}
 .modal h2{margin:0 0 8px}
 .modal p{margin:0 0 18px;color:var(--ink-2);font-size:14px}
 .modal .btns{display:flex;justify-content:flex-end;gap:8px}
