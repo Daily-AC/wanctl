@@ -58,6 +58,8 @@
 
     <div class="dhead">
       <h1 id="dName">—</h1>
+      <!-- 别名当显示名时，原名紧跟在旁边：别名可以更好记，但不能把机器的身份藏起来。 -->
+      <span class="real" id="dReal" hidden></span>
       <!-- 执行模式是这台设备的一个属性，不是一个页面。以前它独占一个 tab。 -->
       <select class="modesel" id="dMode">
         <option value="normal" data-en="Ask me" data-zh="逐条确认">Ask me</option>
@@ -335,6 +337,20 @@
         <span data-en="Done" data-zh="完成">Done</span>
       </button>
       <div class="vhead"><h1 id="dsName">—</h1></div>
+
+      <div class="card">
+        <div class="row">
+          <span class="txt">
+            <b data-en="Alias" data-zh="别名"></b><br>
+            <span class="dim" data-en="Your own name for this device. It works wherever the device name does, --target included. The original name stays on show."
+                              data-zh="你给这台设备起的名字。设备名能用的地方它都能用，包括 --target。原名照常显示。"></span>
+          </span>
+        </div>
+        <div class="row fieldrow">
+          <input id="dsAliasIn" type="text" maxlength="40" autocomplete="off" spellcheck="false">
+          <button class="btn" id="dsAliasSave" data-en="Save" data-zh="保存"></button>
+        </div>
+      </div>
 
       <div class="card" id="dsLan" hidden>
         <div class="row">

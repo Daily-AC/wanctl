@@ -73,6 +73,10 @@
       never2: 'never', revoked: 'revoked', active: 'active',
       copied: 'Copied', copy: 'Copy',
       saved: 'Saved', cleared: 'Cleared', sent: 'Test delivered',
+      aliasNone: 'no alias',
+      aliasTaken: 'Another device already answers to that alias.',
+      aliasShadows: 'A device is already called that. An alias may not stand in front of a real name.',
+      aliasInvalid: 'An alias is 1 to 40 characters and cannot contain a slash.',
       notifyOff: 'No webhook configured', notifyOn: function (f) { return 'Delivering to ' + f; },
       noAttempts: 'No delivery attempted yet.',
       lastOK: function (w) { return 'Last delivery succeeded (' + w + ')'; },
@@ -162,6 +166,10 @@
       never2: '永不', revoked: '已吊销', active: '有效',
       copied: '已复制', copy: '复制',
       saved: '已保存', cleared: '已清除', sent: '测试通知已送达',
+      aliasNone: '未设置',
+      aliasTaken: '这个别名已经指向另一台设备了。',
+      aliasShadows: '已经有一台设备叫这个名字。别名不能挡在真名前面。',
+      aliasInvalid: '别名 1 到 40 个字符，不能含斜杠。',
       notifyOff: '未配置 webhook', notifyOn: function (f) { return '投递到 ' + f; },
       noAttempts: '还没有投递尝试。',
       lastOK: function (w) { return '最近一次投递成功（' + w + '）'; },
@@ -473,10 +481,13 @@
     $('#grid').innerHTML = xs.map(function (x) {
       var on = x.online;
       var n = waitCount[x.name] || 0;
-      var name = x.ambiguous ? (x.name + ' · ' + (x.owner || '')) : x.name;
+      var label = x.alias || x.name;
+      var name = x.ambiguous ? (label + ' · ' + (x.owner || '')) : label;
       return '<button class="dev' + (on ? '' : ' offline') + '" data-dev="' + esc(x.name) + '">' +
         '<span class="nm"><span class="dot' + (on ? '' : ' off') + '"></span>' + esc(name) +
           (n ? '<span class="badge waiting">' + n + ' ' + esc(t().waiting) + '</span>' : '') + '</span>' +
+        // 别名是显示名，不是替身：机器自己报的名字始终在旁边。
+        (x.alias ? '<span class="real">' + esc(x.name) + '</span>' : '') +
         // 「最近」只在离线时出现：在线设备这一行永远是「刚刚」，等于空转。
         (on ? '' : '<span class="seen">' + esc(t().offline) + ' · ' + esc(ago(x.last_seen)) + '</span>') +
         (x.shared ? '<span class="shared">' + esc(t().shared) + ' ' + esc(x.owner || '—') +
@@ -492,6 +503,15 @@
     return jget('/api/devices').then(function (d) {
       noteDevices(d.devices);
       renderDevices();
+      // route() can beat this request: setting a hash while the page is still
+      // loading queues a hashchange that fires as soon as the listener exists.
+      // The device screen is then already up, drawn from an empty list — and an
+      // alias field showing "" for a device that has one would wipe that alias
+      // on the next Save.
+      if (cur) {
+        paintDeviceName(cur);
+        $('#dsAliasIn').value = aliasOf(cur);
+      }
     }).catch(function (e) {
       oops(e);
       $('#grid').innerHTML = '<div class="blank">' + esc(t().cantReach) + '</div>';
@@ -520,15 +540,25 @@
   /* ── 设备下钻 ────────────────────────────────────────────────────── */
   var cur = null, pollGen = 0, curMode = 'normal';
 
+  function devRow(name) { return devices.filter(function (x) { return x.name === name; })[0]; }
+  function aliasOf(name) { var d = devRow(name); return (d && d.alias) || ''; }
+
+  function paintDeviceName(name) {
+    var a = aliasOf(name);
+    $('#dName').textContent = a || name;
+    $('#dReal').textContent = name;
+    $('#dReal').hidden = !a;
+  }
+
   function openDevice(name) {
     cur = name;
-    $('#dName').textContent = name;
+    paintDeviceName(name);
     var m = devMeta[name] || {};
     $('#dShared').hidden = !m.shared;
     if (m.shared) $('#dShared').textContent = t().roBanner(m.owner || '—');
     $('#dGear').hidden = !!m.shared;
     $('#dMode').disabled = !!m.shared;
-    var d = devices.filter(function (x) { return x.name === name; })[0];
+    var d = devRow(name);
     $('#dFp').textContent = d ? (d.fingerprint || '') : '';
     showView('device');
     selTab('asks');
@@ -752,6 +782,8 @@
 
   function loadDeviceSettings(name) {
     $('#dsName').textContent = name;
+    $('#dsAliasIn').value = aliasOf(name);
+    $('#dsAliasIn').placeholder = t().aliasNone;
     // 这套部署没配飞书凭证的话（GitHub OAuth 自部署实例都是），整张卡藏掉
     if (me && me.lark === false) $('#dsLark').hidden = true;
     else jget('/api/devices/lark?device=' + encodeURIComponent(name)).then(function (c) {
@@ -795,6 +827,24 @@
       .then(function (r) { return r.json(); })
       .then(function (saved) { saved.health = devNotify.health; devNotify = saved; paintDevNotify(); })
       .catch(oops);
+  };
+
+  // 中继把这三种拒绝写成裸 token；照着翻成一句人话，其余错误照常走 oops。
+  var aliasSay = {
+    alias_taken: 'aliasTaken', alias_shadows_device: 'aliasShadows', alias_invalid: 'aliasInvalid'
+  };
+  function aliasErr(e) {
+    var k = aliasSay[('' + (e && e.message || '')).trim()];
+    if (k) toast(t()[k], true); else oops(e);
+  }
+
+  $('#dsAliasSave').onclick = function () {
+    if (!cur || roGuard(cur)) return;
+    var name = cur, v = $('#dsAliasIn').value.trim();
+    jpost('/api/devices/alias', { device: name, alias: v })
+      .then(function () { return loadDevices(); })
+      .then(function () { toast(v ? t().saved : t().cleared); })
+      .catch(aliasErr);
   };
 
   $('#dsRemove').onclick = function () {
@@ -1296,6 +1346,7 @@
   function repaint() {
     if (cur && lastState) applyState(lastState);
     else renderDevices();
+    $('#dsAliasIn').placeholder = t().aliasNone;
     dlDone = false; clDone = false;
     if ($('[data-view="settings"]').classList.contains('show') && setLoaders[curSet]) {
       if (curSet === 'downloads') loadDownloads(); else setLoaders[curSet]();
