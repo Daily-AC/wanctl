@@ -478,9 +478,26 @@ pre code{background:none;padding:0;font-size:1em}
 .ov.show{display:flex}
 .modal{
   background:var(--canvas);border-radius:18px;padding:24px;width:100%;max-width:26rem;
-  max-height:calc(100vh - 40px);overflow-y:auto;
+  /* svh 而不是 vh。手机浏览器的 vh 是地址栏收起之后的那个大视口，
+     按它算出来的浮层比你眼前看得见的那块高，底下那排按钮正好落在屏幕外面。
+     两条都留着：不认 svh 的浏览器读第一条。 */
+  max-height:calc(100vh - 40px);
+  max-height:calc(100svh - 40px);
+  overflow-y:auto;
 }
-.modal.wide{max-width:44rem}
+/* 更新日志那张。它是浮层里唯一会长过一屏的，所以只有它分三段：
+   标题与「完成」钉住，中间那层自己滚。整块一起滚的话，手机上「完成」
+   压在十几张版本卡底下 —— 想关掉它得先把它整个读完一遍。 */
+.modal.sheet{
+  max-width:44rem;
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.modal.sheet > .vhead,.modal.sheet > .btns{flex:none}
+.modal.sheet .sbody{
+  flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+  /* 版本说明里有 URL 和环境变量名，断不开的长串会顶破浮层的右缘。 */
+  overflow-wrap:break-word;
+}
 .modal h2{margin:0 0 8px}
 .modal p{margin:0 0 18px;color:var(--ink-2);font-size:14px}
 .modal .btns{display:flex;justify-content:flex-end;gap:8px}

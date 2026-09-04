@@ -408,9 +408,11 @@
 
 <!-- ══ 更新日志。以前它是一个顶级导航项 —— 一年看几次的东西不配。 ══ -->
 <div class="ov" id="clSheet">
-  <div class="modal wide">
+  <div class="modal sheet">
     <div class="vhead"><h1 data-en="Release notes" data-zh="更新日志">Release notes</h1></div>
-    <div id="cl"></div>
+    <!-- 只有这一层滚。标题和「完成」钉住 —— 以前整块浮层是内容高的，
+         于是手机上「完成」压在十几张版本卡底下，要滚到最后才够得着。 -->
+    <div class="sbody" id="cl"></div>
     <div class="btns" style="margin-top:18px">
       <button class="btn soft" id="clClose" data-en="Done" data-zh="完成">Done</button>
     </div>
