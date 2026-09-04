@@ -17,8 +17,11 @@ trap 'rm -rf "$STAGE"' EXIT
 
 cp -R "$ROOT/site/." "$STAGE/"
 
-# 内容指纹：md5 前 10 位，够用且短
-for f in app.css app.js; do
+# 内容指纹：md5 前 10 位，够用且短。
+# mark.svg 也在里面：2026-09-04 换标记那次它被漏下了 —— 源站换了新文件，
+# 而 Cloudflare 拿着一份 age=13048 的 HIT 在发旧的（nginx 给图片的
+# Cache-Control 是 public, max-age=86400），标签页里整整一天还是旧标记。
+for f in app.css app.js mark.svg; do
   h=$(md5 -q "$STAGE/assets/$f" 2>/dev/null || md5sum "$STAGE/assets/$f" | cut -c1-32)
   h=$(echo "$h" | cut -c1-10)
   # BSD 和 GNU sed 的 -i 用法不同，走临时文件绕开
@@ -26,8 +29,11 @@ for f in app.css app.js; do
   mv "$STAGE/index.html.new" "$STAGE/index.html"
   echo "  $f -> ?v=$h"
 done
-grep -o 'assets/app\.[a-z]*?v=[0-9a-f]*' "$STAGE/index.html" || {
-  echo "指纹没写进 index.html —— 别发这一版" >&2; exit 1; }
+for f in app.css app.js mark.svg; do
+  grep -q "assets/$f?v=[0-9a-f]" "$STAGE/index.html" || {
+    echo "$f 的指纹没写进 index.html —— 别发这一版" >&2; exit 1; }
+done
+grep -o 'assets/[a-z.]*?v=[0-9a-f]*' "$STAGE/index.html"
 
 if [ "$1" = "--dry-run" ]; then echo "dry run，未上传"; exit 0; fi
 
