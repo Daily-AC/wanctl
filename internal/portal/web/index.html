@@ -253,6 +253,10 @@
 
       <!-- 邀请（仅管理员） -->
       <section class="sview" data-s="invites">
+        <!-- 申请队列。和主屏那块聚合待审批是同一个组件、同一条规矩：
+             有人在等你决定时它在最上面，没人等时整块不出现。
+             队列是私密的 —— 只有管理员看得见，申请人只看得见自己那一条。 -->
+        <div class="asks" id="reqs"></div>
         <div class="vhead">
           <h1 data-en="Invites" data-zh="邀请">Invites</h1>
           <button class="btn" id="iAdd" data-en="New invite" data-zh="新建邀请">New invite</button>

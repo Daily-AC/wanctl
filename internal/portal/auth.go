@@ -467,7 +467,29 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	s.render(w, "pending.html", map[string]any{"Login": p.Login})
+	// The page renders one of four states, and which one is a server-side
+	// fact: an applicant must not be shown a form whose submit would be
+	// refused. A relay that cannot answer leaves the invite-code form and the
+	// request form both on the page — the relay being down is not a reason to
+	// tell someone their application does not exist.
+	state, retryDays := "none", 0
+	if status, err := s.accessStatusFor(p); err == nil {
+		if status.CanApply {
+			state = "none"
+		} else {
+			state = status.Status
+		}
+		if status.RetryAt != nil {
+			// Whole days, rounded up: a date would need a timezone to be
+			// true, and "in 6 days" is true everywhere.
+			if d := time.Until(*status.RetryAt); d > 0 {
+				retryDays = int((d + 24*time.Hour - time.Second) / (24 * time.Hour))
+			}
+		}
+	}
+	s.render(w, "pending.html", map[string]any{
+		"Login": p.Login, "Req": state, "RetryDays": retryDays, "NoteMax": accessNoteMax,
+	})
 }
 
 func (s *Server) handleAuthRedeem(w http.ResponseWriter, r *http.Request) {

@@ -74,6 +74,8 @@
       newInvite: 'New invite', inviteLogin: 'GitHub login (optional)',
       invitePlaceholder: 'fill in to pre-register; leave empty for a one-time code',
       inviteCode: 'code', invitePre: 'pre-registered', invitePending: 'unused', inviteUsed: 'used by',
+      reqWants: 'is asking for access', approve: 'Approve',
+      reqOK: 'Approved — that login is now invited.', reqNo: 'Declined.',
       addFriend: 'Add friend', friendNS: "Their username (namespace)", send: 'Send request',
       friendYes: 'friend', friendIn: 'wants to add you', friendOut: 'waiting for them',
       accept: 'Accept', decline: 'Decline', withdraw: 'Withdraw',
@@ -181,6 +183,8 @@
       newInvite: '新建邀请', inviteLogin: 'GitHub 用户名（可选）',
       invitePlaceholder: '填了就预录对方；留空则生成一次性邀请码',
       inviteCode: '邀请码', invitePre: '已预录', invitePending: '待使用', inviteUsed: '已用于',
+      reqWants: '申请访问', approve: '通过',
+      reqOK: '已通过 —— 这个登录名现在有邀请了。', reqNo: '已拒绝。',
       addFriend: '加好友', friendNS: '对方的用户名（命名空间）', send: '发送请求',
       friendYes: '好友', friendIn: '想加你为好友', friendOut: '等待对方接受',
       accept: '接受', decline: '拒绝', withdraw: '撤回',
@@ -1005,7 +1009,8 @@
 
   var curSet = 'tokens';
   var setLoaders = {
-    tokens: loadTokens, notify: loadNotify, invites: loadInvites,
+    tokens: loadTokens, notify: loadNotify,
+    invites: function () { loadRequests(); return loadInvites(); },
     friends: loadFriends, acl: loadACL, downloads: loadDownloads, audit: loadAudit
   };
   // 角色在这里拦，不只在导航项的 hidden 上拦。服务端的 requireAdmin 一直是好的
@@ -1124,6 +1129,52 @@
       jpost('/api/notify', { delete: true }).then(function () { toast(t().cleared); loadNotify(); }).catch(oops);
     });
   };
+
+  /* ── 申请访问 ─────────────────────────────────────────────────────────
+     陌生人从官网点进来、用 GitHub 登录、在等待邀请页上申请，就落在这里。
+     它跟主屏那块聚合待审批是同一个组件：有人在等你决定。
+     「通过」不是第二套准入机制 —— 它写的就是一条绑定登录名的普通邀请，
+     跟「新建邀请」写的是同一张表。 */
+  function reqCard(r) {
+    var note = (r.note || '').trim();
+    return '<div class="ask" data-rid="' + esc(r.id) + '">' +
+      '<div class="head">' +
+        '<span class="host">' + esc(r.login) + '</span>' +
+        '<span class="what">' + esc(t().reqWants) + '</span>' +
+        '<span class="wait">' + esc(ago(r.created_at)) + '</span></div>' +
+      (note ? '<div class="body"><p class="cmd" style="font-family:inherit">' + esc(note) + '</p></div>' : '') +
+      '<div class="acts">' +
+        '<button class="btn" data-rv="approved">' + esc(t().approve) + '</button>' +
+        '<button class="btn soft spacer" data-rv="declined">' + esc(t().decline) + '</button>' +
+      '</div></div>';
+  }
+
+  function loadRequests() {
+    return jget('/api/access-requests').then(function (d) {
+      // 只画等着的那些。已决的那一条不再是可以行动的东西，而通过之后
+      // 它本来就以一条邀请的形式留在下面那张表里。
+      var xs = (d.requests || []).filter(function (r) { return r.status === 'pending'; });
+      $('#reqs').innerHTML = xs.map(reqCard).join('');
+      $$('#reqs .ask').forEach(function (el) {
+        $$('.btn[data-rv]', el).forEach(function (b) {
+          b.onclick = function () {
+            $$('.btn', el).forEach(function (x) { x.disabled = true; });
+            jpost('/api/access-requests/decide',
+              { id: parseInt(el.dataset.rid, 10), decision: b.dataset.rv })
+              .then(function () {
+                toast(b.dataset.rv === 'approved' ? t().reqOK : t().reqNo);
+                // 通过会写出一条邀请，所以两张表一起重画。
+                loadRequests(); loadInvites();
+              })
+              .catch(function (e) {
+                $$('.btn', el).forEach(function (x) { x.disabled = false; });
+                oops(e);
+              });
+          };
+        });
+      });
+    }).catch(function () { /* 瞬时失败下轮再来，不要在页面上闪一条错误 */ });
+  }
 
   /* ── 邀请 ────────────────────────────────────────────────────────── */
   function loadInvites() {
