@@ -113,10 +113,10 @@ func TestAccessRequestGate(t *testing.T) {
 		{"never asked", AccessRequest{}, false, nil},
 		{"one already waiting", AccessRequest{Status: accessPending}, true, ErrAccessRequestOpen},
 		{"already approved", decided(accessApproved, time.Hour), true, ErrAccessRequestSettled},
-		{"declined yesterday", decided(accessDeclined, 24 * time.Hour), true, ErrAccessRequestCooldown},
-		{"declined 6 days ago", decided(accessDeclined, 6 * 24 * time.Hour), true, ErrAccessRequestCooldown},
-		{"declined 7 days ago", decided(accessDeclined, 7 * 24 * time.Hour), true, nil},
-		{"declined 8 days ago", decided(accessDeclined, 8 * 24 * time.Hour), true, nil},
+		{"declined yesterday", decided(accessDeclined, 24*time.Hour), true, ErrAccessRequestCooldown},
+		{"declined 6 days ago", decided(accessDeclined, 6*24*time.Hour), true, ErrAccessRequestCooldown},
+		{"declined 7 days ago", decided(accessDeclined, 7*24*time.Hour), true, nil},
+		{"declined 8 days ago", decided(accessDeclined, 8*24*time.Hour), true, nil},
 	}
 	for _, c := range cases {
 		if got := accessRequestGate(c.latest, c.found, now); got != c.want {
