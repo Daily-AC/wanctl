@@ -48,8 +48,11 @@
 
 <main>
 
-  <!-- 首屏：双屏真实场景。屏幕里跑的是活的产品界面，不是贴图。 -->
+  <!-- 首屏：双屏真实场景。屏幕里跑的是活的产品界面，不是贴图。
+       底下那块画布是密文场（assets/field.js）：relay 看得见的那种字节，
+       鼠标经过会解析、点一下会推出一圈蓝色的波。纯装饰，对读屏器不存在。 -->
   <section class="tile hero center">
+    <canvas class="field" id="field" aria-hidden="true"></canvas>
     <h1 data-en="Your machines. Your call." data-zh="你的机器，你说了算。">Your machines. Your call.</h1>
     <p class="lead"
        data-en="wanctl gives an AI agent your machines across the public internet. Every command stops at the device and waits for you."
@@ -62,21 +65,31 @@
       <a class="link-arrow" href="#decide" data-en="See how it works" data-zh="看看它怎么工作">See how it works</a>
     </div>
 
+    <!-- 两台机器的外壳是真机渲染图（屏那块是透明的洞），活界面垫在壳底下：
+         壳压在上面、不接事件，所以屏里那三个按钮照常能按。屏的位置是量出来的，见 app.css。
+         手机屏里的状态栏和 home 条是 iOS 自己的东西，不是我们的界面 —— 对读屏器不存在。 -->
     <div class="stage">
       <div class="laptop">
-        <div class="lid">
-          <div class="notch"></div>
-          <div class="screen"><div class="term" id="term"></div></div>
-        </div>
-        <div class="base"></div>
+        <div class="screen"><div class="term" id="term"></div></div>
+        <img class="shell" src="assets/macbook.webp" width="1400" height="855" alt="" fetchpriority="high">
       </div>
       <div class="phone" id="phone">
-        <div class="body">
-          <div class="screen">
-            <span class="island"></span>
-            <div class="ask" id="ask"></div>
+        <div class="screen">
+          <div class="sbar" aria-hidden="true">
+            <span class="clock">9:41</span>
+            <svg class="sys" viewBox="0 0 72 12" fill="currentColor" aria-hidden="true">
+              <rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="4.6" y="5.5" width="3" height="6.5" rx=".8"/>
+              <rect x="9.2" y="3" width="3" height="9" rx=".8"/><rect x="13.8" y="0" width="3" height="12" rx=".8"/>
+              <path d="M22.8 4.3A9.5 9.5 0 0 1 36.2 4.3M25.1 6.6A6.2 6.2 0 0 1 33.9 6.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="29.5" cy="10.3" r="1.6"/>
+              <rect x="43.5" y=".5" width="24" height="11" rx="3" fill="none" stroke="currentColor" stroke-opacity=".35"/>
+              <rect x="45.5" y="2.5" width="20" height="7" rx="1.6"/><path d="M68.8 4.2v3.6a1.9 1.9 0 0 0 0-3.6z" opacity=".4"/>
+            </svg>
           </div>
+          <div class="ask" id="ask"></div>
+          <span class="homebar" aria-hidden="true"></span>
         </div>
+        <img class="shell" src="assets/iphone.webp" width="900" height="1864" alt="" fetchpriority="high">
       </div>
     </div>
   </section>
@@ -300,5 +313,6 @@
 </footer>
 
 <script src="assets/app.js"></script>
+<script src="assets/field.js"></script>
 </body>
 </html>

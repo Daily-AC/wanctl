@@ -3,32 +3,25 @@
 <link rel="stylesheet" href="assets/app.css">
 <style>
   /* 分享卡片：1200×630，复用站点的 token 和 .phone/.ask 的真实样式，
-     所以卡片上那块屏和官网上那块是同一套 CSS，不会各画各的。 */
+     所以卡片上那块屏和官网上那块是同一套 CSS，不会各画各的。
+     卡片自己的容器叫 .og 不叫 .card —— 手机屏里那张分组卡是 .ask .card，撞过一次名。 */
   html,body{margin:0;width:1200px;height:630px;overflow:hidden;background:var(--canvas)}
-  .card{display:flex;align-items:center;gap:56px;padding:0 76px;height:630px}
+  .og{display:flex;align-items:center;gap:56px;padding:0 76px;height:630px}
   .col{flex:1 1 auto;min-width:0}
   .brand{display:flex;align-items:center;gap:11px;font-size:25px;font-weight:600;
          letter-spacing:-.4px;color:var(--ink);margin-bottom:34px}
   .brand svg{display:block;width:28px;height:28px;flex:none}
-  .card h1{font-size:66px;line-height:1.04;letter-spacing:-.9px;font-weight:600;margin:0}
-  .card p{font-size:26px;line-height:1.4;letter-spacing:-.4px;color:var(--ink-2);
+  .og h1{font-size:66px;line-height:1.04;letter-spacing:-.9px;font-weight:600;margin:0}
+  .og p{font-size:26px;line-height:1.4;letter-spacing:-.4px;color:var(--ink-2);
           margin:26px 0 0;max-width:25ch}
-  .card .tag{margin-top:40px;font-size:19px;color:var(--ink-2);letter-spacing:-.2px}
-  .card .tag b{font-weight:400;color:var(--ink)}
+  .og .tag{margin-top:40px;font-size:19px;color:var(--ink-2);letter-spacing:-.2px}
+  .og .tag b{font-weight:400;color:var(--ink)}
   .shot{flex:0 0 auto}
-  .shot .phone{width:250px;margin:0;filter:drop-shadow(3px 5px 30px rgba(0,0,0,.22))}
-  .shot .ask{padding:38px 17px 17px;gap:6px}
-  .shot .ask .from{font-size:14px}
-  .shot .ask .fp{font-size:11.5px}
-  .shot .ask .host{font-size:21px}
-  .shot .ask .what{font-size:15px}
-  .shot .ask .pend{font-size:13px;padding-bottom:12px}
-  .shot .ask .pend .dot{width:8px;height:8px}
-  .shot .ask .acts{margin:0 -17px;padding:13px 17px 0}
-  .shot .ask button{font-size:17px;padding:11px 6px}
+  /* 卡片上的手机 250 宽；屏里的 iOS 尺子放到 .28cqw（17pt ≈ 12px），社交预览缩小后名字还认得出 */
+  .shot .phone{width:250px;margin:0;--pt:.28cqw;filter:drop-shadow(3px 5px 30px rgba(0,0,0,.22))}
 </style></head>
 <body>
-<div class="card">
+<div class="og">
   <div class="col">
     <div class="brand"><svg class="mk" viewBox="0 0 32 32" aria-hidden="true"><path d="M5.6 12.4 10.2 21.8 15.2 14.6 19.6 21.8 26.4 7.6" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"/></svg>wanctl</div>
     <h1>Your machines.<br>Your call.</h1>
@@ -37,25 +30,40 @@
   </div>
   <div class="shot">
     <div class="phone">
-      <div class="body">
-        <div class="screen">
-          <span class="island"></span>
-          <div class="ask">
-            <div class="from">claude@workstation</div>
+      <div class="screen">
+        <div class="sbar" aria-hidden="true">
+          <span class="clock">9:41</span>
+          <svg class="sys" viewBox="0 0 72 12" fill="currentColor" aria-hidden="true">
+            <rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="4.6" y="5.5" width="3" height="6.5" rx=".8"/>
+            <rect x="9.2" y="3" width="3" height="9" rx=".8"/><rect x="13.8" y="0" width="3" height="12" rx=".8"/>
+            <path d="M22.8 4.3A9.5 9.5 0 0 1 36.2 4.3M25.1 6.6A6.2 6.2 0 0 1 33.9 6.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="29.5" cy="10.3" r="1.6"/>
+            <rect x="43.5" y=".5" width="24" height="11" rx="3" fill="none" stroke="currentColor" stroke-opacity=".35"/>
+            <rect x="45.5" y="2.5" width="20" height="7" rx="1.6"/><path d="M68.8 4.2v3.6a1.9 1.9 0 0 0 0-3.6z" opacity=".4"/>
+          </svg>
+        </div>
+        <div class="ask">
+          <div class="ttl"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5.6 12.4 10.2 21.8 15.2 14.6 19.6 21.8 26.4 7.6" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"/></svg>wanctl</div>
+          <div class="who">
+            <div class="name">claude@workstation</div>
             <div class="fp">SHA256:fJoz5aA…DOAEo=</div>
-            <div class="from">wants to run on</div>
-            <div class="host">bench-02</div>
-            <div class="what"><span class="tok">python</span> <span class="tok">train.py</span>
-              <span class="tok">--epochs</span> <span class="tok">3</span> <span class="tok">--resume</span></div>
-            <div class="pend mono"><span class="dot"></span><span class="pt">pending 0:07</span></div>
-            <div class="acts">
-              <button class="yes">Allow once</button>
-              <button class="alt">Always allow this</button>
-              <button class="no">Refuse</button>
-            </div>
+            <div class="from">wants to run a command</div>
+          </div>
+          <dl class="card">
+            <div class="row"><dt>Device</dt><dd class="mono">bench-02</dd></div>
+            <div class="row"><dt>Command</dt><dd class="mono what"><span class="tok">python</span> <span class="tok">train.py</span>
+              <span class="tok">--epochs</span> <span class="tok">3</span> <span class="tok">--resume</span></dd></div>
+          </dl>
+          <div class="pend"><span class="dot"></span><span class="pt">pending 0:07</span></div>
+          <div class="acts">
+            <button class="yes">Allow once</button>
+            <button class="alt">Always allow this</button>
+            <button class="no">Refuse</button>
           </div>
         </div>
+        <span class="homebar" aria-hidden="true"></span>
       </div>
+      <img class="shell" src="assets/iphone.webp" width="900" height="1864" alt="">
     </div>
   </div>
 </div>
