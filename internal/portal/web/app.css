@@ -531,9 +531,19 @@ pre code{background:none;padding:0;font-size:1em}
   position:fixed;left:50%;bottom:26px;transform:translate(-50%,14px);z-index:var(--z-toast);
   background:var(--ink);color:var(--canvas);border-radius:999px;padding:9px 18px;font-size:13.5px;
   opacity:0;pointer-events:none;transition:opacity .2s var(--ease),transform .2s var(--ease);
-  max-width:calc(100vw - 40px);
+  /* width:max-content 是必需的，不是修饰。left:50% 而没有 right，收缩到合适宽度时
+     可用宽度只有视口的右半边 —— 360px 上就是 180px，于是底下那条 max-width 从来没
+     生效过，一句英文提示在还剩一半空地的时候就折成了两行。 */
+  width:max-content;max-width:calc(100vw - 40px);
 }
 .toast.show{opacity:1;transform:translate(-50%,0)}
+/* 认不出来的服务端错误码。等宽是为了让它能被逐字符读准并抄进 issue 里；
+   底色和字色都跟着 toast 走 —— 全局的 code 样式给的是浅灰底，压在深色或红色
+   的 toast 上会变成一块补丁。 */
+.toast code{
+  background:none;padding:0;margin-left:6px;
+  font-family:var(--mono);font-size:12.5px;color:inherit;opacity:.85;
+}
 .toast.no{background:var(--red)}
 
 /* ── 认证页 ──────────────────────────────────────────────────────────

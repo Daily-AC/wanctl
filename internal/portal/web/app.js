@@ -82,6 +82,20 @@
       copied: 'Copied', copy: 'Copy',
       saved: 'Saved', cleared: 'Cleared', sent: 'Test delivered',
       aliasNone: 'no alias',
+      // 服务端错误码 → 一句人话。见 errSay。
+      eRelay: 'Cannot reach the relay right now.',
+      eIdentity: 'This device reported a different identity.',
+      eNoDevice: 'That device is not in your namespace.',
+      eForbidden: 'You are not allowed to do that.',
+      eUnauthorized: 'Your session has expired. Sign in again.',
+      eNotFound: 'Not found.',
+      eNoUser: 'No such account.',
+      eNoFriend: 'That is not one of your friends.',
+      eNotFriends: 'You are not friends yet.',
+      ePending: 'That invite has not been accepted yet.',
+      eBadCode: 'That code is not valid.',
+      failedGeneric: 'That did not work.',
+      failedCode: 'Failed:',
       aliasTaken: 'Another device already answers to that alias.',
       aliasShadows: 'A device is already called that. An alias may not stand in front of a real name.',
       aliasInvalid: 'An alias is 1 to 40 characters and cannot contain a slash.',
@@ -106,7 +120,6 @@
       bypassT: 'Allow everything on this device?',
       bypassM: 'Every command and file operation runs without asking you. Only for machines you trust and have isolated. The whole period is recorded in the audit log.',
       confirm: 'Confirm', current: 'current',
-      failed: function (e) { return 'Failed: ' + e; },
       notSignedIn: 'Not signed in',
       dlLatest: 'latest', dlSource: 'Released on GitHub',
       dlPhone: 'Android phone or tablet',
@@ -176,6 +189,19 @@
       copied: '已复制', copy: '复制',
       saved: '已保存', cleared: '已清除', sent: '测试通知已送达',
       aliasNone: '未设置',
+      eRelay: '现在连不上中继。',
+      eIdentity: '这台设备报出了另一个身份。',
+      eNoDevice: '这台设备不在你的命名空间里。',
+      eForbidden: '你没有这个权限。',
+      eUnauthorized: '登录已过期，请重新登录。',
+      eNotFound: '没找到。',
+      eNoUser: '没有这个账号。',
+      eNoFriend: '这不是你的好友。',
+      eNotFriends: '你们还不是好友。',
+      ePending: '这条邀请还没被接受。',
+      eBadCode: '这个码不对。',
+      failedGeneric: '没成功。',
+      failedCode: '失败：',
       aliasTaken: '这个别名已经指向另一台设备了。',
       aliasShadows: '已经有一台设备叫这个名字。别名不能挡在真名前面。',
       aliasInvalid: '别名 1 到 40 个字符，不能含斜杠。',
@@ -200,7 +226,6 @@
       bypassT: '这台设备全放行？',
       bypassM: '所有命令和文件操作都会自动放行、不再问你。只给可信且已隔离的机器用。这段时间会一直记进审计。',
       confirm: '确定', current: '当前版本',
-      failed: function (e) { return '失败：' + e; },
       notSignedIn: '未登录',
       dlLatest: '最新', dlSource: '发布源 GitHub',
       dlPhone: '安卓手机 / 平板',
@@ -303,15 +328,61 @@
   /* ── toast ──────────────────────────────────────────────────────────
      反馈只有这一套。以前顶上还挂着一条 6 秒的错误条，两套机制做同一件事。 */
   var toastT;
-  function toast(msg, bad) {
+  /* code 是可选的：认不出来的服务端错误码原样显示，但用等宽排，
+     并且只显示码本身 —— 不显示装它的那层 JSON、也不显示 HTTP 状态。 */
+  function toast(msg, bad, code) {
     var el = $('#toast');
     el.className = 'toast' + (bad ? ' no' : '');
     el.textContent = msg;
+    if (code) {
+      var c = document.createElement('code');
+      c.textContent = code;
+      el.appendChild(c);
+    }
     requestAnimationFrame(function () { el.classList.add('show'); });
     clearTimeout(toastT);
     toastT = setTimeout(function () { el.classList.remove('show'); }, bad ? 4200 : 2200);
   }
-  function oops(e) { toast(t().failed(e && e.message ? e.message : e), true); }
+  /* 服务端的错误体有三种形状，三种都不该原样端到人脸上：
+       · 门户自己写的 JSON     {"error":"device_identity_changed",…}
+       · 中继透传的一个裸 token  forbidden · alias_taken · no-such-user
+       · http.Error 的一句纯文本 "relay unreachable: dial tcp 10.0.0.1:8080…"
+     以前 oops 直接把整段拼进 toast，于是「连不上中继」这一屏上，人看到的是
+     一串带花括号的 JSON（或者一句 Go 的拨号错误）。 */
+  var errSay = {
+    relay_unreachable: 'eRelay',
+    device_identity_changed: 'eIdentity',
+    device_not_found: 'eNoDevice',
+    alias_taken: 'aliasTaken',
+    alias_shadows_device: 'aliasShadows',
+    alias_invalid: 'aliasInvalid',
+    forbidden: 'eForbidden',
+    unauthorized: 'eUnauthorized',
+    not_found: 'eNotFound',
+    bad_verification_code: 'eBadCode',
+    'no-such-user': 'eNoUser',
+    'no-such-friend': 'eNoFriend',
+    'not-friends': 'eNotFriends',
+    'invalid-friend': 'eNotFriends',
+    'pending-invite': 'ePending'
+  };
+
+  function errCode(e) {
+    if (e && e.data && typeof e.data.error === 'string') return e.data.error;
+    var s = ('' + ((e && e.message) || '')).trim();
+    // 「relay unreachable」后面跟的是 Go 的拨号错误原文，对人没有信息。
+    if (/^relay unreachable\b/i.test(s)) return 'relay_unreachable';
+    // 只有单个 token 才可能是错误码；一整句话不是，把它当码显示更糟。
+    return /^[A-Za-z][A-Za-z0-9_.-]{0,48}$/.test(s) ? s : '';
+  }
+
+  function oops(e) {
+    var code = errCode(e);
+    var k = errSay[code];
+    if (k) return toast(t()[k], true);
+    if (code) return toast(t().failedCode, true, code);
+    toast(t().failedGeneric, true);
+  }
 
   /* ── 表 ──────────────────────────────────────────────────────────────
      手机上表头那一行不在了（每行竖着排，见 app.css 的 640 断点），所以每个
@@ -896,13 +967,6 @@
   };
 
   // 中继把这三种拒绝写成裸 token；照着翻成一句人话，其余错误照常走 oops。
-  var aliasSay = {
-    alias_taken: 'aliasTaken', alias_shadows_device: 'aliasShadows', alias_invalid: 'aliasInvalid'
-  };
-  function aliasErr(e) {
-    var k = aliasSay[('' + (e && e.message || '')).trim()];
-    if (k) toast(t()[k], true); else oops(e);
-  }
 
   $('#dsAliasSave').onclick = function () {
     if (!cur || roGuard(cur)) return;
@@ -910,7 +974,7 @@
     jpost('/api/devices/alias', { device: name, alias: v })
       .then(function () { return loadDevices(); })
       .then(function () { toast(v ? t().saved : t().cleared); })
-      .catch(aliasErr);
+      .catch(oops);
   };
 
   $('#dsRemove').onclick = function () {

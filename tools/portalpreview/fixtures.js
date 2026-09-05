@@ -16,7 +16,8 @@
   // 而它们恰恰是布局最容易崩的地方（一张卡都没有 / 一块区整个消失 / 只剩一行字）。
   //   ?scene=empty  设备为零 → 首台设备引导
   //   ?scene=noask  没人在等 → 聚合待审批整块不出现
-  //   ?scene=down   /api/devices 503 → 「连不上中继」
+  //   ?scene=down   /api/devices 502 → 「连不上中继」（纯文本，真形状）
+  //   ?scene=oddcode /api/devices 返回一个字典里没有的裸错误码 → 未知码那一路
   var scene = new URLSearchParams(location.search).get('scene') || '';
 
   // 头像三态。真实端点只对 GitHub 会话返回 avatar_url，header(SSO) 模式不返回，
@@ -199,7 +200,16 @@
     if (url.indexOf('http') === 0 && url.indexOf(location.origin) !== 0) return realFetch(url, opts);
 
     if (scene === 'down' && url.split('?')[0] === '/api/devices') {
-      return Promise.resolve(new Response('{"error":"relay_unreachable"}', { status: 503, headers: { 'Content-Type': 'application/json' } }));
+      // 形状照抄真代码：门户拿不到中继时走的是 http.Error(w, "relay unreachable: …", 502)
+      // —— 纯文本、502、末尾带换行。这里原来编了一个 {"error":"relay_unreachable"} 的
+      // JSON，工装第三次替真代码撒谎，而那个假形状正好把 toast 里那条裸 JSON 藏住了。
+      return Promise.resolve(new Response('relay unreachable: dial tcp 10.60.0.145:8080: i/o timeout\n',
+        { status: 502, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }));
+    }
+    // 认不出来的码：中继将来加一个新 token，门户不该因此又把原始报文端出来。
+    if (scene === 'oddcode' && url.split('?')[0] === '/api/devices') {
+      return Promise.resolve(new Response('quota_exceeded',
+        { status: 429, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }));
     }
     var body = match(url);
     if (body === undefined) {
