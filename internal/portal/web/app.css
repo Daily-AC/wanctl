@@ -621,10 +621,6 @@ pre code{background:none;padding:0;font-size:1em}
   .ask .head{flex-wrap:wrap}
   .ask .head .host{flex:1 1 100%;overflow-wrap:anywhere}
 
-  /* 命令与安装命令。横向滚的代码块在手机上等于把命令藏起来一半，
-     而这块的全部意义就是让你在按下复制之前把它读完。 */
-  pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:visible}
-
   /* ── 表在手机上不是表 ──────────────────────────────────────────────
      活动那张有五列，360px 上一列只剩 72px，而其中一列装的是整条命令；
      信任那张一列装的是指纹。任何列宽都救不了它们，量出来是整页被顶宽。
@@ -669,6 +665,13 @@ pre code{background:none;padding:0;font-size:1em}
      画出来的东西一个像素都没动。滑块跟着往下挪同样的 8px。 */
   .sw{height:40px;padding:8px 0;background-clip:content-box}
   .sw::after{top:10px}
+}
+
+/* 命令与安装命令。横向滚的代码块等于把命令藏起来一半，而这块的全部意义
+   就是让你在按下复制之前把它整条读完。断点比其余手机条款宽：768 的平板上
+   那条 curl 仍然装不下（实测藏掉 327px），而其余条款在平板上并不适用。 */
+@media (max-width:768px){
+  pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:visible}
 }
 
 /* ── 动效降级 ──────────────────────────────────────────────────────── */

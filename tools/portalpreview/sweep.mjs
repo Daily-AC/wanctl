@@ -43,6 +43,9 @@ const PORT = Number(arg('--port', '9779'));
 const CHROME = arg('--chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
 // 把工装里的「现在」钉住，好让两次普查的截图逐像素可比（fixtures.js 读 ?now）。
 const NOW = arg('--now', '');
+// 附加在每个 SPA 地址上的查询串，例如 --query avatar=off：
+// 想把某一处变化按住不动、只看别处差异时用它。
+const QUERY = arg('--query', '');
 
 const VIEWPORTS = arg('--viewports', '360x780,390x844,412x915,430x932,768x1024,1200x820,1440x900')
   .split(',').map((s) => { const [w, h] = s.split('x').map(Number); return { w, h }; });
@@ -372,8 +375,8 @@ for (const vp of VIEWPORTS) {
         ? `${BASE}/${st.page}`
         // `_s` 只为让每次导航的 URL 都不同 —— 同一个地址的 Page.navigate 有时
         // 只是复位滚动，不重新执行脚本，于是上一个状态的浮层会留在页面上。
-        : st.hash ? `${BASE}/?lang=${lang}&_s=${st.id}${NOW ? '&now=' + NOW : ''}`
-                  : `${BASE}/?lang=${lang}&_s=${st.id}${NOW ? '&now=' + NOW : ''}${st.q || ''}`;
+        : st.hash ? `${BASE}/?lang=${lang}&_s=${st.id}${NOW ? '&now=' + NOW : ''}${QUERY ? '&' + QUERY : ''}`
+                  : `${BASE}/?lang=${lang}&_s=${st.id}${NOW ? '&now=' + NOW : ''}${QUERY ? '&' + QUERY : ''}${st.q || ''}`;
 
       // 45s 而不是默认的 20s：机器上同时跑着别的浏览器时，一次导航偶尔会超时。
       // 超时了就记一行接着往下跑 —— 一次瞬时失败不该把整轮普查烧掉。
