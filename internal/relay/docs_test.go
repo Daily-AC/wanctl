@@ -169,8 +169,19 @@ func (n *noopAdmin) ListLarkApproval(string) ([]DeviceLarkApproval, error) {
 func (n *noopAdmin) UpsertLarkApproval(cfg DeviceLarkApproval) (DeviceLarkApproval, error) {
 	return cfg, nil
 }
-func (n *noopAdmin) ListUsers() ([]string, error)    { return nil, nil }
-func (n *noopAdmin) LookupUser(string) (bool, error) { return false, nil }
+func (n *noopAdmin) ListUsers() ([]string, error)           { return nil, nil }
+func (n *noopAdmin) ListAdminNamespaces() ([]string, error) { return nil, nil }
+func (n *noopAdmin) LookupUser(string) (bool, error)        { return false, nil }
+func (n *noopAdmin) CreateAccessRequest(string, string, string, string) (AccessRequest, error) {
+	return AccessRequest{}, nil
+}
+func (n *noopAdmin) LatestAccessRequest(string, string) (AccessRequest, bool, error) {
+	return AccessRequest{}, false, nil
+}
+func (n *noopAdmin) ListAccessRequests() ([]AccessRequest, error) { return nil, nil }
+func (n *noopAdmin) DecideAccessRequest(int, string, string) (AccessRequest, bool, error) {
+	return AccessRequest{}, false, nil
+}
 func (n *noopAdmin) FriendRequest(string, string, string) (string, error) {
 	return "", nil
 }

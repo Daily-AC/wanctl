@@ -602,6 +602,26 @@ pre code{background:none;padding:0;font-size:1em}
 .auth form .go{margin-top:0}
 .auth .err{margin:10px 0 0;font-size:13px;color:var(--red);min-height:1.3em}
 
+/* 申请访问的四种状态。页面把四段都发下来，选哪一段由 <body data-req>
+   决定 —— 纯 CSS，脚本没跑起来的时候看到的也是对的那一段。
+   状态是服务端算的：不能让人看见一张交上去会被拒的表单。 */
+.auth .req{display:none}
+.auth[data-req="none"] .req[data-req-state="none"],
+.auth[data-req="pending"] .req[data-req-state="pending"],
+.auth[data-req="approved"] .req[data-req-state="approved"],
+.auth[data-req="declined"] .req[data-req-state="declined"]{display:block}
+/* 这一栏是一句话，不是一串码：左对齐、正文字体，跟邀请码那格分得开。 */
+.auth #note{font-family:inherit;text-align:left}
+/* 已获准之后：没有东西可兑换了，那个框留着只是噪声；标题也换成另一句。
+   于是这一屏只剩一个蓝按钮 —— 进门。 */
+.auth[data-req="approved"] #redeem,
+.auth[data-req="approved"] #err,
+.auth[data-req="approved"] h1:not(.req){display:none}
+/* 分隔两条路（兑换 / 申请）。发丝线，不是卡片：它分隔的是两件事，
+   而这一页上再没有别的东西需要被框起来。 */
+.auth .req[data-req-state="none"]{margin-top:26px;padding-top:22px;border-top:1px solid var(--hairline)}
+.auth .req[data-req-state="none"] .fine{margin-top:0}
+
 /* ── 手机 ──────────────────────────────────────────────────────────────
    一次扫遍全部状态之后加的这一块（tools/portalpreview/sweep.mjs）。
    在此之前整份样式表只有三条断点，而它们管的是设置的两级形态和一个按钮的

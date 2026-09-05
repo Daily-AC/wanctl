@@ -9,8 +9,11 @@
 </head>
 
 <!-- 等待邀请。你已经把 GitHub 授权出去了，但这个实例还没放你进来。
-     在此之前这张页面是个死胡同：登错账号的人没有任何出口，只能自己去清 cookie。 -->
-<body class="auth">
+     在此之前这张页面是个死胡同：登错账号的人没有任何出口，只能自己去清 cookie。
+     data-req 是服务端算出来的申请状态（none / pending / approved / declined），
+     四段文案全在页面里，由 app.css 按这个属性选一段显示 —— 不靠脚本，
+     所以脚本没跑起来的时候看到的也是对的那一段。 -->
+<body class="auth" data-req="{{.Req}}">
 
 <header class="top">
   <span class="brand"><svg class="mk" viewBox="0 0 32 32" aria-hidden="true"><path d="M5.6 12.4 10.2 21.8 15.2 14.6 19.6 21.8 26.4 7.6" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"/></svg>wanctl</span>
@@ -21,6 +24,8 @@
 
 <main>
   <h1 data-en="Waiting for an invite" data-zh="等待邀请">Waiting for an invite</h1>
+  <!-- 通过之后这一屏不再是「等待邀请」，标题跟着换。 -->
+  <h1 class="req" data-req-state="approved" data-en="You are in" data-zh="你已获准">You are in</h1>
 
   <p class="lead">
     <span data-en="You are signed in as" data-zh="你已登录为">You are signed in as</span>
@@ -36,9 +41,46 @@
   </form>
   <p class="err" id="err" role="alert"></p>
 
-  <p class="fine"
-     data-en="No code? Ask this instance's admin to create an invite for you, or to pre-register your GitHub username."
-     data-zh="没有邀请码？请这个实例的管理员为你创建一个，或者预先登记你的 GitHub 用户名。">No code? Ask this instance's admin to create an invite for you, or to pre-register your GitHub username.</p>
+  <!-- 申请入口。没有邀请码的人以前只能去别处找一个管理员，而这张页面
+       已经知道他是谁 —— 要发的邀请正是发给这个登录名的。 -->
+  <div class="req" data-req-state="none">
+    <p class="fine"
+       data-en="No code? Ask for access and the administrator will see it here."
+       data-zh="没有邀请码？可以直接申请，管理员会在门户里看到。">No code? Ask for access and the administrator will see it here.</p>
+    <form id="ask">
+      <input id="note" maxlength="{{.NoteMax}}" autocomplete="off"
+             data-ph-en="Optional: who you are, in one line"
+             data-ph-zh="选填：一行字说明你是谁"
+             data-lbl-en="Note to the administrator" data-lbl-zh="给管理员的说明"
+             placeholder="Optional: who you are, in one line" aria-label="Note to the administrator">
+      <!-- soft，不是第二根蓝条：一屏只有一个主 CTA（DESIGN.md §6.5）。
+           兑换是已经被认可的那一个，申请让位。 -->
+      <button class="btn go soft" type="submit" data-en="Request access" data-zh="申请访问">Request access</button>
+    </form>
+    <p class="err" id="askErr" role="alert"></p>
+  </div>
+
+  <div class="req" data-req-state="pending">
+    <p class="fine"
+       data-en="Your request is waiting for the administrator. Nothing else to do — come back to this page to see the answer."
+       data-zh="你的申请正在等管理员处理。不用再做什么，回到这张页面就能看到结果。">Your request is waiting for the administrator.</p>
+  </div>
+
+  <div class="req" data-req-state="approved">
+    <p class="fine"
+       data-en="Your request was approved. Open the portal — you are on the list now."
+       data-zh="申请已通过。打开门户即可，你已经在名单里了。">Your request was approved.</p>
+    <p><a class="btn go" href="/" data-en="Open the portal" data-zh="打开门户">Open the portal</a></p>
+  </div>
+
+  <div class="req" data-req-state="declined">
+    <p class="fine"
+       data-en="Your request was not accepted."
+       data-zh="你的申请没有被接受。">Your request was not accepted.</p>
+    <!-- 天数由 auth.js 按语言和单复数写进去（「1 days」是错的英文），
+         所以这里只放数字，不放句子。 -->
+    <p class="fine" id="retry" data-days="{{.RetryDays}}"></p>
+  </div>
 
   <!-- 出口。登错账号是这张页面上最容易发生的事，而它以前无解。 -->
   <p class="fine">

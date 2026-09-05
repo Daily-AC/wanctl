@@ -592,7 +592,12 @@ type AdminStore interface {
 	ListLarkApproval(namespace string) ([]DeviceLarkApproval, error)
 	UpsertLarkApproval(DeviceLarkApproval) (DeviceLarkApproval, error)
 	ListUsers() ([]string, error)
+	ListAdminNamespaces() ([]string, error)
 	LookupUser(namespace string) (bool, error)
+	CreateAccessRequest(provider, subject, login, note string) (AccessRequest, error)
+	LatestAccessRequest(provider, subject string) (AccessRequest, bool, error)
+	ListAccessRequests() ([]AccessRequest, error)
+	DecideAccessRequest(id int, status, decidedBy string) (AccessRequest, bool, error)
 	FriendRequest(requester, addressee, reservedNS string) (string, error)
 	FriendAccept(namespace, requester string) error
 	FriendDecline(namespace, requester string) error

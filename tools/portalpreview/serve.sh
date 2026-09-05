@@ -31,7 +31,8 @@ sed -e 's/__V__/dev/g' \
 #   授权码  9 位、中间一道横杠、字母表去掉了 I O 0 1（internal/relay/enroll.go）
 #   指纹    SHA256: 加 44 个 base64 字符（internal/transport/identity.go）
 #   有效期  5 分钟（enrollCodeTTL），不是随手写的 10
-for page in login pending enroll; do
+#   申请状态 none / pending / approved / declined（internal/portal/auth.go）
+render_page() {   # render_page <模板名> <输出名> <申请状态> <还剩几天>
   sed -e 's/{{\.V}}/dev/g' \
       -e 's#{{\.Host}}#wanctl.example.dev#g' \
       -e 's#{{\.Start}}#/auth/github?next=%2F#g' \
@@ -39,13 +40,25 @@ for page in login pending enroll; do
       -e 's/{{\.NS}}/octocat/g' \
       -e 's/{{\.Code}}/K7RM-2QXP/g' \
       -e 's/{{\.Mins}}/5/g' \
+      -e "s/{{\\.Req}}/$3/g" \
+      -e "s/{{\\.RetryDays}}/$4/g" \
+      -e 's/{{\.NoteMax}}/200/g' \
       -e 's#{{\.FP}}#SHA256:tQ8mv3ZKcR1yXpN0jbLdE7aWfHuGiO4sPzC2rYkVnBw=#g' \
-      "$SRC/$page.html" > "$OUT/$page.html"
-  if grep -q '{{' "$OUT/$page.html"; then
-    echo "$page.html 里还有没填的占位符，补一条 sed" >&2
+      "$SRC/$1.html" > "$OUT/$2.html"
+  if grep -q '{{' "$OUT/$2.html"; then
+    echo "$2.html 里还有没填的占位符，补一条 sed" >&2
     exit 1
   fi
-done
+}
+
+render_page login  login  none 0
+render_page enroll enroll none 0
+# 等待邀请页有四种样子，服务端发的是同一份模板加一个 data-req。
+# 四份文件都是那份模板，只是那个值不同 —— 工装不自己画状态。
+render_page pending pending          none     0
+render_page pending pending-sent     pending  0
+render_page pending pending-approved approved 0
+render_page pending pending-declined declined 6
 
 # app.css / app.js / fonts 在页面里是 /assets/... 的绝对路径。
 # 这里用软链而不是拷贝：改一行 CSS 就要重启服务才看得见，那个来回不值当。
@@ -65,6 +78,7 @@ fi
 LAN=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')
 echo "预览： http://127.0.0.1:$PORT/"
 echo "认证： /login.html · /pending.html · /enroll.html（静态渲染，兑换与退出登录点了没反应）"
+echo "申请： /pending-sent.html · /pending-approved.html · /pending-declined.html"
 [ -n "$LAN" ] && echo "手机： http://$LAN:$PORT/"
 echo "目录： $OUT"
 cd "$OUT" && exec python3 -m http.server "$PORT"

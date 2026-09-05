@@ -17,6 +17,23 @@ you:
 The invited person signs in to the portal with a GitHub account; anyone holding
 a code redeems it on the page that greets them.
 
+## Requesting access
+
+There is a path for people who hold no code: sign in with GitHub, land on the
+waiting page, and press **Request access**, optionally with one line of at most
+200 characters saying who you are.
+
+- one account can have one application waiting at a time; after a decline it
+  waits seven days before asking again, and an approved account never sees the
+  form again;
+- applications are visible only to administrators, and an applicant sees only
+  their own;
+- administrators find the queue on the **Invites** page, and **Approve** writes
+  an invite for that GitHub username — the same road as pre-registering one by
+  hand, so the applicant is in the next time they open the portal;
+- an administrator with a notification webhook configured gets an
+  `access.requested` event.
+
 ## Adding a friend
 
 Devices and shares are visible only under your own account by default. Working

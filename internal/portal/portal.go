@@ -165,7 +165,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/auth/callback", s.handleAuthCallback)
 	mux.HandleFunc("/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("/auth/redeem", s.handleAuthRedeem)
+	mux.HandleFunc("/auth/request-access", s.handleAccessRequest)
 	mux.HandleFunc("/pending", s.handlePending)
+	mux.HandleFunc("/api/access-requests", s.handleAccessRequests)
+	mux.HandleFunc("/api/access-requests/decide", s.handleAccessDecide)
 	mux.HandleFunc("/skills", s.handleSkills)
 	mux.HandleFunc("/api/instance", s.handleInstance)
 	mux.HandleFunc("/api/me", s.handleMe)
@@ -274,6 +277,8 @@ var mutationPaths = map[string]bool{
 	"/api/docs/groups/delete":      true,
 	"/auth/logout":                 true,
 	"/auth/redeem":                 true,
+	"/auth/request-access":         true,
+	"/api/access-requests/decide":  true,
 	"/api/friends/request":         true,
 	"/api/friends/accept":          true,
 	"/api/friends/decline":         true,

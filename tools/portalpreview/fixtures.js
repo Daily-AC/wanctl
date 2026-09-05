@@ -151,6 +151,28 @@
         { namespace: 'fenn', status: 'pending', direction: 'outgoing' }
       ]
     },
+    // 形状照抄 relay.AccessRequest：note 是已经规整过的纯文本一行，
+    // status 只有 pending / approved / declined 三种，decided_at 未决时不出现。
+    // 队列是私密的，所以这是管理员才拿得到的那一份。
+    '/api/access-requests': {
+      requests: [
+        {
+          id: 12, provider: 'github', subject: '10137', login: 'wren', note: '',
+          status: 'pending', created_at: ago(3 * 3600), decided_at: null, decided_by: ''
+        },
+        {
+          // 顶格 200 字的说明：申请人唯一能自己填的东西，也是这块最容易
+          // 在手机上把卡片撑坏的地方，所以工装里放的就是上限那一条。
+          id: 11, provider: 'github', subject: '20481', login: 'thornbury-analytics-ops', status: 'pending',
+          note: 'We run a fleet of build machines across two offices and want to try wanctl for the approval workflow before asking our security team to look at self-hosting it. Happy to answer anything about what we would use it for.',
+          created_at: ago(2 * 86400), decided_at: null, decided_by: ''
+        },
+        {
+          id: 9, provider: 'github', subject: '30119', login: 'fenn', note: 'let me in',
+          status: 'declined', created_at: ago(12 * 86400), decided_at: ago(11 * 86400), decided_by: 'acme'
+        }
+      ]
+    },
     '/api/invites': [
       { id: 4, has_code: true, created_at: ago(2 * 86400) },
       { id: 3, github_login: 'juniper', created_at: ago(10 * 86400), used_at: ago(9 * 86400), used_by_namespace: 'juniper' }
@@ -181,7 +203,11 @@
   function match(url) {
     var p = url.split('?')[0];
     if (scene === 'empty' && p === '/api/devices') return { devices: [] };
+    // 「没人在等你」同时清空两个队列：设备的待审批，和门口的访问申请。
+    // 两块都是「有人等你决定」，空掉时都该整块消失。
     if (scene === 'noask' && p === '/api/pending') return { items: [] };
+    if (scene === 'noask' && p === '/api/access-requests') return { requests: [] };
+    if (p === '/api/access-requests/decide') return {};
     if (p === '/api/devices/console') return consoles[new URLSearchParams(url.split('?')[1]).get('device')] || { mode: 'normal', pending: [], pending_pairings: [], rules: [], trusted: [] };
     if (p === '/api/devices/logs') return { logs: logs.slice().reverse() };
     if (p === '/api/devices/lark') return { approval_enabled: true, pairing_from_card: false, notify_email: 'you@example.com', delivery_health: { result: 'success', attempted_at: ago(300) } };

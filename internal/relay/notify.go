@@ -457,7 +457,8 @@ func notifyEventEnabled(cfg NotifyWebhook, event notify.Event) bool {
 	case strings.HasPrefix(event.Event, "device."):
 		return cfg.OnLifecycle
 	case event.Event == "pairing.requested", strings.HasPrefix(event.Event, "trust."),
-		strings.HasPrefix(event.Event, "enroll."), strings.HasPrefix(event.Event, "friend."):
+		strings.HasPrefix(event.Event, "enroll."), strings.HasPrefix(event.Event, "friend."),
+		strings.HasPrefix(event.Event, "access."):
 		return cfg.OnSecurity
 	case event.Event == "notify.test", event.Event == "notify.throttled":
 		return true

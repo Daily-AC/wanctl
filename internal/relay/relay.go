@@ -125,6 +125,7 @@ func (r *Relay) Handler() http.Handler {
 	mux.HandleFunc("/enroll/exchange", r.handleEnrollExchange)
 	r.registerDocs(mux)
 	r.registerAdmin(mux)
+	r.registerAccess(mux)
 	r.registerUser(mux)
 	r.registerDist(mux)
 	if r.mcpHandler != nil {
