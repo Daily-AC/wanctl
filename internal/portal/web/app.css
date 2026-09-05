@@ -119,7 +119,14 @@ a:hover{text-decoration:underline}
   width:22px;height:22px;border-radius:50%;flex:none;
   display:grid;place-items:center;background:var(--canvas-2);
   font-size:11px;font-weight:600;color:var(--ink-2);text-transform:uppercase;
+  /* 头像叠在字母上，所以这里要成为定位上下文，并且自己把方角裁圆 —— 圆角
+     只作用在盒子上，里面那张方图不裁就会露出四个角。 */
+  position:relative;overflow:hidden;
 }
+.ava i{font-style:normal}
+/* 不写 display：浏览器默认表里 [hidden]{display:none} 只有 (0,1,0)，
+   这里随手写一句 display:block 就会把它盖掉，图没加载出来时留下一个碎图标。 */
+.ava img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .top .tools{display:flex;align-items:center;gap:6px;flex:none}
 /* 头部的三个次级控件（版本号 / 语言 / 齿轮）共用一个形状。
    圆角 999 在这套语法里本来只给主 CTA 和 pill —— 它们是 pill。 */
@@ -159,7 +166,7 @@ h1{margin:0;font-size:clamp(26px,3.2vw,32px);font-weight:600;line-height:1.1;let
 h2{margin:0;font-size:20px;font-weight:600;line-height:1.2;letter-spacing:-.3px}
 .lead{margin:8px 0 0;color:var(--ink-2);max-width:60ch}
 .vhead{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:20px}
-.vhead h1{flex:1 1 auto;min-width:0}
+.vhead h1{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
 
 /* ── 按钮 ────────────────────────────────────────────────────────────
    蓝色实心 pill 只给主 CTA。次级一律浅灰实心、等重。
@@ -298,8 +305,20 @@ h2{margin:0;font-size:20px;font-weight:600;line-height:1.2;letter-spacing:-.3px}
 }
 .back:hover{color:var(--ink)}
 .dhead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px}
-.dhead h1{flex:0 0 auto}
-.dhead .fp{font-size:12px;color:var(--ink-2);flex:1 1 100%;order:9;margin-top:2px}
+/* 收缩得下去，也断得开。以前是 flex:0 0 auto —— 一个 32 字的机器名
+   （DESKTOP-RQFV0SH-workstation-long）于是保持 max-content 宽，把整页顶宽。 */
+.dhead h1{flex:0 1 auto;min-width:0;overflow-wrap:anywhere}
+.dhead .fp{
+  color:var(--ink-2);flex:1 1 100%;order:9;margin-top:2px;
+  /* 指纹是拿来跟终端里那串逐字符核对的，所以整串可见、不截断、不藏在一次点击后面
+     —— enroll 页早就是这么处理的（.auth .fp），同一个东西在两个表面上不该有两种脾气。
+     51 个字符（SHA256: + 44）在 390px 的手机上按 12px 要 367px，而内容宽只有 350，
+     于是它把整个页面撑宽，手机 Chrome 跟着把布局视口一起撑宽，浮层就按那个被撑坏的
+     宽度居中 —— 甲方那张「确认框被推到右边、右缘切掉」的截图就是这么来的。
+     字号跟着视口缩，让这一串在任何手机上都落成一行；break-all 是兜底，
+     万一还是放不下，它宁可折行也不许顶破页面。 */
+  font-size:min(12px,2.85vw);word-break:break-all;
+}
 .dhead .real{font-size:13px;color:var(--ink-2);min-width:0;overflow-wrap:anywhere}
 /* 执行模式是这台设备的一个属性，不是一个页面 —— 所以它住在标题行，
    而不是像以前那样独占一个 tab。 */
@@ -338,6 +357,10 @@ td{padding:11px 12px 11px 0;border-bottom:1px solid var(--hairline);vertical-ali
 th:last-child,td:last-child{padding-right:0;text-align:right}
 tr:last-child td{border-bottom:0}
 td .sub{display:block;font-size:11.5px;color:var(--ink-2);margin-top:2px}
+/* 等宽格子里装的是指纹、命令和路径 —— 断不开的长串，得允许它们在任意位置折。
+   anywhere（不是 break-word）连最小内容宽度一起放开，这样一整串指纹不会把
+   它那一列撑到把表顶出内容锁。 */
+td.mono{overflow-wrap:anywhere}
 td.num{font-variant-numeric:tabular-nums}
 .tcap{margin:0 0 12px;color:var(--ink-2);font-size:13px}
 .dim{color:var(--ink-2)}
@@ -483,24 +506,24 @@ pre code{background:none;padding:0;font-size:1em}
      两条都留着：不认 svh 的浏览器读第一条。 */
   max-height:calc(100vh - 40px);
   max-height:calc(100svh - 40px);
-  overflow-y:auto;
-}
-/* 更新日志那张。它是浮层里唯一会长过一屏的，所以只有它分三段：
-   标题与「完成」钉住，中间那层自己滚。整块一起滚的话，手机上「完成」
-   压在十几张版本卡底下 —— 想关掉它得先把它整个读完一遍。 */
-.modal.sheet{
-  max-width:44rem;
+  /* 四张浮层现在是同一个形状：标题钉住、正文自己滚、按钮钉住。
+     以前只有更新日志那张是，另外三张是整块一起滚 —— 于是正文一长
+     （一个 32 字的设备名、一段中文说明、五个字段的表单），
+     「取消 / 确定」就被推到浮层外面，而人正是来按那两个键的。 */
   display:flex;flex-direction:column;overflow:hidden;
 }
-.modal.sheet > .vhead,.modal.sheet > .btns{flex:none}
-.modal.sheet .sbody{
+.modal > h2,.modal > .vhead,.modal > .btns{flex:none}
+.modal .mbody,.modal .sbody{
   flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;
-  /* 版本说明里有 URL 和环境变量名，断不开的长串会顶破浮层的右缘。 */
-  overflow-wrap:break-word;
+  /* 版本说明和错误里有 URL、路径、环境变量名，断不开的长串会顶破浮层的右缘。 */
+  overflow-wrap:anywhere;
 }
+/* 更新日志那张只是更宽 —— 分三段的骨架现在是所有浮层共有的。 */
+.modal.sheet{max-width:44rem}
 .modal h2{margin:0 0 8px}
 .modal p{margin:0 0 18px;color:var(--ink-2);font-size:14px}
-.modal .btns{display:flex;justify-content:flex-end;gap:8px}
+.modal .mbody > :last-child{margin-bottom:0}
+.modal .btns{display:flex;justify-content:flex-end;gap:8px;padding-top:18px}
 
 /* ── toast ─────────────────────────────────────────────────────────── */
 /* 反馈只有这一套。以前顶上还挂着一条 6 秒的错误条，两套机制做同一件事。 */
@@ -508,9 +531,19 @@ pre code{background:none;padding:0;font-size:1em}
   position:fixed;left:50%;bottom:26px;transform:translate(-50%,14px);z-index:var(--z-toast);
   background:var(--ink);color:var(--canvas);border-radius:999px;padding:9px 18px;font-size:13.5px;
   opacity:0;pointer-events:none;transition:opacity .2s var(--ease),transform .2s var(--ease);
-  max-width:calc(100vw - 40px);
+  /* width:max-content 是必需的，不是修饰。left:50% 而没有 right，收缩到合适宽度时
+     可用宽度只有视口的右半边 —— 360px 上就是 180px，于是底下那条 max-width 从来没
+     生效过，一句英文提示在还剩一半空地的时候就折成了两行。 */
+  width:max-content;max-width:calc(100vw - 40px);
 }
 .toast.show{opacity:1;transform:translate(-50%,0)}
+/* 认不出来的服务端错误码。等宽是为了让它能被逐字符读准并抄进 issue 里；
+   底色和字色都跟着 toast 走 —— 全局的 code 样式给的是浅灰底，压在深色或红色
+   的 toast 上会变成一块补丁。 */
+.toast code{
+  background:none;padding:0;margin-left:6px;
+  font-family:var(--mono);font-size:12.5px;color:inherit;opacity:.85;
+}
 .toast.no{background:var(--red)}
 
 /* ── 认证页 ──────────────────────────────────────────────────────────
@@ -568,6 +601,88 @@ pre code{background:none;padding:0;font-size:1em}
 .auth form input{font-family:var(--mono);text-align:center;padding:11px 12px}
 .auth form .go{margin-top:0}
 .auth .err{margin:10px 0 0;font-size:13px;color:var(--red);min-height:1.3em}
+
+/* ── 手机 ──────────────────────────────────────────────────────────────
+   一次扫遍全部状态之后加的这一块（tools/portalpreview/sweep.mjs）。
+   在此之前整份样式表只有三条断点，而它们管的是设置的两级形态和一个按钮的
+   对齐 —— 表、指纹、卡头、手指靶子四样在手机上从来没有被量过。
+
+   宽屏一个像素都不改：下面所有条款都关在这个断点里面。 */
+@media (max-width:640px){
+
+  /* 外壳上的次级控件。48px 的顶栏里它们只有 21~28px 高，指头够不着
+     —— 苹果和 Material 给的下限都是 44 / 48，这里取 40。 */
+  .top .brand,.top .chip{min-height:40px}
+  .top .chip{min-width:40px;display:inline-flex;align-items:center;justify-content:center}
+  .chip.icon{min-width:40px;min-height:40px;padding:0}
+  /* 内边距归零之后，图标到盒子右缘是 (40-16)/2 = 12px。
+     负外边距要跟着改，否则齿轮的墨迹会比底下的卡片往里缩 12px。 */
+  .top .tools > .chip.icon:last-child{margin-right:-12px}
+  .back{padding:9px 8px 14px;margin-left:-8px}
+  .tab{padding:11px 14px}
+  .dhead .modesel{padding:9px 12px}
+  /* 四个裁决键是这个产品里后果最重的点击，它们尤其不该只有 34px 高。 */
+  .ask .acts .btn{padding:10px 15px}
+  .check{min-height:40px}
+
+  /* 待审批卡的头。设备名是 flex:none，一个 32 字的机器名（DESKTOP-… 那种）
+     会把整行顶出卡片，而卡片是 overflow:hidden —— 名字于是被无声地切掉。
+     挤不下就换行：名字占满第一行，种类和秒表退到第二行。 */
+  .ask .head{flex-wrap:wrap}
+  .ask .head .host{flex:1 1 100%;overflow-wrap:anywhere}
+
+  /* ── 表在手机上不是表 ──────────────────────────────────────────────
+     活动那张有五列，360px 上一列只剩 72px，而其中一列装的是整条命令；
+     信任那张一列装的是指纹。任何列宽都救不了它们，量出来是整页被顶宽。
+
+     所以一行变一块，格子竖排，列名跟着值走 —— 键值两列的形状跟待审批卡里
+     那张 .kv 是同一套，不是新发明的排版。列名从表自己的 <th> 里取
+     （app.js 的 relabel），没有第二份字典可漂。 */
+  table.stack thead{display:none}
+  table.stack,table.stack tbody,table.stack tr,table.stack td{display:block;width:auto}
+  table.stack tr{padding:12px 0;border-bottom:1px solid var(--hairline)}
+  table.stack tr:last-child{border-bottom:0}
+  table.stack td{border:0;padding:0;text-align:left;overflow-wrap:anywhere}
+  table.stack td + td{margin-top:5px}
+  /* 行间距归 0：格子里第二行（比如命令底下那行工作目录）本来就带自己的
+     margin，再吃一份 12px 的行距会把它推得像另一条记录。 */
+  table.stack td[data-l]{display:grid;grid-template-columns:5.5rem minmax(0,1fr);gap:0 12px}
+  table.stack td[data-l]::before{content:attr(data-l);color:var(--ink-2);font-size:12.5px}
+  /* 值那一列。裸文本会被自动放进第 2 格，但格子里有两个元素时
+     （控制端的名字 + 底下那行原名）第二个会掉回第 1 格，落在列名下面。 */
+  table.stack td[data-l] > *{grid-column:2}
+  /* 空表那一行是一句话，不是一条记录。 */
+  table.stack td:empty{display:none}
+  table.stack td[colspan]{padding:0}
+  table.stack tr:has(td[colspan]){padding:0;border-bottom:0}
+  /* 行尾的动作：自己一行、左对齐、够得着。 */
+  table.stack td:last-child:not([data-l]){margin-top:8px}
+  .act{padding:11px 10px;margin:-11px -10px}
+  .act + .act{margin-left:10px}
+  /* 下载表没有表头（一列是平台、一列是文件名），没有列名可挂，
+     所以它不参与上面那套 —— 让格子自己折行就够。 */
+  #dl td{overflow-wrap:anywhere}
+  #dl td:last-child a{
+    display:inline-flex;align-items:center;justify-content:center;
+    min-width:40px;min-height:40px;margin:-12px 0;
+  }
+
+  /* 主 CTA 与次级按钮：8px 内边距配 14px 正文只有 34px 高。 */
+  .btn{min-height:40px;display:inline-flex;align-items:center;justify-content:center}
+  input,select,textarea{min-height:40px}
+  /* 开关的轨道就是它的形状，不能为了指头把它撑胖。把盒子撑到 40 高、
+     再用 background-clip 只在中间那 24px 上画轨道 —— 可点区域大了，
+     画出来的东西一个像素都没动。滑块跟着往下挪同样的 8px。 */
+  .sw{height:40px;padding:8px 0;background-clip:content-box}
+  .sw::after{top:10px}
+}
+
+/* 命令与安装命令。横向滚的代码块等于把命令藏起来一半，而这块的全部意义
+   就是让你在按下复制之前把它整条读完。断点比其余手机条款宽：768 的平板上
+   那条 curl 仍然装不下（实测藏掉 327px），而其余条款在平板上并不适用。 */
+@media (max-width:768px){
+  pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:visible}
+}
 
 /* ── 动效降级 ──────────────────────────────────────────────────────── */
 /* 内容可见性不绑在 transition 上：无 JS、无头渲染、reduced-motion

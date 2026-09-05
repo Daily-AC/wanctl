@@ -12,26 +12,52 @@
 (function () {
   'use strict';
 
-  var now = Date.now();
+  // 场景开关。空态、无人等待、中继不可达这三种形状在真实数据里可遇不可求，
+  // 而它们恰恰是布局最容易崩的地方（一张卡都没有 / 一块区整个消失 / 只剩一行字）。
+  //   ?scene=empty  设备为零 → 首台设备引导
+  //   ?scene=noask  没人在等 → 聚合待审批整块不出现
+  //   ?scene=down   /api/devices 502 → 「连不上中继」（纯文本，真形状）
+  //   ?scene=oddcode /api/devices 返回一个字典里没有的裸错误码 → 未知码那一路
+  var scene = new URLSearchParams(location.search).get('scene') || '';
+
+  // 头像三态。真实端点只对 GitHub 会话返回 avatar_url，header(SSO) 模式不返回，
+  // 而图片本身还可能加载失败 —— 三条路在界面上是两种样子，工装要两种都摆得出来。
+  //   ?avatar=on      默认，一张真的 GitHub 头像
+  //   ?avatar=broken  同一个源、必定 404 的路径，走 onerror 那一路
+  //   ?avatar=off     不返回这个字段，等于 header(SSO) 模式
+  var avatar = new URLSearchParams(location.search).get('avatar') || 'on';
+
+  // ?now=<毫秒> 把「现在」钉住。页面上每一个时间都是从它算出来的，不钉住的话
+  // 两次截图之间光是钟走了几分钟就够让每一张都不一样，前后对比无从做起。
+  var now = Number(new URLSearchParams(location.search).get('now')) || Date.now();
   var ago = function (s) { return new Date(now - s * 1000).toISOString(); };
 
   var devices = [
-    { name: 'bench-02', alias: 'workshop', fingerprint: 'SHA256:fJoz5aAqXxK1r0LmT9vQe8YhCwPd3NuBiGs7DOAEo=', online: true, last_seen: ago(4) },
-    { name: 'atlas', alias: '', fingerprint: 'SHA256:Kq2mVb7ThLnW4xRc0PjZa9eYsDgU6iBoM1XfNvQtEr=', online: true, last_seen: ago(9) },
-    { name: 'kestrel', alias: '', fingerprint: 'SHA256:9WpLmXc3RtYb8QnZk1FvJaHe5UgSoD2iN7xMrTqBEw=', online: true, last_seen: ago(31) },
-    { name: 'mill-01', alias: '', fingerprint: 'SHA256:3TzQrK8mBvNc5XwPd1LhJf7YaGeSoU9iR2xMtCqDEn=', online: false, last_seen: ago(7 * 3600) },
-    { name: 'orchard', alias: '', fingerprint: 'SHA256:Vb6NmXq2RtZc9WpLk4FvJa1He8UgSoD5iN3xMrTqEy=', online: false, last_seen: ago(4 * 86400) },
-    { name: 'slate', alias: '', fingerprint: 'SHA256:Hq4LmZb8TvNc2XwRd6PjKf3YaGeSoU1iM9xNtCrDEp=', online: true, last_seen: ago(12), shared: true, owner: 'rowan', perms: 'exec,read' }
+    { name: 'bench-02', alias: 'workshop', fingerprint: 'SHA256:HXCgsXAExAyRONww/y4Wricn4yqc1euNHRaH/47IhfV=', online: true, last_seen: ago(4) },
+    // 甲方那台真机的形状：34 个字符、一个断不开的长名字。工装以前最长的是
+    // 8 个字符的 bench-02，于是标题行、聚合待审批的 host、解除设备的确认文案
+    // 里那些「名字放不下会怎样」的问题，在这里一个都问不出来。
+    { name: 'DESKTOP-RQFV0SH-workstation-long', alias: '', fingerprint: 'SHA256:Kpjt1sDLepR/liqYHaA0x4Evg7JPsVZcDouLrjCNm2g=', online: true, last_seen: ago(6) },
+    { name: 'atlas', alias: '', fingerprint: 'SHA256:cxUKYdO6FWR/Ah+m9caQdRpnP9aMla6p8igV5ZAz6EV=', online: true, last_seen: ago(9) },
+    { name: 'kestrel', alias: '', fingerprint: 'SHA256:h0RDd+bD2hACHcciN6gURa+hq8s2HvrGVHYtuq8/WwS=', online: true, last_seen: ago(31) },
+    { name: 'mill-01', alias: '', fingerprint: 'SHA256:MuNP5qNocP+eOX8Mrk4WsY2w75moRVPREKo9OKcf2QM=', online: false, last_seen: ago(7 * 3600) },
+    { name: 'orchard', alias: '', fingerprint: 'SHA256:6ZcygFUIXuJXcOnbOLUCnvv2JwanktR0hjN+GiUSt7B=', online: false, last_seen: ago(4 * 86400) },
+    { name: 'slate', alias: '', fingerprint: 'SHA256:OR0q3ilFsfmwBgQ7u5z1ejTTiVb5OPLm1n3Y8QzhQib=', online: true, last_seen: ago(12), shared: true, owner: 'rowan', perms: 'exec,read' }
   ];
 
   var waiting = [
     {
       device: 'bench-02', id: 'a41f9c22', kind: 'exec',
       cmd: 'rm -rf /data/checkpoints/run-2291 --force',
-      cwd: '/data', peer: 'studio · SHA256:Pn7VqL2mXb…', created: ago(7)
+      cwd: '/data', peer: 'studio · SHA256:a5yGk562ILhUW/D+…', created: ago(7)
     },
     {
-      device: 'atlas', fp: 'SHA256:Zx4TmQb9RvNc7WpLd2FjKa5YeGhSoU8iM1xNrTqCEw=',
+      device: 'DESKTOP-RQFV0SH-workstation-long', id: 'b7724e10', kind: 'exec',
+      cmd: 'python /srv/pipelines/nightly/ingest.py --config /etc/wanctl/ingest.production.yaml --resume',
+      cwd: '/srv/pipelines/nightly', peer: 'studio · SHA256:a5yGk562ILhUW/D+…', created: ago(22)
+    },
+    {
+      device: 'atlas', fp: 'SHA256:2lvJifeK+//VCxE0zMA9YVdw76clBF0bGk6n7zbyoaz=',
       name: 'kestrel', label: 'claude-code on kestrel', created: ago(41)
     }
   ];
@@ -47,22 +73,43 @@
         { kind: 'read', pattern: '/data', scope: 'dir', dir: '/data' }
       ],
       trusted: [
-        { fp: 'SHA256:Pn7VqL2mXb4TcZw9…', name: 'studio', label: 'studio (my laptop)', last_seen: ago(60) },
-        { fp: 'SHA256:e+gYUIcZfC7HcEGi…', name: 'portal', label: 'portal', last_seen: ago(3) }
+        { fp: 'SHA256:a5yGk562ILhUW/D+1nJJZB4lDht0IAe9AW6nXf/Y7x/=', name: 'studio', label: 'studio (my laptop)', last_seen: ago(60) },
+        { fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(3) }
       ],
       lan: { enabled: true, connected: true, relay: 'lan-relay.internal:7443' }
     },
+    'DESKTOP-RQFV0SH-workstation-long': {
+      mode: 'normal',
+      pending: [waiting[1]],
+      pending_pairings: [],
+      rules: [{ kind: 'exec', pattern: 'python /srv/pipelines/nightly/ingest.py *', scope: 'dir', dir: '/srv/pipelines/nightly' }],
+      trusted: [{ fp: 'SHA256:a5yGk562ILhUW/D+1nJJZB4lDht0IAe9AW6nXf/Y7x/=', name: 'studio', label: 'studio (my laptop)', last_seen: ago(15) }],
+      lan: { enabled: false, connected: false, relay: 'lan-relay.internal:7443' }
+    },
     'atlas': {
       mode: 'normal', pending: [],
-      pending_pairings: [waiting[1]],
-      rules: [], trusted: [{ fp: 'SHA256:e+gYUIcZfC7HcEGi…', name: 'portal', label: 'portal', last_seen: ago(5) }],
+      pending_pairings: [waiting[2]],
+      rules: [], trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(5) }],
       lan: { enabled: false, connected: false, relay: 'lan-relay.internal:7443' }
     },
     'kestrel': {
       mode: 'bypass', pending: [], pending_pairings: [],
       rules: [{ kind: 'exec', pattern: '*', scope: 'global' }],
-      trusted: [{ fp: 'SHA256:e+gYUIcZfC7HcEGi…', name: 'portal', label: 'portal', last_seen: ago(2) }],
+      trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(2) }],
       lan: null
+    },
+    'mill-01': {
+      mode: 'normal', pending: [], pending_pairings: [], rules: [],
+      trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(7 * 3600) }],
+      lan: null
+    },
+    'orchard': {
+      mode: 'normal', pending: [], pending_pairings: [], rules: [],
+      trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(4 * 86400) }],
+      lan: null
+    },
+    'slate': {
+      mode: 'normal', pending: [], pending_pairings: [], rules: [], trusted: [], lan: null
     }
   };
 
@@ -81,7 +128,11 @@
     '/api/me': {
       identity: 'ardith', login: 'ardith', name: 'Ardith Vale',
       namespace: 'acme', provider: 'github', role: 'admin',
-      lark: true, relay_origin: 'https://relay.example.com'
+      lark: true, relay_origin: 'https://relay.example.com',
+      // 形状照抄 githubAvatarURL：同一个源、u/<数字账号 id>、?s=96。
+      avatar_url: avatar === 'off' ? undefined
+        : avatar === 'broken' ? 'https://avatars.githubusercontent.com/u/0/nope?s=96'
+        : 'https://avatars.githubusercontent.com/u/583231?s=96'
     },
     '/api/devices': { devices: devices },
     '/api/pending': { items: waiting },
@@ -129,6 +180,8 @@
 
   function match(url) {
     var p = url.split('?')[0];
+    if (scene === 'empty' && p === '/api/devices') return { devices: [] };
+    if (scene === 'noask' && p === '/api/pending') return { items: [] };
     if (p === '/api/devices/console') return consoles[new URLSearchParams(url.split('?')[1]).get('device')] || { mode: 'normal', pending: [], pending_pairings: [], rules: [], trusted: [] };
     if (p === '/api/devices/logs') return { logs: logs.slice().reverse() };
     if (p === '/api/devices/lark') return { approval_enabled: true, pairing_from_card: false, notify_email: 'you@example.com', delivery_health: { result: 'success', attempted_at: ago(300) } };
@@ -146,6 +199,18 @@
     // 真正出网的只有 GitHub 的 releases API（下载页要资产大小），让它过。
     if (url.indexOf('http') === 0 && url.indexOf(location.origin) !== 0) return realFetch(url, opts);
 
+    if (scene === 'down' && url.split('?')[0] === '/api/devices') {
+      // 形状照抄真代码：门户拿不到中继时走的是 http.Error(w, "relay unreachable: …", 502)
+      // —— 纯文本、502、末尾带换行。这里原来编了一个 {"error":"relay_unreachable"} 的
+      // JSON，工装第三次替真代码撒谎，而那个假形状正好把 toast 里那条裸 JSON 藏住了。
+      return Promise.resolve(new Response('relay unreachable: dial tcp 10.60.0.145:8080: i/o timeout\n',
+        { status: 502, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }));
+    }
+    // 认不出来的码：中继将来加一个新 token，门户不该因此又把原始报文端出来。
+    if (scene === 'oddcode' && url.split('?')[0] === '/api/devices') {
+      return Promise.resolve(new Response('quota_exceeded',
+        { status: 429, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }));
+    }
     var body = match(url);
     if (body === undefined) {
       return Promise.resolve(new Response('preview: no fixture for ' + url, { status: 404 }));
