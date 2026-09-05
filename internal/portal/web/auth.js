@@ -27,6 +27,18 @@
     $$('[data-lbl-en]').forEach(function (el) {
       el.setAttribute('aria-label', el.getAttribute('data-lbl-' + l));
     });
+    $$('[data-ph-en]').forEach(function (el) {
+      el.setAttribute('placeholder', el.getAttribute('data-ph-' + l));
+    });
+    // 等待邀请页上「还有几天可以再申请」。数字由服务端算，句子在这里拼 ——
+    // 「in 1 days」是错的英文，而单复数不是 data-en/data-zh 装得下的东西。
+    var retry = $('#retry');
+    if (retry) {
+      var days = parseInt(retry.getAttribute('data-days'), 10) || 0;
+      retry.textContent = l === 'en'
+        ? (days === 1 ? 'You can ask again tomorrow.' : 'You can ask again in ' + days + ' days.')
+        : (days === 1 ? '明天可以再申请。' : days + ' 天后可以再申请。');
+    }
     try { localStorage.setItem('wanctl.lang', l); } catch (_) {}
   }
   $('#lang').onclick = function () { applyLang(lang === 'en' ? 'zh' : 'en'); };
@@ -95,6 +107,39 @@
 
     $('#out').onclick = function () {
       post('/auth/logout').then(function () { location.href = '/'; });
+    };
+  }
+
+  /* ── 等待邀请页：申请访问 ───────────────────────────────────────────
+     交完之后不在这里自己画「已提交」——重新加载，让服务端说它现在是什么
+     状态。四种状态本来就是服务端算的，客户端再算一遍就是第二份真源。 */
+  var ask = $('#ask');
+  if (ask) {
+    var askErr = $('#askErr');
+    var askBtn = ask.querySelector('button');
+    ask.onsubmit = function (e) {
+      e.preventDefault();
+      askErr.textContent = '';
+      askBtn.disabled = true;
+      post('/auth/request-access', { note: $('#note').value.trim() }).then(function (r) {
+        if (r.ok) { location.reload(); return; }
+        return r.text().then(function (t) {
+          askBtn.disabled = false;
+          var token = t.trim();
+          // 中继用固定的错误 token 说话（形状同好友那套），认识的翻译成
+          // 人话，不认识的原样透出——少见的时候原因比语言一致更值钱。
+          if (token === 'request-open' || token === 'request-approved') { location.reload(); return; }
+          if (token === 'request-cooldown') {
+            askErr.textContent = lang === 'en'
+              ? 'You asked recently. Try again later.' : '你刚申请过，过些天再来。';
+            return;
+          }
+          askErr.textContent = token || ('HTTP ' + r.status);
+        });
+      }).catch(function () {
+        askBtn.disabled = false;
+        askErr.textContent = lang === 'en' ? 'Network error — try again.' : '网络错误，请重试。';
+      });
     };
   }
 })();
