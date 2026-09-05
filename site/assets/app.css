@@ -105,7 +105,18 @@ a:hover{text-decoration:underline}
   min-height:calc(100vh - 48px);
   min-height:calc(100svh - 48px);
   display:flex;flex-direction:column;justify-content:center;
+  /* 密文场（assets/field.js）垫在首屏底下。isolation 让首屏自成一个层叠上下文，
+     画布的 z-index:-1 才是「在这一屏的内容底下」，而不是「在整页底下」。 */
+  position:relative;isolation:isolate;
 }
+/* 首屏底下的两层，都铺满整幅 tile、都不接事件 —— 指针事件挂在 section 上，
+   手机屏里那三个按钮、两个 CTA 照常能按。
+     .backdrop  svg：只有那团蓝光，圆心在首屏正中（field.js 建）。
+                甲方 09-05 拍板的那一处渐变例外，见 DESIGN.md §7.5 / §8。
+     .field     画布，在光上面：那几圈线、沿圈流动的高光弧、划过才显形的字符都画在这里。
+                没有 JS 两层都不存在，白底即原样。 */
+.backdrop{position:absolute;inset:0;z-index:-2;width:100%;height:100%;display:block;pointer-events:none}
+.field{position:absolute;inset:0;z-index:-1;width:100%;height:100%;display:block;pointer-events:none}
 /* 上面那个 flex 会把子元素拉满宽（stretch），段落自身的居中靠 .center 的
    text-align，不受影响；舞台本来就有 margin:auto。 */
 
@@ -226,44 +237,89 @@ h2{
 /* ── 双屏真实场景：唯一允许有阴影的地方 ────────────────────────────── */
 .stage{
   position:relative;margin:clamp(22px,2.8vw,34px) auto 0;
-  max-width:840px;display:flex;align-items:flex-end;justify-content:center;
+  display:flex;align-items:flex-end;justify-content:center;
   gap:clamp(12px,2.6vw,44px);
+  /* 首屏是个纵向 flex，横向 auto 外边距让舞台按内容宽收缩 —— 而笔记本是个 container
+     （inline-size containment），它对「内容宽」的贡献是 0，舞台会缩到只剩手机、
+     笔记本被挤成 0 宽。所以舞台明确铺满，两台机器由 justify-content 居中。 */
+  width:100%;
+  /* 舞台的尺子是手机的宽 --pw，笔记本按等高跟着它（DESIGN.md §6：两块屏高度大致相等）。
+     手机取视口宽的 17%，再被两条线封顶：300px（2000 宽的屏上手机 300、舞台 1361，够大了），
+     和折线 —— 手机高是宽的 2.07 倍，舞台顶在 ~400px，(100svh−400)/2.07 就是屏底不过折线的
+     最大宽。1440×900 → 245；1536×864 → 224；1366×768 → 178；1920×1080 → 300。
+     甲方 09-05 下午：184 的手机在 2000 宽的屏上「太小了」—— 之前它是个固定上限。
+     地板 150：再小，屏里那份按 iOS 尺子排的字就读不了了（tools/phone-fit.mjs 量的）。 */
+  --pw:clamp(150px,min(17vw,(100svh - 400px) / 2.07),300px);
 }
-.laptop{flex:1 1 auto;min-width:0;max-width:580px;filter:drop-shadow(3px 5px 30px rgba(0,0,0,.22))}
-.laptop .lid{background:#2b2b2d;border-radius:14px 14px 4px 4px;padding:11px 11px 14px}
-.laptop .notch{width:76px;height:5px;margin:0 auto 7px;border-radius:0 0 4px 4px;background:#000}
-.laptop .screen{
-  background:#000;border-radius:5px;overflow:hidden;aspect-ratio:16/10;
-  display:flex;flex-direction:column;
-}
-.laptop .base{height:11px;margin:0 -3.2%;border-radius:0 0 11px 11px;
-              background:linear-gradient(#c8c9cc,#a9abb0)}
+/* 外壳是真机：两张带透明通道的渲染图（assets/iphone.webp · macbook.webp），屏幕那块
+   在图里是个透明的洞。活界面（.screen）垫在壳底下，壳压在上面且不接事件 ——
+   边框、圆角、灵动岛、刘海都是照片级的，屏里跑的仍然是活的产品界面。
+   DESIGN.md §6 那句「渲染的就是产品自己」不变，变的只是壳从 CSS 画的换成了真的。
+   屏那一层落在哪、圆角多大，是 tools/frames.py 按像素量出来的：矩形比洞每边多出几个
+   源像素（洞边上那一两像素的抗锯齿灰边要压在屏底下，不是压在页面白底上），
+   圆角取「不戳出壳外」和「不露出洞的圆角」之间的中点。**数字别手改，重新量。**
+   <img> 带 width/height，加载前盒子就有尺寸，舞台不会跳。
+   挂在 .laptop / .phone 上而不是 .stage 上：分享卡（tools/og.html）里的手机不在舞台里。 */
+.laptop .shell,.phone .shell{display:block;width:100%;height:auto;position:relative;z-index:1;
+                             pointer-events:none;user-select:none;-webkit-user-drag:none}
+.laptop .screen,.phone .screen{position:absolute;z-index:0;overflow:hidden;display:flex;flex-direction:column}
+
+/* 3.39 = 手机的高宽比 ÷ 笔记本的高宽比：这个宽度下两台机器一样高。放不下时笔记本收缩 */
+.laptop{flex:0 1 calc(var(--pw) * 3.39);min-width:0;position:relative;container-type:inline-size;
+        filter:drop-shadow(3px 5px 30px rgba(0,0,0,.22))}
+/* 上角圆、下角方 —— MacBook 的屏就长那样。圆角量出来的可行区间是 0~52 源像素
+   （壳宽 3984）即壳宽的 0~1.3%，.5cqw 在任何显示宽度下都落在区间里 */
+.laptop .screen{left:8.986%;top:2.055%;width:82.028%;height:86.93%;
+                background:#000;border-radius:.5cqw .5cqw 0 0}
 
 .phone{
   /* 不再抬离地面：两台机器摆在同一张桌上就该共一条地平线，
      悬空 16px 是把它们从一张照片变成两张贴图。 */
-  flex:0 0 auto;width:clamp(124px,13.4vw,184px);margin-bottom:0;
+  flex:0 0 auto;width:var(--pw);margin-bottom:0;position:relative;
   filter:drop-shadow(3px 5px 30px rgba(0,0,0,.22));
+  /* 屏里的一切按壳的宽度定尺寸（cqw）：iOS 的状态栏、圆角、安全区都是屏宽的比例，
+     手机放大缩小它们跟着走 —— 桌面 184、手机 230、分享卡 250 用的是同一份数。 */
+  container-type:inline-size;
 }
-.phone .body{background:#2b2b2d;border-radius:32px;padding:8px}
 .phone .screen{
-  background:#fff;border-radius:25px;overflow:hidden;aspect-ratio:9/19.5;
-  display:flex;flex-direction:column;position:relative;
+  left:3.636%;top:1.486%;width:92.727%;height:97.062%;
+  background:var(--canvas-2);border-radius:10.28cqw;
   transition:background .45s var(--ease);
 }
-.phone .island{position:absolute;top:7px;left:50%;transform:translateX(-50%);
-               width:33%;height:13px;border-radius:999px;background:#2b2b2d}
+/* iOS 的状态栏：时间在灵动岛左边那只「耳朵」的正中，信号 / Wi-Fi / 电量在右边那只，
+   整条跟岛的中线对齐；三栏的中间那栏就是岛的宽度，量出来的。
+   9:41 —— 苹果所有渲染图上的那个时间，也正好是 DESIGN.md 第 1 节那句「上午」。
+   字走系统栈：这是 iOS 自己的字不是我们的，苹果设备上看到的就是 SF；别处退到站点字体。
+   尺寸按 iPhone 17 Pro（402pt 宽）的比例：时间 17pt、图标组 72×12pt、home 条 134×5pt。 */
+.phone .sbar{
+  position:absolute;left:0;right:0;top:6.99cqw;transform:translateY(-50%);
+  display:grid;grid-template-columns:1fr 26.3cqw 1fr;align-items:center;
+  pointer-events:none;transition:opacity .3s var(--ease);
+}
+.phone .clock{
+  grid-column:1;text-align:center;color:var(--ink);
+  font:600 3.9cqw/1 -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',var(--sans);
+  letter-spacing:-.02em;font-variant-numeric:tabular-nums;
+}
+.phone .sys{grid-column:3;justify-self:center;display:block;width:16.5cqw;height:auto;color:var(--ink)}
+.phone .homebar{
+  position:absolute;left:50%;bottom:2.1cqw;transform:translateX(-50%);
+  width:30.7cqw;height:1.15cqw;border-radius:999px;background:var(--ink);
+  transition:opacity .3s var(--ease);
+}
 
 /* 开场时手机是黑的，然后亮一下 —— DESIGN.md 第 1 节那句场景句。
-   醒着是默认状态；.asleep 只由 JS 临时加，所以无 JS / 无头渲染看到的都是醒着的。 */
+   醒着是默认状态；.asleep 只由 JS 临时加，所以无 JS / 无头渲染看到的都是醒着的。
+   睡着的时候状态栏和 home 条也一起灭：真机就是这样，黑屏上什么都没有。 */
 .phone.asleep .screen{background:#000}
-.phone.asleep .ask{opacity:0}
+.phone.asleep .ask,.phone.asleep .sbar,.phone.asleep .homebar{opacity:0}
 @keyframes phone-attn{0%{transform:translateY(0)}34%{transform:translateY(-5px)}100%{transform:translateY(0)}}
 .phone.attn{animation:phone-attn .5s var(--ease)}
 
 /* 笔记本屏内：终端 */
+/* 字号按笔记本的宽算（.laptop 是 container）：壳 830 宽时 13px，1017 时 16px，508 时 8px */
 .term{
-  flex:1;padding:15px 17px;font-family:var(--mono);font-size:clamp(8px,.76vw,10.8px);
+  flex:1;padding:2.4cqw 2.6cqw;font-family:var(--mono);font-size:1.6cqw;
   line-height:1.75;color:#e6e6e6;letter-spacing:0;overflow:hidden;text-align:left;
 }
 .term .row{white-space:pre-wrap;word-break:break-word;min-height:1.1em}
@@ -275,45 +331,72 @@ h2{
              background:#fff;animation:blink 1.06s steps(2,end) infinite}
 @keyframes blink{50%{opacity:0}}
 
-/* 手机屏内：审批 */
-.ask{flex:1;display:flex;flex-direction:column;padding:30px 13px 13px;gap:5px;text-align:center;
-     transition:opacity .3s var(--ease)}
+/* 手机屏内：审批 —— 按 iOS 的尺子画。
+   --pt 是「一个 iOS 点」：iPhone 17 Pro 的屏 402pt 宽，占壳宽的 92.2%，真比例是 .229cqw；
+   这里放大一成到 .255：1440 下（手机 245 宽）17pt 的正文才够 10.6px。字号、按钮高、圆角、
+   留白全用这一把尺，手机放大缩小，屏里的一切跟 iOS 保持同一个比例 ——
+   甲方 09-05 下午那句「按钮比例不对」说的就是之前 13px 的字配 35px 的按钮：字是 iOS 的两倍大。
+   版式是 iOS 的请求页：顶上导航标题（字标 + wanctl），然后是谁在请求（名字、短指纹、一句
+   「想运行一条命令」），请求什么（一张分组卡：设备 / 命令），秒表，最底下三颗 50pt 的胶囊
+   按钮压在 home 条的安全区上。屏底是 iOS 分组页那种浅灰（--canvas-2），卡片和次级按钮是白的
+   —— 都是站点自己的 token，没有新颜色。
+   上内边距 54pt = iOS 自己把内容摆在状态栏底下的那条线，下内边距 34pt = home 条的安全区。
+   装不装得下由 tools/phone-fit.mjs 量。 */
+.phone{--pt:.255cqw}
+.ask{
+  flex:1;display:flex;flex-direction:column;text-align:left;
+  padding:calc(var(--pt)*54) calc(var(--pt)*20) calc(var(--pt)*34);
+  transition:opacity .3s var(--ease);
+}
 @keyframes ask-rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 .ask.rise{animation:ask-rise .42s var(--ease) both}
-.ask .from{font-size:clamp(8px,.86vw,11px);color:var(--ink-2);letter-spacing:-.1px}
-.ask .from:first-child{margin-top:auto}
-.ask .what{margin-bottom:auto}
-/* 请求方的短指纹。设备端真会显示它，也把首屏和「端到端身份」那一屏系在一起 */
+/* 导航标题：字标 + 名字，17pt semibold 居中 —— iOS 内嵌标题的写法。所有状态都有它 */
+.ask .ttl{
+  flex:none;display:flex;align-items:center;justify-content:center;gap:calc(var(--pt)*5);
+  height:calc(var(--pt)*44);font-size:calc(var(--pt)*17);font-weight:600;letter-spacing:-.02em;
+}
+.ask .ttl svg{display:block;width:calc(var(--pt)*19);height:calc(var(--pt)*19);flex:none}
+/* 谁在请求：名字 22pt，底下是它的短指纹（设备端真会显示它，也把首屏和「端到端身份」那一屏
+   系在一起），再一句「想运行一条命令」 */
+.ask .who{margin-top:calc(var(--pt)*10)}
+.ask .name{font-size:calc(var(--pt)*22);font-weight:600;line-height:1.2;letter-spacing:-.02em;overflow-wrap:anywhere}
 .ask .fp{
-  font-family:var(--mono);font-size:clamp(6.5px,.7vw,9px);line-height:1.3;
-  color:var(--ink-2);letter-spacing:0;word-break:break-all;margin-bottom:2px;
+  font-family:var(--mono);font-size:calc(var(--pt)*13);line-height:1.3;
+  color:var(--ink-2);letter-spacing:0;word-break:break-all;margin-top:calc(var(--pt)*3);
 }
-.ask .host{font-size:clamp(10.5px,1.2vw,16px);font-weight:600;letter-spacing:-.2px}
-.ask .what{
-  font-family:var(--mono);font-size:clamp(8px,.88vw,11.5px);line-height:1.45;
-  color:var(--ink);letter-spacing:0;
-  /* 优先在空格处折行：break-all 会把 --epochs 拦腰断成 --epoc / hs */
-  word-break:normal;overflow-wrap:break-word;
+.ask .from{font-size:calc(var(--pt)*17);line-height:1.3;color:var(--ink-2);margin-top:calc(var(--pt)*8)}
+/* 请求什么：iOS 的分组卡，两行 —— 设备、命令。标签一栏 74pt，「Command」正好放得下 */
+.ask .card{
+  margin:calc(var(--pt)*14) 0 0;padding:0 calc(var(--pt)*16);
+  background:var(--canvas);border-radius:calc(var(--pt)*20);
 }
+.ask .card .row{display:flex;gap:calc(var(--pt)*12);padding:calc(var(--pt)*11) 0;font-size:calc(var(--pt)*17);line-height:1.3}
+.ask .card .row+.row{border-top:1px solid var(--hairline)}
+.ask .card dt{flex:0 0 calc(var(--pt)*74);margin:0;color:var(--ink-2)}
+.ask .card dd{flex:1;min-width:0;margin:0}
+.ask .card dd.mono{font-family:var(--mono);font-size:calc(var(--pt)*15);letter-spacing:0}
+/* 优先在空格处折行：break-all 会把 --epochs 拦腰断成 --epoc / hs */
+.ask .what{word-break:normal;overflow-wrap:break-word}
 .ask .what .tok,.kv dd.cmd .tok{white-space:nowrap}
 .ask .what .tok.split,.kv dd.cmd .tok.split{white-space:normal;word-break:break-all}
-/* 手机上的那份秒表。移动端终端在折线以下，这一份才是落地时看得见的活体证明 */
+/* 手机上的那份秒表。移动端终端在折线以下，这一份才是落地时看得见的活体证明。
+   压在按钮上方，卡片和它之间的空由 margin-top:auto 吃掉。 */
 .ask .pend{
-  margin-top:auto;display:flex;align-items:center;justify-content:center;gap:6px;
-  font-size:clamp(7px,.76vw,10px);color:var(--ink-2);letter-spacing:0;padding-bottom:9px;
+  margin-top:auto;padding:calc(var(--pt)*14) 0;
+  display:flex;align-items:center;justify-content:center;gap:calc(var(--pt)*6);
+  font-size:calc(var(--pt)*15);color:var(--ink-2);letter-spacing:0;font-variant-numeric:tabular-nums;
 }
 .ask .pend .dot{
-  width:6px;height:6px;border-radius:50%;background:var(--blue);flex:none;
+  width:calc(var(--pt)*7);height:calc(var(--pt)*7);border-radius:50%;background:var(--blue);flex:none;
   animation:pend-dot 2s var(--ease) infinite;
 }
 @keyframes pend-dot{0%,100%{opacity:1}50%{opacity:.28}}
-.ask .acts{
-  margin:0 -13px;padding:10px 13px 0;border-top:1px solid var(--hairline);
-  display:flex;flex-direction:column;gap:6px;
-}
+.ask .acts{flex:none;display:flex;flex-direction:column;gap:calc(var(--pt)*10)}
+/* iOS 的按钮：50pt 高的胶囊，17pt semibold 的字 */
 .ask button{
-  font:inherit;font-size:clamp(9.5px,1vw,13px);font-weight:400;letter-spacing:-.1px;
-  border:0;border-radius:999px;padding:8px 5px;cursor:pointer;
+  font:inherit;font-size:calc(var(--pt)*17);font-weight:600;letter-spacing:-.02em;line-height:1;
+  height:calc(var(--pt)*50);border:0;border-radius:999px;padding:0 calc(var(--pt)*16);cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   transition:background .18s var(--ease);
 }
 /* 主按钮每 3.4 秒轻呼吸两下：告诉你「该你了」，不靠涟漪不靠阴影 */
@@ -326,20 +409,23 @@ h2{
 .ask button:active{transform:scale(.95)}
 /* 层级按后果排，不按语气排。
    「一直允许」是一次持久授权 —— 这个产品里后果最重的动作 —— 之前它是三个里最轻的
-   一行蓝字，而后果最轻的「拒绝」反倒是一块厚灰板。两个次级动作现在等重。 */
+   一行蓝字，而后果最轻的「拒绝」反倒是一块厚灰板。两个次级动作现在等重：
+   浅灰屏底上的两颗白胶囊（iOS 26 起浅底上的次级按钮就是这个样子）。 */
 .ask .yes{background:var(--blue);color:#fff}
 .ask .yes:hover{background:var(--blue-hi)}
-.ask .alt,.ask .no{background:var(--canvas-2);color:var(--ink)}
-.ask .alt:hover,.ask .no:hover{background:#e8e8ed}
-.ask .done{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px}
+.ask .alt,.ask .no{background:var(--canvas);color:var(--ink)}
+.ask .alt:hover,.ask .no:hover{background:#ececf0}
+.ask .done{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--pt)*12)}
 .ask .tickring{
-  width:clamp(30px,3.7vw,50px);height:clamp(30px,3.7vw,50px);border-radius:50%;
+  width:calc(var(--pt)*64);height:calc(var(--pt)*64);border-radius:50%;
   border:2px solid var(--blue);display:grid;place-items:center;color:var(--blue);
 }
+.ask .tickring svg{width:calc(var(--pt)*28);height:calc(var(--pt)*28)}
 .ask .tickring.refused{border-color:var(--ink-2);color:var(--ink-2)}
-.ask .doneword{font-size:clamp(9.5px,1vw,13px);color:var(--ink-2);letter-spacing:-.1px}
-.ask .idle{flex:1;display:grid;place-items:center;color:var(--ink-2);
-           font-size:clamp(9.5px,1vw,13px);padding:0 8px}
+.ask .doneword{font-size:calc(var(--pt)*17);color:var(--ink-2);text-align:center;letter-spacing:-.02em;
+               max-width:calc(var(--pt)*300)}
+.ask .idle{flex:1;display:grid;place-items:center;color:var(--ink-2);text-align:center;
+           font-size:calc(var(--pt)*17);padding:0 calc(var(--pt)*8)}
 
 /* ── 被放大的真实界面 ──────────────────────────────────────────────── */
 .panel{
@@ -539,17 +625,11 @@ h2{
      故事全在手机屏上：谁在请求、要跑什么、等了多久、那三个按钮。 */
   .stage{flex-direction:column-reverse;align-items:center;gap:24px}
   .laptop{display:none}
-  .phone{width:min(230px,62vw);margin-bottom:0}
-  /* 屏内字号按 vw 算在窄屏上会掉到地板价，可这里的手机反而是最大的 */
-  .ask .from{font-size:11px}
-  .ask .fp{font-size:9px}
-  .ask .host{font-size:16px}
-  .ask .what{font-size:11.5px}
-  .ask button,.ask .doneword,.ask .idle{font-size:13px}
-  /* 终端字号按 vw 算，390px 下会掉到 8px 的地板价 —— 那不是小，那是读不了 */
-  .term{font-size:10px;line-height:1.65;padding:13px 14px}
-  .ask .pend{font-size:10px}
-  .ask .tickring{width:46px;height:46px}
+  .stage{--pw:min(230px,62vw)}
+  .phone{margin-bottom:0}
+  /* 这里访客拿的就是手机，屏里的字得读得了：iOS 的尺子从 .255 放到 .27cqw，
+     230 宽的手机上 17pt ≈ 10.6px，跟桌面 1440 那一档一样 */
+  .phone{--pt:.27cqw}
   /* 手指用的宽度。链接撑到整条顶栏高之后还剩宽度这一头：中文的「安装」只有 28px
      宽，旁边 13px 就是下一条。左右各加 6px 的透明内边距把按压面做到 40，再用
      等量的负外边距把整栏拉回去 —— 最右那条链接的墨迹落点一个像素不动（这一栏
@@ -694,10 +774,14 @@ h5:lang(zh),
 h6:lang(zh),
 .tile.chapter h2:lang(zh),
 .nav:lang(zh),
+.ask .ttl:lang(zh),
+.ask .name:lang(zh),
 .ask .from:lang(zh),
-.ask .host:lang(zh),
+.ask .card:lang(zh),
+.ask .pend:lang(zh),
 .ask button:lang(zh),
 .ask .doneword:lang(zh),
+.ask .idle:lang(zh),
 .panel .head .t:lang(zh),
 .rows .name:lang(zh),
 .party .who:lang(zh),
@@ -706,7 +790,7 @@ h6:lang(zh),
 
 /* 行高：正文 1.6（上面 body 那条给的），官网的展示级标题 1.2。
    文档站的标题不在此列 —— .dbody article h1 是 0,1,2，它的 1.12 该留着。
-   等宽块（.term 1.75 / .ask .what 1.45 / .ask .fp 1.3）也不动，它们自己声明着。 */
+   等宽块（.term 1.75 / .ask .card .row 1.3 / .ask .fp 1.3）也不动，它们自己声明着。 */
 h1:lang(zh),h2:lang(zh),.tile.chapter h2:lang(zh){line-height:1.2}
 .lead:lang(zh),.note:lang(zh),.door .d:lang(zh){line-height:1.6}
 

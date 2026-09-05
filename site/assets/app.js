@@ -57,7 +57,7 @@
 
   var T = {
     en: {
-      from: 'wants to run on', once: 'Allow once', always: 'Always allow this', refuse: 'Refuse',
+      from: 'wants to run a command', once: 'Allow once', always: 'Always allow this', refuse: 'Refuse',
       waiting: 'waiting for the owner…', ruled: 'matched a rule you signed',
       lesson: 'A rule covers that command, not this one — so it asks again.',
       refusedBy: 'refused by owner, trying a read-only check',
@@ -78,7 +78,7 @@
       os: { unix: '', win: ' PowerShell 5.1 and up; no OpenSSL needed.' }
     },
     zh: {
-      from: '想在这台上跑', once: '允许一次', always: '这条命令一直允许', refuse: '拒绝',
+      from: '想运行一条命令', once: '允许一次', always: '这条命令一直允许', refuse: '拒绝',
       waiting: '等设备主人…', ruled: '命中了你签过的规则',
       lesson: '规则管的是那条命令，不管这一条——所以它还要再问一次。',
       refusedBy: '被主人拒绝，改用一条只读命令再试',
@@ -235,17 +235,26 @@
     waitEl = null;
   }
 
-  /* ── 手机屏 ────────────────────────────────────────────────────── */
+  /* ── 手机屏 ──────────────────────────────────────────────────────
+     iOS 的请求页（版式和尺子见 app.css 的 .ask 一节）：导航标题在每个状态里都在，
+     底下才是这一刻的内容 —— 请求、结果、或者一句「没有等待中的请求」。 */
+  var MARK = '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5.6 12.4 10.2 21.8 15.2 14.6 19.6 21.8 26.4 7.6" ' +
+             'fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  function ttl() { return '<div class="ttl">' + MARK + 'wanctl</div>'; }
   function renderAsk() {
-    var j = job();
+    var j = job(), k = t().k;
     if (st.phase !== 'asking' || !j) return;
-    ask.innerHTML =
-      '<div class="from">' + esc(j.by) + '</div>' +
-      '<div class="fp">' + esc(CTRL_FP) + '</div>' +
-      '<div class="from">' + esc(t().from) + '</div>' +
-      '<div class="host">' + esc(j.host) + '</div>' +
-      '<div class="what">' + cmdHTML(j.raw) + '</div>' +
-      '<div class="pend mono"><span class="dot"></span>' +
+    ask.innerHTML = ttl() +
+      '<div class="who">' +
+        '<div class="name">' + esc(j.by) + '</div>' +
+        '<div class="fp">' + esc(CTRL_FP) + '</div>' +
+        '<div class="from">' + esc(t().from) + '</div>' +
+      '</div>' +
+      '<dl class="card">' +
+        '<div class="row"><dt>' + esc(k.device) + '</dt><dd class="mono">' + esc(j.host) + '</dd></div>' +
+        '<div class="row"><dt>' + esc(k.cmd) + '</dt><dd class="mono what">' + cmdHTML(j.raw) + '</dd></div>' +
+      '</dl>' +
+      '<div class="pend"><span class="dot"></span>' +
         '<span class="pt">' + esc(pendText()) + '</span></div>' +
       '<div class="acts">' +
         '<button class="yes breathe" data-act="y">' + esc(t().once) + '</button>' +
@@ -258,7 +267,7 @@
     replay(phone, 'attn');
   }
   function renderDone(ok) {
-    ask.innerHTML =
+    ask.innerHTML = ttl() +
       '<div class="done">' +
         '<span class="tickring' + (ok ? '' : ' refused') + '">' +
           (ok ? '<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">' +
@@ -270,7 +279,7 @@
       '</div>';
   }
   function renderIdle(msg) {
-    ask.innerHTML = '<div class="idle">' + esc(msg || t().idle) + '</div>';
+    ask.innerHTML = ttl() + '<div class="idle">' + esc(msg || t().idle) + '</div>';
   }
 
   /* ── 凭证 ──────────────────────────────────────────────────────── */
@@ -352,7 +361,7 @@
     st.phase = 'done';
     line('', '');
     line('cmd', t().finale);
-    ask.innerHTML = '<div class="done">' +
+    ask.innerHTML = ttl() + '<div class="done">' +
       '<span class="doneword">' + esc(t().finale) + '</span>' +
       '<button class="yes" id="again" style="margin-top:8px">' + esc(t().replay) + '</button></div>';
     $('#again').addEventListener('click', function () { location.reload(); });

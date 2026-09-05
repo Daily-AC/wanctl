@@ -33,7 +33,7 @@ uv run "$ROOT/tools/docsite/build.py" --out "$STAGE/docs"
 # 指纹要写进每一个页面，不只是首页：文档站有 14 个 .html，漏掉任何一个
 # 就等于那一页永远在拿 Cloudflare 缓存里的旧样式表。
 PAGES=$(find "$STAGE" -name '*.html')
-for f in app.css app.js mark.svg docs.css docs.js; do
+for f in app.css app.js field.js mark.svg iphone.webp macbook.webp docs.css docs.js; do
   h=$(md5 -q "$STAGE/assets/$f" 2>/dev/null || md5sum "$STAGE/assets/$f" | cut -c1-32)
   h=$(echo "$h" | cut -c1-10)
   for p in $PAGES; do
