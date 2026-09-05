@@ -156,6 +156,9 @@ h2{
 }
 /* 标记 + 字标。标记是那个末笔上扬的 w（assets/mark.svg 同一条路径），
    currentColor 描边 —— 它跟着字标的颜色走，不引入第二种墨色。 */
+/* 字标不跟着链接一起撑到 48：它的盒子高度是分数（17px 的行盒 25.4），撑满之后
+   标记在 48 里居中和在 25.4 里居中差半个像素，1440 上实测 78 个像素不一致 ——
+   那是全站唯一冻着的那一档。它去的又是当前这一页，够不着的代价近乎为零。 */
 .nav .brand{
   display:flex;align-items:center;gap:8px;
   color:var(--ink);font-weight:600;font-size:17px;letter-spacing:-.4px;flex:none;
@@ -174,8 +177,18 @@ h2{
    中文访客第一个要按的那个键。没有这一行，链接栏拒绝收缩（nowrap 的 min-content
    就是它的下限），溢出只能由整条 header 承担；有了这一行，超出的部分在链接栏自己
    那里被裁掉，开关原地不动。**要被牺牲的永远是链接，不是开关。** */
-.nav .links{display:flex;gap:clamp(13px,2vw,26px);margin-left:auto;min-width:0;overflow:hidden}
-.nav .links a{color:var(--ink-2);white-space:nowrap}
+/* align-self:stretch 让这一栏跟整条顶栏一样高（48），链接因此可以做成
+   整条高的按压面而墨迹一动不动 —— 实测手机上每个链接只有 20.6~22.4px 高，
+   而它们是这个站在手机上仅有的两个导航入口之一。栏被撑高之后上面那句
+   overflow:hidden 也不再会把纵向探出的东西裁掉。 */
+.nav .links{
+  display:flex;align-items:center;align-self:stretch;
+  gap:clamp(13px,2vw,26px);margin-left:auto;min-width:0;overflow:hidden;
+}
+.nav .links a{
+  display:flex;align-items:center;align-self:stretch;
+  color:var(--ink-2);white-space:nowrap;
+}
 .nav .links a:hover{color:var(--ink);text-decoration:none}
 /* 不画边框：分隔线拿掉之后，一条描边胶囊会成为整条导航里最重的东西，
    而它只是个次级开关。悬停的浅灰底照样说明它能点。 */
@@ -188,8 +201,13 @@ h2{
      就比内容锁往里缩了 11px —— 而首屏标题和每一屏的内容都是压着锁的。
      负外边距只挪盒子不挪墨迹，悬停那块浅灰底探进 --pad 的留白，正是它该在的地方。 */
   margin-right:-11px;
+  position:relative;
   transition:background .16s var(--ease);
 }
+/* 按压面撑到 44×45，那块浅灰底一个像素都不动。
+   直接给按钮加内边距会把悬停的底块在 48px 的横带里撑成一块厚板；
+   透明的伪元素只管手指够不够得着。 */
+.nav .lang::after{content:"";position:absolute;top:-11px;bottom:-11px;left:-3px;right:-3px}
 .nav .lang:hover{background:var(--canvas-2)}
 .nav .lang:active{transform:scale(.95)}
 
@@ -463,6 +481,16 @@ h2{
 }
 .cmdline button:hover{background:var(--blue-hi)}
 .cmdline button:active{transform:scale(.95)}
+/* 「还有」这个信号。命令一行装不下的时候，末 24px 擦成透明，露出胶囊自己的底
+   （深色屏下露出的就是黑）—— DESIGN.md 第 8 节禁的是装饰性渐变，这是遮罩：
+   它不铺任何一层新颜色，只是把元素自己的末端擦掉。
+   `.more` 由 app.js 在 scrollWidth > clientWidth 时挂上（issue #25 那一版把它
+   挂在 ≤560 上，而 768 下英文那条 GitHub 命令照样有 138px 在框外，遮罩已经
+   下线了）。量的是溢出本身，所以不溢出的宽度上它自动不存在。 */
+.cmdline.more code{
+  -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);
+          mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);
+}
 
 .note{
   margin:14px auto 0;max-width:52ch;font-size:15px;color:var(--ink-2);
@@ -503,9 +531,14 @@ h2{
 .foot .row .end{margin-left:auto}
 
 @media (max-width:760px){
-  /* 手机上访客自己就是设备主人，先给他那块要按的屏 */
+  /* 手机上访客自己就是设备主人，先给他那块要按的屏。
+     笔记本在这里退场，跟竖排是同一个断点：两块屏一旦并排放不下，被折线切掉的
+     就是下面那台。以前退场挂在 ≤560，于是 561~760 这 200px 里既竖排又留着笔记本，
+     首屏实测 1055~1062px 高（900 的窗口下多出 158），落地看到的是「一部手机
+     加半台笔记本」—— HANDOFF §3.11 在 ≤560 修掉的正是这一条。
+     故事全在手机屏上：谁在请求、要跑什么、等了多久、那三个按钮。 */
   .stage{flex-direction:column-reverse;align-items:center;gap:24px}
-  .laptop{width:100%;max-width:520px}
+  .laptop{display:none}
   .phone{width:min(230px,62vw);margin-bottom:0}
   /* 屏内字号按 vw 算在窄屏上会掉到地板价，可这里的手机反而是最大的 */
   .ask .from{font-size:11px}
@@ -517,6 +550,13 @@ h2{
   .term{font-size:10px;line-height:1.65;padding:13px 14px}
   .ask .pend{font-size:10px}
   .ask .tickring{width:46px;height:46px}
+  /* 手指用的宽度。链接撑到整条顶栏高之后还剩宽度这一头：中文的「安装」只有 28px
+     宽，旁边 13px 就是下一条。左右各加 6px 的透明内边距把按压面做到 40，再用
+     等量的负外边距把整栏拉回去 —— 最右那条链接的墨迹落点一个像素不动（这一栏
+     是 margin-left:auto 靠右站的，右缘就是基准）。760 以下才加：桌面用鼠标，
+     而 1440 那一档是冻着的。 */
+  .nav .links{margin-right:-6px;gap:calc(clamp(13px,2vw,26px) - 12px)}
+  .nav .links a{padding:0 6px}
   .nav .links a[data-opt]{display:none}
   .kv{flex-direction:column;gap:2px}
   .kv dt{flex:none}
@@ -562,17 +602,8 @@ h2{
   /* ── 手机上的减法 ────────────────────────────────────────────────
      下面每一条都是「拿掉一件在 390px 上没有职务的东西」，不是加一套手机专用版式。 */
 
-  /* 首屏在手机上装不下自己：390 下它 1102px 高，视口只有 844。被折线切掉的正好是
-     场景的下半截，落地看到的是「一部手机加半台笔记本」—— DESIGN.md 第 5 节
-     「一屏一个主体」当场作废，而首屏本来就有 min-height:100svh 想守住这件事。
-     减掉笔记本而不是缩它，两个理由：
-       · DESIGN.md 第 7 节已经写下移动端「落地时只看得见手机那一份」秒表 ——
-         这半台笔记本本来就不承担信息，只承担被切掉；
-       · 手机屏里已经写全了整个故事：谁在请求（claude@workstation）、要跑什么
-         （python train.py …）、等谁（已等待 0:04）、以及那三个按钮。
-     减完 390 下首屏 827px，一屏装得下（844）。 */
-  .laptop{display:none}
-  /* 中文的 lead 行高 1.6，比英文那三行高出 11px，正好把首屏顶到 850 —— 差 6px。
+  /* 笔记本的退场已经挪到 ≤760（跟竖排同一个断点，理由记在那边）。
+     中文的 lead 行高 1.6，比英文那三行高出 11px，正好把首屏顶到 850 —— 差 6px。
      底部内边距收 10px 补回来，两种语言都落在折线以内。 */
   .tile.hero{padding-bottom:42px}
 
@@ -581,22 +612,16 @@ h2{
      换行之后那条命令不再是「一行装完」，而整页最重的蓝色大块落在了一个次级动作上。
      手机上照样用桌面那一份：单行、胶囊内横向滚、复制键在右。别再竖排回去。
 
-     撤回之后要补的只有一件：框上得有「还有」这个信号，否则命令就是被硬切在
-     复制键上。DESIGN.md 第 8 节禁装饰性渐变 —— 这里用的不是渐变，是遮罩：
-     它把元素自己的末 24px 擦成透明，露出胶囊本来的底（深色下露出的就是黑），
-     不引入任何一层新的颜色。它也只挂在**确实在滚**的宽度上：四条命令在 ≤560
-     全部溢出（实测最小溢出 27px，在 560 的 Windows + 中国镜像那条），
-     640 起最短的两条就装得下了，那里挂个淡出就成了装饰。 */
-  .cmdline code{
-    -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);
-            mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);
-  }
+     撤回之后要补的那个「还有」信号见下面 .cmdline.more —— 它现在不挂在这个
+     断点上了。 */
 
   /* 两个分段控件各自居左居右都不是，是各自居中：实测左缘一个在 87 一个在 100，
      彼此错开 13px，也都不压内容锁（22）。窄屏改成两条通栏，共用同一对左右缘，
-     顺便把两个选项做成一样宽的按压面。 */
+     顺便把两个选项做成一样宽的按压面。
+     内边距 10 而不是 8：8 给出 36.6px（英文）高的按压面，而这两个键决定下面
+     那条命令是哪一条，够不着就选错。10 给出 40.6，通栏的宽度本来就富余。 */
   .picker{flex-direction:column;align-items:stretch;gap:10px;margin-top:24px}
-  .seg button{flex:1 1 0;padding:8px 10px}
+  .seg button{flex:1 1 0;padding:10px}
 }
 
 /* ── 顶栏的落链梯 ────────────────────────────────────────────────────

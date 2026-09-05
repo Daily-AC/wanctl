@@ -90,6 +90,53 @@
     });
   }
 
+  /* ── 宽表：右边还有 ────────────────────────────────────────────────
+     `.tw` 一直是能横滚的，但手机上没有常驻滚动条会说这件事（移动端的滚动条
+     都是覆盖式的），而表格被切在两条发丝线之间的单元格中间，看着不像还能滚，
+     看着像坏了。docs.css 的 `.tw.more` 是一道 24px 的遮罩；这里负责它什么时候在。
+     按真实的 scrollLeft 算，滚到底就摘掉 —— 一道永远亮着的淡出在滚到头之后
+     就是在撒谎。ResizeObserver 覆盖转屏、切语言（另一份表宽度不同）和字体到位。 */
+  var tws = $$('.tw');
+  if (tws.length) {
+    var markMore = function (el) {
+      el.classList.toggle('more', el.scrollWidth - el.clientWidth - el.scrollLeft > 1);
+    };
+    tws.forEach(function (el) {
+      markMore(el);
+      el.addEventListener('scroll', function () { markMore(el); }, { passive: true });
+      if (window.ResizeObserver) new ResizeObserver(function () { markMore(el); }).observe(el);
+    });
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(function () { tws.forEach(markMore); });
+    }
+  }
+
+  /* ── 命令里的参数不许在自己的横杠后面断行 ──────────────────────────
+     浏览器默认允许在连字符后断开，于是中文段落里的 `--transport` 被切成 `--`
+     和 `transport`，读起来是两个参数。官网在 app.js 的 cmdHTML 和 index.html
+     的 .tok 里修过同一个坑两次；这里的正文是 markdown 生成的，包不进 span，
+     所以在加载时包一遍：只包以 - 开头的那种节，长标识符照旧可以在它自己的
+     连字符处断开，那种断法本来就读得通。
+     两份正文都包（隐藏那半边一样会被显示出来），一次到位，不跟着语言重跑。 */
+  $$('.dbody article :is(p,li,blockquote,td,th) code').forEach(function (code) {
+    if (code.children.length) return;                 // 已经有结构的不碰
+    var t = code.textContent;
+    if (!/(^|\s)-{1,2}[^\s]/.test(t)) return;
+    var frag = document.createDocumentFragment();
+    t.split(/(\s+)/).forEach(function (part) {
+      if (/^-{1,2}[^\s]/.test(part)) {
+        var s = document.createElement('span');
+        s.className = 'tok';
+        s.textContent = part;
+        frag.appendChild(s);
+      } else {
+        frag.appendChild(document.createTextNode(part));
+      }
+    });
+    code.textContent = '';
+    code.appendChild(frag);
+  });
+
   /* ── 右栏跟着读到哪一节走 ──────────────────────────────────────────
      标出正文里最后一个已经越过读区上沿的标题。
 
