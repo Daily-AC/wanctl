@@ -172,23 +172,39 @@ func TestRunMigrationsRollsBackFailedVersion(t *testing.T) {
 	}
 }
 
-func TestEmbeddedMigrationsIncludeFriendsNotifyAndDeviceAlias(t *testing.T) {
+// Every embedded migration after the two the fixture pretends are already
+// applied must run, in order, with the body we think it has. A new .sql file
+// that is not listed here fails the count — which is the point: adding one is
+// a schema change, and this is where it gets acknowledged.
+func TestEmbeddedMigrationsApplyEveryVersion(t *testing.T) {
 	state := &migrationState{applied: map[int]bool{1: true, 2: true}}
 	if err := runMigrations(newMigrationTestDB(t, state), migrationFiles); err != nil {
 		t.Fatal(err)
 	}
-	if !state.applied[3] {
-		t.Fatalf("applied versions = %#v, want version 3", state.applied)
+	want := []struct {
+		version int
+		body    string
+	}{
+		{3, "CREATE TABLE IF NOT EXISTS friends"},
+		{4, "CREATE TABLE IF NOT EXISTS notify_webhook"},
+		{5, "devices_owner_namespace_alias_key"},
+		{6, "CREATE TABLE IF NOT EXISTS access_requests"},
 	}
-	if !state.applied[4] {
-		t.Fatalf("applied versions = %#v, want version 4", state.applied)
+	if len(state.committedBodies) != len(want) {
+		t.Fatalf("applied %d migrations, want %d: %#v",
+			len(state.committedBodies), len(want), state.committedBodies)
 	}
-	if !state.applied[5] {
-		t.Fatalf("applied versions = %#v, want version 5", state.applied)
+	for i, w := range want {
+		if !state.applied[w.version] {
+			t.Fatalf("applied versions = %#v, want version %d", state.applied, w.version)
+		}
+		if !strings.Contains(state.committedBodies[i], w.body) {
+			t.Fatalf("migration %d body = %#v", w.version, state.committedBodies[i])
+		}
 	}
-	if len(state.committedBodies) != 3 || !strings.Contains(state.committedBodies[0], "CREATE TABLE IF NOT EXISTS friends") ||
-		!strings.Contains(state.committedBodies[1], "CREATE TABLE IF NOT EXISTS notify_webhook") ||
-		!strings.Contains(state.committedBodies[2], "devices_owner_namespace_alias_key") {
-		t.Fatalf("migration bodies = %#v", state.committedBodies)
+	// The open-application index is the whole rate limit; losing it would let
+	// one account fill the queue.
+	if !strings.Contains(state.committedBodies[3], "access_requests_open_key") {
+		t.Fatalf("migration 6 lost the one-open-request index: %#v", state.committedBodies[3])
 	}
 }
