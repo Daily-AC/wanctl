@@ -137,6 +137,7 @@ func NewShellSession(shell string) (*ShellSession, error) {
 	} else {
 		cmd = exec.Command(shell, "-s")
 	}
+	hideConsole(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -299,6 +300,7 @@ func RunOneShotContext(ctx context.Context, shell, command, cwd string, out io.W
 		cmd = exec.CommandContext(ctx, shell, "-c", command)
 	}
 	configureCommandCancellation(cmd)
+	hideConsole(cmd)
 	cmd.Dir = cwd
 	cmd.Stdout = out
 	cmd.Stderr = out
