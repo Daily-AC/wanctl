@@ -38,7 +38,10 @@ body.docs:lang(zh){letter-spacing:0}
 /* 顶栏：跟官网同一份 .nav，只多一个「你现在在文档里」的标签。
    gap 收到 14px，好让这个标签贴着字标站，而不是浮在中间。 */
 .docs .nav{gap:14px}
+/* align-self:stretch 跟官网的 .brand / .links a 一个道理：这一条也是链接，
+   手机上它只有 24px 高。撑到顶栏的 48 之后按压面够得着，墨迹一个像素不动。 */
 .docs .nav .here{
+  display:flex;align-items:center;align-self:stretch;
   color:var(--ink-2);font-size:14px;font-weight:400;letter-spacing:-.2px;flex:none;
 }
 /* 「文档」两个字，同上：0,3,0 得由 0,4,0 来重置。 */
@@ -210,7 +213,8 @@ body.docs:lang(zh){letter-spacing:0}
   display:block;white-space:pre;
 }
 
-/* 表格：全边框 + 灰表头。宽表在自己的盒子里横滚，页面不滚。 */
+/* 表格：全边框 + 灰表头。宽表在自己的盒子里横滚，页面不滚。
+   「右边还有」那道遮罩挂在窄屏那一档里（见 .tw.more），桌面上有滚动条替它说话。 */
 .tw{overflow-x:auto;margin:0 0 16px}
 .dbody article table{border-collapse:collapse;font-size:14px;line-height:1.5}
 .dbody article th,.dbody article td{
@@ -241,10 +245,14 @@ body.docs:lang(zh){letter-spacing:0}
 :where(.dindex) h1{letter-spacing:-.4px}
 .dindex .lead{margin:14px 0 0;max-width:56ch;font-size:18px}
 /* 六个分组落成 3×2 而不是 4+2：四栏那版第二行只填了两格，右半边空着，
-   看起来像少了两组东西。三栏两行是满的。 */
+   看起来像少了两组东西。三栏两行是满的。
+   `min(330px,100%)` 而不是裸的 330px：auto-fit 的轨道**不会**缩到 minmax 的
+   下限以下，所以 320px 的手机上（正文可用 276）这一格仍旧要 330，页面装不下，
+   Chrome 于是把布局视口撑到 352 —— 整页按 352 排版再缩着显示，标题和链接一起
+   被右边缘切掉。加了 min() 之后下限跟着容器走，330 只在放得下的时候才生效。 */
 .dindex .cols{
   display:grid;gap:26px 48px;margin-top:46px;
-  grid-template-columns:repeat(auto-fit,minmax(330px,1fr));
+  grid-template-columns:repeat(auto-fit,minmax(min(330px,100%),1fr));
 }
 .dindex .g h2{
   margin:22px 0 9px;font-size:12px;font-weight:600;color:var(--ink-2);
@@ -265,13 +273,48 @@ body.docs:lang(zh){letter-spacing:0}
 @media (max-width:1099px){
   .dpage,.dpage.no-toc{grid-template-columns:minmax(0,1fr)}
   .dtoc{display:none}
-  .dbody{padding:22px 0 56px}
+  /* 本页目录退场之后没有东西接手它那一栏，于是 1024 下正文拿到整整 942px ——
+     实测一行 118 个字符，而 DESIGN.md §9 给文档定的是 70 上下。没有目录的文章
+     （.no-toc）本来就封在 78ch，同一个站于是在同一个宽度上有两种行长。
+     封顶挪到 .dbody 自己身上，两种文章从此同一条规矩；手机上正文本来就不到
+     78ch，这一条在那里不生效。 */
+  .dbody{padding:22px 0 56px;max-width:78ch}
   .dpage.no-toc .dbody{padding-right:0}
   .dbody article h1{font-size:clamp(27px,6vw,34px)}
   .dbody article h2{font-size:21px;margin-top:36px}
 
+  /* .87em 是相对正文的，正文 16 给出 13.9px。但表格的正文是 14px，同一条规则
+     在单元格里落到 12.18px —— 而单元格里的等宽字全是环境变量名和参数，是这一页
+     最需要被逐字符读准的东西。13px 的地板只加在窄屏这一档：桌面 1440 是全站
+     唯一冻着的一档，而这条缺陷是在手机上量到的。 */
+  .dbody article code{font-size:max(13px,.87em)}
+
+  /* 命令里以 - 开头的那一节不许在自己的横杠后面断行。浏览器默认允许在连字符后
+     断开，于是 `--transport` 在中文段落里被切成 `--` 和 `transport`，读起来是
+     两个参数 —— HANDOFF §3.5 和 §3.11 在官网上修过两次的同一个坑。正文由
+     markdown 生成，包不进 span，所以由 docs.js 在加载时包；这一条决定它什么
+     宽度上生效。长标识符（release-public.pem 那种）照旧可以在自己的连字符处
+     断开，那种断法本来就读得通。 */
+  .dbody article code .tok{white-space:nowrap}
+
+  /* 「右边还有」这个信号。手机上没有常驻滚动条可以指望（实测：移动端模拟下
+     scrollbar-width 无论怎么写都是覆盖式的），而表格被切在两条发丝线之间的
+     单元格中间，看着不像「还能滚」，看着像坏了 —— 390 下 environment 那张
+     1175px 的表只露得出 346px。用的是跟安装胶囊同一件东西：一道 24px 的遮罩
+     把末端擦成透明，露出页面自己的白，不铺任何一层新颜色（DESIGN.md §8 禁的
+     是装饰性渐变）。`.more` 由 docs.js 按真实的 scrollLeft 挂上，滚到底就摘掉
+     —— 一道永远亮着的淡出在滚到头之后就是在撒谎。 */
+  .tw.more{
+    -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);
+            mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);
+  }
+
   /* 没有脚本时到此为止：导航还是正文上面那一整份清单，跟以前一样能用。
      下面每一条都挂在 `.js` 上，抽屉是脚本兑现得起的那部分。 */
+  /* 「文档」那个标签跟官网的链接一样加 6px 的透明内边距凑够 40 的按压面，
+     等量的负外边距钉住左缘 —— 它左边就是字标，墨迹落点不动。 */
+  .docs .nav .here{padding:0 6px;margin-left:-6px}
+
   .dnav{
     position:static;max-height:none;overflow:visible;
     border-right:0;border-bottom:1px solid var(--hairline);padding:0 0 4px;
@@ -324,13 +367,15 @@ body.docs:lang(zh){letter-spacing:0}
     background:var(--canvas);border-bottom:1px solid var(--hairline);
     font-size:14px;color:var(--ink-2);
   }
-  /* 叉也是画出来的：两笔发丝，跟角标同一套手法。 */
+  /* 叉也是画出来的：两笔发丝，跟角标同一套手法。
+     40×40 而不是 34×34：它是抽屉里唯一的关闭键，34 够不着。那两笔的位置跟着
+     盒子重算，画出来的叉一个像素没变。 */
   .js .dnav-close{
-    position:relative;flex:none;width:34px;height:34px;margin-right:-9px;
+    position:relative;flex:none;width:40px;height:40px;margin-right:-12px;
     border:0;border-radius:8px;background:none;cursor:pointer;color:var(--ink-2);
   }
   .js .dnav-close::before,.js .dnav-close::after{
-    content:"";position:absolute;left:11px;top:16px;width:12px;height:1.5px;
+    content:"";position:absolute;left:14px;top:19px;width:12px;height:1.5px;
     background:currentColor;
   }
   .js .dnav-close::before{transform:rotate(45deg)}
@@ -338,7 +383,16 @@ body.docs:lang(zh){letter-spacing:0}
   .js .dnav-close:hover{color:var(--ink);background:var(--canvas-2)}
 
   .js .dnav .g:first-child{margin-top:16px}
-  .js .dnav li a{margin-left:-10px}
+  /* 抽屉里的十三条是手机上进文章的唯一入口，一条 31px 高、彼此不留缝，
+     点错一条就是读错一篇。内边距 5 → 10 让每条 41px 高，抽屉本来就在滚。 */
+  .js .dnav li a{margin-left:-10px;padding:10px}
+
+  /* 目录页那六组链接同理：18~19px 高、行距 6px，是这一页仅有的内容。
+     做成块级并给上下 11px 的内边距，行距归零，节距从 24 变成 41。
+     只在这个断点里改，桌面那一档（鼠标）保持原样。 */
+  .dindex .g ul{line-height:1.4}
+  .dindex .g li{margin:0}
+  .dindex .g a{display:block;padding:11px 0}
 
   /* 抽屉开着时页面不滚。两个元素都写：iOS Safari 只认 body 上那一条。
      这一条留在窄屏断点里 —— 抽屉开着时把窗口拉宽，抽屉本身随断点退场，
@@ -354,10 +408,12 @@ body.docs:lang(zh){letter-spacing:0}
 @media (max-width:640px){
   .pager{flex-direction:column;gap:8px}
   .pager .n-side{margin-left:0;text-align:left;align-items:flex-start}
-  .dbody article pre code{font-size:12.5px}
+  /* 13 而不是 12.5：这些是要照抄去跑的命令，13px 是这一版给正文定的地板。
+     多出来的半个像素让最长的那条多滚 4%，代价比读错一个字符小。 */
+  .dbody article pre code{font-size:13px}
   /* 面包屑在这个宽度上一定会换行，标题那一节自己占一行。
-     那道斜杠于是吊在上一行的行尾，指着一片空白 —— 关掉它。 */
-  .crumbs{font-size:12px}
+     那道斜杠于是吊在上一行的行尾，指着一片空白 —— 关掉它。
+     字号留在 13（默认值）：这一行说的是「你在站里的哪儿」，是内容不是标签。 */
   .crumbs>*:nth-last-child(2)::after{content:none}
   .dindex{padding-top:38px}
 }
