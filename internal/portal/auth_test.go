@@ -139,6 +139,11 @@ func TestOAuthCallbackFullFlow(t *testing.T) {
 	if out["namespace"] != "octocat" || out["role"] != "admin" || out["provider"] != "github" {
 		t.Fatalf("/api/me = %v", out)
 	}
+	// The header badge is drawn from this field; the account id is the subject
+	// GitHub returned at callback, so this is the whole chain end to end.
+	if got := out["avatar_url"]; got != "https://avatars.githubusercontent.com/u/8437?s=96" {
+		t.Fatalf("/api/me avatar_url = %q", got)
+	}
 }
 
 func TestOAuthCallbackRejectsWrongState(t *testing.T) {

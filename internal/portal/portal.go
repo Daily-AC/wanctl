@@ -324,7 +324,19 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 }
 
 func setSecurityHeaders(h http.Header) {
-	h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'")
+	// img-src carries one third-party host: avatars.githubusercontent.com, for
+	// the identity badge in the header (owner's call, 2026-09-05, reversing the
+	// removal in #14). Only that host, and only for images -- everything else
+	// stays 'self'. The <img> is rendered with referrerpolicy="no-referrer", so
+	// GitHub is not told which portal the request came from.
+	//
+	// One edge, measured in Chrome on 2026-09-05: an avatar path for an id that
+	// does not exist is answered by a 302 to https://github.com/, and the
+	// browser blocks *that* -- so a wrong id costs one console violation, while
+	// the badge still falls back to the monogram. github.com is deliberately not
+	// added here; widening the policy to silence a broken-image edge case is the
+	// wrong trade for a console that holds device names and fingerprints.
+	h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https://avatars.githubusercontent.com; connect-src 'self'")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Frame-Options", "DENY")
@@ -789,15 +801,16 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, detail, http.StatusBadGateway)
 		return
 	}
-	// There is deliberately no avatar field. It used to hand the SPA an
-	// avatars.githubusercontent.com URL built from the account id — and this
-	// portal's own CSP is `img-src 'self' data:`, so the browser refused every
-	// one of them and logged a violation on each page load. Measured in Chrome
-	// against this server, 2026-09-04: the monogram fallback is what everybody
-	// has always seen. Widening the CSP instead would mean a security console
-	// fetching cross-origin from GitHub on every load, for a decoration.
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	// The avatar came back on 2026-09-05 (owner's call, reversing #14, which had
+	// removed it because the portal's own CSP refused every one of those images
+	// and logged a violation per page load). The CSP now names that one host and
+	// nothing else, and the <img> is sent with referrerpolicy="no-referrer" so
+	// GitHub learns nothing about which portal is asking. The remaining cost is
+	// real and was accepted: one cross-origin request to GitHub per load, which
+	// tells GitHub the viewer's IP. The letter badge stays as the fallback --
+	// header(SSO) mode has no avatar at all, and an image that fails to load
+	// must land back on the monogram without moving anything.
+	body := map[string]any{
 		// `identity` predates the split and is the login; kept so nothing that
 		// reads it breaks. `login`/`name` are what the header renders.
 		"identity": p.Login, "login": p.Login, "name": p.Name,
@@ -806,7 +819,28 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// The SPA composes copy-pasteable `wanctl config set relay=…` lines,
 		// which need the public relay origin this instance runs on.
 		"relay_origin": s.relayPublic,
-	})
+	}
+	if u := githubAvatarURL(p); u != "" {
+		body["avatar_url"] = u
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(body)
+}
+
+// githubAvatarURL builds the badge image URL from the account id GitHub gave us
+// at sign-in. It returns "" for anything that is not a GitHub session with a
+// numeric subject -- header(SSO) mode has no avatar, and the subject there is an
+// arbitrary header value that must never be pasted into a URL.
+func githubAvatarURL(p *principal) string {
+	if p == nil || p.Provider != providerGitHub || p.Subject == "" {
+		return ""
+	}
+	for _, c := range p.Subject {
+		if c < '0' || c > '9' {
+			return ""
+		}
+	}
+	return "https://avatars.githubusercontent.com/u/" + p.Subject + "?s=96"
 }
 
 // handleInstance answers, without a session, where this instance's relay is.

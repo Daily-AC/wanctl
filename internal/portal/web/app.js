@@ -9,6 +9,13 @@
   var $ = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
+  /* 截断要留个记号。门户里三处切字符串都是裸 slice ——「指纹」「来源」这类
+     东西被无声地切掉，读者看到的是一串看起来完整的 base64，而它不是。 */
+  function cut(s, n) {
+    s = '' + (s == null ? '' : s);
+    return s.length > n ? s.slice(0, n) + '…' : s;
+  }
+
   function esc(s) {
     return ('' + (s == null ? '' : s)).replace(/[&<>"]/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
@@ -29,6 +36,7 @@
       nothingWaiting: 'Nothing is waiting for you.',
       noneOnDevice: 'Nothing waiting on this device.',
       cantReach: 'Cannot reach this device — it may be offline.',
+      cantList: 'Cannot reach the relay, so the device list is unavailable. Nothing has been removed.',
       kind: { exec: 'command', read: 'read a file', write: 'write a file' },
       wantsTo: function (d) { return d; },
       from: 'from', cwd: 'in',
@@ -74,6 +82,20 @@
       copied: 'Copied', copy: 'Copy',
       saved: 'Saved', cleared: 'Cleared', sent: 'Test delivered',
       aliasNone: 'no alias',
+      // 服务端错误码 → 一句人话。见 errSay。
+      eRelay: 'Cannot reach the relay right now.',
+      eIdentity: 'This device reported a different identity.',
+      eNoDevice: 'That device is not in your namespace.',
+      eForbidden: 'You are not allowed to do that.',
+      eUnauthorized: 'Your session has expired. Sign in again.',
+      eNotFound: 'Not found.',
+      eNoUser: 'No such account.',
+      eNoFriend: 'That is not one of your friends.',
+      eNotFriends: 'You are not friends yet.',
+      ePending: 'That invite has not been accepted yet.',
+      eBadCode: 'That code is not valid.',
+      failedGeneric: 'That did not work.',
+      failedCode: 'Failed:',
       aliasTaken: 'Another device already answers to that alias.',
       aliasShadows: 'A device is already called that. An alias may not stand in front of a real name.',
       aliasInvalid: 'An alias is 1 to 40 characters and cannot contain a slash.',
@@ -98,7 +120,6 @@
       bypassT: 'Allow everything on this device?',
       bypassM: 'Every command and file operation runs without asking you. Only for machines you trust and have isolated. The whole period is recorded in the audit log.',
       confirm: 'Confirm', current: 'current',
-      failed: function (e) { return 'Failed: ' + e; },
       notSignedIn: 'Not signed in',
       dlLatest: 'latest', dlSource: 'Released on GitHub',
       dlPhone: 'Android phone or tablet',
@@ -122,6 +143,7 @@
       nothingWaiting: '没有人在等你。',
       noneOnDevice: '这台设备没有待审批。',
       cantReach: '连不上这台设备，它可能不在线。',
+      cantList: '连不上中继，暂时列不出设备。什么都没有丢。',
       kind: { exec: '命令', read: '读取文件', write: '写入文件' },
       wantsTo: function (d) { return d; },
       from: '来自', cwd: '工作目录',
@@ -167,6 +189,19 @@
       copied: '已复制', copy: '复制',
       saved: '已保存', cleared: '已清除', sent: '测试通知已送达',
       aliasNone: '未设置',
+      eRelay: '现在连不上中继。',
+      eIdentity: '这台设备报出了另一个身份。',
+      eNoDevice: '这台设备不在你的命名空间里。',
+      eForbidden: '你没有这个权限。',
+      eUnauthorized: '登录已过期，请重新登录。',
+      eNotFound: '没找到。',
+      eNoUser: '没有这个账号。',
+      eNoFriend: '这不是你的好友。',
+      eNotFriends: '你们还不是好友。',
+      ePending: '这条邀请还没被接受。',
+      eBadCode: '这个码不对。',
+      failedGeneric: '没成功。',
+      failedCode: '失败：',
       aliasTaken: '这个别名已经指向另一台设备了。',
       aliasShadows: '已经有一台设备叫这个名字。别名不能挡在真名前面。',
       aliasInvalid: '别名 1 到 40 个字符，不能含斜杠。',
@@ -191,7 +226,6 @@
       bypassT: '这台设备全放行？',
       bypassM: '所有命令和文件操作都会自动放行、不再问你。只给可信且已隔离的机器用。这段时间会一直记进审计。',
       confirm: '确定', current: '当前版本',
-      failed: function (e) { return '失败：' + e; },
       notSignedIn: '未登录',
       dlLatest: '最新', dlSource: '发布源 GitHub',
       dlPhone: '安卓手机 / 平板',
@@ -223,6 +257,9 @@
     });
     try { localStorage.setItem('wanctl.lang', l); } catch (_) {}
     repaint();
+    // <th> 的文字刚换过，格子上的列名要跟着换 —— repaint() 只重画一部分表，
+    // 活动日志那张就不在里面。
+    relabel();
   }
 
   /* ── 时间 ────────────────────────────────────────────────────────── */
@@ -291,15 +328,82 @@
   /* ── toast ──────────────────────────────────────────────────────────
      反馈只有这一套。以前顶上还挂着一条 6 秒的错误条，两套机制做同一件事。 */
   var toastT;
-  function toast(msg, bad) {
+  /* code 是可选的：认不出来的服务端错误码原样显示，但用等宽排，
+     并且只显示码本身 —— 不显示装它的那层 JSON、也不显示 HTTP 状态。 */
+  function toast(msg, bad, code) {
     var el = $('#toast');
     el.className = 'toast' + (bad ? ' no' : '');
     el.textContent = msg;
+    if (code) {
+      var c = document.createElement('code');
+      c.textContent = code;
+      el.appendChild(c);
+    }
     requestAnimationFrame(function () { el.classList.add('show'); });
     clearTimeout(toastT);
     toastT = setTimeout(function () { el.classList.remove('show'); }, bad ? 4200 : 2200);
   }
-  function oops(e) { toast(t().failed(e && e.message ? e.message : e), true); }
+  /* 服务端的错误体有三种形状，三种都不该原样端到人脸上：
+       · 门户自己写的 JSON     {"error":"device_identity_changed",…}
+       · 中继透传的一个裸 token  forbidden · alias_taken · no-such-user
+       · http.Error 的一句纯文本 "relay unreachable: dial tcp 10.0.0.1:8080…"
+     以前 oops 直接把整段拼进 toast，于是「连不上中继」这一屏上，人看到的是
+     一串带花括号的 JSON（或者一句 Go 的拨号错误）。 */
+  var errSay = {
+    relay_unreachable: 'eRelay',
+    device_identity_changed: 'eIdentity',
+    device_not_found: 'eNoDevice',
+    alias_taken: 'aliasTaken',
+    alias_shadows_device: 'aliasShadows',
+    alias_invalid: 'aliasInvalid',
+    forbidden: 'eForbidden',
+    unauthorized: 'eUnauthorized',
+    not_found: 'eNotFound',
+    bad_verification_code: 'eBadCode',
+    'no-such-user': 'eNoUser',
+    'no-such-friend': 'eNoFriend',
+    'not-friends': 'eNotFriends',
+    'invalid-friend': 'eNotFriends',
+    'pending-invite': 'ePending'
+  };
+
+  function errCode(e) {
+    if (e && e.data && typeof e.data.error === 'string') return e.data.error;
+    var s = ('' + ((e && e.message) || '')).trim();
+    // 「relay unreachable」后面跟的是 Go 的拨号错误原文，对人没有信息。
+    if (/^relay unreachable\b/i.test(s)) return 'relay_unreachable';
+    // 只有单个 token 才可能是错误码；一整句话不是，把它当码显示更糟。
+    return /^[A-Za-z][A-Za-z0-9_.-]{0,48}$/.test(s) ? s : '';
+  }
+
+  function oops(e) {
+    var code = errCode(e);
+    var k = errSay[code];
+    if (k) return toast(t()[k], true);
+    if (code) return toast(t().failedCode, true, code);
+    toast(t().failedGeneric, true);
+  }
+
+  /* ── 表 ──────────────────────────────────────────────────────────────
+     手机上表头那一行不在了（每行竖着排，见 app.css 的 640 断点），所以每个
+     格子得自己带上它的列名。标签从表自己的 <th> 里取，不另开一份字典 ——
+     两份就会漂，而这些列名是双语的、跟着 data-en/data-zh 走。
+
+     顺带给有表头的表打上 .stack：下载表没有表头（平台 + 文件名，不需要），
+     它不参与竖排。 */
+  function relabel() {
+    $$('table').forEach(function (tb) {
+      var ths = $$('thead th', tb).map(function (h) { return (h.textContent || '').trim(); });
+      tb.classList.toggle('stack', ths.length > 0);
+      $$('tbody tr', tb).forEach(function (tr) {
+        $$('td', tr).forEach(function (td, i) {
+          var h = ths[i] || '';
+          if (h && !td.hasAttribute('colspan')) td.setAttribute('data-l', h);
+          else td.removeAttribute('data-l');
+        });
+      });
+    });
+  }
 
   /* ── 确认 / 表单 ─────────────────────────────────────────────────── */
   function confirmBox(title, msg, okLabel) {
@@ -375,7 +479,7 @@
      （过滤到这一台）。 */
   function askCard(p, dev, readOnly, hideHost) {
     var isExec = p.kind === 'exec';
-    var kv = '<dt>' + esc(t().from) + '</dt><dd>' + esc((p.peer || '—').slice(0, 40)) + '</dd>';
+    var kv = '<dt>' + esc(t().from) + '</dt><dd>' + esc(cut(p.peer || '—', 40)) + '</dd>';
     if (p.cwd) kv += '<dt>' + esc(t().cwd) + '</dt><dd>' + esc(p.cwd) + '</dd>';
     // 层级按后果排。三个次级动作等重，作用域写在标签旁边让后果看得见。
     var acts = readOnly
@@ -479,9 +583,19 @@
   }
 
   var waitCount = {};   // device -> 待审批条数，用于设备卡上的角标
+  var devLoadFailed = false;   // 上一次拉设备清单失败了吗（空清单和拉不到是两回事）
 
   function renderDevices() {
     var xs = devices;
+    // 拉不到清单 ≠ 一台都没有。这两种「空」以前渲染成同一屏：loadDevices 的
+    // catch 先写上「连不上」，紧接着 refreshAsks → renderDevices 看见空数组，
+    // 把它换成了「装好 wanctl，然后在那儿运行它」—— 一次中继抖动于是长得像
+    // 「你的设备都没了，从头装一台吧」。
+    if (!xs.length && devLoadFailed) {
+      $('#onboard').hidden = true;
+      $('#grid').innerHTML = '<div class="blank">' + esc(t().cantList) + '</div>';
+      return;
+    }
     $('#onboard').hidden = xs.length > 0;
     if (!xs.length) {
       $('#onboard').innerHTML = '<div class="onboard"><p>' + esc(t().firstDevice) + '</p>' +
@@ -513,6 +627,7 @@
 
   function loadDevices() {
     return jget('/api/devices').then(function (d) {
+      devLoadFailed = false;
       noteDevices(d.devices);
       renderDevices();
       // route() can beat this request: setting a hash while the page is still
@@ -526,7 +641,8 @@
       }
     }).catch(function (e) {
       oops(e);
-      $('#grid').innerHTML = '<div class="blank">' + esc(t().cantReach) + '</div>';
+      devLoadFailed = true;
+      renderDevices();
     });
   }
 
@@ -650,6 +766,7 @@
         '<td>' + (r.scope === 'dir' ? esc(r.dir || 'dir') : 'global') + '</td>' +
         '<td><button class="act danger" data-i="' + i + '">' + esc(t().del) + '</button></td></tr>';
     }).join('') : '<tr><td colspan="4" class="tempty">' + esc(t().noRules) + '</td></tr>';
+    relabel();
     $$('#rules .act').forEach(function (b) {
       b.onclick = function () {
         if (roGuard(cur)) return;
@@ -663,11 +780,15 @@
       var isPortal = x.name === 'portal';
       return '<tr><td><b>' + esc(x.label || x.name || '—') + '</b>' +
         (x.name && x.label ? '<span class="sub">' + esc(x.name) + '</span>' : '') + '</td>' +
-        '<td class="mono">' + esc((x.fp || '').slice(0, 30)) + '</td>' +
+        // 整串。这张表的职责就是核对控制端的身份，而 30 个字符的 base64
+        // 前缀既核对不了、又看不出被切过（以前连省略号都没有）。
+        // 它在手机上竖排、在宽屏上自己折行，都不会顶破布局。
+        '<td class="mono">' + esc(x.fp || '') + '</td>' +
         '<td>' + (x.last_seen ? esc(ago(x.last_seen)) : '—') + '</td>' +
         '<td>' + (isPortal ? '<span class="dim">' + esc(t().webConsole) + '</span>'
           : '<button class="act danger" data-fp="' + esc(x.fp) + '">' + esc(t().revoke) + '</button>') + '</td></tr>';
     }).join('') : '<tr><td colspan="4" class="tempty">' + esc(t().noTrusted) + '</td></tr>';
+    relabel();
     $$('#trusted .act').forEach(function (b) {
       b.onclick = function () {
         if (roGuard(cur)) return;
@@ -756,10 +877,11 @@
         return '<tr><td>' + esc(fmt(e.ts)) + '</td>' +
           '<td class="mono">' + esc(e.detail || '—') +
             (e.cwd ? '<span class="sub">' + esc(e.cwd) + '</span>' : '') + '</td>' +
-          '<td>' + esc(('' + (e.peer_name || e.peer_fp || '—')).slice(0, 20)) + '</td>' +
+          '<td>' + esc(cut(e.peer_name || e.peer_fp || '—', 20)) + '</td>' +
           '<td' + (/den/i.test(dec) ? ' class="no"' : '') + '>' + esc(dec || '—') + '</td>' +
           '<td class="num">' + exit + '</td></tr>';
       }).join('') : '<tr><td colspan="5" class="tempty">' + esc(t().noLog) + '</td></tr>';
+      relabel();
     }).catch(function (e) {
       $('#devlog').innerHTML = '<tr><td colspan="5" class="tempty">' + esc(t().cantReach) + '</td></tr>';
       oops(e);
@@ -845,13 +967,6 @@
   };
 
   // 中继把这三种拒绝写成裸 token；照着翻成一句人话，其余错误照常走 oops。
-  var aliasSay = {
-    alias_taken: 'aliasTaken', alias_shadows_device: 'aliasShadows', alias_invalid: 'aliasInvalid'
-  };
-  function aliasErr(e) {
-    var k = aliasSay[('' + (e && e.message || '')).trim()];
-    if (k) toast(t()[k], true); else oops(e);
-  }
 
   $('#dsAliasSave').onclick = function () {
     if (!cur || roGuard(cur)) return;
@@ -859,7 +974,7 @@
     jpost('/api/devices/alias', { device: name, alias: v })
       .then(function () { return loadDevices(); })
       .then(function () { toast(v ? t().saved : t().cleared); })
-      .catch(aliasErr);
+      .catch(oops);
   };
 
   $('#dsRemove').onclick = function () {
@@ -935,6 +1050,7 @@
           '<td>' + esc(rev ? t().revoked : t().active) + '</td>' +
           '<td>' + (rev ? '' : '<button class="act danger" data-i="' + x.id + '">' + esc(t().revoke) + '</button>') + '</td></tr>';
       }).join('') : '<tr><td colspan="5" class="tempty">' + esc(t().noTokens) + '</td></tr>';
+      relabel();
       $$('#tokens .act').forEach(function (b) {
         b.onclick = function () {
           jpost('/api/tokens/revoke', { id: Number(b.dataset.i) }).then(loadTokens).catch(oops);
@@ -1020,6 +1136,7 @@
           '<td>' + esc(state) + '</td>' +
           '<td>' + (i.used_at ? '' : '<button class="act danger" data-i="' + i.id + '">' + esc(t().revoke) + '</button>') + '</td></tr>';
       }).join('') : '<tr><td colspan="4" class="tempty">' + esc(t().noInvites) + '</td></tr>';
+      relabel();
       $$('#invites .act').forEach(function (b) {
         b.onclick = function () {
           confirmBox(t().revokeInviteT, t().revokeInviteM, t().revoke).then(function (ok) {
@@ -1066,6 +1183,7 @@
           '<td>' + esc(day(f.since)) + '</td>' +
           '<td>' + act + '</td></tr>';
       }).join('') : '<tr><td colspan="4" class="tempty">' + esc(t().noFriends) + '</td></tr>';
+      relabel();
       $$('#friends .act').forEach(function (b) {
         b.onclick = function () {
           var run = function () {
@@ -1100,6 +1218,7 @@
           '<td class="mono">' + esc(a.perms) + '</td>' +
           '<td><button class="act danger" data-i="' + a.id + '">' + esc(t().revoke) + '</button></td></tr>';
       }).join('') : '<tr><td colspan="4" class="tempty">' + esc(t().noACL) + '</td></tr>';
+      relabel();
       $$('#acl .act').forEach(function (b) {
         b.onclick = function () {
           jpost('/api/acl/revoke', { id: Number(b.dataset.i) }).then(loadACL).catch(oops);
@@ -1135,6 +1254,7 @@
         return '<tr><td>' + esc(fmt(a.ts)) + '</td><td>' + esc(a.device) + '</td>' +
           '<td class="mono">' + esc(a.event) + '</td></tr>';
       }).join('') : '<tr><td colspan="3" class="tempty">' + esc(t().noAudit) + '</td></tr>';
+      relabel();
     }).catch(oops);
   }
 
@@ -1410,10 +1530,21 @@
     var differs = ns && login && ns.toLowerCase() !== login.toLowerCase();
     $('#ns').hidden = !differs;
     if (differs) $('#ns').textContent = ns;
-    // 字母章。这里曾经先试着加载 GitHub 头像、失败才退回字母 —— 而门户自己的
-    // CSP 是 img-src 'self' data:，那张图从来就没加载成功过，只是每次打开都在
-    // 控制台留一条违规（2026-09-04 用真浏览器对着真服务端测过）。
-    $('#ava').textContent = (login || ns || '?').charAt(0);
+    // 字母章 + 头像。09-05 甲方推翻了 #14 里「整块删掉」的决定，头像回来了：
+    // CSP 现在只多放行 avatars.githubusercontent.com 这一个源。
+    // 字母始终画在底下，头像盖上去 —— 图没到、加载失败、或者 header(SSO)
+    // 模式没有头像时，露出来的就是字母，中间不发生任何位移。
+    $('#avaLtr').textContent = (login || ns || '?').charAt(0);
+    var img = $('#avaImg');
+    img.hidden = true;
+    if (m.avatar_url) {
+      // 先藏后显：src 一赋值就开始加载，失败的那一路要连碎图标都不给看见。
+      img.onload = function () { img.hidden = false; };
+      img.onerror = function () { img.hidden = true; };
+      img.src = m.avatar_url;
+    } else {
+      img.removeAttribute('src');
+    }
   }
 
   // 版本徽章是外壳的一部分，不是更新日志页的一部分，所以在启动时填。
