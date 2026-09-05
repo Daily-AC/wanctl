@@ -12,7 +12,9 @@ func configureCommandCancellation(cmd *exec.Cmd) {
 		if cmd.Process == nil {
 			return os.ErrProcessDone
 		}
-		if err := exec.Command("taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run(); err != nil {
+		kill := exec.Command("taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F")
+		hideConsole(kill) // taskkill is a console app too, and would flash its own window
+		if err := kill.Run(); err != nil {
 			_ = cmd.Process.Kill()
 		}
 		return nil
