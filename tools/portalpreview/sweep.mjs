@@ -80,6 +80,8 @@ const STATES = [
   { id: 'set-tokens', q: '&view=settings/tokens' },
   { id: 'set-notify', q: '&view=settings/notify' },
   { id: 'set-invites', q: '&view=settings/invites' },
+  // 申请队列空掉的样子。整块该消失，下面那张邀请表不该因此塌掉。
+  { id: 'set-invites-noreq', q: '&view=settings/invites&scene=noask' },
   { id: 'set-friends', q: '&view=settings/friends' },
   { id: 'set-acl', q: '&view=settings/acl' },
   { id: 'set-downloads', q: '&view=settings/downloads', settle: 1400 },
@@ -127,6 +129,10 @@ const STATES = [
   // D. 认证页（Go 渲染，预览里是静态的）
   { id: 'login', page: 'login.html' },
   { id: 'pending', page: 'pending.html' },
+  // 申请访问的另外三种样子。同一份模板，服务端给的 data-req 不同。
+  { id: 'pending-sent', page: 'pending-sent.html' },
+  { id: 'pending-approved', page: 'pending-approved.html' },
+  { id: 'pending-declined', page: 'pending-declined.html' },
   { id: 'enroll', page: 'enroll.html' },
 ];
 
