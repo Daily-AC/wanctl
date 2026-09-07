@@ -116,7 +116,7 @@ func (a *Agent) reportNotify(report agentEventReport) {
 	if err != nil {
 		return
 	}
-	go a.postNotifyEvent(body, report.Event)
+	a.spawn(func() { a.postNotifyEvent(body, report.Event) })
 }
 
 func (a *Agent) postNotifyEvent(body []byte, event string) {
@@ -124,7 +124,13 @@ func (a *Agent) postNotifyEvent(body []byte, event string) {
 	target := httpBase(a.opts.RelayURL) + "/agent/events?" + q
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Retries are the reason a report can outlive everything else the agent
+		// is doing, so they end when the agent does instead of holding shutdown
+		// open for another round trip.
+		if a.shutdown().Err() != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(a.shutdown(), 5*time.Second)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
@@ -149,9 +155,14 @@ func (a *Agent) postNotifyEvent(body []byte, event string) {
 			lastErr = err
 		}
 		cancel()
-		if attempt < 2 {
-			time.Sleep(time.Duration(100*(1<<attempt)) * time.Millisecond)
+		if attempt < 2 && !sleepCtx(a.shutdown(), time.Duration(100*(1<<attempt))*time.Millisecond) {
+			return
 		}
+	}
+	if a.shutdown().Err() != nil {
+		// Abandoned at shutdown, not rejected by the relay: saying so would be
+		// a false report of a delivery failure.
+		return
 	}
 	fmt.Fprintf(os.Stderr, "wanctl: report webhook event %s: %v\n", event, lastErr)
 }

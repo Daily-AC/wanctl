@@ -64,11 +64,14 @@ func TestRefuseRecordsTheDenial(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &Agent{known: transport.NewMemStore(), log: logger}
+	t.Cleanup(a.Close)
 
 	controller, device := net.Pipe()
 	defer controller.Close()
-	go a.refuse(device, "SHA256:stranger", "bogon", "rejected:unpaired",
-		protocol.Message{Kind: protocol.KindReject, Reason: "device has not paired this controller"})
+	a.spawn(func() {
+		a.refuse(device, "SHA256:stranger", "bogon", "rejected:unpaired",
+			protocol.Message{Kind: protocol.KindReject, Reason: "device has not paired this controller"})
+	})
 	if _, err := protocol.ReadMessage(controller); err != nil {
 		t.Fatalf("controller never got the rejection: %v", err)
 	}

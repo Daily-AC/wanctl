@@ -45,6 +45,9 @@ func startAgent(t *testing.T, base string, appr policy.Approver, mode policy.Mod
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Join the agent before t.TempDir removes its config dir: its session
+	// handlers append to <config>/logs after the controller's last read (#35).
+	t.Cleanup(ag.Close)
 	ag.setApprover(appr)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -225,6 +228,7 @@ func TestRuntimeModeChangeRebindsTheApprover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(ag.Close)
 	req := policy.Request{Kind: policy.KindExec, Cmd: "rm -rf /", Peer: "SHA256:test"}
 
 	if ok, decision := ag.gate(req); !ok || decision != "bypass" {

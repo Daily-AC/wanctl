@@ -29,6 +29,9 @@ func TestIncludeDetailOffRemovesCommandBeforeAgentReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The reporter retries in the background; Close joins it so no report is
+	// still in flight when the harness removes the temp config dir (#35).
+	t.Cleanup(a.Close)
 	bodies := make(chan []byte, 1)
 	a.notifyClient = &http.Client{Transport: notifyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		body, _ := io.ReadAll(req.Body)
@@ -58,6 +61,9 @@ func TestIncludeDetailOnRedactsCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The reporter retries in the background; Close joins it so no report is
+	// still in flight when the harness removes the temp config dir (#35).
+	t.Cleanup(a.Close)
 	a.notifyPolicy.IncludeDetail = true
 	bodies := make(chan []byte, 1)
 	a.notifyClient = &http.Client{Transport: notifyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -82,6 +88,9 @@ func TestRelay500DoesNotBlockApprovalDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The reporter retries in the background; Close joins it so no report is
+	// still in flight when the harness removes the temp config dir (#35).
+	t.Cleanup(a.Close)
 	reports := make(chan struct{}, 3)
 	a.notifyClient = &http.Client{Transport: notifyRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		reports <- struct{}{}
