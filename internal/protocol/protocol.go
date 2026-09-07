@@ -39,6 +39,7 @@ const MaxFileSize int64 = 1 << 30
 const (
 	KindHello     = "hello"      // client -> server, opening greeting
 	KindExec      = "exec"       // client -> server, run a command
+	KindCancel    = "cancel"     // client -> server, abort the command running on this stream
 	KindExecAsync = "exec_async" // client -> server, start a background job, return its id
 	KindExecPoll  = "exec_poll"  // client -> server, fetch a background job's new output + status
 	KindExit      = "exit"       // server -> client, command finished
