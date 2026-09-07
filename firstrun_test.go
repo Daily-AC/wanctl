@@ -10,7 +10,9 @@ import (
 )
 
 // The decision table from GitHub issue #11. Every row is a way the question
-// must NOT be asked, plus the one way it must be.
+// must NOT be asked, plus the one way it must be. Where the relay came from
+// does not enter into it: any answer already given is an answer, which is what
+// TestEnsureRelayConfiguredAcceptsEveryConfiguredSource checks end to end.
 func TestDecideFirstRun(t *testing.T) {
 	tty := func(in firstRunInput) firstRunInput { in.Interactive = true; return in }
 	for _, tc := range []struct {
@@ -18,13 +20,10 @@ func TestDecideFirstRun(t *testing.T) {
 		in   firstRunInput
 		want firstRunAction
 	}{
-		{"configured in the config file", tty(firstRunInput{Relay: "https://r.example", Source: "config file"}), firstRunProceed},
-		{"configured by the environment", tty(firstRunInput{Relay: "https://r.example", Source: "env WANCTL_RELAY"}), firstRunProceed},
-		{"given on the command line", tty(firstRunInput{Relay: "wss://r.example", Source: sourceFlag}), firstRunProceed},
-		{"baked into the build, still onboarding", tty(firstRunInput{Relay: "https://r.example", Source: config.SourceBuildDefault}), firstRunConfirm},
-		{"baked into the build, already enrolled", tty(firstRunInput{Relay: "https://r.example", Source: config.SourceBuildDefault, Enrolled: true}), firstRunProceed},
-		{"baked into the build, no terminal", firstRunInput{Relay: "https://r.example", Source: config.SourceBuildDefault}, firstRunProceed},
-		{"baked into the build, prompts refused", tty(firstRunInput{Relay: "https://r.example", Source: config.SourceBuildDefault, NoPrompt: true}), firstRunProceed},
+		{"already configured, terminal", tty(firstRunInput{Relay: "https://r.example"}), firstRunProceed},
+		{"already configured, no terminal", firstRunInput{Relay: "https://r.example"}, firstRunProceed},
+		{"already configured, prompts refused", tty(firstRunInput{Relay: "https://r.example", NoPrompt: true}), firstRunProceed},
+		{"already configured, android", tty(firstRunInput{Relay: "https://r.example", Android: true}), firstRunProceed},
 		{"nothing configured, terminal", tty(firstRunInput{}), firstRunAsk},
 		{"nothing configured, no terminal", firstRunInput{}, firstRunExplain},
 		{"nothing configured, prompts refused", tty(firstRunInput{NoPrompt: true}), firstRunExplain},
@@ -149,7 +148,7 @@ func TestEnsureRelayConfiguredExplains(t *testing.T) {
 }
 
 // A relay from anywhere — flag, environment, config file, build — settles the
-// question, and none of these may block.
+// question, and none of these may block or be overwritten.
 func TestEnsureRelayConfiguredAcceptsEveryConfiguredSource(t *testing.T) {
 	freshConfig(t)
 	defer fakeTerminal(t, true)()
@@ -168,21 +167,16 @@ func TestEnsureRelayConfiguredAcceptsEveryConfiguredSource(t *testing.T) {
 	if err := ensureRelayConfigured(""); err != nil {
 		t.Fatalf("stored relay rejected: %v", err)
 	}
-}
-
-// A build that carries a relay — a relay-served installer, an enterprise build
-// — has already answered. Confirm, never re-ask.
-func TestEnsureRelayConfiguredConfirmsBuildDefault(t *testing.T) {
-	freshConfig(t)
-	defer fakeTerminal(t, true)()
+	if err := config.RemoveSetting("relay"); err != nil {
+		t.Fatal(err)
+	}
 	old := config.DefaultRelay
 	config.DefaultRelay = "https://baked.example"
 	t.Cleanup(func() { config.DefaultRelay = old })
-
 	if err := ensureRelayConfigured(""); err != nil {
-		t.Fatalf("baked-in relay rejected: %v", err)
+		t.Fatalf("build-default relay rejected: %v", err)
 	}
 	if got := config.StoredSetting("relay"); got != "" {
-		t.Fatalf("the confirmation persisted %q; a build default must stay a build default", got)
+		t.Fatalf("a build default was persisted as %q; it must stay a build default", got)
 	}
 }

@@ -36,9 +36,7 @@ Nothing unattended is ever blocked by that question. It is skipped when a relay
 is already configured (a `--relay` flag, `WANCTL_RELAY`, the config file, or a
 value baked into the build), when stdin or stdout is not a terminal, and when
 `WANCTL_NO_PROMPT=1` is set; those runs get an error that names both doors and
-the exact command for each instead. A build that carries its own relay is never
-asked about — it prints one line naming that relay while onboarding, and stops
-once the device is enrolled.
+the exact command for each instead.
 
 ### Supported platforms
 
