@@ -45,6 +45,7 @@ Variables marked "conditional" are required only for the feature described.
 | `WANCTL_RELEASE_BASE` | agent, controller, installers | No | `wanctl config set release_base=…`, then the build-time default | Base URL where signed release artifacts live flat (official builds bake the project's GitHub releases). `wanctl update` and the installers pull from it; empty falls back to the relay's `/dl` mirror. Persist it with `wanctl config set release_base=https://relay.example.com/dl` when the baked-in release page is unreachable from where the binary runs. |
 | `WANCTL_DIST_BASE` | installers | No | none | Installer-only override of the artifact source; wins over `WANCTL_RELAY` and the baked release base. |
 | `WANCTL_TOKEN` | agent, controller, MCP | Conditional | saved token or none | Namespace bearer token. Overrides the token stored in the config directory. |
+| `WANCTL_NO_PROMPT` | agent, controller | No | unset | Set to `1` to refuse every interactive question, including the first-run "which relay" one. The command prints the `wanctl config set` instruction and exits instead of asking. |
 | `WANCTL_LABEL` | controller, MCP | No | saved label or generated MCP label | Human-readable controller identity shown during pairing. |
 | `WANCTL_LAN_RELAY` | agent, controller | No | build-time default or none | Optional intranet WebSocket relay used by the LAN fast path. |
 | `WANCTL_PORTAL_FPS` | agent | No | none | Comma-separated portal administrator fingerprints to seed. |

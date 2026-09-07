@@ -44,6 +44,7 @@
 | `WANCTL_RELEASE_BASE` | agent、控制端、安装器 | 否 | `wanctl config set release_base=…`，其次构建时默认值 | 签名过的发布产物平铺存放的基址（官方构建烤进的是项目的 GitHub releases）。`wanctl update` 和安装器都从这里拉；为空则退回 relay 的 `/dl` 镜像。二进制运行的地方够不到那个烤进去的发布页时，用 `wanctl config set release_base=https://relay.example.com/dl` 把它持久化。 |
 | `WANCTL_DIST_BASE` | 安装器 | 否 | 无 | 仅安装器可用的产物来源覆盖项；优先级高于 `WANCTL_RELAY` 和烤进去的发布基址。 |
 | `WANCTL_TOKEN` | agent、控制端、MCP | 视情况 | 已保存的令牌，或无 | 命名空间 bearer 令牌。覆盖配置目录里存着的那个。 |
+| `WANCTL_NO_PROMPT` | agent、控制端 | 否 | 未设置 | 设成 `1` 拒绝一切交互提问，包括首次运行时那个「用哪个中继」。命令不再提问，改为打印 `wanctl config set` 指令后退出。 |
 | `WANCTL_LABEL` | 控制端、MCP | 否 | 已保存的标签，或生成的 MCP 标签 | 配对时显示的、人能读的控制端身份。 |
 | `WANCTL_LAN_RELAY` | agent、控制端 | 否 | 构建时默认值，或无 | 局域网快速通道用的可选内网 WebSocket relay。 |
 | `WANCTL_PORTAL_FPS` | agent | 否 | 无 | 逗号分隔的门户管理员指纹，用于播种。 |
