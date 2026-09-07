@@ -20,8 +20,11 @@ Installing needs **no token at all**.
 > (see "Invites, friends and sharing").
 >
 > You can skip the second line and run `wanctl` on its own — the first run asks
-> for both addresses in the terminal. `wanctl config` shows and changes what you
-> set, and `WANCTL_RELAY`/`WANCTL_PORTAL` still override it for one run.
+> in the terminal which relay to use, this deployment's or the project's hosted
+> instance, and saves your answer. `wanctl config` shows and changes what you
+> set, and `WANCTL_RELAY`/`WANCTL_PORTAL` still override it for one run. Nothing
+> scripted is ever blocked by the question: with no terminal, or with
+> `WANCTL_NO_PROMPT=1`, the command prints the `wanctl config set` line and exits.
 
 Both the tool and the install script come from the project's
 [GitHub Releases](https://github.com/Daily-AC/wanctl/releases): the installer

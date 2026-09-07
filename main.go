@@ -125,7 +125,12 @@ USAGE
   wanctl portal [--addr :8080]                run the web portal (GitHub OAuth or reverse-proxy SSO)
 
 Defaults: relay=` + configuredDisplay(defaultRelay, "(not set)") + `  portal=` + configuredDisplay(defaultPortal, "(not set)") + `  transport=` + defaultTransport + ` (persist with 'wanctl config set', override with WANCTL_RELAY/WANCTL_PORTAL/WANCTL_TRANSPORT)
-ENV (controller): WANCTL_TOKEN=... (or run 'wanctl' to log in)  WANCTL_RELAY=...
+FIRST RUN: with no relay configured, a command that needs one asks on a terminal which
+           instance to use — the project's hosted one (` + hostedPortal + `, invite-only)
+           or a relay you run yourself — and saves the answer. The question is skipped by
+           any configured relay, by a non-terminal stdin/stdout, and by WANCTL_NO_PROMPT=1,
+           which turns it into a printed instruction instead.
+ENV (controller): WANCTL_TOKEN=... (or run 'wanctl' to log in)  WANCTL_RELAY=...  WANCTL_NO_PROMPT=1
                   WANCTL_PORTAL=... WANCTL_ADMIN_SECRET=... (server logs only)
 ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"  WANCTL_ADMIN_SECRET=...  WANCTL_PORTAL_NS=...
 ENV (portal):     RELAY_ADMIN_URL=...  WANCTL_ADMIN_SECRET=...
@@ -157,7 +162,7 @@ func main() {
 	if len(os.Args) < 2 {
 		// Bare `wanctl`: onboard if needed, then ensure the agent runs in the
 		// background — the claude-code-style "just works" entrypoint.
-		if err := cmdUp(context.Background()); err != nil {
+		if err := runRelayCommand(func() error { return cmdUp(context.Background()) }); err != nil {
 			fmt.Fprintln(os.Stderr, "wanctl: "+err.Error())
 			os.Exit(1)
 		}
@@ -165,6 +170,15 @@ func main() {
 	}
 	ctx := context.Background()
 	var err error
+	if relayCommands[os.Args[1]] {
+		// The first-run question happens before the command's own work, so a
+		// binary that does not know where to connect asks instead of failing
+		// deep inside a dial (GitHub issue #11).
+		if gateErr := ensureRelayConfigured(""); gateErr != nil {
+			fmt.Fprintln(os.Stderr, "wanctl: "+gateErr.Error())
+			os.Exit(1)
+		}
+	}
 	switch os.Args[1] {
 	case "relay":
 		err = cmdRelay(os.Args[2:])
@@ -244,6 +258,29 @@ func main() {
 		fmt.Fprintln(os.Stderr, "wanctl: "+err.Error())
 		os.Exit(1)
 	}
+}
+
+// relayCommands cannot do anything without a relay, and take no --relay of
+// their own, so the first-run gate runs for them before dispatch. Deliberately
+// absent: `update` (an official build bakes a release page and needs no
+// relay), `logs` (reads the local device log when no target is given),
+// `service` (has its own --relay, and status/uninstall need none), `status`
+// (a diagnostic that reports the missing relay itself), and the servers
+// `relay`/`portal`. `agent` runs the same gate itself, after parsing --relay.
+var relayCommands = map[string]bool{
+	"up": true, "start": true, "login": true,
+	"exec": true, "screenshot": true, "push": true, "pull": true,
+	"peers": true, "pair": true, "friends": true, "share": true,
+	"docs": true, "admin": true,
+}
+
+// runRelayCommand gates the bare-`wanctl` path, which never reaches the
+// dispatch switch.
+func runRelayCommand(run func() error) error {
+	if err := ensureRelayConfigured(""); err != nil {
+		return err
+	}
+	return run()
 }
 
 // settingValue is config.Setting without the source, for flag defaults and
@@ -445,9 +482,13 @@ func cmdAgent(ctx context.Context, args []string) error {
 	if *token == "" {
 		return fmt.Errorf("provide --token (or WANCTL_TOKEN)")
 	}
-	if *relayURL == "" {
-		_, err := config.Relay()
+	if err := ensureRelayConfigured(*relayURL); err != nil {
 		return err
+	}
+	if *relayURL == "" {
+		if *relayURL, err = config.Relay(); err != nil {
+			return err
+		}
 	}
 	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFPs: parsedPortalFPs, LanRelay: *lanRelay, Version: buildVersion})
 	if err != nil {

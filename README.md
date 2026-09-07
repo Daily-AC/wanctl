@@ -23,6 +23,21 @@ GitHub OAuth, HTTPS termination, admission, and device enrollment.
 To try the encrypted relay path locally without Postgres or OAuth, run the
 [local smoke test](docs/architecture.md#local-smoke-test-no-external-services).
 
+### First run
+
+A freshly installed binary does not yet know which instance it talks to. The
+first command that needs a relay asks, on a terminal, which one to use: the
+project's hosted instance at `https://wanctl.z10.dev` — invite-only, so sign in
+with GitHub there and ask for access — or a relay you run yourself. The answer
+is saved through the same machinery as `wanctl config set relay=... portal=...`
+and the command then carries on.
+
+Nothing unattended is ever blocked by that question. It is skipped when a relay
+is already configured (a `--relay` flag, `WANCTL_RELAY`, the config file, or a
+value baked into the build), when stdin or stdout is not a terminal, and when
+`WANCTL_NO_PROMPT=1` is set; those runs get an error that names both doors and
+the exact command for each instead.
+
 ### Supported platforms
 
 Every release ships signed binaries for the whole matrix below; the one-line
