@@ -321,12 +321,52 @@ h2{margin:0;font-size:20px;font-weight:600;line-height:1.2;letter-spacing:-.3px}
 }
 .dhead .real{font-size:13px;color:var(--ink-2);min-width:0;overflow-wrap:anywhere}
 /* 执行模式是这台设备的一个属性，不是一个页面 —— 所以它住在标题行，
-   而不是像以前那样独占一个 tab。 */
+   而不是像以前那样独占一个 tab。
+
+   胶囊是原来那个 <select> 的形状（同样的字号、圆角、发丝线边框、红色变体），
+   只是里面换成了一个按钮加一张自绘的菜单：原生下拉在 macOS Chrome 上是一张
+   系统菜单，浮在胶囊左上方盖住设备名，看着不属于这一行。 */
+.modemenu{position:relative;flex:none}
 .dhead .modesel{
   width:auto;flex:none;font:inherit;font-size:13px;color:var(--ink);background:var(--canvas);
   border:1px solid var(--hairline);border-radius:999px;padding:5px 11px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:5px;white-space:nowrap;
+  transition:background .16s var(--ease);
+  /* 盒子要跟它替掉的那个 <select> 一样大，宽屏 30、手机 40（见下面的断点）。
+     一个 <button> 里的文字按正文的 1.47 行高排，比 select 自己的内部行高高出
+     一两个像素 —— 手机上那一两个像素正好把它从 40 掉到 39，而 40 是这份样式表
+     给手指靶子定的下限（sweep.mjs 就是照这个数判的）。 */
+  line-height:1.2;min-height:30px;
 }
+.dhead .modesel:hover{background:var(--canvas-2)}
 .dhead .modesel.bypass{border-color:var(--red);color:var(--red)}
+/* 共享给我的设备只能看：按钮 disabled，墨迹压下去，悬停也不再回应。 */
+.dhead .modesel:disabled{cursor:default;color:var(--ink-2);border-color:var(--hairline)}
+.dhead .modesel:disabled:hover{background:var(--canvas)}
+/* 人字是装饰笔画，不跟标签抢分量；它同时是「开着没开」的唯一指示。 */
+.dhead .modesel .cv{flex:none;opacity:.5;transition:transform .16s var(--ease)}
+.dhead .modesel[aria-expanded="true"] .cv{transform:rotate(180deg)}
+
+/* 菜单贴着胶囊的下沿开、左缘对齐 —— 它是这个控件长出来的，不是飘在页面上的
+   另一块东西。整份样式表一处阴影都没有，这里也不破例：白底加一圈发丝线就够分层。
+   left 由 app.js 在打开时校一次：胶囊靠得太右时把菜单往回收，
+   横向溢出在手机上会把布局视口一起撑坏（见本文件末尾断点里的账）。 */
+.modelist{
+  position:absolute;top:calc(100% + 6px);left:0;z-index:var(--z-overlay);
+  margin:0;padding:4px;list-style:none;min-width:100%;
+  background:var(--canvas);border:1px solid var(--hairline);border-radius:12px;
+}
+.modeopt{
+  display:flex;align-items:center;gap:8px;white-space:nowrap;
+  font-size:13px;color:var(--ink);padding:7px 10px;border-radius:8px;cursor:pointer;
+}
+/* .on 是键盘走到的那一条 —— 程序性 focus 不一定触发 :focus-visible，
+   光靠焦点环指不出「现在在第几条」。 */
+.modeopt:hover,.modeopt.on{background:var(--canvas-2)}
+/* 当前项只用一个勾说明，不再叠底色和第二种颜色：三个信号说同一件事。
+   勾常驻但不可见，两条的文字才对得齐。 */
+.modeopt .ck{flex:none;visibility:hidden}
+.modeopt[aria-selected="true"] .ck{visibility:visible}
 
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--hairline);margin:20px 0 22px}
 .tab{
@@ -640,7 +680,9 @@ pre code{background:none;padding:0;font-size:1em}
   .top .tools > .chip.icon:last-child{margin-right:-12px}
   .back{padding:9px 8px 14px;margin-left:-8px}
   .tab{padding:11px 14px}
-  .dhead .modesel{padding:9px 12px}
+  .dhead .modesel{padding:9px 12px;min-height:40px}
+  /* 菜单里的两条也是手指靶子：13px 的字加 11px 上下内边距正好 40。 */
+  .modeopt{padding:11px 12px}
   /* 四个裁决键是这个产品里后果最重的点击，它们尤其不该只有 34px 高。 */
   .ask .acts .btn{padding:10px 15px}
   .check{min-height:40px}

@@ -63,11 +63,28 @@
       <h1 id="dName">—</h1>
       <!-- 别名当显示名时，原名紧跟在旁边：别名可以更好记，但不能把机器的身份藏起来。 -->
       <span class="real" id="dReal" hidden></span>
-      <!-- 执行模式是这台设备的一个属性，不是一个页面。以前它独占一个 tab。 -->
-      <select class="modesel" id="dMode">
-        <option value="normal" data-en="Ask me" data-zh="逐条确认">Ask me</option>
-        <option value="bypass" data-en="Allow all" data-zh="全放行">Allow all</option>
-      </select>
+      <!-- 执行模式是这台设备的一个属性，不是一个页面。以前它独占一个 tab。
+           这里曾是原生 <select>。macOS Chrome 把它的下拉弹成一张系统菜单：
+           浮在胶囊的左上方、盖住设备名，跟这一行的其它控件不是一套东西。
+           所以自绘一张贴着胶囊下沿开的菜单，行为跟那个 select 逐条对齐。 -->
+      <div class="modemenu" id="dModeWrap">
+        <button type="button" class="modesel" id="dMode" aria-haspopup="listbox" aria-expanded="false" aria-controls="dModeList">
+          <!-- 胶囊上的字跟着当前模式走，双语仍旧走 data-en/data-zh，
+               由 app.js 的 setModeUI 从选中那条上抄过来，不另开一份字典。 -->
+          <span id="dModeLbl" data-en="Ask me" data-zh="逐条确认">Ask me</span>
+          <svg class="cv" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path d="m6 9 6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <ul class="modelist" id="dModeList" role="listbox" aria-labelledby="dMode" hidden>
+          <li class="modeopt" role="option" data-v="normal" aria-selected="true" tabindex="-1">
+            <svg class="ck" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m5 13 4 4 10-10" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span data-en="Ask me" data-zh="逐条确认">Ask me</span>
+          </li>
+          <li class="modeopt" role="option" data-v="bypass" aria-selected="false" tabindex="-1">
+            <svg class="ck" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m5 13 4 4 10-10" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span data-en="Allow all" data-zh="全放行">Allow all</span>
+          </li>
+        </ul>
+      </div>
       <button class="chip icon" id="dGear" data-lbl-en="Device settings" data-lbl-zh="设备设置" aria-label="Device settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
           <circle cx="12" cy="12" r="3"/>
