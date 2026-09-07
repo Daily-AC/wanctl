@@ -28,6 +28,9 @@ func filePolicyConn(t *testing.T, allowedRoot string) *tls.Conn {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Join the agent before t.TempDir removes its config dir: its session
+	// handlers append to <config>/logs after the controller's last read (#35).
+	t.Cleanup(ag.Close)
 	for _, kind := range []policy.Kind{policy.KindRead, policy.KindWrite} {
 		if err := ag.engine.Add(policy.Rule{Kind: kind, Pattern: allowedRoot, Scope: policy.ScopeDir}); err != nil {
 			t.Fatal(err)

@@ -40,16 +40,19 @@ func TestTrustedControllerCannotOpenAdminConsole(t *testing.T) {
 	if err := a.known.Add(controllerID.Fingerprint, "ordinary-controller"); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(a.Close)
 
 	dev, controller := net.Pipe()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	go a.handleSession(ctx, dev, sessionauth.Open{
-		Session:         "test-session",
-		CallerNamespace: "owner",
-		OwnerNamespace:  "owner",
-		Device:          "dev1",
-		Capabilities:    sessionauth.FullCapabilities,
+	a.spawn(func() {
+		a.handleSession(ctx, dev, sessionauth.Open{
+			Session:         "test-session",
+			CallerNamespace: "owner",
+			OwnerNamespace:  "owner",
+			Device:          "dev1",
+			Capabilities:    sessionauth.FullCapabilities,
+		})
 	})
 
 	dr, err := transport.ClientHandshake(ctx, controller, "dev1", controllerID, transport.NewMemStore())
@@ -111,12 +114,20 @@ func TestServeConsoleFramedWireAndNotif(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// serveConsole appends the remote decision to <config>/logs/events.jsonl
+	// after the RPC response that unblocks step 3 below, so without a join the
+	// test could return while that write was still in flight and t.TempDir's
+	// RemoveAll would fail with "directory not empty" (#35). Close cancels the
+	// agent and waits for its goroutines; t.Cleanup runs it before the harness
+	// removes the directory.
+	t.Cleanup(a.Close)
+
 	dev, portal := net.Pipe()
 	defer dev.Close()
 	defer portal.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go a.serveConsole(ctx, dev)
+	a.spawn(func() { a.serveConsole(ctx, dev) })
 
 	// portal-side reader: split async notifs from RPC responses (like deviceConn).
 	notifCh := make(chan console.State, 8)
@@ -452,4 +463,101 @@ func TestConsoleRPCLogsNilLogger(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatalf("want empty, got %d", len(events))
 	}
+}
+
+// TestAgentCloseJoinsTheRemoteDecisionAudit pins the flake in #35. serveConsole
+// appends the remote decision to <config>/logs/events.jsonl AFTER it has
+// answered the decide RPC, so a test that stops at "the gate unblocked" leaves
+// the agent writing into a directory the harness is already deleting, and
+// t.TempDir's RemoveAll fails with "directory not empty" whenever the append
+// lands between its readdir and its rmdir.
+//
+// The invariant is that Close is that missing barrier: once it returns, nothing
+// the agent owns is still touching the config dir. Asserting the audit line is
+// on disk by then is the observable form of it.
+func TestAgentCloseJoinsTheRemoteDecisionAudit(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	a, err := New(Options{RelayURL: "ws://x", Token: "t", Name: "dev1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dev, portal := net.Pipe()
+	defer portal.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a.spawn(func() { a.serveConsole(ctx, dev) })
+
+	// net.Pipe is unbuffered: keep reading, or the async notif blocks the write
+	// mutex the RPC responses share.
+	notifCh := make(chan console.State, 8)
+	respCh := make(chan protocol.Message, 8)
+	go func() {
+		for {
+			m, err := protocol.ReadMessage(portal)
+			if err != nil {
+				return
+			}
+			if m.Kind == protocol.KindApprovalNotif {
+				var st console.State
+				if json.Unmarshal(m.Data, &st) == nil {
+					notifCh <- st
+				}
+				continue
+			}
+			respCh <- m
+		}
+	}()
+
+	// One round trip first: Ask denies outright until a front-end is subscribed.
+	if err := protocol.WriteMessage(portal, protocol.Message{Kind: protocol.KindConsoleState}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-respCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no state response")
+	}
+
+	askDone := make(chan policy.Decision, 1)
+	go func() { askDone <- a.console.Ask(policy.Request{Kind: policy.KindExec, Cmd: "rm -rf /tmp"}) }()
+	var id string
+	select {
+	case ns := <-notifCh:
+		if len(ns.Pending) != 1 {
+			t.Fatalf("notif Pending = %d, want 1", len(ns.Pending))
+		}
+		id = ns.Pending[0].ID
+	case <-time.After(2 * time.Second):
+		t.Fatal("no approval notif pushed")
+	}
+	if err := protocol.WriteMessage(portal, protocol.Message{
+		Kind: protocol.KindDecide, ApprovalID: id, Verdict: "y", Approver: "portal:me@corp",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case d := <-askDone:
+		if !d.Allow {
+			t.Fatal("remote y-decision should allow")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("remote decide did not unblock Ask")
+	}
+
+	// What the harness does at the end of a test: stop using the connection,
+	// then join. After this the config dir must be quiet.
+	dev.Close()
+	a.Close()
+
+	events, err := a.log.Read(eventlog.Filter{Type: "connect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if strings.Contains(e.Detail, "remote decision y by portal:me@corp") {
+			return
+		}
+	}
+	t.Fatalf("Close returned while the remote-decision audit write was still in flight; logged %d connect events", len(events))
 }
