@@ -29,20 +29,14 @@ const (
 	selfHostDocs = "https://wc.z10.dev/docs/self-hosting/"
 )
 
-// sourceFlag is the pseudo-source for a relay handed to the command on the
-// command line. Only `wanctl agent` takes a --relay, and it hands the parsed
-// value here so a flag suppresses the question the same way a setting does.
-const sourceFlag = "--relay flag"
-
 // firstRunAction is what a relay-needing command should do before it runs.
 type firstRunAction int
 
 const (
-	// firstRunProceed: a relay is configured and nothing needs saying.
+	// firstRunProceed: a relay is configured and nothing needs saying. A relay
+	// baked in with -ldflags lands here too: it is an answer someone already
+	// gave, and re-asking would override the build.
 	firstRunProceed firstRunAction = iota
-	// firstRunConfirm: the relay was baked into this build, so it is not a
-	// question — name it once and carry on.
-	firstRunConfirm
 	// firstRunAsk: nothing is configured and a human is watching. Ask.
 	firstRunAsk
 	// firstRunExplain: nothing is configured and nobody can answer. Fail with
@@ -53,18 +47,14 @@ const (
 // firstRunInput is every fact the decision depends on, so the decision itself
 // is a pure function and testable without a terminal.
 type firstRunInput struct {
-	// Relay is the relay the command already has, and Source where it came
-	// from: a flag, an environment variable, the config file, or the build.
-	Relay  string
-	Source string
+	// Relay is the relay the command already has, from wherever it came: a
+	// --relay flag, WANCTL_RELAY, the config file, or a build-time default.
+	Relay string
 	// Interactive is true when stdin and stdout are both a terminal. Stdout
 	// matters as much as stdin: a question nobody can read is a hang.
 	Interactive bool
 	// NoPrompt is the explicit escape hatch (WANCTL_NO_PROMPT).
 	NoPrompt bool
-	// Enrolled is true once a token exists. It ends the onboarding window, and
-	// with it the one-line confirmation of a built-in relay.
-	Enrolled bool
 	// Android has no shell to run the printed command in, and the app's
 	// enrollment dialog is the only place an address can be typed.
 	Android bool
@@ -73,12 +63,8 @@ type firstRunInput struct {
 // decideFirstRun is the whole decision table for issue #11.
 func decideFirstRun(in firstRunInput) firstRunAction {
 	if in.Relay != "" {
-		// Someone already answered. Confirm a build default once during
-		// onboarding, because the answer was given by whoever built or served
-		// the installer rather than by the person at the keyboard.
-		if in.Source == config.SourceBuildDefault && in.Interactive && !in.NoPrompt && !in.Enrolled {
-			return firstRunConfirm
-		}
+		// Someone already answered — on the command line, in the environment,
+		// in the config file, or at build time. None of those is re-opened.
 		return firstRunProceed
 	}
 	if in.Android || in.NoPrompt || !in.Interactive {
@@ -105,16 +91,14 @@ func promptSuppressed() bool {
 // firstRunInputNow reads the decision's inputs from this process. flagRelay is
 // the value of a command's own --relay, or "" when it has none.
 func firstRunInputNow(flagRelay string) firstRunInput {
-	relay, source := strings.TrimSpace(flagRelay), sourceFlag
+	relay := strings.TrimSpace(flagRelay)
 	if relay == "" {
-		relay, source = config.Setting("relay")
+		relay, _ = config.Setting("relay")
 	}
 	return firstRunInput{
 		Relay:       relay,
-		Source:      source,
 		Interactive: stdioIsTerminal(),
 		NoPrompt:    promptSuppressed(),
-		Enrolled:    config.EnvOr("WANCTL_TOKEN", config.StoredToken()) != "",
 		Android:     runtime.GOOS == "android",
 	}
 }
@@ -125,12 +109,6 @@ func firstRunInputNow(flagRelay string) firstRunInput {
 func ensureRelayConfigured(flagRelay string) error {
 	in := firstRunInputNow(flagRelay)
 	switch decideFirstRun(in) {
-	case firstRunConfirm:
-		// stderr: a confirmation is a note about the environment, and stdout
-		// belongs to whatever the command was actually asked to produce.
-		fmt.Fprintf(os.Stderr, "wanctl: using the relay this build was installed with: %s\n", in.Relay)
-		fmt.Fprintf(os.Stderr, "        change it with `wanctl config set relay=... portal=...`\n")
-		return nil
 	case firstRunAsk:
 		return askInstance(bufio.NewReader(os.Stdin), os.Stdout)
 	case firstRunExplain:
