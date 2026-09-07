@@ -12,9 +12,6 @@ func TestDeploymentDefaultsAreEmpty(t *testing.T) {
 	if DefaultPortal != "" {
 		t.Fatalf("DefaultPortal = %q, want empty", DefaultPortal)
 	}
-	if DefaultLanRelay != "" {
-		t.Fatalf("DefaultLanRelay = %q, want empty", DefaultLanRelay)
-	}
 	if DefaultTransport != "http" {
 		t.Fatalf("DefaultTransport = %q", DefaultTransport)
 	}

@@ -63,7 +63,6 @@ const (
 	KindApprovalNotif = "approval_notif" // device -> portal, UNSOLICITED: pending set changed
 	KindPairDecide    = "pair_decide"    // portal -> device, trust/deny a pending controller pairing
 	KindTrustRevoke   = "trust_revoke"   // portal -> device, drop a trusted controller by fingerprint
-	KindLanSet        = "lan_set"        // portal -> device, enable/disable the LAN relay uplink (Verdict "on"/"off")
 	KindTimeoutSet    = "timeout_set"    // portal -> device, set how long an approval waits (TimeoutSec; 0 = default)
 )
 

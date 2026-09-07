@@ -139,17 +139,15 @@ success while the old version keeps serving. After any upgrade, trust the
 running process's start time against the binary's mtime, not the version on
 disk.
 
-## LAN fast path (optional)
+## Satellite relays
 
-Devices can keep a second uplink to an intranet WebSocket relay
-(`WANCTL_LAN_RELAY`; unset disables). Controllers switch with
-`wanctl net wan|lan|auto|status` (persisted; `auto` probes the LAN relay's
-`/healthz`; an explicit `WANCTL_RELAY` always wins). LAN dials bypass
-`HTTP(S)_PROXY` env, because corporate proxies blackhole private ranges. A LAN
-relay without a database can resolve tokens against the main relay
+A relay without a database can resolve tokens against the main relay
 (`WANCTL_UPSTREAM_RELAY` + `WANCTL_ADMIN_SECRET`, 5-minute cache), so
-portal-issued tokens work everywhere. A `ws://` LAN relay is acceptable only
-inside an encrypted overlay (WireGuard or similar); otherwise use `wss://`.
+portal-issued tokens work on every relay without sharing the DB. That is how a
+self-hoster gets intranet latency: run a relay inside the network and point the
+devices and controllers there with `wanctl config set relay=…`. A `ws://` relay
+is acceptable only inside an encrypted overlay (WireGuard or similar);
+otherwise use `wss://`.
 
 ## Field notes (hard-won, don't relearn)
 

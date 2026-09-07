@@ -389,7 +389,6 @@ func TestConsoleWriteEndpointsRejectSharedDevice(t *testing.T) {
 		{"untrust", s.handleDeviceUntrust, `{"device":"devbox","fp":"fp1"}`},
 		{"rules", s.handleDeviceRules, `{"device":"devbox","op":"add","kind":"exec","pattern":"echo *"}`},
 		{"mode", s.handleDeviceMode, `{"device":"devbox","mode":"bypass"}`},
-		{"lan", s.handleDeviceLan, `{"device":"devbox","on":true}`},
 	}
 	for _, e := range endpoints {
 		req := httptest.NewRequest("POST", "/api/devices/"+e.name, strings.NewReader(e.body))

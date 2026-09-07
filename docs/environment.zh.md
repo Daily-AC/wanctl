@@ -46,7 +46,6 @@
 | `WANCTL_TOKEN` | agent、控制端、MCP | 视情况 | 已保存的令牌，或无 | 命名空间 bearer 令牌。覆盖配置目录里存着的那个。 |
 | `WANCTL_NO_PROMPT` | agent、控制端 | 否 | 未设置 | 设成 `1` 拒绝一切交互提问，包括首次运行时那个「用哪个中继」。命令不再提问，改为打印 `wanctl config set` 指令后退出。 |
 | `WANCTL_LABEL` | 控制端、MCP | 否 | 已保存的标签，或生成的 MCP 标签 | 配对时显示的、人能读的控制端身份。 |
-| `WANCTL_LAN_RELAY` | agent、控制端 | 否 | 构建时默认值，或无 | 局域网快速通道用的可选内网 WebSocket relay。 |
 | `WANCTL_PORTAL_FPS` | agent | 否 | 无 | 逗号分隔的门户管理员指纹，用于播种。 |
 | `WANCTL_PORTAL_FP` | agent | 否 | 无 | 已废弃的单指纹别名，只有 `WANCTL_PORTAL_FPS` 没设时才用。 |
 

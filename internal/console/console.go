@@ -52,14 +52,6 @@ type TrustedController struct {
 	LastSeen string `json:"last_seen"`
 }
 
-// LanInfo describes the device's intranet fast-path relay uplink, so the
-// portal can show and toggle it.
-type LanInfo struct {
-	Relay     string `json:"relay"`     // intranet relay URL ("" = feature unavailable)
-	Enabled   bool   `json:"enabled"`   // device-side switch
-	Connected bool   `json:"connected"` // uplink currently registered on the intranet relay
-}
-
 // State is a full snapshot for a console front-end.
 type State struct {
 	Info            Info                `json:"info"`
@@ -68,7 +60,6 @@ type State struct {
 	Pending         []Pending           `json:"pending"`
 	PendingPairings []PendingPairing    `json:"pending_pairings"`
 	Trusted         []TrustedController `json:"trusted"`
-	Lan             *LanInfo            `json:"lan,omitempty"`
 }
 
 type pending struct {
@@ -112,17 +103,8 @@ type Service struct {
 	pairs     map[string]*pendingPair // keyed by controller fingerprint
 	subs      map[chan struct{}]struct{}
 	trustedFn func() []TrustedController // supplies the trusted-controller list (set by the agent)
-	lanFn     func() *LanInfo            // supplies LAN-uplink state (set by the agent; nil = no LAN feature)
 	pendingFn func(Pending)              // best-effort observer; never runs on the approval path
 	pairingFn func(PendingPairing)       // best-effort observer; called only for a new pairing entry
-}
-
-// SetLanSource installs a callback returning the LAN-uplink state, included
-// in State snapshots (and thus in approval-notif pushes) for the portal UI.
-func (s *Service) SetLanSource(fn func() *LanInfo) {
-	s.mu.Lock()
-	s.lanFn = fn
-	s.mu.Unlock()
 }
 
 // SetTimeout changes how long Ask and AskPair wait for a decision, and returns
@@ -369,17 +351,12 @@ func (s *Service) State() State {
 		}
 	}
 	trustedFn := s.trustedFn
-	lanFn := s.lanFn
 	s.mu.Unlock()
 	var trusted []TrustedController
 	if trustedFn != nil {
 		trusted = trustedFn()
 	}
-	var lan *LanInfo
-	if lanFn != nil {
-		lan = lanFn()
-	}
-	return State{Info: s.info, Mode: s.engine.Mode(), Rules: s.engine.List(), Pending: pend, PendingPairings: pairs, Trusted: trusted, Lan: lan}
+	return State{Info: s.info, Mode: s.engine.Mode(), Rules: s.engine.List(), Pending: pend, PendingPairings: pairs, Trusted: trusted}
 }
 
 // Decide delivers a verdict to a pending request. Returns false if unknown.
