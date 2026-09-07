@@ -749,8 +749,7 @@
     if (!st || !st.mode) return;
     lastState = st;
     curMode = st.mode;
-    $('#dMode').value = st.mode;
-    $('#dMode').className = 'modesel' + (st.mode === 'bypass' ? ' bypass' : '');
+    setModeUI(st.mode);
 
     var pend = st.pending || [], pairs = st.pending_pairings || [];
     var total = pend.length + pairs.length;
@@ -838,22 +837,102 @@
   $$('.tab').forEach(function (x) { x.onclick = function () { selTab(x.dataset.tab); }; });
   $('#back').onclick = function () { go('devices'); };
 
-  $('#dMode').onchange = function () {
-    if (roGuard(cur)) { $('#dMode').value = curMode; return; }
-    var next = $('#dMode').value;
+  /* ── 执行模式菜单 ──────────────────────────────────────────────────
+     以前这里是一个原生 <select> 的 onchange。换掉的理由是弹层的形状：
+     macOS Chrome 把下拉弹成一张系统菜单，它盖住胶囊、还往左上方飘，
+     于是「全放行」这个后果最重的开关看起来不长在这一行上。
+
+     下面这几个函数跟那个 onchange 逐条对齐：只读设备先拦下、切到 bypass
+     先问一句、POST 失败退回原值。多出来的只有一条 —— 点已经选中的那条
+     直接关掉菜单，因为 select 的 change 本来就只在真的变了时才发。 */
+  var modeWrap = $('#dModeWrap'), modeBtn = $('#dMode'), modeList = $('#dModeList');
+  var modeOpts = $$('.modeopt', modeList);
+  var modeOpen = false, modeIx = 0;
+
+  // 胶囊上的字是从选中那条上抄过来的，连同它的 data-en/data-zh ——
+  // 切语言时 applyLang 那一遍扫描会把胶囊一起改掉，这里不另开一份字典。
+  function setModeUI(mode) {
+    var opt = modeOpts.filter(function (o) { return o.dataset.v === mode; })[0] || modeOpts[0];
+    var src = $('span', opt), lbl = $('#dModeLbl');
+    lbl.setAttribute('data-en', src.getAttribute('data-en'));
+    lbl.setAttribute('data-zh', src.getAttribute('data-zh'));
+    lbl.textContent = src.textContent;
+    modeBtn.className = 'modesel' + (mode === 'bypass' ? ' bypass' : '');
+    modeOpts.forEach(function (o) { o.setAttribute('aria-selected', o === opt ? 'true' : 'false'); });
+  }
+
+  function modeMenu(show) {
+    modeOpen = show;
+    modeList.hidden = !show;
+    modeBtn.setAttribute('aria-expanded', show ? 'true' : 'false');
+    modeList.style.left = '0';
+    if (!show) {
+      modeOpts.forEach(function (o) { o.classList.remove('on'); });
+      return;
+    }
+    // 左对齐胶囊是常态；只有胶囊靠得太右、菜单会顶出屏幕时才往回收。
+    // 横向溢出在手机上不只是被切掉一块：Chrome 会把布局视口跟着撑宽，
+    // 然后所有 position:fixed 的浮层按那个被撑坏的宽度居中（见 app.css 的手机断点）。
+    var r = modeList.getBoundingClientRect(), over = r.right - (window.innerWidth - 8);
+    if (over > 0) modeList.style.left = -Math.min(over, Math.max(0, r.left - 8)) + 'px';
+  }
+
+  function modeFocus(i) {
+    modeIx = (i + modeOpts.length) % modeOpts.length;
+    modeOpts.forEach(function (o, k) { o.classList.toggle('on', k === modeIx); });
+    modeOpts[modeIx].focus();
+  }
+
+  function pickMode(next) {
+    modeMenu(false);
+    modeBtn.focus();
+    if (next === curMode) return;
+    if (roGuard(cur)) return;
     var apply = function () {
       jpost('/api/devices/mode', { device: cur, mode: next }).then(renderConsole).catch(function (e) {
-        $('#dMode').value = curMode; oops(e);
+        setModeUI(curMode); oops(e);
       });
     };
+    setModeUI(next);
     if (next === 'bypass') {
       confirmBox(t().bypassT, t().bypassM, t().confirm).then(function (ok) {
-        if (ok) apply(); else $('#dMode').value = curMode;
+        if (ok) apply(); else setModeUI(curMode);
       });
       return;
     }
     apply();
+  }
+
+  modeBtn.onclick = function () {
+    if (modeOpen) return modeMenu(false);
+    modeMenu(true);
+    modeFocus(Math.max(0, modeOpts.map(function (o) {
+      return o.getAttribute('aria-selected');
+    }).indexOf('true')));
   };
+  // Enter / 空格由 button 自己变成 click；方向键补上「不看就能开」的那一半。
+  modeBtn.onkeydown = function (e) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    if (!modeOpen) modeBtn.click();
+  };
+  modeList.onkeydown = function (e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); modeFocus(modeIx + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); modeFocus(modeIx - 1); }
+    else if (e.key === 'Home') { e.preventDefault(); modeFocus(0); }
+    else if (e.key === 'End') { e.preventDefault(); modeFocus(modeOpts.length - 1); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickMode(modeOpts[modeIx].dataset.v); }
+    else if (e.key === 'Escape') { e.preventDefault(); modeMenu(false); modeBtn.focus(); }
+    else if (e.key === 'Tab') modeMenu(false);
+  };
+  modeOpts.forEach(function (o) {
+    o.onclick = function () { pickMode(o.dataset.v); };
+  });
+  // 点外面关。挂在 click 而不是 mousedown 上：mousedown 会在胶囊自己的 click
+  // 之前把菜单关掉，那一下点击于是变成「关了又开」，看着像没反应。
+  document.addEventListener('click', function (e) {
+    if (modeOpen && !modeWrap.contains(e.target)) modeMenu(false);
+  });
 
   $('#rAdd').onclick = function () {
     if (roGuard(cur)) return;
@@ -1503,6 +1582,9 @@
   /* ── 路由 ────────────────────────────────────────────────────────── */
   function showView(v) {
     $$('.view').forEach(function (x) { x.classList.toggle('show', x.dataset.view === v); });
+    // 换屏时把执行模式菜单收起来：它是绝对定位在设备标题行上的，
+    // 那一行一藏，开着的菜单就成了一块无主的浮层。
+    modeMenu(false);
   }
   function go(v) {
     var h = '#' + v;

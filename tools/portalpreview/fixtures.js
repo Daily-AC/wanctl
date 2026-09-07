@@ -216,6 +216,7 @@
     // POST-only endpoints still need an entry here: match() returning undefined
     // is what produces the preview's 404, before the write branch is reached.
     if (p === '/api/devices/alias') return {};
+    if (p === '/api/devices/mode') return {};
     return db[p];
   }
 
@@ -250,6 +251,13 @@
         var row = devices.filter(function (x) { return x.name === want.device; })[0];
         if (row) row.alias = ('' + (want.alias || '')).trim();
         out = { name: want.device, alias: row ? row.alias : '' };
+      }
+      // 模式是唯一一个「写完立刻再读一遍」的写操作：真代码 POST 完就
+      // renderConsole，而设备真的换了模式。工装要是不记这一笔，胶囊会在
+      // 一次成功的切换之后自己弹回原样 —— 那是工装在替真代码撒谎。
+      if (url.indexOf('/api/devices/mode') === 0) {
+        var mw = JSON.parse((opts && opts.body) || '{}');
+        if (consoles[mw.device]) consoles[mw.device].mode = mw.mode;
       }
       if (url.indexOf('/api/tokens') === 0) out = { token: 'wanctl_9fQ2mXbLpR7tZv4NcKwJaHe1UgSoD5iM3xNrTqCEy' };
       if (url.indexOf('/api/invites') === 0) out = { code: 'winv_4TmQb9RvNc7WpLd2FjKa5Y' };
