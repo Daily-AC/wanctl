@@ -23,6 +23,9 @@ func TestPairAlreadyTrusted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Join the agent before t.TempDir removes its config dir: it appends to
+	// <config>/logs after the controller's last read (#35).
+	t.Cleanup(ag.Close)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ag.Run(ctx)
@@ -71,6 +74,9 @@ func TestPairRequiresApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Join the agent before t.TempDir removes its config dir: it appends to
+	// <config>/logs after the controller's last read (#35).
+	t.Cleanup(ag.Close)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ag.Run(ctx)
@@ -118,6 +124,9 @@ func TestPairWithoutLabelIsRefusedOutright(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Join the agent before t.TempDir removes its config dir: it appends to
+	// <config>/logs after the controller's last read (#35).
+	t.Cleanup(ag.Close)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ag.Run(ctx)
