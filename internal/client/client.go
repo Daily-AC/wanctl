@@ -480,6 +480,12 @@ func (c *Client) LogsTo(ctx context.Context, target, logType, grep, since string
 	}
 }
 
+// cancelGrace is how long a cancelled Exec waits for the device to answer its
+// cancel frame before closing the connection anyway. The device normally
+// replies at once (the command is killed and an error frame comes back); the
+// close is only there so a device that cannot answer never hangs the caller.
+const cancelGrace = 2 * time.Second
+
 // ExecRequest is one command to run on a device. It replaced a five-argument
 // signature when elevation added two more; the fields are named at every call
 // site, which is worth more here than brevity.
@@ -543,9 +549,28 @@ func (c *Client) ExecTo(ctx context.Context, req ExecRequest, stdout, stderr io.
 	if err := protocol.WriteMessage(conn, msg); err != nil {
 		return -1, err
 	}
+	// A cancelled context (Ctrl-C at the terminal, an MCP host abandoning the
+	// call) has to reach the device, or the command runs to completion there
+	// with nobody left to read it (#37). Say so on the wire first, then drop
+	// the connection so the device also notices if the frame never lands.
+	//
+	// Neither reaches an agent from before this fix, and nothing here can: such
+	// an agent reads the connection only between commands, so both the frame
+	// and the close are seen after the command has already finished. It then
+	// answers the frame with "unknown request" and ends the session — harmless,
+	// but the command ran to completion. Cancellation needs a device running
+	// this version.
+	stopCancel := context.AfterFunc(ctx, func() {
+		_ = protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindCancel})
+		time.AfterFunc(cancelGrace, func() { conn.Close() })
+	})
+	defer stopCancel()
 	for {
 		ft, payload, err := protocol.ReadFrame(conn)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return -1, ctxErr
+			}
 			return -1, err
 		}
 		switch ft {
@@ -562,6 +587,12 @@ func (c *Client) ExecTo(ctx context.Context, req ExecRequest, stdout, stderr io.
 			case protocol.KindExit:
 				return m.Code, elevationHonoured(req, m)
 			case protocol.KindError:
+				// A device that honoured our cancel reports the killed command
+				// as an error. The caller asked for that, so it reads as
+				// cancellation rather than as a device-side failure.
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return -1, ctxErr
+				}
 				return -1, fmt.Errorf("remote error: %s", m.Reason)
 			case protocol.KindReject:
 				return -1, rejectError(m)

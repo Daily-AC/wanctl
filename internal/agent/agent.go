@@ -650,9 +650,46 @@ func (a *Agent) trustedControllers() []console.TrustedController {
 	return out
 }
 
-func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capabilities) {
-	for {
+// peerRead is one control message read from the controller, or the error that
+// ended the stream.
+type peerRead struct {
+	msg protocol.Message
+	err error
+}
+
+// watchPeer reads the next control message while a command is running, so the
+// device notices a controller that went away (Ctrl-C, dropped link) or that
+// asks outright to abort: either one cancels the command's context, and the
+// per-platform cancel hook then kills the shell and everything under it.
+//
+// The read it starts owns the connection's read side, so its result is handed
+// back on the returned channel — the request loop must take its next message
+// from there rather than reading the connection itself, or the two reads race.
+func watchPeer(conn io.Reader, cancel context.CancelFunc) <-chan peerRead {
+	ch := make(chan peerRead, 1)
+	go func() {
 		m, err := protocol.ReadMessage(conn)
+		ch <- peerRead{msg: m, err: err}
+		if err != nil || m.Kind == protocol.KindCancel {
+			cancel()
+		}
+	}()
+	return ch
+}
+
+func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capabilities) {
+	// Set while a read started by doExec is still in flight; the next request
+	// comes from it (see watchPeer).
+	var pending <-chan peerRead
+	for {
+		var m protocol.Message
+		var err error
+		if pending != nil {
+			r := <-pending
+			pending, m, err = nil, r.msg, r.err
+		} else {
+			m, err = protocol.ReadMessage(conn)
+		}
 		if err != nil {
 			return
 		}
@@ -662,7 +699,10 @@ func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capa
 		}
 		switch m.Kind {
 		case protocol.KindExec:
-			a.doExec(conn, fp, peerName, m)
+			pending = a.doExec(conn, fp, peerName, m)
+		case protocol.KindCancel:
+			// Nothing is running on this stream: a cancel that lost the race
+			// with its own command finishing is not a protocol error.
 		case protocol.KindExecAsync:
 			a.doExecAsync(conn, fp, peerName, m)
 		case protocol.KindExecPoll:
@@ -726,7 +766,10 @@ func requiredCapability(kind string) sessionauth.Capabilities {
 	}
 }
 
-func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) {
+// doExec runs one command for a controller. It returns the in-flight read that
+// watched for the controller leaving, so the request loop can take its next
+// message from there; nil means the loop owns the connection again.
+func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) <-chan peerRead {
 	kind := policy.KindExec
 	if m.Elevate {
 		kind = policy.KindExecElevated
@@ -738,7 +781,7 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 		parsed, err := elevate.ParseKind(m.Via)
 		if err != nil {
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
-			return
+			return nil
 		}
 		via = parsed
 	}
@@ -752,8 +795,16 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 				" (elevated commands need their own rule; bypass mode does not cover them)"
 		}
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: reason})
-		return
+		return nil
 	}
+
+	// The command runs under a context tied to this request. A controller that
+	// goes away mid-command (Ctrl-C) or sends a cancel frame cancels it, and
+	// the per-platform cancel hook kills the shell and its children instead of
+	// leaving an orphan running to completion on the device (#37).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pending := watchPeer(conn, cancel)
 
 	out := server.FrameWriter(conn, protocol.FrameStdout)
 	var code int
@@ -764,11 +815,11 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 		// Structured verbs first: they are elevated commands with a nicer
 		// spelling, so they go through the same channel and the same gate that
 		// already ran above.
-		handled, vVia, vCode, vErr := androidverb.Dispatch(context.Background(), m.Command, via, a.elevator, out)
+		handled, vVia, vCode, vErr := androidverb.Dispatch(ctx, m.Command, via, a.elevator, out)
 		if handled {
 			ranVia, code, err = vVia, vCode, vErr
 		} else {
-			ranVia, code, err = a.elevator.Run(context.Background(), via, m.Command, m.Cwd, out)
+			ranVia, code, err = a.elevator.Run(ctx, via, m.Command, m.Cwd, out)
 		}
 		if err != nil {
 			// A channel that could not be selected has not run anything, so
@@ -776,7 +827,7 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 			// it is: the caller must not read it as "ran, and failed".
 			a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
-			return
+			return pending
 		}
 	default:
 		// adb-pair is unelevated on purpose: it is how the elevation channel
@@ -786,28 +837,34 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 		} else if handled, builtinCode, builtinErr := server.RunBuiltin(m.Command, out); handled {
 			code, err = builtinCode, builtinErr
 		} else if m.OneShot {
-			code, err = server.RunOneShot(a.opts.Shell, m.Command, m.Cwd, out)
+			code, err = server.RunOneShotContext(ctx, a.opts.Shell, m.Command, m.Cwd, out)
 		} else {
 			sess, serr := a.session(fp)
 			if serr != nil {
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: serr.Error()})
-				return
+				return pending
 			}
 			code, err = sess.ExecInDir(m.Command, m.Cwd, out)
 		}
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			// Say who ended it: the audit line and a controller that is still
+			// listening must not read this as the command itself failing.
+			err = fmt.Errorf("command cancelled by the controller")
+		}
 		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(ranVia)})
 		if code == 0 {
 			code = -1
 		}
 		a.notifyExecFinished(m.Command, m.Cwd, peerName, code)
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
-		return
+		return pending
 	}
 	a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code, Via: string(ranVia)})
 	a.notifyExecFinished(m.Command, m.Cwd, peerName, code)
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExit, Code: code, ElevatedVia: string(ranVia)})
+	return pending
 }
 
 // doExecAsync starts a command as a background job and returns its id at once,
