@@ -203,7 +203,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices/identity/accept", s.handleDeviceIdentityAccept)
 	mux.HandleFunc("/api/devices/rules", s.handleDeviceRules)
 	mux.HandleFunc("/api/devices/mode", s.handleDeviceMode)
-	mux.HandleFunc("/api/devices/lan", s.handleDeviceLan)
 	mux.HandleFunc("/api/devices/logs", s.handleDeviceLogs)
 	mux.HandleFunc("/api/devices/events", s.handleDeviceEvents)
 	mux.HandleFunc("/admin/logs", s.handleAdminLogs)
@@ -266,7 +265,6 @@ var mutationPaths = map[string]bool{
 	"/api/devices/identity/accept": true,
 	"/api/devices/rules":           true,
 	"/api/devices/mode":            true,
-	"/api/devices/lan":             true,
 	"/api/devices/lark":            true,
 	"/api/devices/notify":          true,
 	"/api/notify":                  true,
@@ -1254,7 +1252,7 @@ func (s *Server) requireDevice(w http.ResponseWriter, r *http.Request, device st
 
 // requireOwnedConsole is requireDevice plus an owner gate. ACL-shared devices
 // get no console in the portal at all — neither writes (approvals, pairing,
-// trust, rules, mode, LAN) nor reads (console state, activity log, approval
+// trust, rules, mode) nor reads (console state, activity log, approval
 // events, Feishu settings). The protocol already says so: a grant can carry
 // exec/read/write but never console or logs (sessionauth.ParseGrant), and the
 // device refuses those kinds from a grantee's own session. The portal dials
@@ -1628,30 +1626,6 @@ func (s *Server) handleDeviceRules(w http.ResponseWriter, r *http.Request) {
 	}
 	if err2 != nil {
 		http.Error(w, err2.Error(), http.StatusBadGateway)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-}
-
-// handleDeviceLan toggles the device's intranet fast-path uplink from the web
-// console (POST {device, on}).
-func (s *Server) handleDeviceLan(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Device string
-		On     bool
-	}
-	json.NewDecoder(r.Body).Decode(&body)
-	ns, ok := s.requireOwnedConsole(w, r, body.Device)
-	if !ok {
-		return
-	}
-	d, err := s.deviceConnFor(r.Context(), ns, body.Device)
-	if err != nil {
-		s.connError(w, body.Device, err)
-		return
-	}
-	if err := d.setLan(body.On); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

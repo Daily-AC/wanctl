@@ -47,7 +47,6 @@ Variables marked "conditional" are required only for the feature described.
 | `WANCTL_TOKEN` | agent, controller, MCP | Conditional | saved token or none | Namespace bearer token. Overrides the token stored in the config directory. |
 | `WANCTL_NO_PROMPT` | agent, controller | No | unset | Set to `1` to refuse every interactive question, including the first-run "which relay" one. The command prints the `wanctl config set` instruction and exits instead of asking. |
 | `WANCTL_LABEL` | controller, MCP | No | saved label or generated MCP label | Human-readable controller identity shown during pairing. |
-| `WANCTL_LAN_RELAY` | agent, controller | No | build-time default or none | Optional intranet WebSocket relay used by the LAN fast path. |
 | `WANCTL_PORTAL_FPS` | agent | No | none | Comma-separated portal administrator fingerprints to seed. |
 | `WANCTL_PORTAL_FP` | agent | No | none | Deprecated single-fingerprint alias, used only when `WANCTL_PORTAL_FPS` is unset. |
 

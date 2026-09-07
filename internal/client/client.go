@@ -71,19 +71,15 @@ type Client struct {
 	token     string
 	transport string       // "ws" (default) or "http"
 	label     string       // self-description sent at pairing (WANCTL_LABEL)
-	httpc     *http.Client // relay HTTP client (no-proxy variant for the intranet relay)
-	lan       bool         // true when this client resolved to the intranet relay
+	httpc     *http.Client // relay HTTP client
 }
 
 // SetLabel overrides the controller's self-description (who/why), shown to the
 // device owner at pairing time and in audit.
 func (c *Client) SetLabel(l string) { c.label = l }
 
-// New loads identity + config from env (WANCTL_RELAY, WANCTL_TOKEN) and the
-// persisted network mode (`wanctl net wan|lan|auto`). An explicit WANCTL_RELAY
-// always wins; otherwise "lan" targets the intranet fast-path relay over WS
-// (bypassing any HTTP proxy env), and "auto" probes it first, falling back to
-// the public relay.
+// New loads identity + config from env (WANCTL_RELAY, WANCTL_TOKEN), falling
+// back to the persisted relay setting.
 func New() (*Client, error) {
 	id, err := transport.LoadOrCreateIdentity()
 	if err != nil {
@@ -99,61 +95,19 @@ func New() (*Client, error) {
 	}
 	relayURL := os.Getenv("WANCTL_RELAY")
 	tr := os.Getenv("WANCTL_TRANSPORT")
-	lan := false
 	if relayURL == "" {
-		switch config.StoredNetMode() {
-		case "lan":
-			if config.LanRelay() == "" {
-				return nil, fmt.Errorf("no LAN relay configured (set WANCTL_LAN_RELAY)")
-			}
-			lan = true
-		case "auto":
-			lan = LanReachable(600 * time.Millisecond)
+		relayURL, err = config.Relay()
+		if err != nil {
+			return nil, err
 		}
-		if lan {
-			relayURL, tr = config.LanRelay(), "ws"
-		} else {
-			relayURL, err = config.Relay()
-			if err != nil {
-				return nil, err
-			}
-			if tr == "" {
-				tr = config.Transport()
-			}
-		}
-	} else if tr == "" {
+	}
+	if tr == "" {
 		tr = config.Transport()
 	}
 	c := NewWith(id, known, relayURL, token, tr)
 	c.label = config.EnvOr("WANCTL_LABEL", config.StoredLabel())
-	if lan {
-		c.lan = true
-		c.httpc = wsconn.NoProxyClient
-	}
 	return c, nil
 }
-
-// LanReachable probes the intranet relay /healthz, bypassing proxy env vars.
-func LanReachable(timeout time.Duration) bool {
-	lanRelay := config.LanRelay()
-	if lanRelay == "" {
-		return false
-	}
-	base, err := config.RelayHTTPOrigin(lanRelay)
-	if err != nil {
-		return false
-	}
-	hc := &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: nil}}
-	resp, err := hc.Get(base + "/healthz")
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return resp.StatusCode == 200
-}
-
-// Lan reports whether this client resolved to the intranet relay.
-func (c *Client) Lan() bool { return c.lan }
 
 // RelayURL exposes the relay this client resolved to (for status output).
 func (c *Client) RelayURL() string { return c.relayURL }
@@ -333,11 +287,7 @@ func (c *Client) connectKind(ctx context.Context, target, helloKind string) (*tl
 
 func (c *Client) dialWS(ctx context.Context, target string) (net.Conn, error) {
 	dialURL := c.relayURL + "/dial?" + url.Values{"target": {target}}.Encode()
-	var hc *http.Client
-	if c.lan {
-		hc = wsconn.NoProxyClient
-	}
-	nc, resp, err := wsconn.DialWith(ctx, dialURL, admission.Header(c.token), hc)
+	nc, resp, err := wsconn.Dial(ctx, dialURL, admission.Header(c.token))
 	if err != nil {
 		if resp != nil {
 			return nil, fmt.Errorf("dial relay (%d): is %q online?", resp.StatusCode, target)

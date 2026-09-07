@@ -154,7 +154,8 @@ func adminAuthorFromBody(req *http.Request) string {
 }
 
 // adminTokenResolve resolves a raw token to its namespace. It exists for
-// satellite relays (the intranet fast-path relay) whose UpstreamTokenStore
+// satellite relays (a database-less relay, e.g. one run inside an intranet)
+// whose UpstreamTokenStore
 // delegates token auth here, so portal-issued tokens work on every relay
 // without sharing the DB. Gated by the same shared secret as the rest of
 // /admin/*, but does not require the Postgres admin backend — it only needs
