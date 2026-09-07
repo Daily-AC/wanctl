@@ -10,7 +10,7 @@ wanctl
 
 > 第一次能登录门户的前提是你已经在这个部署里：部署的第一个登录用户自动成为管理员，之后的人要拿管理员发的邀请码，登录后兑换（见「邀请、好友与共享」）。
 >
-> 跳过第二行直接跑 `wanctl` 也行——第一次会在终端里引导你填这两个地址。配好的地址用 `wanctl config` 随时查看或修改，环境变量 `WANCTL_RELAY`/`WANCTL_PORTAL` 仍可临时覆盖。
+> 跳过第二行直接跑 `wanctl` 也行——第一次会在终端里问你用哪个中继：这套部署自己的，还是项目的官方实例，答完就存下来。配好的地址用 `wanctl config` 随时查看或修改，环境变量 `WANCTL_RELAY`/`WANCTL_PORTAL` 仍可临时覆盖。这个提问不会挡住任何脚本：没有终端、或者设了 `WANCTL_NO_PROMPT=1`，命令就直接打印那行 `wanctl config set` 然后退出。
 
 工具和安装脚本都来自项目的 [GitHub Releases](https://github.com/Daily-AC/wanctl/releases)：安装器先验证签名过的发布清单，再核对二进制的大小和哈希，然后才落盘（用系统自带的 `openssl`，macOS 的 LibreSSL 也可以）——发布源与你的中继相互独立，中继出问题也装得上。
 

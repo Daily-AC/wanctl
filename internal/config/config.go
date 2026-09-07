@@ -35,9 +35,16 @@ const (
 	DefaultPortalFP = ""
 )
 
+// SourceBuildDefault is the source Setting reports for a value injected at
+// build time with -ldflags. Callers distinguish it because a build default is
+// an answer someone already gave — a relay-served installer, an enterprise
+// build — and must not be second-guessed with a question at first run.
+const SourceBuildDefault = "build default"
+
 // Setting resolves one endpoint setting and reports where the value came from
-// ("env WANCTL_…", "config file", "build default", or "" when unset). The keys
-// are the ones `wanctl config` exposes: relay, portal, transport, release_base.
+// ("env WANCTL_…", "config file", SourceBuildDefault, or "" when unset). The
+// keys are the ones `wanctl config` exposes: relay, portal, transport,
+// release_base.
 func Setting(key string) (value, source string) {
 	envKey, def := "", ""
 	switch key {
@@ -59,7 +66,7 @@ func Setting(key string) (value, source string) {
 		return v, "config file"
 	}
 	if def != "" {
-		return def, "build default"
+		return def, SourceBuildDefault
 	}
 	return "", ""
 }
