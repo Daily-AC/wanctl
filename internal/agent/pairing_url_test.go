@@ -8,6 +8,11 @@ import (
 )
 
 func TestPairingURLRequiresPortal(t *testing.T) {
+	// Isolate the config directory: clearing the environment and the build
+	// default still leaves `wanctl config set portal=…`, so on a developer's
+	// own machine the "no portal anywhere" case read a real portal and the
+	// test failed.
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	old := config.DefaultPortal
 	config.DefaultPortal = ""
 	t.Cleanup(func() { config.DefaultPortal = old })
