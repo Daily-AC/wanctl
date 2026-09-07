@@ -4,13 +4,12 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"runtime"
 	"strings"
 	"time"
-
-	"golang.org/x/term"
 
 	"wanctl/internal/client"
 	"wanctl/internal/config"
@@ -198,31 +197,29 @@ func ensureEndpointsConfigured() error {
 		// only place a portal can be typed.
 		return fmt.Errorf("还没配置门户地址：在登录对话框里填写门户地址后重试")
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return fmt.Errorf("还没配置实例地址：运行 `wanctl config set relay=https://你的中继 portal=https://你的门户` 后重试")
+	if !stdioIsTerminal() || promptSuppressed() {
+		return errNoInstanceConfigured()
 	}
-	fmt.Println("首次使用，先告诉我你的实例在哪（之后 `wanctl config` 可随时查看/修改）：")
 	in := bufio.NewReader(os.Stdin)
 	if relayErr != nil {
-		v, err := promptSetting(in, "relay", "中继地址 (例 https://relay.example.com): ")
-		if err != nil {
+		// The first-run question settles the portal too when the hosted
+		// instance is chosen, so it runs before the portal is asked about.
+		if err := askInstance(in, os.Stdout); err != nil {
 			return err
 		}
-		if err := config.SaveSetting("relay", v); err != nil {
-			return err
-		}
+		_, portalErr = config.Portal()
 	}
 	if portalErr != nil {
-		v, err := promptSetting(in, "portal", "门户地址 (例 https://portal.example.com): ")
+		v, err := promptSetting(in, os.Stdout, "portal", "Portal URL (e.g. https://portal.example.com): ")
 		if err != nil {
 			return err
 		}
-		if err := config.SaveSetting("portal", v); err != nil {
+		if err := configSet([]string{"portal=" + v}); err != nil {
 			return err
 		}
 	}
 	if dir := config.SettingsDir(); dir != "" {
-		fmt.Printf("✓ 已保存到 %s\n", dir)
+		fmt.Printf("Settings saved in %s\n", dir)
 	}
 	return nil
 }
@@ -254,22 +251,22 @@ func discoverRelayFromPortal(portal string) error {
 	return nil
 }
 
-func promptSetting(in *bufio.Reader, key, prompt string) (string, error) {
+func promptSetting(in *bufio.Reader, out io.Writer, key, prompt string) (string, error) {
 	for tries := 0; tries < 3; tries++ {
-		fmt.Print(prompt)
+		fmt.Fprint(out, prompt)
 		line, err := in.ReadString('\n')
 		if err != nil {
-			return "", fmt.Errorf("读取输入失败: %w", err)
+			return "", fmt.Errorf("read input: %w", err)
 		}
 		v := strings.TrimSpace(line)
 		if v == "" {
-			return "", fmt.Errorf("已取消；之后可用 `wanctl config set %s=...` 配置", key)
+			return "", fmt.Errorf("cancelled; configure it later with `wanctl config set %s=...`", key)
 		}
 		if err := validateSetting(key, v); err != nil {
-			fmt.Println(err.Error())
+			fmt.Fprintln(out, err.Error())
 			continue
 		}
 		return v, nil
 	}
-	return "", fmt.Errorf("连续三次输入无效；用 `wanctl config set %s=...` 配置", key)
+	return "", fmt.Errorf("three invalid answers; configure it with `wanctl config set %s=...`", key)
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -78,12 +79,12 @@ func TestEnsureEndpointsNonInteractive(t *testing.T) {
 
 func TestPromptSettingRetriesThenAccepts(t *testing.T) {
 	in := bufio.NewReader(strings.NewReader("not a url\nhttps://r.example\n"))
-	v, err := promptSetting(in, "relay", "> ")
+	v, err := promptSetting(in, io.Discard, "relay", "> ")
 	if err != nil || v != "https://r.example" {
 		t.Fatalf("got %q, %v", v, err)
 	}
 	in = bufio.NewReader(strings.NewReader("\n"))
-	if _, err := promptSetting(in, "relay", "> "); err == nil {
+	if _, err := promptSetting(in, io.Discard, "relay", "> "); err == nil {
 		t.Fatal("empty input accepted, want cancellation")
 	}
 }
