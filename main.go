@@ -487,6 +487,12 @@ func cmdAgent(ctx context.Context, args []string) error {
 }
 
 func cmdExec(ctx context.Context, args []string) error {
+	// Ctrl-C is handled here rather than left to the default disposition: the
+	// device has to be told to kill the command, which the client does when
+	// this context is cancelled. The process still ends with the shell's
+	// conventional 128+SIGINT below, so callers see no change in exit code.
+	ctx, stopSignals := signal.NotifyContext(ctx, os.Interrupt)
+	defer stopSignals()
 	fs := flag.NewFlagSet("exec", flag.ExitOnError)
 	target := fs.String("target", "", "device (NS/DEV or DEV)")
 	oneShot := fs.Bool("oneshot", false, "fresh shell, no session state")
@@ -558,6 +564,10 @@ func cmdExec(ctx context.Context, args []string) error {
 		Elevate: *elevateFlag, Via: *via,
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Fprintln(os.Stderr, "wanctl: interrupted — sent a cancel to the device")
+			os.Exit(130) // 128 + SIGINT, what a shell reports for an interrupted command
+		}
 		return err
 	}
 	os.Exit(code)

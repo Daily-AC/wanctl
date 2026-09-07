@@ -480,6 +480,12 @@ func (c *Client) LogsTo(ctx context.Context, target, logType, grep, since string
 	}
 }
 
+// cancelGrace is how long a cancelled Exec waits for the device to answer its
+// cancel frame before closing the connection anyway. The device normally
+// replies at once (the command is killed and an error frame comes back); the
+// close is only there so a device that cannot answer never hangs the caller.
+const cancelGrace = 2 * time.Second
+
 // ExecRequest is one command to run on a device. It replaced a five-argument
 // signature when elevation added two more; the fields are named at every call
 // site, which is worth more here than brevity.
@@ -543,9 +549,22 @@ func (c *Client) ExecTo(ctx context.Context, req ExecRequest, stdout, stderr io.
 	if err := protocol.WriteMessage(conn, msg); err != nil {
 		return -1, err
 	}
+	// A cancelled context (Ctrl-C at the terminal, an MCP host abandoning the
+	// call) has to reach the device, or the command runs to completion there
+	// with nobody left to read it (#37). Say so on the wire first, then drop
+	// the connection as the backstop that also works on an older agent — which
+	// ignores the cancel frame but does notice the stream closing.
+	stopCancel := context.AfterFunc(ctx, func() {
+		_ = protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindCancel})
+		time.AfterFunc(cancelGrace, func() { conn.Close() })
+	})
+	defer stopCancel()
 	for {
 		ft, payload, err := protocol.ReadFrame(conn)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return -1, ctxErr
+			}
 			return -1, err
 		}
 		switch ft {
@@ -562,6 +581,12 @@ func (c *Client) ExecTo(ctx context.Context, req ExecRequest, stdout, stderr io.
 			case protocol.KindExit:
 				return m.Code, elevationHonoured(req, m)
 			case protocol.KindError:
+				// A device that honoured our cancel reports the killed command
+				// as an error. The caller asked for that, so it reads as
+				// cancellation rather than as a device-side failure.
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return -1, ctxErr
+				}
 				return -1, fmt.Errorf("remote error: %s", m.Reason)
 			case protocol.KindReject:
 				return -1, rejectError(m)
