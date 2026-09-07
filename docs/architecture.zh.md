@@ -116,15 +116,13 @@ bearer 凭据，以及长度 ≥ 32 的类 base64 字符串——所以拿一个
 而不是在旧版本还在服务的时候报告成功。任何一次升级之后，
 去信运行进程的启动时间对上二进制的 mtime，别信磁盘上的版本号。
 
-## 局域网快速通道（可选）
+## 卫星 relay
 
-设备可以额外保持一条通往内网 WebSocket relay 的上行（`WANCTL_LAN_RELAY`；不设即关闭）。
-控制端用 `wanctl net wan|lan|auto|status` 切换（会持久化；`auto` 探测局域网 relay 的
-`/healthz`；显式的 `WANCTL_RELAY` 永远优先）。局域网拨号绕过 `HTTP(S)_PROXY`
-环境变量，因为公司代理会把私有网段黑洞掉。没有数据库的局域网 relay 可以把令牌拿到主
-relay 去解析（`WANCTL_UPSTREAM_RELAY` + `WANCTL_ADMIN_SECRET`，5 分钟缓存），
-这样门户签发的令牌在哪儿都能用。`ws://` 的局域网 relay 只有在加密覆盖网
-（WireGuard 之类）里面才可以接受；否则请用 `wss://`。
+没有数据库的 relay 可以把令牌拿到主 relay 去解析（`WANCTL_UPSTREAM_RELAY` +
+`WANCTL_ADMIN_SECRET`，5 分钟缓存），这样门户签发的令牌在每个 relay 上都能用，
+不必共享数据库。想要内网延迟就是这么做的：在内网里自己跑一个 relay，
+用 `wanctl config set relay=…` 把设备和控制端指过去。`ws://` 的 relay 只有在加密
+覆盖网（WireGuard 之类）里面才可以接受；否则请用 `wss://`。
 
 ## 现场笔记（都是踩出来的，别再踩一遍）
 

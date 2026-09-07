@@ -50,7 +50,6 @@ type Options struct {
 	Mode      policy.Mode // "normal" (default) or "bypass"
 	PortalFP  string      // deprecated single portal admin fingerprint
 	PortalFPs []string    // pre-trusted portal admin fingerprints, enrolled locally
-	LanRelay  string      // intranet fast-path relay (ws://...); "" disables the second uplink
 	Version   string      // immutable release version reported to controllers
 }
 
@@ -75,11 +74,6 @@ type Agent struct {
 	jobs     *jobStore
 	stdin    *bufio.Reader
 	elevator *elevate.Manager
-
-	lanMu        sync.Mutex
-	lanEnabled   bool
-	lanConnected bool
-	lanKick      chan struct{} // wakes the LAN loop when the switch flips
 
 	// Owned goroutines. Every goroutine the agent starts is registered in wg
 	// and takes its context from stopCtx, so Close can cancel them all and then
@@ -140,8 +134,8 @@ func (a *Agent) runContext(ctx context.Context) (context.Context, context.Cancel
 }
 
 // Close shuts the agent down and waits for the goroutines it owns to return:
-// the control loop, live session handlers, the LAN uplink, the notify-policy
-// loop and any in-flight webhook report. It is idempotent, and a closed agent
+// the control loop, live session handlers, the notify-policy loop and any
+// in-flight webhook report. It is idempotent, and a closed agent
 // stays closed (Run on one returns immediately).
 //
 // Production shutdown is process exit, so nothing on the daemon path has to
@@ -260,11 +254,6 @@ func New(opts Options) (*Agent, error) {
 	a.jobs.onDone = func(command, cwd string, code int) {
 		a.notifyExecFinished(command, cwd, "", code)
 	}
-	a.lanEnabled = config.LanUplinkEnabled()
-	a.lanKick = make(chan struct{}, 1)
-	if opts.LanRelay != "" {
-		a.console.SetLanSource(a.lanInfo)
-	}
 	// Queue-backed approver: the remote portal and/or the local CLI terminal
 	// feed decisions into the same queue. Headless + no portal -> timeout deny.
 	//
@@ -372,9 +361,6 @@ func (a *Agent) gateFile(req policy.Request) (bool, string, string) {
 }
 
 // Run connects the control channel and serves sessions until ctx is cancelled.
-// If a LAN relay is configured, a second uplink to it runs alongside the
-// primary one; sessions from either relay are served identically (same E2E
-// trust, same policy gate).
 func (a *Agent) Run(ctx context.Context) error {
 	// The caller starts Run, but the agent owns it: Close must join the control
 	// loop too, or the loop can still accept a session — and log it — after
@@ -387,9 +373,6 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer cancel()
 
 	a.spawn(func() { a.runNotifyPolicy(ctx) })
-	if a.opts.LanRelay != "" {
-		a.spawn(func() { a.runLan(ctx) })
-	}
 	if a.opts.Transport == "http" {
 		return a.runHTTP(ctx)
 	}
@@ -431,16 +414,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
+// serveSession opens the per-session WebSocket on the relay and serves it.
 func (a *Agent) serveSession(ctx context.Context, open sessionauth.Open) {
-	a.serveSessionWS(ctx, a.opts.RelayURL, open, nil)
-}
-
-// serveSessionWS opens the per-session WebSocket on the given relay and serves
-// it. hc overrides the handshake HTTP client (NoProxyClient for the intranet
-// relay).
-func (a *Agent) serveSessionWS(ctx context.Context, relayURL string, open sessionauth.Open, hc *http.Client) {
-	url := strings.TrimRight(relayURL, "/") + open.URL
-	nc, _, err := wsconn.DialWith(ctx, url, admission.Header(a.opts.Token), hc)
+	url := strings.TrimRight(a.opts.RelayURL, "/") + open.URL
+	nc, _, err := wsconn.Dial(ctx, url, admission.Header(a.opts.Token))
 	if err != nil {
 		return
 	}
@@ -1048,127 +1025,6 @@ func (a *Agent) serveSessionHTTP(ctx context.Context, base string, open sessiona
 	a.handleSession(ctx, nc, open)
 }
 
-// lanInfo snapshots the LAN-uplink state for the console/portal.
-func (a *Agent) lanInfo() *console.LanInfo {
-	a.lanMu.Lock()
-	defer a.lanMu.Unlock()
-	return &console.LanInfo{Relay: a.opts.LanRelay, Enabled: a.lanEnabled, Connected: a.lanConnected}
-}
-
-func (a *Agent) setLanConnected(v bool) {
-	a.lanMu.Lock()
-	changed := a.lanConnected != v
-	a.lanConnected = v
-	a.lanMu.Unlock()
-	if changed {
-		a.console.Notify() // push fresh state to any connected portal
-	}
-}
-
-// SetLanEnabled flips the device-side LAN-uplink switch (portal RPC / CLI),
-// persists it, and kicks the LAN loop so it reacts immediately.
-func (a *Agent) SetLanEnabled(on bool) {
-	a.lanMu.Lock()
-	a.lanEnabled = on
-	a.lanMu.Unlock()
-	_ = config.SaveLanUplink(on)
-	select {
-	case a.lanKick <- struct{}{}:
-	default:
-	}
-	a.console.Notify()
-}
-
-func (a *Agent) lanIsEnabled() bool {
-	a.lanMu.Lock()
-	defer a.lanMu.Unlock()
-	return a.lanEnabled
-}
-
-// runLan maintains the second uplink to the intranet relay: register, serve
-// sessions, reconnect with quiet backoff. Unreachable relay (device outside
-// the company network) just means periodic cheap dial failures. The uplink
-// only ever uses the WS transport — the intranet relay has no proxy in front.
-func (a *Agent) runLan(ctx context.Context) {
-	const backoff = 30 * time.Second
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		if !a.lanIsEnabled() {
-			a.setLanConnected(false)
-			select {
-			case <-ctx.Done():
-				return
-			case <-a.lanKick:
-			}
-			continue
-		}
-		err := a.runLanOnce(ctx)
-		a.setLanConnected(false)
-		if ctx.Err() != nil {
-			return
-		}
-		_ = err // quiet: expected whenever the device is outside the intranet
-		select {
-		case <-ctx.Done():
-			return
-		case <-a.lanKick:
-		case <-time.After(backoff):
-		}
-	}
-}
-
-// runLanOnce holds one registered control channel on the intranet relay until
-// it drops or the switch turns off.
-func (a *Agent) runLanOnce(ctx context.Context) error {
-	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	ctrlURL := strings.TrimRight(a.opts.LanRelay, "/") + "/agent"
-	nc, _, err := wsconn.DialWith(dialCtx, ctrlURL, admission.Header(a.opts.Token), wsconn.NoProxyClient)
-	cancel()
-	if err != nil {
-		return err
-	}
-	defer nc.Close()
-	enc := json.NewEncoder(nc)
-	if err := enc.Encode(map[string]string{"op": "register", "device": a.opts.Name, "fingerprint": a.id.Fingerprint}); err != nil {
-		return err
-	}
-	fmt.Printf("wanctl agent %q: LAN uplink online via %s\n", a.opts.Name, a.opts.LanRelay)
-	a.setLanConnected(true)
-
-	// Tear the conn down when the switch flips off so the read below unblocks.
-	watchDone := make(chan struct{})
-	defer close(watchDone)
-	go func() {
-		for {
-			select {
-			case <-watchDone:
-				return
-			case <-ctx.Done():
-				nc.Close()
-				return
-			case <-a.lanKick:
-				if !a.lanIsEnabled() {
-					nc.Close()
-					return
-				}
-			}
-		}
-	}()
-
-	dec := json.NewDecoder(bufio.NewReader(nc))
-	for {
-		var msg sessionauth.Open
-		if err := dec.Decode(&msg); err != nil {
-			return err
-		}
-		if msg.Op == "open" && msg.ValidFor(a.opts.Name) {
-			a.spawn(func() { a.serveSessionWS(ctx, a.opts.LanRelay, msg, wsconn.NoProxyClient) })
-		}
-	}
-}
-
 func (a *Agent) session(fp string) (*server.ShellSession, error) {
 	a.sessMu.Lock()
 	defer a.sessMu.Unlock()
@@ -1257,16 +1113,6 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 			a.console.Notify()
 			a.notifyTrustChanged(msg.FP, "", "revoked")
 		}
-		return resp
-
-	case protocol.KindLanSet:
-		resp := protocol.Message{Kind: protocol.KindLanSet}
-		if a.opts.LanRelay == "" {
-			errJSON, _ := json.Marshal("no LAN relay configured on this device")
-			resp.Data = json.RawMessage(errJSON)
-			return resp
-		}
-		a.SetLanEnabled(msg.Verdict == "on")
 		return resp
 
 	case protocol.KindTimeoutSet:
