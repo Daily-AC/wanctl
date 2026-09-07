@@ -105,9 +105,6 @@
       noAttempts: 'No delivery attempted yet.',
       lastOK: function (w) { return 'Last delivery succeeded (' + w + ')'; },
       lastFail: function (w, e) { return 'Last delivery failed (' + w + '): ' + e; },
-      lanOn: function (r) { return 'Direct LAN link — connected to ' + r; },
-      lanTrying: function (r) { return 'Direct LAN link — on, trying ' + r; },
-      lanOff: 'Direct LAN link — off, public relay only',
       larkOn: function (m) { return 'Feishu approvals — on, cards go to ' + m; },
       larkOff: 'Feishu approvals — off',
       notifyDevOn: 'Webhook notifications — on', notifyDevOff: 'Webhook notifications — off',
@@ -213,9 +210,6 @@
       noAttempts: '还没有投递尝试。',
       lastOK: function (w) { return '最近一次投递成功（' + w + '）'; },
       lastFail: function (w, e) { return '最近一次投递失败（' + w + '）：' + e; },
-      lanOn: function (r) { return '内网直连 —— 已连上 ' + r; },
-      lanTrying: function (r) { return '内网直连 —— 已开启，正在连 ' + r; },
-      lanOff: '内网直连 —— 已关闭，仅走公网中继',
       larkOn: function (m) { return '飞书审批 —— 已开启，卡片推给 ' + m; },
       larkOff: '飞书审批 —— 已关闭',
       notifyDevOn: 'Webhook 通知 —— 已开启', notifyDevOff: 'Webhook 通知 —— 已关闭',
@@ -803,8 +797,6 @@
         });
       };
     });
-
-    paintLan(st.lan);
   }
 
   function renderIdentityChanged(d) {
@@ -894,20 +886,7 @@
   $('#logReload').onclick = loadLog;
 
   /* ── 设备设置（齿轮在哪一层就是哪一层的设置） ─────────────────────── */
-  var lanOn = false, lark = {}, devNotify = {};
-
-  function paintLan(lan) {
-    $('#dsLan').hidden = !lan;
-    if (!lan) return;
-    lanOn = !!lan.enabled;
-    $('#dsLanSw').className = 'sw' + (lanOn ? ' on' : '');
-    $('#dsLanTxt').textContent = lan.connected ? t().lanOn(lan.relay)
-      : (lan.enabled ? t().lanTrying(lan.relay) : t().lanOff);
-  }
-  $('#dsLanSw').onclick = function () {
-    if (roGuard(cur)) return;
-    jpost('/api/devices/lan', { device: cur, on: !lanOn }).then(renderConsole).catch(oops);
-  };
+  var lark = {}, devNotify = {};
 
   function health(el, h, empty) {
     if (!h) { el.className = 'note'; el.textContent = empty || t().noAttempts; return; }

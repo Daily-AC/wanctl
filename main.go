@@ -105,8 +105,6 @@ USAGE
   wanctl config                               show effective settings (relay/portal/transport) and their source
   wanctl config set key=value ...             persist settings; e.g. wanctl config set relay=https://r portal=https://p
   wanctl config unset key ...                 remove persisted settings
-  wanctl net [wan|lan|auto|status]           switch which relay the controller uses: public (wan), intranet
-                                              fast-path (lan, real-time WS), or probe-and-pick (auto)
   wanctl label ["<who you are>"]              show or set this controller's self-description; devices refuse to
                                               raise a pairing request from a controller without one
   wanctl id
@@ -208,8 +206,6 @@ func main() {
 		err = cmdRules(os.Args[2:])
 	case "logs":
 		err = cmdLogs(ctx, os.Args[2:])
-	case "net":
-		err = cmdNet(os.Args[2:])
 	case "label":
 		err = cmdLabel(os.Args[2:])
 	case "up":
@@ -466,7 +462,6 @@ func cmdAgent(ctx context.Context, args []string) error {
 	managed := fs.Bool("managed", false, "agent is owned by an external supervisor")
 	portalFPS := fs.String("portal-fps", config.PortalFingerprintsEnv(), "comma-separated portal admin fingerprints to seed locally")
 	portalPK := fs.String("portal-pk", "", "deprecated alias for one --portal-fps entry")
-	lanRelay := fs.String("lan-relay", config.LanRelay(), "intranet fast-path relay (ws://...); empty disables the second uplink")
 	fs.Parse(args)
 	portalRaw := *portalFPS
 	if *portalPK != "" {
@@ -490,7 +485,7 @@ func cmdAgent(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFPs: parsedPortalFPs, LanRelay: *lanRelay, Version: buildVersion})
+	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFPs: parsedPortalFPs, Version: buildVersion})
 	if err != nil {
 		return err
 	}
@@ -856,49 +851,6 @@ func cmdLabel(args []string) error {
 	}
 	fmt.Printf("✓ 控制端标签: %s\n", label)
 	return nil
-}
-
-func cmdNet(args []string) error {
-	sub := "status"
-	if len(args) > 0 {
-		sub = args[0]
-	}
-	switch sub {
-	case "wan", "lan", "auto":
-		if sub == "lan" && config.LanRelay() == "" {
-			return fmt.Errorf("no LAN relay configured (set WANCTL_LAN_RELAY)")
-		}
-		if err := config.SaveNetMode(sub); err != nil {
-			return err
-		}
-		fmt.Printf("network mode: %s\n", sub)
-		if sub != "wan" {
-			lanRelay := configuredDisplay(config.LanRelay(), "(not configured)")
-			if client.LanReachable(800 * time.Millisecond) {
-				fmt.Printf("intranet relay %s: reachable ✓\n", lanRelay)
-			} else if sub == "auto" {
-				fmt.Printf("intranet relay %s: NOT reachable (auto will use the public relay)\n", lanRelay)
-			} else {
-				fmt.Printf("intranet relay %s: NOT reachable — lan exec will fail\n", lanRelay)
-			}
-		}
-		return nil
-	case "status":
-		mode := config.StoredNetMode()
-		fmt.Printf("network mode:   %s\n", mode)
-		fmt.Printf("public relay:   %s\n", configuredDisplay(settingValue("relay"), "(not configured)"))
-		reach := "not reachable"
-		if client.LanReachable(800 * time.Millisecond) {
-			reach = "reachable ✓"
-		}
-		fmt.Printf("intranet relay: %s (%s)\n", configuredDisplay(config.LanRelay(), "(not configured)"), reach)
-		if os.Getenv("WANCTL_RELAY") != "" {
-			fmt.Println("note: WANCTL_RELAY is set and overrides the network mode")
-		}
-		return nil
-	default:
-		return fmt.Errorf("usage: wanctl net [wan|lan|auto|status]")
-	}
 }
 
 func cmdID() error {

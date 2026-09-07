@@ -75,41 +75,35 @@
       trusted: [
         { fp: 'SHA256:a5yGk562ILhUW/D+1nJJZB4lDht0IAe9AW6nXf/Y7x/=', name: 'studio', label: 'studio (my laptop)', last_seen: ago(60) },
         { fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(3) }
-      ],
-      lan: { enabled: true, connected: true, relay: 'lan-relay.internal:7443' }
+      ]
     },
     'DESKTOP-RQFV0SH-workstation-long': {
       mode: 'normal',
       pending: [waiting[1]],
       pending_pairings: [],
       rules: [{ kind: 'exec', pattern: 'python /srv/pipelines/nightly/ingest.py *', scope: 'dir', dir: '/srv/pipelines/nightly' }],
-      trusted: [{ fp: 'SHA256:a5yGk562ILhUW/D+1nJJZB4lDht0IAe9AW6nXf/Y7x/=', name: 'studio', label: 'studio (my laptop)', last_seen: ago(15) }],
-      lan: { enabled: false, connected: false, relay: 'lan-relay.internal:7443' }
+      trusted: [{ fp: 'SHA256:a5yGk562ILhUW/D+1nJJZB4lDht0IAe9AW6nXf/Y7x/=', name: 'studio', label: 'studio (my laptop)', last_seen: ago(15) }]
     },
     'atlas': {
       mode: 'normal', pending: [],
       pending_pairings: [waiting[2]],
-      rules: [], trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(5) }],
-      lan: { enabled: false, connected: false, relay: 'lan-relay.internal:7443' }
+      rules: [], trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(5) }]
     },
     'kestrel': {
       mode: 'bypass', pending: [], pending_pairings: [],
       rules: [{ kind: 'exec', pattern: '*', scope: 'global' }],
-      trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(2) }],
-      lan: null
+      trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(2) }]
     },
     'mill-01': {
       mode: 'normal', pending: [], pending_pairings: [], rules: [],
-      trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(7 * 3600) }],
-      lan: null
+      trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(7 * 3600) }]
     },
     'orchard': {
       mode: 'normal', pending: [], pending_pairings: [], rules: [],
-      trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(4 * 86400) }],
-      lan: null
+      trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(4 * 86400) }]
     },
     'slate': {
-      mode: 'normal', pending: [], pending_pairings: [], rules: [], trusted: [], lan: null
+      mode: 'normal', pending: [], pending_pairings: [], rules: [], trusted: []
     }
   };
 

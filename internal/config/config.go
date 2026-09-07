@@ -16,9 +16,6 @@ var (
 	DefaultRelay = ""
 	// DefaultPortal may be set at build time with -ldflags -X.
 	DefaultPortal = ""
-	// DefaultLanRelay may be set at build time with -ldflags -X. Empty disables
-	// the optional LAN fast path.
-	DefaultLanRelay = ""
 	// DefaultReleaseBase may be set at build time with -ldflags -X: the base URL
 	// under which signed release artifacts live flat (manifest.json,
 	// wanctl-<os>-<arch>, …). Official builds point it at the project's GitHub
