@@ -80,6 +80,96 @@ type Agent struct {
 	lanEnabled   bool
 	lanConnected bool
 	lanKick      chan struct{} // wakes the LAN loop when the switch flips
+
+	// Owned goroutines. Every goroutine the agent starts is registered in wg
+	// and takes its context from stopCtx, so Close can cancel them all and then
+	// wait for the last one to return. Without that join the agent has no
+	// moment where it is provably quiet: the control loop, a session handler or
+	// the webhook reporter can still be writing to <config>/logs after the
+	// caller believes the agent is finished.
+	spawnMu sync.Mutex
+	closing bool
+	wg      sync.WaitGroup
+	stopCtx context.Context
+	stop    context.CancelFunc
+}
+
+// enter registers the calling goroutine as one the agent owns. It reports false
+// if the agent is already closing, in which case the caller must return without
+// doing any work: registering then would race Close's wg.Wait.
+func (a *Agent) enter() bool {
+	a.spawnMu.Lock()
+	defer a.spawnMu.Unlock()
+	if a.closing {
+		return false
+	}
+	a.wg.Add(1)
+	return true
+}
+
+// leave releases the registration taken by enter.
+func (a *Agent) leave() { a.wg.Done() }
+
+// spawn runs fn on a goroutine the agent owns, so Close joins it.
+func (a *Agent) spawn(fn func()) {
+	if !a.enter() {
+		return
+	}
+	go func() {
+		defer a.leave()
+		fn()
+	}()
+}
+
+// shutdown is the context cancelled by Close. An Agent assembled directly by a
+// unit test (no New) has no shutdown context and never stops on its own, which
+// is the behaviour those tests already relied on.
+func (a *Agent) shutdown() context.Context {
+	if a.stopCtx == nil {
+		return context.Background()
+	}
+	return a.stopCtx
+}
+
+// runContext derives ctx so it is cancelled by the caller's context or by
+// Close, whichever comes first.
+func (a *Agent) runContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(a.shutdown(), cancel)
+	return ctx, func() { stop(); cancel() }
+}
+
+// Close shuts the agent down and waits for the goroutines it owns to return:
+// the control loop, live session handlers, the LAN uplink, the notify-policy
+// loop and any in-flight webhook report. It is idempotent, and a closed agent
+// stays closed (Run on one returns immediately).
+//
+// Production shutdown is process exit, so nothing on the daemon path has to
+// call this; what it buys is a point where the agent is provably done touching
+// its config directory. Tests need exactly that — an agent that appends to
+// <config>/logs/events.jsonl after the test's last read makes t.TempDir's
+// RemoveAll fail with "directory not empty" (#35).
+func (a *Agent) Close() {
+	a.spawnMu.Lock()
+	a.closing = true
+	a.spawnMu.Unlock()
+	if a.stop != nil {
+		a.stop()
+	}
+	a.wg.Wait()
+}
+
+// sleepCtx waits for d and reports whether it elapsed; a cancelled context ends
+// the wait early so backoffs never outlive a shutdown.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 // New constructs an Agent with loaded identity, controller allow-list, and
@@ -158,6 +248,9 @@ func New(opts Options) (*Agent, error) {
 		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(), stdin: bufio.NewReader(os.Stdin),
 		elevator: elevate.ConfigureDefault(configDirOrEmpty(), os.Getenv),
 	}
+	// Shutdown context for everything the agent starts; Close cancels it and
+	// then joins those goroutines.
+	a.stopCtx, a.stop = context.WithCancel(context.Background())
 	a.console = console.New(engine, logger, console.Info{
 		Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL,
 	})
@@ -283,9 +376,19 @@ func (a *Agent) gateFile(req policy.Request) (bool, string, string) {
 // primary one; sessions from either relay are served identically (same E2E
 // trust, same policy gate).
 func (a *Agent) Run(ctx context.Context) error {
-	go a.runNotifyPolicy(ctx)
+	// The caller starts Run, but the agent owns it: Close must join the control
+	// loop too, or the loop can still accept a session — and log it — after
+	// everything else has stopped.
+	if !a.enter() {
+		return nil
+	}
+	defer a.leave()
+	ctx, cancel := a.runContext(ctx)
+	defer cancel()
+
+	a.spawn(func() { a.runNotifyPolicy(ctx) })
 	if a.opts.LanRelay != "" {
-		go a.runLan(ctx)
+		a.spawn(func() { a.runLan(ctx) })
 	}
 	if a.opts.Transport == "http" {
 		return a.runHTTP(ctx)
@@ -308,7 +411,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	fmt.Printf("wanctl agent %q online via %s\n  fingerprint: %s\n", a.opts.Name, a.opts.RelayURL, a.id.Fingerprint)
 	if term.IsTerminal(int(os.Stdin.Fd())) {
-		go a.runConsolePrompt(ctx)
+		a.spawn(func() { a.runConsolePrompt(ctx) })
 	}
 
 	dec := json.NewDecoder(bufio.NewReader(nc))
@@ -323,7 +426,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 		}
 		if msg.Op == "open" && msg.ValidFor(a.opts.Name) {
-			go a.serveSession(ctx, msg)
+			a.spawn(func() { a.serveSession(ctx, msg) })
 		}
 	}
 }
@@ -396,6 +499,10 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 		return
 	}
 	defer conn.Close()
+	// Every read below parks until the controller says something. Cancelling the
+	// run context (SIGTERM, Close) has to reach them, or a shutdown waits on a
+	// peer that may never write again.
+	defer wsconn.CloseOnCancel(ctx, conn)()
 
 	hello, err := protocol.ReadMessage(conn)
 	if err != nil {
@@ -842,7 +949,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 			}
 			failures++
 			report("relay poll failed: %v", err)
-			time.Sleep(2 * time.Second) // backoff then re-poll
+			sleepCtx(ctx, 2*time.Second) // backoff then re-poll (the loop top handles a cancelled ctx)
 			continue
 		}
 		if resp.StatusCode == http.StatusUnauthorized {
@@ -860,7 +967,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 			resp.Body.Close()
 			failures++
 			report("relay poll returned %s", resp.Status)
-			time.Sleep(2 * time.Second)
+			sleepCtx(ctx, 2*time.Second)
 			continue
 		}
 		if failures > 0 {
@@ -871,7 +978,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 		json.NewDecoder(resp.Body).Decode(&msg)
 		resp.Body.Close()
 		if msg.ValidFor(a.opts.Name) {
-			go a.serveSessionHTTP(ctx, base, msg)
+			a.spawn(func() { a.serveSessionHTTP(ctx, base, msg) })
 		}
 	}
 }
@@ -1000,7 +1107,7 @@ func (a *Agent) runLanOnce(ctx context.Context) error {
 			return err
 		}
 		if msg.Op == "open" && msg.ValidFor(a.opts.Name) {
-			go a.serveSessionWS(ctx, a.opts.LanRelay, msg, wsconn.NoProxyClient)
+			a.spawn(func() { a.serveSessionWS(ctx, a.opts.LanRelay, msg, wsconn.NoProxyClient) })
 		}
 	}
 }
@@ -1180,7 +1287,7 @@ func (a *Agent) serveConsole(ctx context.Context, conn net.Conn) {
 	// Push approval notifications asynchronously.
 	ch, unsub := a.console.Subscribe()
 	defer unsub()
-	go pumpApprovalNotifs(ctx, ch, a.console, send)
+	a.spawn(func() { pumpApprovalNotifs(ctx, ch, a.console, send) })
 
 	// Speak the same framed protocol the controller/portal uses (the hello/OK
 	// handshake in handleSession was framed too) — NOT raw json.Encoder.

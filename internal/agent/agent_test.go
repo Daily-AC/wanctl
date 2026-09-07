@@ -53,6 +53,9 @@ func TestAgentExecOverRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Join the agent before t.TempDir removes its config dir: its session
+	// handlers append to <config>/logs after the controller's last read (#35).
+	t.Cleanup(ag.Close)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ag.Run(ctx)
@@ -111,6 +114,7 @@ func TestConsoleApproverUnblocksGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(a.Close)
 	if a.console == nil {
 		t.Fatal("expected a console service")
 	}
@@ -139,6 +143,7 @@ func TestAgentStatusReportsModeAndVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(a.Close)
 	got := a.status()
 	if got.Kind != protocol.KindStatus || got.Name != "phone" || got.ConsoleMode != "bypass" || got.Version != "v1.2.3-test" {
 		t.Fatalf("status = %+v", got)
@@ -163,6 +168,7 @@ func TestAgentRunStopsOnContextCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(ag.Close)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -190,6 +196,9 @@ func TestAutoTrustAdmissionIsLogged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Join the agent before t.TempDir removes its config dir: its session
+	// handlers append to <config>/logs after the controller's last read (#35).
+	t.Cleanup(ag.Close)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ag.Run(ctx)

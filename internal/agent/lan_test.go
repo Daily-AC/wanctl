@@ -14,6 +14,7 @@ func TestLanSetRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(a.Close)
 	st := a.console.State()
 	if st.Lan == nil || !st.Lan.Enabled || st.Lan.Connected {
 		t.Fatalf("initial lan state wrong: %+v", st.Lan)
@@ -35,6 +36,7 @@ func TestLanSetRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(b.Close)
 	if st := b.console.State(); st.Lan.Enabled {
 		t.Fatal("lan switch not persisted across restarts")
 	}
@@ -56,6 +58,7 @@ func TestLanSetRPCWithoutLanRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(a.Close)
 	if st := a.console.State(); st.Lan != nil {
 		t.Fatalf("lan state should be absent, got %+v", st.Lan)
 	}

@@ -24,6 +24,7 @@ func TestAgentWithoutModeUsesThePersistedMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(ag.Close)
 	if got := ag.engine.Mode(); got != policy.ModeBypass {
 		t.Fatalf("mode = %q, want %q — the persisted mode was overridden by a default", got, policy.ModeBypass)
 	}
@@ -40,6 +41,7 @@ func TestExplicitModeStillOverridesThePersistedOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(ag.Close)
 	if got := ag.engine.Mode(); got != policy.ModeNormal {
 		t.Fatalf("mode = %q, want %q", got, policy.ModeNormal)
 	}
@@ -53,6 +55,7 @@ func TestNoFlagAndNothingPersistedIsNormal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(ag.Close)
 	if got := ag.engine.Mode(); got != policy.ModeNormal {
 		t.Fatalf("mode = %q, want %q", got, policy.ModeNormal)
 	}
