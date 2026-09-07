@@ -552,8 +552,14 @@ func (c *Client) ExecTo(ctx context.Context, req ExecRequest, stdout, stderr io.
 	// A cancelled context (Ctrl-C at the terminal, an MCP host abandoning the
 	// call) has to reach the device, or the command runs to completion there
 	// with nobody left to read it (#37). Say so on the wire first, then drop
-	// the connection as the backstop that also works on an older agent — which
-	// ignores the cancel frame but does notice the stream closing.
+	// the connection so the device also notices if the frame never lands.
+	//
+	// Neither reaches an agent from before this fix, and nothing here can: such
+	// an agent reads the connection only between commands, so both the frame
+	// and the close are seen after the command has already finished. It then
+	// answers the frame with "unknown request" and ends the session — harmless,
+	// but the command ran to completion. Cancellation needs a device running
+	// this version.
 	stopCancel := context.AfterFunc(ctx, func() {
 		_ = protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindCancel})
 		time.AfterFunc(cancelGrace, func() { conn.Close() })
