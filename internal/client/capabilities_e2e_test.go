@@ -17,10 +17,10 @@ import (
 	"wanctl/internal/transport"
 )
 
-type grantACL string
+type grantACL struct{ id, perms string }
 
 func (p grantACL) ACLPerms(callerNS, targetNS, device string) (string, bool) {
-	return string(p), callerNS == "shared" && targetNS == "owner" && device == "home-pc"
+	return p.perms, callerNS == "shared" && targetNS == "owner" && device == p.id
 }
 
 func TestSharedSessionCapabilities(t *testing.T) {
@@ -64,7 +64,6 @@ func TestSharedSessionCapabilities(t *testing.T) {
 func startCapabilityFixture(t *testing.T, transportName, grant string) (*Client, context.Context) {
 	t.Helper()
 	r := relay.New(relay.EnvTokenStore("owner-token:owner,shared-token:shared"))
-	r.SetACL(grantACL(grant))
 	srv := httptest.NewServer(r.Handler())
 	t.Cleanup(srv.Close)
 	relayURL := srv.URL
@@ -84,6 +83,7 @@ func startCapabilityFixture(t *testing.T, transportName, grant string) (*Client,
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.SetACL(grantACL{id: ag.DeviceID(), perms: grant})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	go ag.Run(ctx)

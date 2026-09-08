@@ -93,13 +93,13 @@ func TestNormalizeDeviceAlias(t *testing.T) {
 	}
 }
 
-func TestPGStoreSetDeviceAliasConflictsAreCaseInsensitive(t *testing.T) {
+func TestPGStoreSetDeviceAliasAllowsDuplicateLabels(t *testing.T) {
 	p := newAdminTestPGStore(t)
-	if _, err := p.SetDeviceAlias("alice", "legion", "DEVBOX"); !errors.Is(err, ErrAliasShadowsDevice) {
-		t.Fatalf("device-name conflict error = %v, want alias_shadows_device", err)
+	if _, err := p.SetDeviceAlias("alice", "legion", "DEVBOX"); err != nil {
+		t.Fatalf("display name should be allowed as alias: %v", err)
 	}
-	if _, err := p.SetDeviceAlias("alice", "legion", "HOME"); !errors.Is(err, ErrAliasTaken) {
-		t.Fatalf("alias conflict error = %v, want alias_taken", err)
+	if _, err := p.SetDeviceAlias("alice", "legion", "HOME"); err != nil {
+		t.Fatalf("duplicate alias should be allowed: %v", err)
 	}
 	got, err := p.SetDeviceAlias("alice", "legion", "  work rig  ")
 	if err != nil || got != (DeviceAlias{Name: "legion", Alias: "work rig"}) {

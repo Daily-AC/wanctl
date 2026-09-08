@@ -55,6 +55,7 @@ type Options struct {
 
 // Agent is a running controlled node.
 type Agent struct {
+	deviceID     string
 	id           *transport.Identity
 	known        *transport.Store
 	portalAdmins *config.PortalAdmins
@@ -171,6 +172,10 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // terminal and/or a connected portal can both feed decisions into the same
 // queue. Headless + no portal connected means the 60 s timeout deny fires.
 func New(opts Options) (*Agent, error) {
+	deviceID, err := transport.LoadOrCreateDeviceID()
+	if err != nil {
+		return nil, err
+	}
 	id, err := transport.LoadOrCreateIdentity()
 	if err != nil {
 		return nil, err
@@ -237,7 +242,7 @@ func New(opts Options) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{
-		id: id, known: known, portalAdmins: portalAdmins, opts: opts, engine: engine, log: logger,
+		deviceID: deviceID, id: id, known: known, portalAdmins: portalAdmins, opts: opts, engine: engine, log: logger,
 		inst:     inst,
 		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(), stdin: bufio.NewReader(os.Stdin),
 		elevator: elevate.ConfigureDefault(configDirOrEmpty(), os.Getenv),
@@ -389,7 +394,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// cancellation (SIGTERM, `wanctl stop`) is never observed.
 	defer wsconn.CloseOnCancel(ctx, nc)()
 	enc := json.NewEncoder(nc)
-	if err := enc.Encode(map[string]string{"op": "register", "device": a.opts.Name, "fingerprint": a.id.Fingerprint, "inst": a.inst}); err != nil {
+	if err := enc.Encode(map[string]string{"op": "register", "device": a.DeviceID(), "device_id": a.DeviceID(), "name": a.opts.Name, "fingerprint": a.id.Fingerprint, "inst": a.inst}); err != nil {
 		return err
 	}
 	fmt.Printf("wanctl agent %q online via %s\n  fingerprint: %s\n", a.opts.Name, a.opts.RelayURL, a.id.Fingerprint)
@@ -408,7 +413,7 @@ func (a *Agent) Run(ctx context.Context) error {
 				return fmt.Errorf("control channel closed: %w", err)
 			}
 		}
-		if msg.Op == "open" && msg.ValidFor(a.opts.Name) {
+		if msg.Op == "open" && msg.ValidFor(a.DeviceID()) {
 			a.spawn(func() { a.serveSession(ctx, msg) })
 		}
 	}
@@ -488,7 +493,7 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	if hello.Kind != protocol.KindHello && hello.Kind != protocol.KindConsoleHello {
 		return
 	}
-	if !auth.ValidFor(a.opts.Name) {
+	if !auth.ValidFor(a.DeviceID()) {
 		a.refuse(conn, fp, hello.Name, "rejected:session", protocol.Message{Kind: protocol.KindReject, Reason: "invalid relay session capabilities"})
 		return
 	}
@@ -603,7 +608,7 @@ func (a *Agent) pairingURL(fp, name, label string) string {
 		return ""
 	}
 	q := url.Values{}
-	q.Set("device", a.opts.Name)
+	q.Set("device", a.DeviceID())
 	q.Set("fp", fp)
 	if name != "" {
 		q.Set("name", name)
@@ -924,7 +929,7 @@ func httpBase(relayURL string) string {
 // Called on clean shutdown; uses a fresh short-timeout client since the run ctx
 // is already cancelled.
 func (a *Agent) deregisterHTTP(base string) {
-	qv := url.Values{"device": {a.opts.Name}}
+	qv := url.Values{"device": {a.DeviceID()}}
 	if a.inst != "" {
 		qv.Set("inst", a.inst)
 	}
@@ -944,7 +949,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 	base := httpBase(a.opts.RelayURL)
 	fmt.Printf("wanctl agent %q online via %s (http transport)\n  fingerprint: %s\n", a.opts.Name, base, a.id.Fingerprint)
 	hc := &http.Client{Timeout: 35 * time.Second}
-	q := url.Values{"device": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}}.Encode()
+	q := url.Values{"device": {a.DeviceID()}, "device_id": {a.DeviceID()}, "name": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}}.Encode()
 	pollURL := base + "/h/poll?" + q
 	// Registration lives or dies by this loop: the relay keeps a device listed
 	// only while its polls keep arriving. Until 2026-08-07 every failure here
@@ -1011,7 +1016,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 		var msg sessionauth.Open
 		json.NewDecoder(resp.Body).Decode(&msg)
 		resp.Body.Close()
-		if msg.ValidFor(a.opts.Name) {
+		if msg.ValidFor(a.DeviceID()) {
 			a.spawn(func() { a.serveSessionHTTP(ctx, base, msg) })
 		}
 	}
@@ -1246,4 +1251,13 @@ func (a *Agent) runConsolePrompt(ctx context.Context) {
 func isPowerShell(shell string) bool {
 	s := strings.ToLower(shell)
 	return strings.Contains(s, "powershell") || strings.Contains(s, "pwsh")
+}
+
+// DeviceID is the persistent routing identity. The fallback is only for embedded
+// agents constructed without New (including legacy protocol tests).
+func (a *Agent) DeviceID() string {
+	if a.deviceID != "" {
+		return a.deviceID
+	}
+	return a.opts.Name
 }

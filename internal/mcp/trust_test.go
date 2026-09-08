@@ -2,9 +2,11 @@ package mcp
 
 import (
 	"context"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"wanctl/internal/relay"
 	"wanctl/internal/transport"
 
 	mcpapi "github.com/mark3labs/mcp-go/mcp"
@@ -14,7 +16,9 @@ func TestMCPTrustServerPinsExactTarget(t *testing.T) {
 	t.Setenv("WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER", "1")
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	t.Setenv("WANCTL_TOKEN", "tok")
-	t.Setenv("WANCTL_RELAY", "http://relay.invalid")
+	srv := httptest.NewServer(relay.New(relay.EnvTokenStore("tok:alice")).Handler())
+	defer srv.Close()
+	t.Setenv("WANCTL_RELAY", srv.URL)
 	sessions = &sessionStore{stdio: &localFsSession{}}
 	fp := transport.Fingerprint([]byte("verified device cert"))
 	req := mcpapi.CallToolRequest{Params: mcpapi.CallToolParams{Arguments: map[string]any{

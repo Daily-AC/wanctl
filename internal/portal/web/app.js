@@ -431,7 +431,7 @@
       $('#formF').innerHTML = fields.map(function (f) {
         var input = f.options
           ? '<select data-k="' + f.key + '">' + f.options.map(function (o) {
-              return '<option value="' + esc(o) + '">' + esc(o) + '</option>';
+              return '<option value="' + esc(typeof o === 'string' ? o : o.value) + '">' + esc(typeof o === 'string' ? o : o.label) + '</option>';
             }).join('') + '</select>'
           : '<input data-k="' + f.key + '" type="' + (f.type || 'text') + '" placeholder="' + esc(f.hint || '') + '"' + (f.min != null ? ' min="' + f.min + '"' : '') + '>';
         return '<div class="field"><label>' + esc(f.label) + '</label>' + input + '</div>';
@@ -561,8 +561,13 @@
   /* 一台设备在门户里只有一种叫法：别名当显示名，机器自己报的那个名字跟在旁边。
      设备卡、设备页标题、聚合待审批、设备待审批四处都从这里取 —— 各写各的就会各漂各的。 */
   function devName(name) {
-    var a = aliasOf(name);
-    return { label: a || name, real: a ? name : '' };
+    var a = aliasOf(name), row = devRow(name);
+    var label = (row && row.display_name) || name;
+    var shown = a || label;
+    var duplicate = devices.filter(function (x) { return (x.alias || x.display_name || x.name) === shown; }).length > 1;
+    var detail = a ? label : '';
+    if (duplicate && row && row.device_id) detail = (detail ? detail + ' · ' : '') + row.device_id.slice(0, 8);
+    return { label: shown, real: detail };
   }
   function realHTML(d) { return d.real ? '<span class="real">' + esc(d.real) + '</span>' : ''; }
 
@@ -1323,7 +1328,7 @@
     jget('/api/acl').then(function (d) {
       var xs = d.acl || [];
       $('#acl').innerHTML = xs.length ? xs.map(function (a) {
-        return '<tr><td>' + esc(a.device) + '</td><td>' + esc(a.grantee) + '</td>' +
+        return '<tr><td>' + esc(devName(a.device).label) + realHTML(devName(a.device)) + '</td><td>' + esc(a.grantee) + '</td>' +
           '<td class="mono">' + esc(a.perms) + '</td>' +
           '<td><button class="act danger" data-i="' + a.id + '">' + esc(t().revoke) + '</button></td></tr>';
       }).join('') : '<tr><td colspan="4" class="tempty">' + esc(t().noACL) + '</td></tr>';
@@ -1341,7 +1346,7 @@
       jget('/api/namespaces').catch(function () { return {}; })
     ]).then(function (r) {
       var own = (r[0].devices || []).filter(function (x) { return x.shared !== true; })
-        .map(function (x) { return x.name; }).filter(Boolean);
+        .map(function (x) { var label = x.alias || x.display_name || x.name; return { value: x.name, label: label + (x.device_id ? ' · ' + x.device_id.slice(0, 8) : '') }; });
       var nss = (r[1].namespaces || []).filter(function (n) { return n && n !== (me && me.namespace); });
       return formBox(t().shareDevice, t().share, [
         { key: 'device', label: t().shareDevice, options: own },
@@ -1522,7 +1527,7 @@
   function showPair(p) {
     $('#pairM').textContent = t().pairMsg;
     $('#pairKV').innerHTML =
-      '<dt>' + esc(t().kDevice) + '</dt><dd>' + esc(p.device) + '</dd>' +
+      '<dt>' + esc(t().kDevice) + '</dt><dd>' + esc(devName(p.device).label) + realHTML(devName(p.device)) + '</dd>' +
       '<dt>' + esc(t().kController) + '</dt><dd>' + esc(p.label || p.name || '—') + '</dd>' +
       '<dt>' + esc(t().kFP) + '</dt><dd>' + esc(p.fp) + '</dd>';
     $('#pair').classList.add('show');
