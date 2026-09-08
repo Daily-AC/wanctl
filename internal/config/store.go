@@ -98,6 +98,7 @@ var settingFiles = map[string]string{
 	"portal":       "portal",
 	"transport":    "transport",
 	"release_base": "release-base",
+	"auto_update":  "auto-update",
 }
 
 // KnownSetting reports whether key is a persistable endpoint setting.

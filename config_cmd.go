@@ -35,18 +35,19 @@ func cmdConfig(args []string) error {
 }
 
 const configHelp = `wanctl config                      查看生效配置与来源
-wanctl config set key=value ...    持久化设置 (relay / portal / transport / release_base)
+wanctl config set key=value ...    持久化设置 (relay / portal / transport / release_base / auto_update)
 wanctl config unset key ...        删除持久化设置
 
 例:
   wanctl config set relay=https://relay.example.com portal=https://portal.example.com
   wanctl config set transport=ws
   wanctl config set release_base=https://your-relay.example.com/dl
+  wanctl config set auto_update=off
   wanctl config unset transport
 
 优先级: 命令行 flag > 环境变量 > 这里的配置 > 编译期默认值。`
 
-var configKeys = []string{"relay", "portal", "transport", "release_base"}
+var configKeys = []string{"relay", "portal", "transport", "release_base", "auto_update"}
 
 type kv struct{ k, v string }
 
@@ -149,6 +150,14 @@ func validateSetting(key, value string) error {
 			return fmt.Errorf("transport: want ws or http, got %q", value)
 		}
 		return nil
+	case "auto_update":
+		// Whether a running agent replaces its own binary with a newer signed
+		// release. Two words only: a third state would be an interval or a
+		// channel, and this feature deliberately has neither.
+		if value != "on" && value != "off" {
+			return fmt.Errorf("auto_update: want on or off, got %q", value)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown setting %q (known: %s)", key, strings.Join(configKeys, ", "))
 	}
@@ -160,6 +169,7 @@ func warnEnvShadow(pending []kv) {
 	envKey := map[string]string{
 		"relay": "WANCTL_RELAY", "portal": "WANCTL_PORTAL",
 		"transport": "WANCTL_TRANSPORT", "release_base": "WANCTL_RELEASE_BASE",
+		"auto_update": "WANCTL_AUTO_UPDATE",
 	}
 	for _, p := range pending {
 		if ev := os.Getenv(envKey[p.k]); ev != "" && ev != p.v {
