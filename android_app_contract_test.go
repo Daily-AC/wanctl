@@ -48,7 +48,7 @@ func TestAgentErrorsTheAppKeysOn(t *testing.T) {
 // appear in this package, where a `grep` from either side lands on the contract
 // and on the test that pins it. See internal/agent/agent.go for where they are
 // produced.
-const agentFatalMarkers = "--token | rejected token | registered this device name"
+const agentFatalMarkers = "--token | rejected token | registered this device name | initialize device ID:"
 
 // androidAppSources are the files scripts/build-apk.sh compiles. Listed rather
 // than globbed, because a glob over a directory that is not there matches
