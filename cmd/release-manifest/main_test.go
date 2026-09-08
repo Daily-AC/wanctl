@@ -12,7 +12,32 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	wanrelease "wanctl/internal/release"
 )
+
+func TestCreateIncludesBrowserArchive(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"wanctl-linux-amd64", "wanctl-linux-amd64.tar.gz"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := create("v1.2.3", dir); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, wanrelease.ManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := wanrelease.ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Artifacts) != 2 || manifest.Artifacts[1].Arch != "amd64.tar.gz" {
+		t.Fatalf("artifacts = %#v", manifest.Artifacts)
+	}
+}
 
 func testKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -107,6 +108,12 @@ func TestSignedDistribution(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET %s: status %d", path, resp.StatusCode)
+		}
+		if path == "/dl/wanctl-linux-amd64" {
+			mediaType, params, err := mime.ParseMediaType(resp.Header.Get("Content-Disposition"))
+			if err != nil || mediaType != "attachment" || params["filename"] != "wanctl-linux-amd64" {
+				t.Errorf("GET %s: Content-Disposition = %q", path, resp.Header.Get("Content-Disposition"))
+			}
 		}
 	}
 	resp, err := srv.Client().Get(srv.URL + "/dl/unsigned")

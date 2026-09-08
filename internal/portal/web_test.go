@@ -67,6 +67,28 @@ func TestIndexAsksForVersionedAssets(t *testing.T) {
 	}
 }
 
+func TestDownloadTableUsesFilesWithExtensions(t *testing.T) {
+	js := readWeb(t, "web/app.js")
+	start := strings.Index(js, "var NAMES = [")
+	if start < 0 {
+		t.Fatal("download table asset list not found")
+	}
+	end := strings.Index(js[start:], "];\n        var apk")
+	if end < 0 {
+		t.Fatal("download table asset list not found")
+	}
+	list := js[start : start+end]
+	names := regexp.MustCompile(`\['(wanctl-[^']+)'`).FindAllStringSubmatch(list, -1)
+	if len(names) == 0 {
+		t.Fatal("download table has no assets")
+	}
+	for _, match := range names {
+		if !strings.HasSuffix(match[1], ".tar.gz") && !strings.HasSuffix(match[1], ".exe") {
+			t.Errorf("download table links extensionless artifact %q", match[1])
+		}
+	}
+}
+
 // auth.js runs on three separate pages and each carries only part of what it
 // touches, so the rule is different from the SPA's: an id must exist on at
 // least one page, and the ids it reaches for unconditionally must exist on all

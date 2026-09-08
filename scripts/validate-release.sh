@@ -24,7 +24,12 @@ DIST=$(CDPATH= cd -- "$DIST" && pwd)
 . "$ROOT/scripts/release-targets.sh"
 EXPECTED=$({
   printf '%s\n' install.ps1 install.sh manifest.json manifest.json.rsa.sig manifest.json.sig release-public-rsa.pem release-public.pem
-  wanctl_targets | while read -r os arch; do wanctl_artifact_name "$os" "$arch"; done
+  wanctl_targets | while read -r os arch; do
+    raw=$(wanctl_artifact_name "$os" "$arch")
+    download=$(wanctl_download_name "$os" "$arch")
+    printf '%s\n' "$raw"
+    [ "$raw" = "$download" ] || printf '%s\n' "$download"
+  done
   wanctl_apk_arches | while read -r arch; do echo "wanctl-android-$arch.apk"; done
 } | LC_ALL=C sort)
 ACTUAL=$(find "$DIST" -mindepth 1 -maxdepth 1 -exec basename {} \; | LC_ALL=C sort)
