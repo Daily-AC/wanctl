@@ -214,6 +214,16 @@ This mirror is optional: official binaries and installers default to the
 project's GitHub release page for both install and `wanctl update`, so most
 deployments never need to serve /dl at all.
 
+Devices do not wait to be told. A running `wanctl agent` checks the same signed
+manifest a minute after it starts and every six hours after that, and installs a
+newer release itself — verifying the signature, then restarting in place while
+keeping its pid. It skips the check while a session or job is running, and a
+binary in a directory it cannot write logs that `sudo wanctl update` is needed
+rather than attempting to elevate. `wanctl config set auto_update=off` on a
+device opts it out. When the release page is unreachable but the relay's mirror
+is configured, the automatic check falls back to the mirror exactly as
+`wanctl update` does.
+
 ## Troubleshooting
 
 **GitHub reports a callback URL error.** The OAuth App callback must exactly
