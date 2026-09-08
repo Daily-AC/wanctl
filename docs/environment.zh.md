@@ -43,6 +43,7 @@
 |---|---|---:|---|---|
 | `WANCTL_PORTAL` | agent、控制端 | 视情况 | 持久化配置，其次构建时默认值 | 登录/接入和配对链接所用的门户 URL。用 `wanctl config set portal=…` 持久化。 |
 | `WANCTL_RELEASE_BASE` | agent、控制端、安装器 | 否 | `wanctl config set release_base=…`，其次构建时默认值 | 签名过的发布产物平铺存放的基址（官方构建烤进的是项目的 GitHub releases）。`wanctl update` 和安装器都从这里拉；为空则退回 relay 的 `/dl` 镜像。二进制运行的地方够不到那个烤进去的发布页时，用 `wanctl config set release_base=https://relay.example.com/dl` 把它持久化。 |
+| `WANCTL_AUTO_UPDATE` | agent | 否 | `on` | 设成 `off`，正在跑的 agent 就不再把自己的二进制换成更新的签名发布。每次检查都会重读，所以不用重启就生效；用 `wanctl config set auto_update=off` 持久化。开发构建、安卓 APK 里的那份、以及所在目录 agent 写不了的二进制，无论如何都不会被替换。 |
 | `WANCTL_DIST_BASE` | 安装器 | 否 | 无 | 仅安装器可用的产物来源覆盖项；优先级高于 `WANCTL_RELAY` 和烤进去的发布基址。 |
 | `WANCTL_TOKEN` | agent、控制端、MCP | 视情况 | 已保存的令牌，或无 | 命名空间 bearer 令牌。覆盖配置目录里存着的那个。 |
 | `WANCTL_NO_PROMPT` | agent、控制端 | 否 | 未设置 | 设成 `1` 拒绝一切交互提问，包括首次运行时那个「用哪个中继」。命令不再提问，改为打印 `wanctl config set` 指令后退出。 |
