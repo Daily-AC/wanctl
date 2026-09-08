@@ -202,6 +202,7 @@
     if (scene === 'noask' && p === '/api/pending') return { items: [] };
     if (scene === 'noask' && p === '/api/access-requests') return { requests: [] };
     if (p === '/api/access-requests/decide') return {};
+    if (p === '/api/devices/console') { var st = consoles[new URLSearchParams(url.split('?')[1]).get('device')]; if (st) { var android = new URLSearchParams(url.split('?')[1]).get('device') === 'bench-02'; st.info = {platform:android?'android':'linux', adb_pair:android}; } }
     if (p === '/api/devices/console') return consoles[new URLSearchParams(url.split('?')[1]).get('device')] || { mode: 'normal', pending: [], pending_pairings: [], rules: [], trusted: [] };
     if (p === '/api/devices/logs') return { logs: logs.slice().reverse() };
     if (p === '/api/devices/lark') return { approval_enabled: true, pairing_from_card: false, notify_email: 'you@example.com', delivery_health: { result: 'success', attempted_at: ago(300) } };
@@ -209,6 +210,7 @@
     if (p === '/api/users/lookup') return {};
     // POST-only endpoints still need an entry here: match() returning undefined
     // is what produces the preview's 404, before the write branch is reached.
+    if (p === '/api/devices/remove' || p === '/api/devices/adb-pair') return {};
     if (p === '/api/devices/alias') return {};
     if (p === '/api/devices/mode') return {};
     return db[p];
@@ -240,6 +242,11 @@
       // 写操作一律成功。工装不模拟状态机 —— 它是给眼睛看的，
       // 真正的裁决路径由 go test 覆盖。
       var out = { ok: true };
+      if (url.indexOf('/api/devices/remove') === 0) {
+        var removed = JSON.parse(opts.body).device;
+        for (var i = devices.length - 1; i >= 0; i--) if (devices[i].name === removed) devices.splice(i, 1);
+      }
+      if (url.indexOf('/api/devices/adb-pair') === 0) out = { paired: true };
       if (url.indexOf('/api/devices/alias') === 0) {
         var want = JSON.parse((opts && opts.body) || '{}');
         var row = devices.filter(function (x) { return x.name === want.device; })[0];

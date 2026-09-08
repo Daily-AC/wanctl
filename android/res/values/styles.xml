@@ -2,7 +2,17 @@
 <resources>
   <!-- DayNight exists from API 29, which is this app's minSdk, so there is no
        separate light-only fallback to keep in sync. -->
-  <style name="AppTheme" parent="@android:style/Theme.DeviceDefault.DayNight" />
+  <style name="AppTheme" parent="@android:style/Theme.Material.Light">
+    <item name="android:fontFamily">sans</item>
+    <item name="android:colorPrimary">#FAFAFC</item>
+    <item name="android:colorAccent">#0066CC</item>
+    <item name="android:windowLightStatusBar">true</item>
+    <item name="android:windowLightNavigationBar">true</item>
+    <item name="android:statusBarColor">#FAFAFC</item>
+    <item name="android:navigationBarColor">#FAFAFC</item>
+    <item name="android:windowBackground">#FAFAFC</item>
+    <item name="android:windowActionModeOverlay">true</item>
+  </style>
 
   <color name="brand">#FF2E7D6F</color>
   <color name="ok">#FF2E7D32</color>

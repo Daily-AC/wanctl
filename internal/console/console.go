@@ -17,6 +17,8 @@ import (
 
 // Info is static device identity shown in the console.
 type Info struct {
+	Platform    string `json:"platform,omitempty"`
+	ADBPair     bool   `json:"adb_pair,omitempty"`
 	Device      string `json:"device"`
 	Fingerprint string `json:"fingerprint"`
 	Relay       string `json:"relay"`

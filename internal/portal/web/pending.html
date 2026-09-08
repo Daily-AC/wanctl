@@ -34,7 +34,7 @@
       data-zh="。这个实例是邀请制的。">. This instance is invite-only.</span>
   </p>
 
-  <form id="redeem">
+  <form id="redeem" data-next="{{.Next}}">
     <input id="code" class="mono" placeholder="winv_…" autocomplete="off" spellcheck="false"
            data-lbl-en="Invite code" data-lbl-zh="邀请码" aria-label="Invite code">
     <button class="btn go" type="submit" data-en="Redeem" data-zh="兑换">Redeem</button>

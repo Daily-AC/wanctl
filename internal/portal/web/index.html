@@ -383,6 +383,20 @@
         </div>
       </div>
 
+      <div class="card" id="dsAdb" hidden>
+        <h2 data-en="ADB pairing" data-zh="ADB 配对">ADB pairing</h2>
+        <p class="note" data-en="On the phone, connect to Wi-Fi and open Developer options → Wireless debugging → Pair device with pairing code. Keep that dialog open and enter its port and six-digit code here."
+           data-zh="手机连接 Wi-Fi 后，打开「开发者选项 → 无线调试 → 使用配对码配对设备」。保持弹窗打开，在这里填写弹窗中的端口和六位配对码。"></p>
+        <form id="dsAdbForm" class="adb-pair-form">
+          <label><span data-en="Pairing port" data-zh="配对端口"></span><input id="dsAdbPort" type="text" inputmode="numeric" pattern="[0-9]{1,5}" maxlength="5" required autocomplete="off" placeholder="37129"></label>
+          <label><span data-en="Pairing code" data-zh="六位配对码"></span><input id="dsAdbCode" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="off"></label>
+          <button class="btn" id="dsAdbSubmit" type="submit" data-en="Pair" data-zh="配对"></button>
+        </form>
+        <p class="note" data-en="Use the port in the pairing dialog, not the connection port on the Wireless debugging page."
+           data-zh="注意使用配对弹窗的端口，不是无线调试首页的连接端口。"></p>
+        <p class="note" id="dsAdbResult" role="status" aria-live="polite"></p>
+      </div>
+
       <div class="card" id="dsLark" hidden>
         <div class="row">
           <span class="txt" id="dsLarkTxt"></span>
