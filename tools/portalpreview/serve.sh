@@ -10,7 +10,7 @@ set -e
 PORT=${1:-8724}
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SRC="$ROOT/internal/portal/web"
-OUT="${TMPDIR:-/tmp}/wanctl-portal-preview"
+OUT="${WANCTL_PREVIEW_OUT:-${TMPDIR:-/tmp}/wanctl-portal-preview}"
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -32,33 +32,7 @@ sed -e 's/__V__/dev/g' \
 #   指纹    SHA256: 加 44 个 base64 字符（internal/transport/identity.go）
 #   有效期  5 分钟（enrollCodeTTL），不是随手写的 10
 #   申请状态 none / pending / approved / declined（internal/portal/auth.go）
-render_page() {   # render_page <模板名> <输出名> <申请状态> <还剩几天>
-  sed -e 's/{{\.V}}/dev/g' \
-      -e 's#{{\.Host}}#wanctl.example.dev#g' \
-      -e 's#{{\.Start}}#/auth/github?next=%2F#g' \
-      -e 's/{{\.Login}}/octocat/g' \
-      -e 's/{{\.NS}}/octocat/g' \
-      -e 's/{{\.Code}}/K7RM-2QXP/g' \
-      -e 's/{{\.Mins}}/5/g' \
-      -e "s/{{\\.Req}}/$3/g" \
-      -e "s/{{\\.RetryDays}}/$4/g" \
-      -e 's/{{\.NoteMax}}/200/g' \
-      -e 's#{{\.FP}}#SHA256:tQ8mv3ZKcR1yXpN0jbLdE7aWfHuGiO4sPzC2rYkVnBw=#g' \
-      "$SRC/$1.html" > "$OUT/$2.html"
-  if grep -q '{{' "$OUT/$2.html"; then
-    echo "$2.html 里还有没填的占位符，补一条 sed" >&2
-    exit 1
-  fi
-}
-
-render_page login  login  none 0
-render_page enroll enroll none 0
-# 等待邀请页有四种样子，服务端发的是同一份模板加一个 data-req。
-# 四份文件都是那份模板，只是那个值不同 —— 工装不自己画状态。
-render_page pending pending          none     0
-render_page pending pending-sent     pending  0
-render_page pending pending-approved approved 0
-render_page pending pending-declined declined 6
+go run "$ROOT/tools/portalpreview/render.go" "$SRC" "$OUT"
 
 # app.css / app.js / fonts 在页面里是 /assets/... 的绝对路径。
 # 这里用软链而不是拷贝：改一行 CSS 就要重启服务才看得见，那个来回不值当。

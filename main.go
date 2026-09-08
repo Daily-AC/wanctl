@@ -407,10 +407,15 @@ func cmdPortal(args []string) error {
 			return fmt.Errorf("WANCTL_SESSION_SECRET must be at least 32 bytes when OAuth login is enabled (have %d)", len(sessionSecret))
 		}
 	}
+	githubTransport, err := portal.GitHubProxyTransport(os.Getenv("WANCTL_GITHUB_PROXY"))
+	if err != nil {
+		return err
+	}
 	p := portal.New(portal.Config{
-		RelayAdminURL: os.Getenv("RELAY_ADMIN_URL"),
-		AdminSecret:   os.Getenv("WANCTL_ADMIN_SECRET"),
-		UserHeader:    os.Getenv("PORTAL_USER_HEADER"),
+		GitHubTransport: githubTransport,
+		RelayAdminURL:   os.Getenv("RELAY_ADMIN_URL"),
+		AdminSecret:     os.Getenv("WANCTL_ADMIN_SECRET"),
+		UserHeader:      os.Getenv("PORTAL_USER_HEADER"),
 
 		GitHubClientID:     ghClientID,
 		GitHubClientSecret: os.Getenv("WANCTL_GITHUB_CLIENT_SECRET"),

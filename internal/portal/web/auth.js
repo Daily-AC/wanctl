@@ -91,7 +91,7 @@
       if (!v) { say('Paste an invite code first.', '请先粘贴邀请码。'); return; }
       btn.disabled = true;
       post('/auth/redeem', { code: v }).then(function (r) {
-        if (r.ok) { location.href = '/'; return; }
+        if (r.ok) { location.href = form.dataset.next || '/'; return; }
         return r.text().then(function (t) {
           btn.disabled = false;
           // 403 就是「这个码不行」，说人话；其余状态原样透出服务端的说明 ——

@@ -75,6 +75,10 @@ func (d *deviceConn) readLoop() {
 }
 
 func (d *deviceConn) rpc(req protocol.Message) (protocol.Message, error) {
+	return d.rpcWithin(req, rpcTimeout)
+}
+
+func (d *deviceConn) rpcWithin(req protocol.Message, timeout time.Duration) (protocol.Message, error) {
 	d.rpcMu.Lock()
 	defer d.rpcMu.Unlock()
 	d.wmu.Lock()
@@ -97,12 +101,12 @@ func (d *deviceConn) rpc(req protocol.Message) (protocol.Message, error) {
 		return m, nil
 	case <-d.closed:
 		return protocol.Message{}, fmt.Errorf("device connection closed")
-	case <-time.After(rpcTimeout):
+	case <-time.After(timeout):
 		// Half-open relayed conn: the agent vanished but our leg to the relay
 		// stayed up, so readLoop never errored. Tear it down so the pool evicts
 		// this conn and the next request re-dials.
 		d.close()
-		return protocol.Message{}, fmt.Errorf("device did not respond within %s (re-dialing)", rpcTimeout)
+		return protocol.Message{}, fmt.Errorf("device did not respond within %s (re-dialing)", timeout)
 	}
 }
 
@@ -240,4 +244,16 @@ func (d *deviceConn) close() {
 		}
 		d.notifMu.Unlock()
 	})
+}
+
+// Pairing has its own 30-second device deadline. Leave room for relayed delivery.
+func (d *deviceConn) pairADB(port int, code string) error {
+	reply, err := d.rpcWithin(protocol.Message{Kind: protocol.KindADBPair, PairPort: port, PairCode: code}, 40*time.Second)
+	if err != nil {
+		return err
+	}
+	if reply.Kind != protocol.KindADBPair {
+		return fmt.Errorf("device does not support ADB pairing; update its Android app")
+	}
+	return nil
 }

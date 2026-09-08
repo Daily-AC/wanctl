@@ -26,19 +26,17 @@ import java.util.concurrent.Executors;
 /**
  * In-app update.
  *
- * <p>An APK cannot update itself the way `wanctl update` updates a binary: the
- * only directory this app may execute from is the one the package manager owns,
- * and it is read-only. So the unit of update is the APK, and the installer is
- * the system's.
+ * <p>An APK cannot update itself the way `wanctl update` updates a binary: the only directory this
+ * app may execute from is the one the package manager owns, and it is read-only. So the unit of
+ * update is the APK, and the installer is the system's.
  *
- * <p>The download and its signature check are done by the wanctl binary, not
- * here. It already fetches the release manifest, verifies the Ed25519 signature
- * against the public key compiled into it, and checks the artifact's SHA-256 —
- * reimplementing any of that in Java would add a second, weaker path to the
- * same trust decision. Java's job is to hand the verified file to
- * PackageInstaller. The APK's own signing key is then checked by Android on top
- * of that: an APK signed by anything other than the installed app's key is
- * refused, whatever the release manifest says.
+ * <p>The download and its signature check are done by the wanctl binary, not here. It already
+ * fetches the release manifest, verifies the Ed25519 signature against the public key compiled into
+ * it, and checks the artifact's SHA-256 — reimplementing any of that in Java would add a second,
+ * weaker path to the same trust decision. Java's job is to hand the verified file to
+ * PackageInstaller. The APK's own signing key is then checked by Android on top of that: an APK
+ * signed by anything other than the installed app's key is refused, whatever the release manifest
+ * says.
  */
 final class Installer {
     private static final String ACTION_STATUS = "dev.wanctl.agent.INSTALL_STATUS";
@@ -65,28 +63,44 @@ final class Installer {
     }
 
     void checkAndInstall() {
+        if (!BuildInfo.UPDATES_SUPPORTED) {
+            new AlertDialog.Builder(activity)
+                    .setTitle("预览版更新")
+                    .setMessage("当前是预览版，暂不支持应用内更新。请安装新的 wanctl Preview 安装包；同一预览渠道的更新会保留现有配置。")
+                    .setPositiveButton("知道了", null)
+                    .show();
+            return;
+        }
         Toast.makeText(activity, R.string.update_checking, Toast.LENGTH_SHORT).show();
         File dir = new File(activity.getCacheDir(), "update");
         //noinspection ResultOfMethodCallIgnored
         dir.mkdirs();
         clear(dir);
-        io.execute(() -> {
-            // Generous: the relay verifies the artifact's hash before serving it,
-            // and a phone on mobile data is not fast.
-            Wanctl.Result r = Wanctl.run(activity, 300, "update", "--fetch-apk", dir.getAbsolutePath());
-            main.post(() -> {
-                if (!r.ok()) {
-                    fail(activity.getString(R.string.update_failed), r.message());
-                    return;
-                }
-                String path = r.out.trim();
-                if (path.isEmpty()) {
-                    Toast.makeText(activity, R.string.update_latest, Toast.LENGTH_LONG).show();
-                    return;
-                }
-                install(new File(path));
-            });
-        });
+        io.execute(
+                () -> {
+                    // Generous: the relay verifies the artifact's hash before serving it,
+                    // and a phone on mobile data is not fast.
+                    Wanctl.Result r =
+                            Wanctl.run(
+                                    activity, 300, "update", "--fetch-apk", dir.getAbsolutePath());
+                    main.post(
+                            () -> {
+                                if (!r.ok()) {
+                                    fail(activity.getString(R.string.update_failed), r.message());
+                                    return;
+                                }
+                                String path = r.out.trim();
+                                if (path.isEmpty()) {
+                                    Toast.makeText(
+                                                    activity,
+                                                    R.string.update_latest,
+                                                    Toast.LENGTH_LONG)
+                                            .show();
+                                    return;
+                                }
+                                install(new File(path));
+                            });
+                });
     }
 
     private void install(File apk) {
@@ -95,73 +109,98 @@ final class Installer {
                     .setTitle(R.string.btn_update)
                     .setMessage("系统需要先允许 wanctl 安装应用，去设置里打开「安装未知应用」后再点一次检查更新。")
                     .setNegativeButton(R.string.cancel, null)
-                    .setPositiveButton(android.R.string.ok, (d, w) -> activity.startActivity(
-                            new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                    Uri.parse("package:" + activity.getPackageName()))))
+                    .setPositiveButton(
+                            android.R.string.ok,
+                            (d, w) ->
+                                    activity.startActivity(
+                                            new Intent(
+                                                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                                    Uri.parse(
+                                                            "package:"
+                                                                    + activity.getPackageName()))))
                     .show();
             return;
         }
         registerReceiver();
-        io.execute(() -> {
-            PackageInstaller pi = activity.getPackageManager().getPackageInstaller();
-            try {
-                PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
-                        PackageInstaller.SessionParams.MODE_FULL_INSTALL);
-                params.setAppPackageName(activity.getPackageName());
-                int sessionId = pi.createSession(params);
-                try (PackageInstaller.Session session = pi.openSession(sessionId)) {
-                    try (InputStream in = new FileInputStream(apk);
-                         OutputStream out = session.openWrite("wanctl", 0, apk.length())) {
-                        byte[] buf = new byte[64 * 1024];
-                        int n;
-                        while ((n = in.read(buf)) > 0) {
-                            out.write(buf, 0, n);
+        io.execute(
+                () -> {
+                    PackageInstaller pi = activity.getPackageManager().getPackageInstaller();
+                    try {
+                        PackageInstaller.SessionParams params =
+                                new PackageInstaller.SessionParams(
+                                        PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+                        params.setAppPackageName(activity.getPackageName());
+                        int sessionId = pi.createSession(params);
+                        try (PackageInstaller.Session session = pi.openSession(sessionId)) {
+                            try (InputStream in = new FileInputStream(apk);
+                                    OutputStream out =
+                                            session.openWrite("wanctl", 0, apk.length())) {
+                                byte[] buf = new byte[64 * 1024];
+                                int n;
+                                while ((n = in.read(buf)) > 0) {
+                                    out.write(buf, 0, n);
+                                }
+                                session.fsync(out);
+                            }
+                            int flags =
+                                    Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0;
+                            PendingIntent sender =
+                                    PendingIntent.getBroadcast(
+                                            activity,
+                                            sessionId,
+                                            new Intent(ACTION_STATUS)
+                                                    .setPackage(activity.getPackageName()),
+                                            flags);
+                            session.commit(sender.getIntentSender());
                         }
-                        session.fsync(out);
+                    } catch (IOException e) {
+                        main.post(
+                                () ->
+                                        fail(
+                                                activity.getString(R.string.update_failed),
+                                                String.valueOf(e.getMessage())));
                     }
-                    int flags = Build.VERSION.SDK_INT >= 31
-                            ? PendingIntent.FLAG_MUTABLE : 0;
-                    PendingIntent sender = PendingIntent.getBroadcast(activity, sessionId,
-                            new Intent(ACTION_STATUS).setPackage(activity.getPackageName()), flags);
-                    session.commit(sender.getIntentSender());
-                }
-            } catch (IOException e) {
-                main.post(() -> fail(activity.getString(R.string.update_failed), String.valueOf(e.getMessage())));
-            }
-        });
+                });
     }
 
     private void registerReceiver() {
         if (receiver != null) {
             return;
         }
-        receiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                int st = intent.getIntExtra(PackageInstaller.EXTRA_STATUS,
-                        PackageInstaller.STATUS_FAILURE);
-                if (st == PackageInstaller.STATUS_PENDING_USER_ACTION) {
-                    // The system's own confirm-install screen. Nothing installs
-                    // without the user seeing this.
-                    Intent confirm = Build.VERSION.SDK_INT >= 33
-                            ? intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class)
-                            : intent.getParcelableExtra(Intent.EXTRA_INTENT);
-                    if (confirm != null) {
-                        confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        activity.startActivity(confirm);
+        receiver =
+                new BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context context, Intent intent) {
+                        int st =
+                                intent.getIntExtra(
+                                        PackageInstaller.EXTRA_STATUS,
+                                        PackageInstaller.STATUS_FAILURE);
+                        if (st == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                            // The system's own confirm-install screen. Nothing installs
+                            // without the user seeing this.
+                            Intent confirm =
+                                    Build.VERSION.SDK_INT >= 33
+                                            ? intent.getParcelableExtra(
+                                                    Intent.EXTRA_INTENT, Intent.class)
+                                            : intent.getParcelableExtra(Intent.EXTRA_INTENT);
+                            if (confirm != null) {
+                                confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                activity.startActivity(confirm);
+                            }
+                            return;
+                        }
+                        if (st == PackageInstaller.STATUS_SUCCESS) {
+                            // The process is about to be replaced; BootReceiver's
+                            // MY_PACKAGE_REPLACED branch brings the agent back.
+                            Toast.makeText(context, "✓ 已更新", Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
+                        fail(
+                                activity.getString(R.string.update_failed),
+                                msg == null ? ("status " + st) : msg);
                     }
-                    return;
-                }
-                if (st == PackageInstaller.STATUS_SUCCESS) {
-                    // The process is about to be replaced; BootReceiver's
-                    // MY_PACKAGE_REPLACED branch brings the agent back.
-                    Toast.makeText(context, "✓ 已更新", Toast.LENGTH_LONG).show();
-                    return;
-                }
-                String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
-                fail(activity.getString(R.string.update_failed), msg == null ? ("status " + st) : msg);
-            }
-        };
+                };
         IntentFilter filter = new IntentFilter(ACTION_STATUS);
         if (Build.VERSION.SDK_INT >= 33) {
             activity.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);

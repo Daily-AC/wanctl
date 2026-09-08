@@ -275,7 +275,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// Resolve once now so a not-yet-invited user lands on the pending page
 	// instead of a wall of failing API calls.
 	if _, _, status, _ := s.resolveNamespace(p, ""); status == resolvePending {
-		http.Redirect(w, r, "/pending", http.StatusSeeOther)
+		http.Redirect(w, r, pendingNext(st.Next), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, st.Next, http.StatusSeeOther)
@@ -300,7 +300,7 @@ func (s *Server) githubUserForCode(r *http.Request, code string) (*githubUser, e
 		s.ghAuthBase+"/login/oauth/access_token", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	resp, err := s.hc.Do(req)
+	resp, err := s.githubHTTP().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +321,7 @@ func (s *Server) githubUserForCode(r *http.Request, code string) (*githubUser, e
 	req, _ = http.NewRequestWithContext(r.Context(), "GET", s.ghAPIBase+"/user", nil)
 	req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err = s.hc.Do(req)
+	resp, err = s.githubHTTP().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -441,7 +441,7 @@ func (s *Server) pageAuth(w http.ResponseWriter, r *http.Request, next string) (
 	case resolveOK:
 		return ns, true
 	case resolvePending:
-		http.Redirect(w, r, "/pending", http.StatusSeeOther)
+		http.Redirect(w, r, pendingNext(next), http.StatusSeeOther)
 	case resolveConflict:
 		http.Error(w, detail, http.StatusConflict)
 	default:
@@ -452,19 +452,28 @@ func (s *Server) pageAuth(w http.ResponseWriter, r *http.Request, next string) (
 
 // --- pending / invite redemption ---
 
+func pendingNext(next string) string {
+	next = safeNext(next)
+	if next == "/" {
+		return "/pending"
+	}
+	return "/pending?next=" + url.QueryEscape(next)
+}
+
 func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
+	next := safeNext(r.URL.Query().Get("next"))
 	if !s.oauthEnabled() {
 		http.NotFound(w, r)
 		return
 	}
 	p := s.principalFrom(r)
 	if p == nil {
-		http.Redirect(w, r, "/auth/login?next=/pending", http.StatusSeeOther)
+		http.Redirect(w, r, "/auth/login?next="+url.QueryEscape(pendingNext(next)), http.StatusSeeOther)
 		return
 	}
-	// Already admitted? Straight home.
+	// Already admitted? Resume enrollment if this login started on a device.
 	if _, _, status, _ := s.resolveNamespace(p, ""); status == resolveOK {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, next, http.StatusSeeOther)
 		return
 	}
 	// The page renders one of four states, and which one is a server-side
@@ -488,7 +497,7 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, "pending.html", map[string]any{
-		"Login": p.Login, "Req": state, "RetryDays": retryDays, "NoteMax": accessNoteMax,
+		"Next": next, "Login": p.Login, "Req": state, "RetryDays": retryDays, "NoteMax": accessNoteMax,
 	})
 }
 

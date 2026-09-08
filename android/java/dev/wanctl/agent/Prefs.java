@@ -21,9 +21,9 @@ final class Prefs {
     }
 
     /**
-     * Portal origin the user typed in the enroll dialog. Empty in a build that
-     * bakes one in (BuildInfo.PORTAL); this exists because the open-source APK
-     * ships with no portal at all, so it has to come from the person enrolling.
+     * Portal origin the user typed in the enroll dialog. Empty in a build that bakes one in
+     * (BuildInfo.PORTAL); this exists because the open-source APK ships with no portal at all, so
+     * it has to come from the person enrolling.
      */
     String portal() {
         return sp.getString(PORTAL, "");
@@ -33,7 +33,40 @@ final class Prefs {
         sp.edit().putString(PORTAL, v).apply();
     }
 
-    /** Whether the user wants the agent running. The service reflects this, it does not define it. */
+    boolean notificationAsked() {
+        return sp.getBoolean("notification_asked", false);
+    }
+
+    void setNotificationAsked() {
+        sp.edit().putBoolean("notification_asked", true).apply();
+    }
+
+    boolean setupDone() {
+        return sp.getBoolean("setup_done", false);
+    }
+
+    void setSetupDone() {
+        sp.edit().putBoolean("setup_done", true).apply();
+    }
+
+    String loginState() {
+        return sp.getString("login_state", "");
+    }
+
+    long loginStarted() {
+        return sp.getLong("login_started", 0);
+    }
+
+    void setLoginState(String state) {
+        sp.edit()
+                .putString("login_state", state)
+                .putLong("login_started", System.currentTimeMillis())
+                .commit();
+    }
+
+    /**
+     * Whether the user wants the agent running. The service reflects this, it does not define it.
+     */
     boolean enabled() {
         return sp.getBoolean(ENABLED, false);
     }
@@ -51,10 +84,9 @@ final class Prefs {
     }
 
     /**
-     * Off by default, and deliberately so. Without it the agent routes an
-     * unknown controller's pairing request to the portal web console for a
-     * human decision, which works on a headless device; --yes trades that gate
-     * away for anyone holding a namespace token.
+     * Off by default, and deliberately so. Without it the agent routes an unknown controller's
+     * pairing request to the portal web console for a human decision, which works on a headless
+     * device; --yes trades that gate away for anyone holding a namespace token.
      */
     boolean autoTrust() {
         return sp.getBoolean(AUTO_TRUST, false);
@@ -67,13 +99,12 @@ final class Prefs {
     /**
      * Policy bypass, off by default.
      *
-     * <p>Without this the agent runs in `normal` mode, where a command that
-     * matches no rule is refused unless a human approves it — and on a device
-     * with no terminal, the only place that approval can happen is the portal
-     * web console. That is the right default and a usable one for a device
-     * someone watches. It is not usable for an unattended box, and there is no
-     * other way to say so from here: `wanctl rules` and `--mode` are local
-     * commands, and an APK has no shell to type them into.
+     * <p>Without this the agent runs in `normal` mode, where a command that matches no rule is
+     * refused unless a human approves it — and on a device with no terminal, the only place that
+     * approval can happen is the portal web console. That is the right default and a usable one for
+     * a device someone watches. It is not usable for an unattended box, and there is no other way
+     * to say so from here: `wanctl rules` and `--mode` are local commands, and an APK has no shell
+     * to type them into.
      */
     boolean bypass() {
         return sp.getBoolean(BYPASS, false);
@@ -84,21 +115,19 @@ final class Prefs {
     }
 
     /**
-     * The elevation channels, off by default and separate from every other
-     * switch here.
+     * The elevation channels, off by default and separate from every other switch here.
      *
-     * <p>With it on, the agent may run a command through root, Shizuku, or the
-     * device's own adbd instead of inside the app sandbox — which is what makes
-     * {@code pm}, {@code am}, {@code input}, {@code screencap}, {@code dumpsys}
-     * and {@code settings} work at all. That is a real privilege boundary, so
-     * it gets its own decision rather than riding along on 自动放行所有命令:
-     * turning that switch on says "this device is unattended", not "hand out
-     * root". The agent enforces the same separation in its policy engine —
-     * bypass mode does not authorize an elevated command (ADR 0004).
+     * <p>With it on, the agent may run a command through root, Shizuku, or the device's own adbd
+     * instead of inside the app sandbox — which is what makes {@code pm}, {@code am}, {@code
+     * input}, {@code screencap}, {@code dumpsys} and {@code settings} work at all. That is a real
+     * privilege boundary, so it gets its own decision rather than riding along on 自动放行所有命令: turning
+     * that switch on says "this device is unattended", not "hand out root". The agent enforces the
+     * same separation in its policy engine — bypass mode does not authorize an elevated command
+     * (ADR 0004).
      *
-     * <p>Off does not merely deny the commands, it stops the channels being
-     * probed at all, so nothing here raises a root-manager consent dialog on a
-     * device whose owner never asked for any of this.
+     * <p>Off does not merely deny the commands, it stops the channels being probed at all, so
+     * nothing here raises a root-manager consent dialog on a device whose owner never asked for any
+     * of this.
      */
     boolean elevation() {
         return sp.getBoolean(ELEVATION, false);

@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -252,6 +253,7 @@ func New(opts Options) (*Agent, error) {
 	a.stopCtx, a.stop = context.WithCancel(context.Background())
 	a.console = console.New(engine, logger, console.Info{
 		Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL,
+		Platform: runtime.GOOS, ADBPair: runtime.GOOS == "android",
 	})
 	a.console.SetTrustedSource(a.trustedControllers)
 	a.console.SetPendingHook(a.notifyApproval)
@@ -1048,6 +1050,16 @@ func (a *Agent) session(fp string) (*server.ShellSession, error) {
 // It is a pure function: no goroutines, no writes to conn.
 func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 	switch msg.Kind {
+	case protocol.KindADBPair:
+		if msg.PairPort < 1 || msg.PairPort > 65535 || len(msg.PairCode) != 6 || strings.TrimFunc(msg.PairCode, isDigit) != "" {
+			return protocol.Message{Kind: protocol.KindError, Reason: "invalid pairing port or six-digit code"}
+		}
+		_, _, err := a.runADBPair(fmt.Sprintf("adb-pair %d %s", msg.PairPort, msg.PairCode), io.Discard)
+		if err != nil {
+			return protocol.Message{Kind: protocol.KindError, Reason: strings.ReplaceAll(err.Error(), msg.PairCode, "[redacted]")}
+		}
+		return protocol.Message{Kind: protocol.KindADBPair}
+
 	case protocol.KindConsoleState:
 		snap := a.console.State()
 		data, _ := json.Marshal(snap)

@@ -24,6 +24,7 @@
 | `WANCTL_GITHUB_CLIENT_ID` | portal | 视情况 | 无 | 启用 GitHub OAuth 登录。与 `PORTAL_USER_HEADER` 互斥。 |
 | `WANCTL_GITHUB_CLIENT_SECRET` | portal | 视情况 | 无 | OAuth App 的 client secret；设了 client ID 就必需。 |
 | `WANCTL_SESSION_SECRET` | portal | 视情况 | 无 | OAuth state 和会话 cookie 的 HMAC 密钥；启用 OAuth 时至少 32 字节。 |
+| `WANCTL_GITHUB_PROXY` | 门户 | 否 | 无 | 仅用于 GitHub 令牌交换和用户接口的 HTTP(S) 或 SOCKS5 代理，不改变 relay 或其他请求的路由。 |
 | `WANCTL_GITHUB_AUTH_BASE` | portal | 否 | `https://github.com` | OAuth 授权/令牌的基址；GitHub Enterprise 用得上。 |
 | `WANCTL_GITHUB_API_BASE` | portal | 否 | `https://api.github.com` | GitHub 用户 API 的基址；GitHub Enterprise 用得上。 |
 | `PORTAL_USER_HEADER` | portal | 视情况 | `X-Auth-Request-Email` | header 认证模式下，来自可信反向代理的身份头。代理必须剥掉客户端自带的同名头。与 GitHub OAuth 互斥。 |
