@@ -224,3 +224,18 @@ production code cross-compiles: `GOOS=windows go build ./...` is clean.
 - **Nothing else was left out.** Every Behaviour, Files and implementer-side
   Acceptance item is implemented. The owner's end-to-end check with two real
   signed builds was not run — it is stated as hidden from the implementer.
+
+### Follow-up: the Windows respawn lost its flags
+
+The detached-Windows branch built its successor as
+`selfCommand(self, append([]string{"agent"}, os.Args...)...)`, which produces
+`<self> agent <self> agent --relay …`. The child's FlagSet stops at the first
+positional, so the replacement agent started with none of the flags the original
+had — no relay override, no name, no mode, no portal fingerprints — and looked
+like a healthy restart while doing it.
+
+Fixed by `successorArgs(osArgs []string) []string` in `autoupdate.go`, which
+drops the program name and the subcommand. Windows uses it; the Unix exec still
+passes the whole `os.Args`, because an exec supplies argv itself. Covered by
+`TestSuccessorArgs`, a table test with no build tag, so it runs on the platform
+this is developed on rather than only on the one where the bug lived.
