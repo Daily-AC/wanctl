@@ -47,7 +47,7 @@ cp "$OUT/base.apk" "$OUT/unsigned.apk"
 "$BT/apksigner" sign --ks "$HOME/.android/debug.keystore" --ks-pass pass:android --out "$OUT/test.apk" "$OUT/aligned.apk"
 "$ADB" -s "$DEVICE" install -r "$OUT/test.apk"
 "$ADB" -s "$DEVICE" shell am force-stop dev.wanctl.idsandbox
-"$ADB" -s "$DEVICE" shell am start -n dev.wanctl.idsandbox/.Probe
+"$ADB" -s "$DEVICE" shell am start -W -n dev.wanctl.idsandbox/.Probe
 
 PID=$("$ADB" -s "$DEVICE" shell pidof dev.wanctl.idsandbox | tr -d '\r')
 for attempt in $(seq 1 45); do
