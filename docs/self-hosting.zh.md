@@ -200,6 +200,13 @@ wanctl config set release_base=https://relay.example.com/dl
 这个镜像是可选的：官方二进制和安装器在安装和 `wanctl update` 上都默认走项目的 GitHub
 发布页，所以大多数部署根本不需要提供 /dl。
 
+设备不用等人来通知。正在跑的 `wanctl agent` 会在启动一分钟后、之后每六小时，
+去读同一份签名清单，发现更新的版本就自己装：验签之后原地重启，pid 保持不变。
+有会话或后台任务在跑时它会跳过；二进制所在目录写不了时，它只记一行「请手动运行
+sudo wanctl update」，不会尝试提权。某台设备想退出，在那台上跑
+`wanctl config set auto_update=off`。发布页够不到而 relay 镜像配好了的时候，
+自动检查会像 `wanctl update` 一样退回镜像。
+
 ## 排障
 
 **GitHub 报 callback URL 错误。** OAuth App 的 callback 必须精确等于

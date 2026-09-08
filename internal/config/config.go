@@ -27,6 +27,10 @@ const (
 	// DefaultTransport uses proxy-agnostic HTTP long-poll because the public
 	// edge may not forward WebSocket upgrades.
 	DefaultTransport = "http"
+	// DefaultAutoUpdate makes an unattended agent keep itself current. The
+	// alternative default — every device waiting for a human to run `wanctl
+	// update` — is what this setting exists to stop.
+	DefaultAutoUpdate = "on"
 	// Portal trust is deployment data injected by the installer, never a
 	// compile-time fleet root. Kept as an empty compatibility constant.
 	DefaultPortalFP = ""
@@ -34,7 +38,8 @@ const (
 
 // Setting resolves one endpoint setting and reports where the value came from
 // ("env WANCTL_…", "config file", "build default", or "" when unset). The keys
-// are the ones `wanctl config` exposes: relay, portal, transport, release_base.
+// are the ones `wanctl config` exposes: relay, portal, transport,
+// release_base, auto_update.
 func Setting(key string) (value, source string) {
 	envKey, def := "", ""
 	switch key {
@@ -46,6 +51,8 @@ func Setting(key string) (value, source string) {
 		envKey, def = "WANCTL_TRANSPORT", DefaultTransport
 	case "release_base":
 		envKey, def = "WANCTL_RELEASE_BASE", DefaultReleaseBase
+	case "auto_update":
+		envKey, def = "WANCTL_AUTO_UPDATE", DefaultAutoUpdate
 	default:
 		return "", ""
 	}
@@ -97,6 +104,18 @@ func Transport() string {
 func ReleaseBase() string {
 	base, _ := Setting("release_base")
 	return base
+}
+
+// AutoUpdateEnabled reports whether a running agent may replace its own binary
+// with a newer signed release. Read at every check rather than once at start,
+// so `wanctl config set auto_update=off` takes effect without a restart.
+//
+// Anything other than the exact word "off" is on: the switch is a safety
+// release for someone who wants their binary left alone, and a typo in it must
+// not silently strand a device on an old build.
+func AutoUpdateEnabled() bool {
+	v, _ := Setting("auto_update")
+	return v != "off"
 }
 
 // RelayHTTPOrigin converts a relay's dial URL to the HTTP(S) base used by

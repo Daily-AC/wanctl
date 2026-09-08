@@ -188,6 +188,13 @@ func printLocalStatus() error {
 			fmt.Printf("  %s: 未配置\n", k)
 		}
 	}
+	// Whether this device keeps itself current, said where someone chasing a
+	// version mismatch will look first.
+	if config.AutoUpdateEnabled() {
+		fmt.Println("  自动更新: 开启")
+	} else {
+		fmt.Println("  自动更新: 关闭")
+	}
 	if config.StoredToken() != "" {
 		fmt.Println("  凭证: 已登录")
 	} else if os.Getenv("WANCTL_TOKEN") != "" {

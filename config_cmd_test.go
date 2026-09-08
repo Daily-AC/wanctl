@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -89,22 +90,40 @@ func TestPromptSettingRetriesThenAccepts(t *testing.T) {
 	}
 }
 
-func TestUpdateSourcePrefersReleaseBase(t *testing.T) {
+func TestUpdateSourcesPreferReleaseBaseThenMirror(t *testing.T) {
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
-	t.Setenv("WANCTL_RELEASE_BASE", "https://github.com/o/r/releases/latest/download/")
-	base, err := updateSource()
-	if err != nil || base != "https://github.com/o/r/releases/latest/download" {
-		t.Fatalf("base = %q, %v", base, err)
-	}
-	t.Setenv("WANCTL_RELEASE_BASE", "")
-	t.Setenv("WANCTL_RELAY", "https://relay.example/")
-	base, err = updateSource()
-	if err != nil || base != "https://relay.example/dl" {
-		t.Fatalf("relay fallback = %q, %v", base, err)
-	}
 	t.Setenv("WANCTL_RELAY", "")
-	if _, err := updateSource(); err == nil {
-		t.Fatal("no source configured but updateSource succeeded")
+	t.Setenv("WANCTL_RELEASE_BASE", "https://github.com/o/r/releases/latest/download/")
+	bases, err := updateSources()
+	if err != nil || len(bases) != 1 || bases[0] != "https://github.com/o/r/releases/latest/download" {
+		t.Fatalf("bases = %q, %v", bases, err)
+	}
+
+	// Both configured: the release page is tried first and the relay's mirror
+	// is there to catch a network that cannot reach it.
+	t.Setenv("WANCTL_RELAY", "https://relay.example/")
+	bases, err = updateSources()
+	want := []string{"https://github.com/o/r/releases/latest/download", "https://relay.example/dl"}
+	if err != nil || !slices.Equal(bases, want) {
+		t.Fatalf("bases = %q, %v; want %q", bases, err, want)
+	}
+
+	// A release_base that already IS the mirror must not be listed twice.
+	t.Setenv("WANCTL_RELEASE_BASE", "https://relay.example/dl")
+	bases, err = updateSources()
+	if err != nil || len(bases) != 1 || bases[0] != "https://relay.example/dl" {
+		t.Fatalf("deduplicated bases = %q, %v", bases, err)
+	}
+
+	t.Setenv("WANCTL_RELEASE_BASE", "")
+	bases, err = updateSources()
+	if err != nil || len(bases) != 1 || bases[0] != "https://relay.example/dl" {
+		t.Fatalf("relay fallback = %q, %v", bases, err)
+	}
+
+	t.Setenv("WANCTL_RELAY", "")
+	if _, err := updateSources(); err == nil {
+		t.Fatal("no source configured but updateSources succeeded")
 	}
 }
 
@@ -166,14 +185,14 @@ func TestReleaseBasePersistsAndYieldsToEnv(t *testing.T) {
 	if err := configSet([]string{"release_base=https://mirror.example/dl"}); err != nil {
 		t.Fatal(err)
 	}
-	base, err := updateSource()
-	if err != nil || base != "https://mirror.example/dl" {
-		t.Fatalf("stored release_base ignored: %q, %v", base, err)
+	bases, err := updateSources()
+	if err != nil || len(bases) == 0 || bases[0] != "https://mirror.example/dl" {
+		t.Fatalf("stored release_base ignored: %q, %v", bases, err)
 	}
 
 	t.Setenv("WANCTL_RELEASE_BASE", "https://env.example/dl")
-	if base, _ := updateSource(); base != "https://env.example/dl" {
-		t.Fatalf("env should outrank the config file, got %q", base)
+	if bases, _ := updateSources(); len(bases) == 0 || bases[0] != "https://env.example/dl" {
+		t.Fatalf("env should outrank the config file, got %q", bases)
 	}
 
 	if err := configSet([]string{"release_base=ftp://mirror.example"}); err == nil {
