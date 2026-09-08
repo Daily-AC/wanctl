@@ -12,6 +12,7 @@
 #   wanctl_targets                        "os arch" per line, every binary shipped
 #   wanctl_apk_arches                     the GOARCH of every APK shipped
 #   wanctl_artifact_name OS ARCH          wanctl-OS-ARCH, plus .exe on windows
+#   wanctl_download_name OS ARCH          browser-facing .tar.gz, or .exe on windows
 #   wanctl_go_build OS ARCH OUT LDFLAGS   build one target into OUT (run from the repo root)
 #   wanctl_android_cc ARCH                the NDK clang that links a cgo Android target
 
@@ -62,6 +63,17 @@ wanctl_artifact_name() {
   case "$1" in
     windows) printf 'wanctl-%s-%s.exe\n' "$1" "$2" ;;
     *) printf 'wanctl-%s-%s\n' "$1" "$2" ;;
+  esac
+}
+
+# Humans downloading from the portal need a filename their OS can identify.
+# Keep the raw names above for existing installers and updaters, and publish a
+# signed tarball alongside each extensionless binary. Windows already has .exe.
+wanctl_download_name() {
+  name=$(wanctl_artifact_name "$1" "$2")
+  case "$1" in
+    windows) printf '%s\n' "$name" ;;
+    *) printf '%s.tar.gz\n' "$name" ;;
   esac
 }
 

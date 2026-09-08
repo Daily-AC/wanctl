@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -204,6 +205,7 @@ func (h *signedDistHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	http.ServeContent(w, req, name, time.Time{}, bytes.NewReader(verified))
 }
 

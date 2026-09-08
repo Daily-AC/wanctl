@@ -15,14 +15,15 @@ There are two ways to run it, and they are genuinely different products:
 | needs another app installed | no | Termux, from F-Droid |
 | workarounds it depends on | none | four, on Termux internals |
 
-Shipped artifacts: one APK and one bare binary per ABI — `wanctl-android-arm64`
-(`arm64-v8a`, what nearly every phone and tablet is), `wanctl-android-arm`
-(`armeabi-v7a`: older phones, TV boxes, watches), `wanctl-android-386` (`x86`)
-and `wanctl-android-amd64` (`x86_64`: emulators, Chromebooks), each with a
-matching `.apk`. Install the APK for your device's ABI; the app then updates
-itself through the APK that matches the binary it carries. The arm64 binary is
-static; the other three are linked against bionic through the NDK, because Go
-cannot link those targets internally.
+Shipped artifacts: one APK and one bare binary per ABI, plus a `.tar.gz` of the
+binary for browser downloads — `wanctl-android-arm64` (`arm64-v8a`, what nearly
+every phone and tablet is), `wanctl-android-arm` (`armeabi-v7a`: older phones,
+TV boxes, watches), `wanctl-android-386` (`x86`) and `wanctl-android-amd64`
+(`x86_64`: emulators, Chromebooks), each with matching `.apk` and `.tar.gz`
+files. Install the APK for your device's ABI; the app then updates itself
+through the APK that matches the binary it carries. The arm64 binary is static;
+the other three are linked against bionic through the NDK, because Go cannot
+link those targets internally.
 
 ## The app
 

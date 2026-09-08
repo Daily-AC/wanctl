@@ -42,6 +42,23 @@ wanctl_targets | while read -r os arch; do
   (cd "$ROOT" && wanctl_go_build "$os" "$arch" "$DIST/$(wanctl_artifact_name "$os" "$arch")" "$LDFLAGS")
 done
 
+# Installers and `wanctl update` consume the raw binaries above. The portal's
+# manual-download table uses these archives, so a browser never saves an
+# extensionless mystery file. They remain in the signed manifest under pseudo
+# architectures such as amd64.tar.gz, which older clients safely ignore.
+PACKAGE_DIR="$DIST/.package"
+mkdir "$PACKAGE_DIR"
+wanctl_targets | while read -r os arch; do
+  raw=$(wanctl_artifact_name "$os" "$arch")
+  download=$(wanctl_download_name "$os" "$arch")
+  [ "$raw" != "$download" ] || continue
+  cp "$DIST/$raw" "$PACKAGE_DIR/wanctl"
+  chmod 0755 "$PACKAGE_DIR/wanctl"
+  tar -C "$PACKAGE_DIR" -czf "$DIST/$download" wanctl
+  rm "$PACKAGE_DIR/wanctl"
+done
+rmdir "$PACKAGE_DIR"
+
 # The Android APKs, one per ABI.
 #
 # They ride in the same signed manifest as everything else, as platforms
