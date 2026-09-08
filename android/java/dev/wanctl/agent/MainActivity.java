@@ -57,6 +57,7 @@ public final class MainActivity extends Activity {
             configuredRelay = "",
             configuredPortal = "",
             fingerprint = "",
+            deviceId = "",
             credential = "";
     private boolean ready, loggedIn, busy, probing, permissionsFromSettings;
     private EditText relayField, portalField;
@@ -906,6 +907,7 @@ public final class MainActivity extends Activity {
         screen("details", "连接详情", this::showSettings);
         for (String[] item :
                 new String[][] {
+                    {"设备 ID", deviceId},
                     {"门户", configuredPortal},
                     {"中继", configuredRelay},
                     {"设备指纹", fingerprint},
@@ -1078,6 +1080,7 @@ public final class MainActivity extends Activity {
                                 credential = line(result.out, "凭证:");
                                 loggedIn = credential.contains("已登录");
                                 fingerprint = line(id.out, "fingerprint:");
+                                deviceId = line(id.out, "device_id:");
                                 boolean first = !ready;
                                 ready = true;
                                 if (first && !pendingPage.isEmpty()) {

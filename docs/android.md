@@ -41,7 +41,7 @@ First launch follows four steps:
 
 Settings contains the device name, boot behavior, notification/background permissions, instance, sign-in, logs and updates. Switching instances stops the connection and clears the old login. Elevation stays off until explicitly enabled, at which point the app explains the required system settings.
 
-Auto-trust and policy bypass remain off by default and independent of elevation. Boot recovery only resumes a device the user enabled, and remains subject to Android/OEM background restrictions. Identical phone models should use different device names.
+Auto-trust and policy bypass remain off by default and independent of elevation. Boot recovery only resumes a device the user enabled, and remains subject to Android/OEM background restrictions. Device names are editable labels; identical phone models may share a name without sharing an installation identity.
 
 Returning from the browser requires the updated portal. The app accepts only a locally initiated login state less than ten minutes old; an expired or cancelled login can be restarted.
 
