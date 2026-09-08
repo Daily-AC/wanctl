@@ -54,6 +54,19 @@ matching one, and `wanctl update` does the same from inside the binary.
 The list lives in `scripts/release-targets.sh`, which the release build, the
 publisher's checks and CI's cross-compile gate all read.
 
+### Staying up to date
+
+A running `wanctl agent` keeps itself current. It checks the same signed
+release manifest `wanctl update` uses — a minute after it starts, then every six
+hours — and when a newer release is on offer it verifies the signature,
+swaps the binary and restarts itself in place, keeping its pid so systemd,
+launchd and `wanctl status` all still point at it. It waits while a shell
+session, a background job or a console session is open, and it never tries to
+elevate: a binary in a root-owned directory such as `/usr/local/bin` logs that
+`sudo wanctl update` is needed and leaves itself alone. Development builds are
+never replaced. Turn it off with `wanctl config set auto_update=off` (or
+`WANCTL_AUTO_UPDATE=off`); `wanctl status` shows which way it is set.
+
 ## Architecture
 
 ```text

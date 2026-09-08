@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"wanctl/internal/admission"
@@ -73,6 +74,10 @@ type Agent struct {
 
 	sessMu   sync.Mutex
 	sessions map[string]*server.ShellSession
+	// consoles counts live console sessions. An update that swapped the binary
+	// under an owner who is mid-approval would drop the connection they are
+	// answering on.
+	consoles atomic.Int64
 	jobs     *jobStore
 	stdin    *bufio.Reader
 	elevator *elevate.Manager
@@ -1197,6 +1202,9 @@ func (a *Agent) serveConsole(ctx context.Context, conn net.Conn) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	a.consoles.Add(1)
+	defer a.consoles.Add(-1)
+
 	var wmu sync.Mutex
 	send := func(m protocol.Message) error {
 		wmu.Lock()
@@ -1257,6 +1265,32 @@ func (a *Agent) runConsolePrompt(ctx context.Context) {
 			a.console.Decide(p.ID, verdict)
 		}
 	}
+}
+
+// Busy reports whether this agent is in the middle of work that restarting it
+// would destroy: an open shell session (its cwd, its environment, its history),
+// a background job whose output nobody has collected yet, or a live console
+// session. It is the gate the auto-updater consults before swapping the binary
+// under itself.
+//
+// A relay it cannot currently reach is deliberately not busy. That state can
+// last for days on a laptop that is closed, and treating it as busy would mean
+// the devices most in need of an unattended update are the ones that never get
+// one.
+func (a *Agent) Busy() bool {
+	a.sessMu.Lock()
+	for _, sess := range a.sessions {
+		if !sess.Closed() {
+			a.sessMu.Unlock()
+			return true
+		}
+	}
+	a.sessMu.Unlock()
+	// jobs is nil in unit tests that assemble an Agent without New.
+	if a.jobs != nil && a.jobs.runningCount() > 0 {
+		return true
+	}
+	return a.consoles.Load() > 0
 }
 
 // isPowerShell reports whether the resolved session shell is a PowerShell.
