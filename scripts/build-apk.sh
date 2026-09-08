@@ -139,6 +139,11 @@ done
 
 # ---------------------------------------------------------------- generated source
 
+UPDATES_SUPPORTED=false
+if [ "$VERSION" != dev ] && [ "${WANCTL_ANDROID_APP_ID:-dev.wanctl.agent}" = dev.wanctl.agent ] && [ -n "$TRUSTED" ] && { [ -n "${WANCTL_ANDROID_KEYSTORE_B64:-}" ] || [ -n "${WANCTL_ANDROID_KEYSTORE:-}" ]; }; then
+  UPDATES_SUPPORTED=true
+fi
+
 mkdir -p "$OUT/gen/dev/wanctl/agent"
 cat > "$OUT/gen/dev/wanctl/agent/BuildInfo.java" <<EOF
 package dev.wanctl.agent;
@@ -147,6 +152,7 @@ package dev.wanctl.agent;
 final class BuildInfo {
     static final String PORTAL = "$PORTAL";
     static final String VERSION = "$VERSION_NAME";
+    static final boolean UPDATES_SUPPORTED = $UPDATES_SUPPORTED;
 
     private BuildInfo() {
     }
@@ -155,15 +161,22 @@ EOF
 
 # ---------------------------------------------------------------- resources
 
+MANIFEST="$APP/AndroidManifest.xml"
+if [ "${WANCTL_ANDROID_APP_ID:-dev.wanctl.agent}" != dev.wanctl.agent ]; then
+  MANIFEST="$OUT/AndroidManifest.xml"
+  sed 's/android:label="@string\/app_name"/android:label="wanctl Preview"/' "$APP/AndroidManifest.xml" > "$MANIFEST"
+fi
+
 echo "  aapt2 compile/link …"
 "$BT/aapt2" compile --dir "$APP/res" -o "$OUT/flat/res.zip"
 "$BT/aapt2" link \
     -I "$ANDROID_JAR" \
-    --manifest "$APP/AndroidManifest.xml" \
+    --manifest "$MANIFEST" \
     --java "$OUT/gen" \
     --version-code "$VERSION_CODE" \
     --version-name "$VERSION_NAME" \
     --auto-add-overlay \
+    --rename-manifest-package "${WANCTL_ANDROID_APP_ID:-dev.wanctl.agent}" \
     -o "$OUT/base.apk" \
     "$OUT/flat/res.zip"
 

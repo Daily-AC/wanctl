@@ -72,6 +72,7 @@ type Config struct {
 	// GitHub OAuth login (self-hosted deployments). Setting GitHubClientID
 	// switches the portal to OAuth mode: identity comes only from the signed
 	// session cookie and the identity header is ignored entirely.
+	GitHubTransport    http.RoundTripper // optional, applies only to token/user requests
 	GitHubClientID     string
 	GitHubClientSecret string
 	SessionSecret      string // HMAC key for session/state cookies; >=32 bytes
@@ -87,6 +88,7 @@ type Server struct {
 	adminSecret  string
 	userHeader   string
 	hc           *http.Client
+	ghc          *http.Client
 	publicOrigin string
 	debugWhoami  bool
 	skillURL     string
@@ -136,6 +138,9 @@ func New(cfg Config) *Server {
 		sessionKey:     []byte(cfg.SessionSecret),
 		ghAuthBase:     strings.TrimRight(orDefault(cfg.GitHubAuthBase, "https://github.com"), "/"),
 		ghAPIBase:      strings.TrimRight(orDefault(cfg.GitHubAPIBase, "https://api.github.com"), "/"),
+	}
+	if cfg.GitHubTransport != nil {
+		s.ghc = &http.Client{Transport: cfg.GitHubTransport, Timeout: 15 * time.Second}
 	}
 	if cfg.Identity != nil {
 		s.fp = cfg.Identity.Fingerprint
@@ -671,7 +676,16 @@ func (s *Server) adminReq(method, path string, query url.Values, body any) (*htt
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	// A browser page: authentication failures redirect through login/pending
 	// so `wanctl login` opening this URL lands back here after the OAuth trip.
-	ns, ok := s.pageAuth(w, r, "/enroll")
+	state := r.URL.Query().Get("mobile_state")
+	if state != "" && !validMobileState(state) {
+		http.Error(w, "invalid mobile state", http.StatusBadRequest)
+		return
+	}
+	next := "/enroll"
+	if state != "" {
+		next += "?mobile_state=" + url.QueryEscape(state)
+	}
+	ns, ok := s.pageAuth(w, r, next)
 	if !ok {
 		return
 	}
@@ -704,7 +718,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	// this page is the one leg the relay is not on, which is what makes the
 	// value the terminal prints checkable rather than merely asserted.
 	s.render(w, "enroll.html", map[string]any{
-		"NS": ns, "Code": out.Code, "Mins": mins, "FP": s.fp,
+		"NS": ns, "Code": out.Code, "Mins": mins, "FP": s.fp, "MobileReturn": mobileReturnURL(state, out.Code),
 	})
 }
 

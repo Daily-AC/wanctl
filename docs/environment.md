@@ -25,6 +25,7 @@ Variables marked "conditional" are required only for the feature described.
 | `WANCTL_GITHUB_CLIENT_ID` | portal | Conditional | none | Enables GitHub OAuth login. Mutually exclusive with `PORTAL_USER_HEADER`. |
 | `WANCTL_GITHUB_CLIENT_SECRET` | portal | Conditional | none | OAuth App client secret; required when the client ID is set. |
 | `WANCTL_SESSION_SECRET` | portal | Conditional | none | HMAC key for OAuth state and session cookies; at least 32 bytes when OAuth is enabled. |
+| `WANCTL_GITHUB_PROXY` | portal | No | none | HTTP(S) or SOCKS5 proxy for GitHub token/user requests only. Relay and other outbound traffic are unaffected. |
 | `WANCTL_GITHUB_AUTH_BASE` | portal | No | `https://github.com` | OAuth authorization/token base URL; useful for GitHub Enterprise. |
 | `WANCTL_GITHUB_API_BASE` | portal | No | `https://api.github.com` | GitHub user API base URL; useful for GitHub Enterprise. |
 | `PORTAL_USER_HEADER` | portal | Conditional | `X-Auth-Request-Email` | Trusted reverse-proxy identity header for header-auth mode. The proxy must strip client-supplied copies. Mutually exclusive with GitHub OAuth. |

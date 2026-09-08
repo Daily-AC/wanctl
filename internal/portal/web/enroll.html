@@ -24,6 +24,13 @@
 <main>
   <h1 data-en="Authorize this device" data-zh="设备授权">Authorize this device</h1>
 
+  {{if .MobileReturn}}
+  <p class="lead" data-en="Return to wanctl to finish signing in. You can then enable this phone."
+     data-zh="返回 wanctl 完成登录，然后启用这台手机。">Return to wanctl to finish signing in. You can then enable this phone.</p>
+  <p class="lead"><b class="mono">{{.NS}}</b></p>
+  <p><a class="btn primary" href="{{.MobileReturn}}" data-en="Return to wanctl" data-zh="返回 wanctl">Return to wanctl</a></p>
+  <details><summary data-en="Cannot return? Copy the code" data-zh="无法返回？复制授权码">Cannot return? Copy the code</summary>
+  {{end}}
   <div class="code" id="acode" role="button" tabindex="0"
        data-lbl-en="Copy the code" data-lbl-zh="复制授权码" aria-label="Copy the code">{{.Code}}</div>
   <p class="meta">
@@ -33,6 +40,7 @@
     <span class="mono">{{.Mins}}</span><span data-en=" min" data-zh=" 分钟"> min</span>
   </p>
 
+  {{if .MobileReturn}}</details>{{else}}
   <p class="lead">
     <span data-en="Paste it back into the terminal. This machine joins the space"
           data-zh="回到终端粘贴。这台机器会加入空间">Paste it back into the terminal. This machine joins the space</span>
@@ -50,6 +58,7 @@
   <p class="fine"
      data-en="From then on this machine can be driven remotely. <code>wanctl stop</code> ends that."
      data-zh="从此这台机器可以被远程驱动。用 <code>wanctl stop</code> 结束。">From then on this machine can be driven remotely. <code>wanctl stop</code> ends that.</p>
+  {{end}}
 </main>
 
 <script src="/assets/auth.js?v={{.V}}"></script>

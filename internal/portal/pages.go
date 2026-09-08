@@ -49,3 +49,32 @@ func (s *Server) publicHost(r *http.Request) string {
 	}
 	return r.Host
 }
+
+// Only a fixed app destination is allowed, never a caller-supplied redirect.
+// The nonce binds a returned enrollment code to a login initiated on that phone.
+func validMobileState(state string) bool {
+	if len(state) != 36 {
+		return false
+	}
+	for i, c := range state {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+			continue
+		}
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func mobileReturnURL(state, code string) template.URL {
+	if !validMobileState(state) || code == "" {
+		return ""
+	}
+	q := url.Values{"state": {state}, "code": {code}}
+	// Safe by construction: fixed scheme/host, query escaped separately.
+	return template.URL("wanctl://enroll?" + q.Encode())
+}

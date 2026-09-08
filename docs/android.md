@@ -32,36 +32,20 @@ link those targets internally.
 https://relay.example.com/dl/wanctl-android-arm64.apk
 ```
 
-Install it, open it, tap **登录**, and follow the Feishu enrollment the same way
-every other platform does. Then turn on **启用 wanctl**. The agent runs as a
-foreground service — there is a permanent notification, which is the deal
-Android offers: the system keeps the process alive and the user always knows.
+First launch follows four steps:
 
-The UI is five switches and four buttons:
+1. Follow the animated guide to allow running notifications and background activity. You may skip these, but screen-off connections and reboot recovery can be restricted until permissions are completed in Settings.
+2. Choose the **official service** (the same addresses as the CLI, currently invite-only) or enter your self-hosted relay and portal addresses.
+3. Tap **使用 GitHub 登录**, authorize in the browser, then tap **Return to wanctl**. GitHub Mobile handles the link only if it supports the authorization URL. Self-hosted SSO portals have an alternative sign-in entry; older portals can still use a one-time enrollment code.
+4. Tap **启用**. Home shows connection state and one enable/disable button. Configuration persists across launches.
 
-- **加入电池优化白名单** is **not optional**, whatever the wording suggests.
-  Android permits a background foreground-service start only for an exempt app;
-  the successful start after a reboot logs, in as many words,
-  `am_foreground_service_start: … SYSTEM_ALLOW_LISTED`. Without the exemption
-  the agent will not come back on its own. The service additionally holds a
-  partial wake lock, which is what `termux-wake-lock` did for the Termux route.
-  **On a Chinese OEM ROM this is only half of it — see the next section, which
-  is the difference between a device that works and one that does not.**
-- **开机自启** (on by default) restarts the agent after a reboot and after the
-  app updates itself. See "Coming back after a reboot" below for what it does
-  and does not guarantee.
-- **自动信任新控制端** is **off**, and should stay off. With it off, an unknown
-  controller's pairing request is raised to the portal web console for a human
-  decision, which works on a device with no keyboard. With it on, anything
-  holding a namespace token pairs silently.
-- **自动放行所有命令** is **off**, and turning it on is a real decision. Off,
-  the agent runs in wanctl's `normal` policy mode: a command matching no rule is
-  refused until a human approves it in the portal console. That is right for a
-  device someone watches and unusable for an unattended one — and an APK has no
-  shell to type `wanctl rules` into, so this switch is the only way to say so.
-  Expect `command denied by device policy` until you make the choice.
-- **设备名** defaults to the model name (`pa2353`). Two devices of the same
-  model collide; set one here.
+Settings contains the device name, boot behavior, notification/background permissions, instance, sign-in, logs and updates. Switching instances stops the connection and clears the old login. Elevation stays off until explicitly enabled, at which point the app explains the required system settings.
+
+Auto-trust and policy bypass remain off by default and independent of elevation. Boot recovery only resumes a device the user enabled, and remains subject to Android/OEM background restrictions. Identical phone models should use different device names.
+
+Returning from the browser requires the updated portal. The app accepts only a locally initiated login state less than ten minutes old; an expired or cancelled login can be restarted.
+
+Preview builds do not use the production in-app updater. Check for updates explains how to install a newer preview with the same package identity and signing key, preserving configuration. Signed release builds retain verified in-app updates.
 
 ### The OEM gates, which decide whether any of this works
 
