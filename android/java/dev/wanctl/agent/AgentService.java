@@ -311,6 +311,8 @@ public final class AgentService extends Service {
             updateNotification(getString(R.string.state_running), relay);
         } else if (t.startsWith("fingerprint:")) {
             AgentState.get().setFingerprint(t.substring("fingerprint:".length()).trim());
+        } else if (t.contains("initialize device ID:")) {
+            fatalReason = "无法读取或创建设备身份，请查看日志。不要清除应用数据。";
         } else if (t.contains("--token")) {
             // No credential at all. Retrying cannot produce one, and a service
             // that respawns every two seconds forever is a battery drain that

@@ -10,8 +10,13 @@ import (
 )
 
 // LoadOrCreateDeviceID identifies an installation independently of its name and
-// certificate. Publish with a hard link so concurrent starts never return two IDs.
-func LoadOrCreateDeviceID() (string, error) {
+// certificate. Publish atomically so concurrent starts never return two IDs.
+func LoadOrCreateDeviceID() (deviceID string, err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("initialize device ID: %w", err)
+		}
+	}()
 	dir, err := ConfigDir()
 	if err != nil {
 		return "", err
@@ -51,7 +56,7 @@ func LoadOrCreateDeviceID() (string, error) {
 	if err = f.Close(); err != nil {
 		return "", err
 	}
-	if err = os.Link(f.Name(), path); err != nil && !os.IsExist(err) {
+	if err = publishDeviceID(f.Name(), path); err != nil && !os.IsExist(err) {
 		return "", err
 	}
 	return read()
