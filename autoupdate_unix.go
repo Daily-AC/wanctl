@@ -25,12 +25,13 @@ import (
 // it here is what makes the new image's own AcquireAgentLock provably able to
 // succeed rather than dependent on that detail.
 //
-// os.Args is passed through unchanged so the successor runs with the flags this
-// agent was given, and fds 1 and 2 are inherited, so the log file keeps
-// receiving output across the swap.
-func restartAgentForUpdate(self string, args []string, lock *config.AgentLock) (bool, error) {
+// osArgs is passed through whole — program name and subcommand included, since
+// an exec supplies the argv itself — so the successor runs with the flags this
+// agent was given. Fds 1 and 2 are inherited, so the log file keeps receiving
+// output across the swap.
+func restartAgentForUpdate(self string, osArgs []string, lock *config.AgentLock) (bool, error) {
 	_ = lock.Close()
-	err := syscall.Exec(self, args, os.Environ())
+	err := syscall.Exec(self, osArgs, os.Environ())
 	// Exec does not return on success.
 	return false, fmt.Errorf("exec %s: %w", self, err)
 }

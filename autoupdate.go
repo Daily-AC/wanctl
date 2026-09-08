@@ -228,6 +228,24 @@ func (u *autoUpdater) updated() bool { return u.handedOver.Load() }
 // already resolved. It is what the restart must exec.
 func (u *autoUpdater) binaryPath() string { return u.probe.self }
 
+// successorArgs is the flag list to hand a replacement agent process: this
+// invocation's arguments with the program name and the subcommand removed.
+//
+// It exists because the two restart shapes need different things from the same
+// os.Args. A Unix exec replaces the image and takes the whole argv, subcommand
+// included. A Windows respawn rebuilds the command line and supplies "agent"
+// itself, so passing the whole argv there produced
+// `<self> agent <self> agent --relay …`: the child's FlagSet stops at the first
+// positional, so the successor came up with none of the flags the agent was
+// started with — no relay override, no name, no mode, no portal fingerprints —
+// and looked like it had started fine.
+func successorArgs(osArgs []string) []string {
+	if len(osArgs) < 2 {
+		return nil
+	}
+	return osArgs[2:]
+}
+
 // tick runs one check, acts on it, says whatever needs saying, and reports how
 // long to wait before the next one. The second return is true when this agent
 // is done: the binary has been replaced and the restart has been asked for.

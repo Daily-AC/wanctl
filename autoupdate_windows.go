@@ -15,7 +15,7 @@ import (
 //
 // It reports true when a successor process already owns the pid files, so the
 // caller must not clean them up on the way out.
-func restartAgentForUpdate(self string, args []string, lock *config.AgentLock) (bool, error) {
+func restartAgentForUpdate(self string, osArgs []string, lock *config.AgentLock) (bool, error) {
 	// Under a supervisor — the Scheduled Task's `__supervise` loop — exiting
 	// cleanly is the restart: the parent re-runs the stable binary path three
 	// seconds later and gets the new file. Spawning our own successor here
@@ -26,9 +26,9 @@ func restartAgentForUpdate(self string, args []string, lock *config.AgentLock) (
 
 	// Detached (`wanctl` / `wanctl start`): nothing will restart us, so start
 	// the replacement the same way cmdStart does — same detach flags, same log
-	// file — and let it register itself. replaceBinary has already renamed the
-	// running .exe to .old, so this process is unaffected and self now names
-	// the new file.
+	// file, and the flags this agent was given — and let it register itself.
+	// replaceBinary has already renamed the running .exe to .old, so this
+	// process is unaffected and self now names the new file.
 	logPath, err := config.LogPath()
 	if err != nil {
 		return false, err
@@ -44,7 +44,7 @@ func restartAgentForUpdate(self string, args []string, lock *config.AgentLock) (
 	_ = lock.Close()
 	_ = config.RemovePID()
 
-	cmd := selfCommand(self, append([]string{"agent"}, args...)...)
+	cmd := selfCommand(self, append([]string{"agent"}, successorArgs(osArgs)...)...)
 	cmd.Stdout = logf
 	cmd.Stderr = logf
 	cmd.SysProcAttr = detachSysProcAttr()

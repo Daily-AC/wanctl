@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -135,6 +136,54 @@ func TestDecideAutoUpdate(t *testing.T) {
 			}
 			if (got.err != nil) != (tc.want == autoUpdateFailed) {
 				t.Errorf("err = %v for action %v", got.err, got.action)
+			}
+		})
+	}
+}
+
+// TestSuccessorArgs pins what a replacement agent is started with. The Windows
+// respawn supplies "agent" itself, so handing it the whole os.Args produced
+// `<self> agent <self> agent --relay …`; the child's FlagSet stops at the first
+// positional, so the successor came up with no relay, no name, no mode and no
+// portal fingerprints while looking like a healthy restart.
+//
+// Not a Windows-only test: the bug is in argument arithmetic, and arithmetic
+// that only runs on the platform nobody develops on is arithmetic nobody checks.
+func TestSuccessorArgs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		osArgs []string
+		want   []string
+	}{
+		{
+			name:   "the flags the agent was started with",
+			osArgs: []string{"wanctl", "agent", "--relay", "wss://relay.example", "--mode", "bypass"},
+			want:   []string{"--relay", "wss://relay.example", "--mode", "bypass"},
+		},
+		{
+			name:   "a supervised agent keeps its --managed marker",
+			osArgs: []string{"wanctl", "agent", "--managed", "--portal-fps", "SHA256:abc"},
+			want:   []string{"--managed", "--portal-fps", "SHA256:abc"},
+		},
+		{
+			name:   "no flags at all",
+			osArgs: []string{"wanctl", "agent"},
+			want:   nil,
+		},
+		{
+			name:   "no subcommand, which cmdAgent cannot be reached without",
+			osArgs: []string{"wanctl"},
+			want:   nil,
+		},
+		{
+			name:   "an empty argv",
+			osArgs: nil,
+			want:   nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := successorArgs(tc.osArgs); !slices.Equal(got, tc.want) {
+				t.Fatalf("successorArgs(%q) = %q, want %q", tc.osArgs, got, tc.want)
 			}
 		})
 	}
