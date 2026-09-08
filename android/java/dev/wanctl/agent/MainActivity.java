@@ -900,6 +900,7 @@ public final class MainActivity extends Activity {
                     } else showElevationHelp();
                 });
         row(elevation, "配置系统权限", "设置指引", this::showElevationHelp);
+
         note("截图、模拟点击等系统操作需要额外配置无线调试或 root。仅在使用这些功能时配置。");
     }
 
@@ -962,9 +963,9 @@ public final class MainActivity extends Activity {
                 .setTitle("配置提权通道")
                 .setMessage(
                         "仅在需要控制系统、截图或模拟点击时开启。\n\n"
-                                + "无线调试：在开发者选项中启用无线调试，再从门户终端完成 adb 配对。\n\n"
+                                + "无线调试：手机连接 Wi-Fi，打开开发者选项中的「无线调试」，点「使用配对码配对设备」并保持弹窗打开。在另一台设备的浏览器打开门户，选择这台手机，进入「设备设置 → ADB 配对」，填写弹窗里的端口和六位码。\n\n"
                                 + "已 root 的手机可使用 root 通道。开启后仍需按系统提示授权。")
-                .setNegativeButton("取消", (d, w) -> showAdvanced())
+                .setNegativeButton("关闭", (d, w) -> showAdvanced())
                 .setNeutralButton(
                         "打开开发者选项",
                         (d, w) -> {

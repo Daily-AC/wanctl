@@ -170,6 +170,8 @@ Android 11+ can hand out shell access over Wi-Fi without a computer, and the
 agent can take it. On the device: 设置 → 开发者选项 → **无线调试** → **使用配对码
 配对设备**. That screen shows a port and six digits. Then, from the controller:
 
+Alternatively, open the phone's **Device settings → ADB pairing** in the portal on another device. Keep the pairing-code dialog open on the phone and enter its port and code. This requires Android app and portal v0.6.0 or later.
+
 ```sh
 wanctl exec --target phone -- adb-pair 37129 314159
 ```

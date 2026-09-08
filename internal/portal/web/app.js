@@ -579,6 +579,7 @@
 
   function noteDevices(xs) {
     devices = xs || [];
+    devMeta = {};
     devices.forEach(function (x) {
       var sh = x.shared === true;
       if (!(x.name in devMeta) || !sh) devMeta[x.name] = { shared: sh, owner: x.owner || '' };
@@ -586,6 +587,7 @@
   }
 
   var waitCount = {};   // device -> 待审批条数，用于设备卡上的角标
+  var deviceListVersion = 0;
   var devLoadFailed = false;   // 上一次拉设备清单失败了吗（空清单和拉不到是两回事）
 
   function renderDevices() {
@@ -629,7 +631,9 @@
   }
 
   function loadDevices() {
+    var version = ++deviceListVersion;
     return jget('/api/devices').then(function (d) {
+      if (version !== deviceListVersion) return;
       devLoadFailed = false;
       noteDevices(d.devices);
       renderDevices();
@@ -643,6 +647,7 @@
         $('#dsAliasIn').value = aliasOf(cur);
       }
     }).catch(function (e) {
+      if (version !== deviceListVersion) return;
       oops(e);
       devLoadFailed = true;
       renderDevices();
@@ -656,7 +661,7 @@
   function refreshAsks() {
     if (cur) return renderConsole();
     return jget('/api/pending').then(function (d) {
-      var items = d.items || [];
+      var items = (d.items || []).filter(function (item) { return devices.some(function (device) { return device.name === item.device; }); });
       waitCount = {};
       items.forEach(function (i) { waitCount[i.device] = (waitCount[i.device] || 0) + 1; });
       $('#asks').innerHTML = items.map(function (i) {
@@ -747,6 +752,7 @@
   function applyState(st) {
     if (!st || !st.mode) return;
     lastState = st;
+    $('#dsAdb').hidden = !(st.info && st.info.adb_pair) || !!(devMeta[cur] || {}).shared;
     curMode = st.mode;
     setModeUI(st.mode);
 
@@ -985,7 +991,10 @@
   }
 
   function loadDeviceSettings(name) {
-    $('#dsName').textContent = name;
+    $('#dsName').textContent = devName(name).label;
+    $('#dsAdb').hidden = true;
+    $('#dsAdbForm').reset();
+    $('#dsAdbResult').textContent = '';
     $('#dsAliasIn').value = aliasOf(name);
     $('#dsAliasIn').placeholder = t().aliasNone;
     // 这套部署没配飞书凭证的话（GitHub OAuth 自部署实例都是），整张卡藏掉
@@ -1000,6 +1009,27 @@
       devNotify = c; $('#dsNotify').hidden = false; paintDevNotify();
     }).catch(function () { $('#dsNotify').hidden = true; });
   }
+  var adbPairBusy = false;
+  $('#dsAdbForm').onsubmit = function (event) {
+    event.preventDefault();
+    if (!cur || roGuard(cur) || adbPairBusy) return;
+    var name = cur, port = Number($('#dsAdbPort').value), code = $('#dsAdbCode').value;
+    var result = $('#dsAdbResult'), button = $('#dsAdbSubmit');
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || !/^[0-9]{6}$/.test(code)) {
+      result.textContent = lang === 'zh' ? '请填写有效端口和六位配对码。' : 'Enter a valid port and six-digit code.'; return;
+    }
+    adbPairBusy = true; button.disabled = true;
+    result.textContent = lang === 'zh' ? '正在配对，请保持手机上的配对码弹窗打开…' : 'Pairing… Keep the pairing dialog open on the phone.';
+    $('#dsAdbCode').value = '';
+    jpost('/api/devices/adb-pair', { device:name, port:port, code:code }).then(function () {
+      if (cur !== name) return;
+      result.textContent = lang === 'zh' ? '配对成功。请保持无线调试开启，并在手机 App 中启用提权通道。' : 'Paired. Keep Wireless debugging on and enable elevation in the phone app.';
+    }).catch(function (error) {
+      if (cur !== name) return;
+      result.textContent = (lang === 'zh' ? '配对失败，请重新打开配对码弹窗后重试。' : 'Pairing failed. Open a new pairing-code dialog and retry.') + ' ' + error.message;
+    }).finally(function () { adbPairBusy = false; button.disabled = false; });
+  };
+
   function paintLark() {
     var on = !!lark.approval_enabled;
     $('#dsLarkSw').className = 'sw' + (on ? ' on' : '');
@@ -1050,8 +1080,15 @@
     confirmBox(t().removeDevT, t().removeDevM(name), t().remove).then(function (ok) {
       if (!ok) return;
       jpost('/api/devices/remove', { device: name }).then(function () {
+        // Commit the confirmed deletion locally before navigation. Ignore any
+        // list response that started before it, then reconcile with the server.
+        deviceListVersion++;
+        noteDevices(devices.filter(function (device) { return device.name !== name; }));
+        delete waitCount[name];
+        renderDevices();
         toast(t().remove);
-        go('devices');
+        if (cur === name) go('devices');
+        return loadDevices();
       }).catch(oops);
     });
   };

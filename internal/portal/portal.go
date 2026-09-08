@@ -203,6 +203,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices/console", s.handleDeviceConsole)
 	mux.HandleFunc("/api/devices/decide", s.handleDeviceDecide)
 	mux.HandleFunc("/api/devices/pair", s.handleDevicePair)
+	mux.HandleFunc("/api/devices/adb-pair", s.handleDeviceADBPair)
 	mux.HandleFunc("/api/devices/untrust", s.handleDeviceUntrust)
 	mux.HandleFunc("/api/devices/remove", s.handleDeviceRemove)
 	mux.HandleFunc("/api/devices/identity/accept", s.handleDeviceIdentityAccept)
@@ -264,6 +265,7 @@ var mutationPaths = map[string]bool{
 	"/api/acl/revoke":              true,
 	"/api/devices/decide":          true,
 	"/api/devices/pair":            true,
+	"/api/devices/adb-pair":        true,
 	"/api/devices/untrust":         true,
 	"/api/devices/remove":          true,
 	"/api/devices/alias":           true,

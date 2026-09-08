@@ -63,6 +63,7 @@ const (
 	KindApprovalNotif = "approval_notif" // device -> portal, UNSOLICITED: pending set changed
 	KindPairDecide    = "pair_decide"    // portal -> device, trust/deny a pending controller pairing
 	KindTrustRevoke   = "trust_revoke"   // portal -> device, drop a trusted controller by fingerprint
+	KindADBPair       = "adb_pair"       // console administrator pairs this Android installation with local adbd
 	KindTimeoutSet    = "timeout_set"    // portal -> device, set how long an approval waits (TimeoutSec; 0 = default)
 )
 
@@ -137,8 +138,10 @@ type Message struct {
 	Scope       string          `json:"scope,omitempty"`        // rule_add: dir/global
 	Index       int             `json:"index,omitempty"`        // rule_rm
 	TimeoutSec  int             `json:"timeout_sec,omitempty"`  // timeout_set: approval wait in seconds (0 = restore default)
-	FP          string          `json:"fp,omitempty"`           // pair_decide: controller fingerprint
-	Data        json.RawMessage `json:"data,omitempty"`         // console_state / approval_notif payload
+	PairPort    int             `json:"pair_port,omitempty"`
+	PairCode    string          `json:"pair_code,omitempty"`
+	FP          string          `json:"fp,omitempty"`   // pair_decide: controller fingerprint
+	Data        json.RawMessage `json:"data,omitempty"` // console_state / approval_notif payload
 }
 
 // WriteFrame writes a single framed payload.
