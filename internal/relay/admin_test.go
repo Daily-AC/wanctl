@@ -43,8 +43,8 @@ func (s adminTestStmt) Exec([]driver.Value) (driver.Result, error) {
 }
 func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
 	updated := time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
-	if strings.Contains(s.query, "ORDER BY CASE WHEN name = $2") {
-		if !strings.Contains(s.query, "alias IS NOT NULL") || !strings.Contains(s.query, "lower(alias) = lower($2)") {
+	if strings.Contains(s.query, "ORDER BY CASE WHEN device_id=$2") {
+		if !strings.Contains(s.query, "display_name=$2") || !strings.Contains(s.query, "lower(alias)=lower($2)") {
 			return nil, errors.New("device target lookup must include case-insensitive aliases")
 		}
 		target := args[1].(string)
@@ -57,7 +57,7 @@ func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
 		}
 		return rows, nil
 	}
-	if strings.Contains(s.query, "SELECT name, alias FROM devices") {
+	if strings.Contains(s.query, "SELECT device_id, COALESCE(alias, NULLIF(display_name,''), device_id) FROM devices") {
 		return &adminRows{
 			columns: []string{"name", "alias"},
 			values:  [][]driver.Value{{"legion", "laptop"}, {"desk", "office"}},
@@ -140,8 +140,11 @@ func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
 		rows = append(rows, []driver.Value{"book", "", "fp-book", seen, "alice", false, ""})
 		rows = append(rows, []driver.Value{"devbox", "office", "fp-devbox", seen, "bob", true, "exec"})
 	}
+	for i := range rows {
+		rows[i] = append(rows[i], rows[i][0], "", false)
+	}
 	return &adminRows{
-		columns: []string{"name", "alias", "fingerprint", "last_seen", "owner", "shared", "perms"},
+		columns: []string{"name", "alias", "fingerprint", "last_seen", "owner", "shared", "perms", "display_name", "legacy_name", "uses_device_id"},
 		values:  rows,
 	}, nil
 }

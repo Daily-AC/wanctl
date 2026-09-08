@@ -29,8 +29,8 @@ func trustServer(t *testing.T, c *Client, target string) {
 	if required.Target == "" || required.Fingerprint == "" {
 		t.Fatalf("incomplete trust request: %+v", required)
 	}
-	if required.Target != "alice/home-pc" && target == "home-pc" {
-		t.Fatalf("trust request target = %q, want canonical alice/home-pc", required.Target)
+	if target == "home-pc" && (!strings.HasPrefix(required.Target, "alice/") || !transport.ValidDeviceID(strings.TrimPrefix(required.Target, "alice/"))) {
+		t.Fatalf("trust request target = %q, want canonical alice/<device ID>", required.Target)
 	}
 	if _, err := c.PinServer(context.Background(), required.Target, required.Fingerprint, false); err != nil {
 		t.Fatalf("confirm server identity: %v", err)
@@ -116,6 +116,10 @@ func TestPinNamePreservesOwnerNamespace(t *testing.T) {
 
 func TestResolveUnqualifiedTargetUsesRelayNamespace(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/resolve" {
+			http.NotFound(w, r)
+			return
+		} // legacy relay
 		json.NewEncoder(w).Encode(map[string]any{"namespace": "alice", "devices": []string{"build"}})
 	}))
 	defer srv.Close()
@@ -172,6 +176,10 @@ func (f peerRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { 
 // for that exact machine — a confirmation prompt that can only ever say yes.
 func TestResolveMapsAliasOntoTheDeviceItsHostnamePinned(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/resolve" {
+			http.NotFound(w, r)
+			return
+		} // legacy relay
 		json.NewEncoder(w).Encode(map[string]any{
 			"namespace": "alice",
 			"devices":   []string{"bench-02", "atlas"},

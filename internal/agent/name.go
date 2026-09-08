@@ -8,14 +8,9 @@ import (
 	"unicode"
 )
 
-// defaultDeviceName is the name an agent registers under when --name is absent.
-//
-// Everywhere else the hostname is a fine answer. On Android it is not: the
-// hostname is hard-coded to "localhost" on every device, so a phone registers
-// as "localhost" — meaningless in `wanctl peers`, and worse, two Android
-// devices in one namespace collide on the same name. Asking the property
-// service for the model gives a name a human recognises ("pa2353"), which is
-// what the device is actually called.
+// defaultDeviceName supplies a human-readable label when --name is absent.
+// Android's hostname is usually localhost, so use its product model instead.
+// Device identity and routing are independent of this label.
 func defaultDeviceName() string {
 	if runtime.GOOS == "android" {
 		if name := androidDeviceName(getprop); name != "" {
@@ -23,14 +18,6 @@ func defaultDeviceName() string {
 		}
 	}
 	host, _ := os.Hostname()
-	// "localhost" is what Android reports when the property service told us
-	// nothing, and it is no kind of identifier. Elsewhere it is left alone on
-	// purpose: a device that has been registering as "localhost" would silently
-	// re-register under a new name after an upgrade, and every controller's
-	// pinned identity for the old name would stop matching.
-	if host == "" || (runtime.GOOS == "android" && host == "localhost") {
-		return "wanctl-agent"
-	}
 	return host
 }
 

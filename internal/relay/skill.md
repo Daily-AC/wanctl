@@ -71,6 +71,9 @@ wanctl id                                 # this controller's fingerprint
 
 - `--target` is `DEVICE` or its owner-assigned alias (your namespace), or
   `NS/DEVICE` / `NS/ALIAS` (shared). `wanctl peers` shows aliases in parentheses.
+  New agents use persistent UUID device IDs, independent of names and aliases.
+  Names and aliases may repeat: use the full ID whenever a label is ambiguous.
+  Renaming does not change identity; a changed certificate still requires verification.
   If exactly one device is online you may omit `--target`.
 - Persistent session: separate `exec` calls share working dir + env (like a real
   shell) unless `--oneshot`.

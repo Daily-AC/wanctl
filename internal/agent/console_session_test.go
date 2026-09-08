@@ -50,7 +50,7 @@ func TestTrustedControllerCannotOpenAdminConsole(t *testing.T) {
 			Session:         "test-session",
 			CallerNamespace: "owner",
 			OwnerNamespace:  "owner",
-			Device:          "dev1",
+			Device:          a.DeviceID(),
 			Capabilities:    sessionauth.FullCapabilities,
 		})
 	})

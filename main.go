@@ -452,7 +452,7 @@ func cmdPortal(args []string) error {
 
 func cmdAgent(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("agent", flag.ExitOnError)
-	name := fs.String("name", "", "device name (default hostname)")
+	name := fs.String("name", "", "display name (default hostname; does not change device ID)")
 	relayURL := fs.String("relay", settingValue("relay"), "relay ws(s) URL")
 	token := fs.String("token", envOr("WANCTL_TOKEN", config.StoredToken()), "access/registration token")
 	shell := fs.String("shell", "", "shell (default powershell on Windows, /bin/sh elsewhere)")
@@ -530,7 +530,7 @@ func cmdExec(ctx context.Context, args []string) error {
 	ctx, stopSignals := signal.NotifyContext(ctx, os.Interrupt)
 	defer stopSignals()
 	fs := flag.NewFlagSet("exec", flag.ExitOnError)
-	target := fs.String("target", "", "device (NS/DEV or DEV)")
+	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
 	oneShot := fs.Bool("oneshot", false, "fresh shell, no session state")
 	cwd := fs.String("cwd", "", "working directory on the device (also the policy scope)")
 	scriptPath := fs.String("script", "", "run a local script file on the device instead of a command string;\n"+
@@ -619,7 +619,7 @@ func cmdExec(ctx context.Context, args []string) error {
 // command and a screenful of binary.
 func cmdScreenshot(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("screenshot", flag.ExitOnError)
-	target := fs.String("target", "", "device (NS/DEV or DEV)")
+	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
 	out := fs.String("o", "", "local file to write (default screenshot-<device>-<time>.png; \"-\" writes to stdout)")
 	via := fs.String("via", "", "pin the elevation channel: su | adb")
 	fs.Parse(args)
@@ -775,7 +775,7 @@ func cmdPull(ctx context.Context, args []string) error {
 
 func cmdPair(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("pair", flag.ExitOnError)
-	target := fs.String("target", "", "device (NS/DEV or DEV); positional <device> also accepted")
+	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV); positional <device> also accepted")
 	fs.Parse(args)
 	if *target == "" && fs.NArg() > 0 {
 		*target = fs.Arg(0)
@@ -859,7 +859,11 @@ func cmdID() error {
 		return err
 	}
 	dir, _ := transport.ConfigDir()
-	fmt.Printf("fingerprint: %s\nconfig dir:  %s\n", id.Fingerprint, dir)
+	deviceID, err := transport.LoadOrCreateDeviceID()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("device ID:  %s\nfingerprint: %s\nconfig dir:  %s\n", deviceID, id.Fingerprint, dir)
 	return nil
 }
 

@@ -133,8 +133,8 @@ func (c *Client) Peers(ctx context.Context) ([]string, error) {
 	return info.Devices, nil
 }
 
-// PeersWithAliases lists online device names and the owner-assigned aliases
-// keyed by real device name.
+// PeersWithAliases lists canonical device IDs and their display labels. Legacy
+// devices retain their name as the route until upgraded.
 func (c *Client) PeersWithAliases(ctx context.Context) ([]string, map[string]string, error) {
 	info, err := c.peerInfo(ctx)
 	if err != nil {
@@ -146,17 +146,21 @@ func (c *Client) PeersWithAliases(ctx context.Context) ([]string, map[string]str
 	return info.Devices, info.Aliases, nil
 }
 
-// PeerAliases lists every exact spelling accepted for an online target: real
-// names and owner-assigned aliases, both short and namespace-qualified.
+// PeerAliases lists IDs and unambiguous display labels for target completion,
+// both short and namespace-qualified.
 func (c *Client) PeerAliases(ctx context.Context) ([]string, error) {
 	info, err := c.peerInfo(ctx)
 	if err != nil {
 		return nil, err
 	}
+	counts := map[string]int{}
+	for _, label := range info.Aliases {
+		counts[strings.ToLower(label)]++
+	}
 	aliases := make([]string, 0, len(info.Devices)*4)
 	for _, device := range info.Devices {
 		aliases = append(aliases, device, info.Namespace+"/"+device)
-		if alias := info.Aliases[device]; alias != "" {
+		if alias := info.Aliases[device]; alias != "" && counts[strings.ToLower(alias)] == 1 {
 			aliases = append(aliases, alias, info.Namespace+"/"+alias)
 		}
 	}
@@ -199,10 +203,10 @@ func (c *Client) peerInfo(ctx context.Context) (peerInfo, error) {
 	return out, nil
 }
 
-// pinName is the canonical owner namespace plus device name.
+// pinName is the canonical owner namespace plus device ID.
 func pinName(target string) string { return strings.TrimSpace(target) }
 
-func (c *Client) resolve(ctx context.Context, target string) (string, error) {
+func (c *Client) resolveLegacy(ctx context.Context, target string) (string, error) {
 	target = strings.TrimSpace(target)
 	if strings.Contains(target, "/") {
 		parts := strings.Split(target, "/")
@@ -225,6 +229,72 @@ func (c *Client) resolve(ctx context.Context, target string) (string, error) {
 		return "", fmt.Errorf("no devices online for this token")
 	}
 	return "", fmt.Errorf("multiple devices online; pass --target: %s", strings.Join(info.Devices, ", "))
+}
+
+// resolve canonicalizes both qualified and unqualified names before pinning.
+// Only a 404 (older relay) permits the old peers-based resolution path.
+func (c *Client) resolve(ctx context.Context, target string) (string, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		var err error
+		target, err = c.resolveLegacy(ctx, target)
+		if err != nil {
+			return "", err
+		}
+	}
+	if strings.Contains(target, "/") {
+		parts := strings.Split(target, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return "", fmt.Errorf("invalid target %q: expected owner/device", target)
+		}
+	}
+	base, err := config.RelayHTTPOrigin(c.relayURL)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", base+"/resolve?"+url.Values{"target": {target}}.Encode(), nil)
+	if err != nil {
+		return "", err
+	}
+	admission.SetBearer(req, c.token)
+	resp, err := c.httpc.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return c.resolveLegacy(ctx, target)
+	}
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("cannot resolve device (%d); for duplicate names use a device ID", resp.StatusCode)
+	}
+	var out struct {
+		Target       string `json:"target"`
+		LegacyTarget string `json:"legacy_target"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	parts := strings.Split(out.Target, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("relay returned invalid device target")
+	}
+	if out.LegacyTarget != "" && c.known != nil {
+		legacyParts := strings.Split(out.LegacyTarget, "/")
+		if len(legacyParts) != 2 || legacyParts[0] != parts[0] || legacyParts[1] == "" {
+			return "", fmt.Errorf("relay returned invalid legacy device target")
+		}
+		if _, exists := c.known.GetByName(out.Target); !exists {
+			if old, exists := c.known.GetByName(out.LegacyTarget); exists {
+				// Copy the stored pin, never the relay's offered fingerprint. A mismatch
+				// still fails PinServer or the subsequent TLS handshake.
+				if err := c.known.Pin(out.Target, old.Fingerprint, false); err != nil {
+					return "", err
+				}
+			}
+		}
+	}
+	return out.Target, nil
 }
 
 // canonicalDevice maps an owner-assigned alias back to the device's real name,

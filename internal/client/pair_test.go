@@ -105,8 +105,8 @@ func TestPairRequiresApproval(t *testing.T) {
 	if pairingURL == "" {
 		t.Fatal("Pair: reject path must return a non-empty pairingURL")
 	}
-	if !strings.Contains(pairingURL, "/#pair?") || !strings.Contains(pairingURL, "device=home-pc") {
-		t.Errorf("pairingURL %q doesn't look like the portal pair URL with device=home-pc", pairingURL)
+	if !strings.Contains(pairingURL, "/#pair?") || !strings.Contains(pairingURL, "device="+ag.DeviceID()) {
+		t.Errorf("pairingURL %q doesn't look like the portal pair URL with its device ID", pairingURL)
 	}
 }
 

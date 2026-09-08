@@ -43,7 +43,7 @@ func TestHTTPTransportExecAndFileRoundTrip(t *testing.T) {
 	}
 
 	devs, err := c.Peers(context.Background())
-	if err != nil || len(devs) != 1 || devs[0] != "home-pc" {
+	if err != nil || len(devs) != 1 || devs[0] != ag.DeviceID() {
 		t.Fatalf("peers: %v err=%v", devs, err)
 	}
 	trustServer(t, c, "home-pc")

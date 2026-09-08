@@ -43,7 +43,15 @@ func withDialer(t *testing.T, s *Server) *transport.Store {
 	}
 	known := transport.NewMemStore()
 	s.known = known
-	s.dialer = client.NewWith(id, known, "https://relay.invalid", "tok", "http")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/resolve" {
+			json.NewEncoder(w).Encode(map[string]string{"target": r.URL.Query().Get("target")})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	s.dialer = client.NewWith(id, known, srv.URL, "tok", "http")
 	return known
 }
 

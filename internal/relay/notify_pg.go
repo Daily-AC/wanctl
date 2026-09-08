@@ -160,11 +160,12 @@ func (p *PGStore) RecordNotifyHealth(health NotifyHealth) error {
 func (p *PGStore) UpsertDeviceCreated(namespace, name, fingerprint string) bool {
 	var created bool
 	err := p.db.QueryRow(
-		`INSERT INTO devices (owner_namespace, name, fingerprint, last_seen)
-		 VALUES ($1,$2,NULLIF($3,''),now())
-		 ON CONFLICT (owner_namespace, name) DO UPDATE
+		`INSERT INTO devices (owner_namespace, device_id, display_name, fingerprint, last_seen)
+		 VALUES ($1,$2,$2,NULLIF($3,''),now())
+		 ON CONFLICT (owner_namespace, device_id) DO UPDATE
 		   SET last_seen = now(),
 		       fingerprint = COALESCE(NULLIF(EXCLUDED.fingerprint,''), devices.fingerprint)
+ WHERE NOT devices.uses_device_id
 		 RETURNING (xmax = 0)`, namespace, name, fingerprint,
 	).Scan(&created)
 	return err == nil && created

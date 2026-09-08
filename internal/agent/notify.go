@@ -39,7 +39,7 @@ type agentEventReport struct {
 }
 
 func (a *Agent) refreshNotifyPolicy(ctx context.Context) error {
-	q := url.Values{"device": {a.opts.Name}, "inst": {a.inst}}.Encode()
+	q := url.Values{"device": {a.DeviceID()}, "inst": {a.inst}}.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpBase(a.opts.RelayURL)+"/agent/notify-policy?"+q, nil)
 	if err != nil {
 		return err
@@ -120,7 +120,7 @@ func (a *Agent) reportNotify(report agentEventReport) {
 }
 
 func (a *Agent) postNotifyEvent(body []byte, event string) {
-	q := url.Values{"device": {a.opts.Name}, "inst": {a.inst}}.Encode()
+	q := url.Values{"device": {a.DeviceID()}, "inst": {a.inst}}.Encode()
 	target := httpBase(a.opts.RelayURL) + "/agent/events?" + q
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
