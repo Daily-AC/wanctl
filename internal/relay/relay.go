@@ -27,6 +27,7 @@ import (
 
 type agentConn struct {
 	device string
+	name   string
 	ns     string
 	inst   string
 	ctrl   io.Writer
@@ -74,9 +75,10 @@ type Relay struct {
 	portalNS    string
 	logs        *serverlog.Buffer
 
-	mu      sync.Mutex
-	agents  map[string]*agentConn      // key "ns/device" (WebSocket transport)
-	pending map[string]*pendingSession // key session id (WebSocket transport)
+	registrationMu sync.Mutex
+	mu             sync.Mutex
+	agents         map[string]*agentConn      // key "ns/device" (WebSocket transport)
+	pending        map[string]*pendingSession // key session id (WebSocket transport)
 
 	hmu        sync.Mutex
 	hagents    map[string]*httpAgent   // key "ns/device" (HTTP transport)
@@ -107,6 +109,7 @@ func New(ts TokenStore) *Relay {
 // Handler returns the relay's HTTP mux.
 func (r *Relay) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/resolve", r.handleResolve)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("/agent", r.handleAgent)
 	mux.HandleFunc("/agent/notify-policy", r.handleAgentNotifyPolicy)
@@ -224,12 +227,26 @@ func (r *Relay) dialAllowed(callerNS, target string) (targetKey string, auth ses
 	}
 	i := strings.Index(target, "/")
 	targetNS, device := target[:i], target[i+1:]
-	if r.aliases != nil {
+	if strict, yes := r.aliases.(interface {
+		ResolveDeviceTargetStrict(string, string) (string, error)
+	}); yes {
+		resolved, err := strict.ResolveDeviceTargetStrict(targetNS, device)
+		if err != nil {
+			return "", auth, false
+		}
+		device = resolved
+	} else if r.aliases != nil {
 		if resolved, found := r.aliases.ResolveDeviceTarget(targetNS, device); found {
 			device = resolved
 			target = targetNS + "/" + device
 		}
 	}
+	resolved, unambiguous := r.resolveLiveLabel(targetNS, device)
+	if !unambiguous {
+		return "", auth, false
+	}
+	device = resolved
+	target = targetNS + "/" + device
 	auth = sessionauth.Open{CallerNamespace: callerNS, OwnerNamespace: targetNS, Device: device}
 	if r.portalNS != "" && callerNS == r.portalNS {
 		auth.Capabilities = sessionauth.FullCapabilities
@@ -271,19 +288,46 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	nc := wsconn.FromAccepted(req.Context(), c)
 	dec := json.NewDecoder(nc)
 	var reg struct {
-		Op, Device, Fingerprint, Inst string
+		Op, Device, Fingerprint, Inst, Name string
+		DeviceID                            string `json:"device_id"`
 	}
 	if err := dec.Decode(&reg); err != nil || reg.Op != "register" || reg.Device == "" {
 		c.Close(websocket.StatusPolicyViolation, "expected register")
 		return
 	}
+	r.registrationMu.Lock()
+	created := false
+	if reg.DeviceID != "" {
+		if reg.Device != reg.DeviceID {
+			r.registrationMu.Unlock()
+			c.Close(websocket.StatusPolicyViolation, "device ID mismatch")
+			return
+		}
+		var err error
+		created, err = r.registerDeviceID(ns, reg.DeviceID, reg.Name, reg.Fingerprint)
+		if err != nil {
+			r.registrationMu.Unlock()
+			c.Close(websocket.StatusPolicyViolation, "device registration failed")
+			return
+		}
+	}
+	if reg.DeviceID == "" {
+		if err := r.allowLegacyRegistration(ns, reg.Device); err != nil {
+			r.registrationMu.Unlock()
+			c.Close(websocket.StatusPolicyViolation, err.Error())
+			return
+		}
+	}
 	key := ns + "/" + reg.Device
 	wasLive := r.deviceLive(ns, reg.Device)
-	ac := &agentConn{device: reg.Device, ns: ns, inst: reg.Inst, ctrl: nc}
+	ac := &agentConn{device: reg.Device, name: reg.Name, ns: ns, inst: reg.Inst, ctrl: nc}
 	r.mu.Lock()
 	r.agents[key] = ac
 	r.mu.Unlock()
-	created := r.recordDeviceRegistration(ns, reg.Device, reg.Fingerprint)
+	if reg.DeviceID == "" {
+		created = r.recordDeviceRegistration(ns, reg.Device, reg.Fingerprint)
+	}
+	r.registrationMu.Unlock()
 	if !wasLive {
 		r.emitDeviceEvent(ns, reg.Device, onlineEvent(reg.Device))
 	}

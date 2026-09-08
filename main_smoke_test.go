@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"net/http/httptest"
 	"os/exec"
 	"strings"
 	"testing"
 
 	"wanctl/internal/config"
+	"wanctl/internal/relay"
 	"wanctl/internal/transport"
 )
 
@@ -104,7 +106,9 @@ func TestPOSIXShellQuoteLossWarning(t *testing.T) {
 func TestCmdTrustServerPinsVerifiedIdentity(t *testing.T) {
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	t.Setenv("WANCTL_TOKEN", "tok")
-	t.Setenv("WANCTL_RELAY", "http://relay.invalid")
+	srv := httptest.NewServer(relay.New(relay.EnvTokenStore("tok:alice")).Handler())
+	defer srv.Close()
+	t.Setenv("WANCTL_RELAY", srv.URL)
 	fp := transport.Fingerprint([]byte("verified device cert"))
 	if err := cmdTrust([]string{"server", "--target", "alice/build", "--fingerprint", fp}); err != nil {
 		t.Fatal(err)

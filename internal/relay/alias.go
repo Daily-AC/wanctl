@@ -3,11 +3,12 @@ package relay
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/jackc/pgx/v5/pgconn"
+	"wanctl/internal/transport"
 )
 
 var (
@@ -55,8 +56,8 @@ func (p *PGStore) SetDeviceAlias(namespace, device, alias string) (DeviceAlias, 
 		var out DeviceAlias
 		err := p.db.QueryRow(
 			`UPDATE devices SET alias = NULL
-			  WHERE owner_namespace = $1 AND name = $2
-			  RETURNING name, COALESCE(alias,'')`, namespace, device,
+			  WHERE owner_namespace = $1 AND device_id = $2
+			  RETURNING device_id, COALESCE(alias,'')`, namespace, device,
 		).Scan(&out.Name, &out.Alias)
 		if errors.Is(err, sql.ErrNoRows) {
 			return DeviceAlias{}, ErrDeviceNotFound
@@ -64,68 +65,62 @@ func (p *PGStore) SetDeviceAlias(namespace, device, alias string) (DeviceAlias, 
 		return out, err
 	}
 
-	var exists, shadows, taken bool
-	err = p.db.QueryRow(
-		`SELECT
-		   EXISTS (SELECT 1 FROM devices WHERE owner_namespace = $1 AND name = $2),
-		   EXISTS (SELECT 1 FROM devices WHERE owner_namespace = $1 AND lower(name) = lower($3)),
-		   EXISTS (SELECT 1 FROM devices
-		            WHERE owner_namespace = $1 AND name <> $2
-		              AND alias IS NOT NULL AND lower(alias) = lower($3))`,
-		namespace, device, alias,
-	).Scan(&exists, &shadows, &taken)
-	if err != nil {
-		return DeviceAlias{}, err
-	}
-	if !exists {
-		return DeviceAlias{}, ErrDeviceNotFound
-	}
-	if shadows {
-		return DeviceAlias{}, ErrAliasShadowsDevice
-	}
-	if taken {
-		return DeviceAlias{}, ErrAliasTaken
-	}
-
 	var out DeviceAlias
 	err = p.db.QueryRow(
 		`UPDATE devices SET alias = $3
-		  WHERE owner_namespace = $1 AND name = $2
-		  RETURNING name, alias`, namespace, device, alias,
+		  WHERE owner_namespace = $1 AND device_id = $2
+		  RETURNING device_id, alias`, namespace, device, alias,
 	).Scan(&out.Name, &out.Alias)
-	if isAliasUniqueViolation(err) {
-		return DeviceAlias{}, ErrAliasTaken
-	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return DeviceAlias{}, ErrDeviceNotFound
 	}
 	return out, err
 }
 
-func isAliasUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505" &&
-		pgErr.ConstraintName == "devices_owner_namespace_alias_key"
+// ResolveDeviceTarget implements the legacy store interface. Strict callers
+// use ResolveDeviceTargetStrict to distinguish an ambiguous label from failure.
+func (p *PGStore) ResolveDeviceTarget(namespace, target string) (string, bool) {
+	id, err := p.ResolveDeviceTargetStrict(namespace, target)
+	return id, err == nil
 }
 
-// ResolveDeviceTarget returns an exact device name first, then a
-// case-insensitive alias match. Database errors leave the target unchanged.
-func (p *PGStore) ResolveDeviceTarget(namespace, target string) (string, bool) {
-	var name string
-	err := p.db.QueryRow(
-		`SELECT name FROM devices
-		  WHERE owner_namespace = $1
-		    AND (name = $2 OR (alias IS NOT NULL AND lower(alias) = lower($2)))
-		  ORDER BY CASE WHEN name = $2 THEN 0 ELSE 1 END
-		  LIMIT 1`, namespace, target,
-	).Scan(&name)
-	return name, err == nil
+// ResolveDeviceTargetStrict prefers the immutable route, then a unique name or
+// alias. Include offline devices so a name does not silently change meaning.
+func (p *PGStore) ResolveDeviceTargetStrict(namespace, target string) (string, error) {
+	rows, err := p.db.Query(`SELECT device_id FROM devices WHERE owner_namespace=$1
+ AND (device_id=$2 OR display_name=$2 OR lower(alias)=lower($2))
+ ORDER BY CASE WHEN device_id=$2 THEN 0 ELSE 1 END`, namespace, target)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var matches []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		matches = append(matches, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(matches) > 0 && matches[0] == target && transport.ValidDeviceID(target) {
+		return target, nil
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("ambiguous device name; use a device ID")
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	return "", ErrDeviceNotFound
 }
 
 func (p *PGStore) ListDeviceAliases(namespace string) (map[string]string, error) {
 	rows, err := p.db.Query(
-		`SELECT name, alias FROM devices
-		  WHERE owner_namespace = $1 AND alias IS NOT NULL`, namespace)
+		`SELECT device_id, COALESCE(alias, NULLIF(display_name,''), device_id) FROM devices
+		  WHERE owner_namespace = $1`, namespace)
 	if err != nil {
 		return nil, err
 	}

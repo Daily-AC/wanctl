@@ -527,6 +527,18 @@ func (r *Relay) adminACL(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "namespace, device, grantee and perms are required", http.StatusBadRequest)
 			return
 		}
+		if body.Device != "" {
+			if store, ok := r.aliases.(interface {
+				ResolveDeviceTargetStrict(string, string) (string, error)
+			}); ok {
+				target, err := store.ResolveDeviceTargetStrict(body.Namespace, body.Device)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
+				body.Device = target
+			}
+		}
 		if err := r.admin.AddACL(body.Namespace, body.Device, body.Grantee, body.Perms); err != nil {
 			if errors.Is(err, ErrNotFriends) {
 				writeErrorToken(w, http.StatusForbidden, ErrNotFriends.Error())
@@ -931,10 +943,11 @@ func (p *PGStore) RevokeInvite(id int) (bool, error) {
 // Best-effort: never blocks registration on a DB hiccup.
 func (p *PGStore) UpsertDevice(namespace, name, fingerprint string) {
 	_, _ = p.db.Exec(
-		`INSERT INTO devices (owner_namespace, name, fingerprint, last_seen) VALUES ($1,$2,NULLIF($3,''),now())
-		   ON CONFLICT (owner_namespace, name) DO UPDATE
+		`INSERT INTO devices (owner_namespace, device_id, display_name, fingerprint, last_seen) VALUES ($1,$2,$2,NULLIF($3,''),now())
+		   ON CONFLICT (owner_namespace, device_id) DO UPDATE
 		     SET last_seen = now(),
-		         fingerprint = COALESCE(NULLIF(EXCLUDED.fingerprint,''), devices.fingerprint)`,
+		         fingerprint = COALESCE(NULLIF(EXCLUDED.fingerprint,''), devices.fingerprint)
+ WHERE NOT devices.uses_device_id`,
 		namespace, name, fingerprint)
 }
 
@@ -983,46 +996,53 @@ func (p *PGStore) RevokeToken(namespace string, id int) error {
 
 func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 	rows, err := p.db.Query(
-		`SELECT name, alias, fingerprint, last_seen, owner_namespace, shared, perms
+		`SELECT device_id, alias, fingerprint, last_seen, owner_namespace, shared, perms, display_name, legacy_name, uses_device_id
 		   FROM (
-		     SELECT d.name,
+		     SELECT d.device_id,
 		            COALESCE(d.alias,'') AS alias,
 		            COALESCE(d.fingerprint,'') AS fingerprint,
 		            d.last_seen,
 		            d.owner_namespace,
 		            false AS shared,
-		            '' AS perms
+		            '' AS perms, d.display_name, COALESCE(d.legacy_name,'') AS legacy_name, d.uses_device_id
 		       FROM devices d
 		      WHERE d.owner_namespace = $1
 		     UNION ALL
-		     SELECT d.name,
+		     SELECT d.device_id,
 		            COALESCE(d.alias,'') AS alias,
 		            COALESCE(d.fingerprint,'') AS fingerprint,
 		            d.last_seen,
 		            d.owner_namespace,
 		            true AS shared,
-		            a.perms
+		            a.perms, d.display_name, COALESCE(d.legacy_name,'') AS legacy_name, d.uses_device_id
 		       FROM acl a
 		       JOIN devices d
 		         ON d.owner_namespace = a.owner_namespace
-		        AND d.name = a.device
+		        AND d.device_id = a.device
 		      WHERE a.grantee_namespace = $1
 		        AND a.revoked_at IS NULL
 		   ) visible
-		  ORDER BY name, shared, owner_namespace`, namespace)
+		  ORDER BY display_name, shared, owner_namespace, device_id`, namespace)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var name, alias, fp, owner, perms string
+		var name, alias, fp, owner, perms, displayName, legacyName string
+		var usesID bool
 		var seen sql.NullTime
 		var shared bool
-		rows.Scan(&name, &alias, &fp, &seen, &owner, &shared, &perms)
+		if err := rows.Scan(&name, &alias, &fp, &seen, &owner, &shared, &perms, &displayName, &legacyName, &usesID); err != nil {
+			return nil, err
+		}
 		row := map[string]any{
+			// `name` is retained as a compatibility alias for the canonical route.
 			"name": name, "alias": alias, "fingerprint": fp, "last_seen": nullTime(seen),
-			"owner": owner, "shared": shared,
+			"owner": owner, "shared": shared, "display_name": displayName, "legacy_name": legacyName,
+		}
+		if usesID {
+			row["device_id"] = name
 		}
 		if shared {
 			row["perms"] = perms
@@ -1078,7 +1098,7 @@ func (p *PGStore) ListUsers() ([]string, error) {
 
 // RemoveDevice unbinds a device from a namespace (and any ACL grants for it).
 func (p *PGStore) RemoveDevice(namespace, device string) error {
-	if _, err := p.db.Exec(`DELETE FROM devices WHERE owner_namespace=$1 AND name=$2`, namespace, device); err != nil {
+	if _, err := p.db.Exec(`DELETE FROM devices WHERE owner_namespace=$1 AND device_id=$2`, namespace, device); err != nil {
 		return err
 	}
 	_, _ = p.db.Exec(`DELETE FROM acl WHERE owner_namespace=$1 AND device=$2`, namespace, device)

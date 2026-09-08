@@ -5,6 +5,9 @@ agent's shell), over an end-to-end-encrypted, relayed channel. A web portal
 issues tokens and manages sharing; a Postgres-backed relay authenticates and
 brokers; devices enforce a local, approval-based permission policy.
 
+Devices use persistent UUIDs for routing and associations, independently of their
+display names and TLS fingerprints. See [device identity and upgrading](device-identity.md).
+
 ```
 controller (you/agent) ──┐                            ┌── device (wanctl agent)
    wanctl exec/push/logs  │   relay (public broker)   │     policy engine + approval

@@ -79,7 +79,7 @@ func TestRemoteConsoleApprovalOverRelay(t *testing.T) {
 	// Wait for the device to come online (relay registry visible to the controller).
 	online := false
 	for i := 0; i < 100; i++ {
-		if devs, _ := ctrl.Peers(ctx); len(devs) == 1 && devs[0] == "lab" {
+		if devs, _ := ctrl.Peers(ctx); len(devs) == 1 && devs[0] == ag.DeviceID() {
 			online = true
 			break
 		}

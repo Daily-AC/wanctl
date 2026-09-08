@@ -15,12 +15,12 @@ import (
 // httpAgent is an online device reachable over the HTTP transport. The agent
 // keeps a long-poll on /h/poll; the relay pushes session ids to open onto `open`.
 type httpAgent struct {
-	ns, device string
-	open       chan sessionauth.Open
-	lastSeen   time.Time
-	inst       string
-	retired    map[string]struct{}
-	changed    chan struct{}
+	ns, device, name string
+	open             chan sessionauth.Open
+	lastSeen         time.Time
+	inst             string
+	retired          map[string]struct{}
+	changed          chan struct{}
 }
 
 // sideQueue is one direction of a session's byte flow. The relay never inspects
@@ -132,27 +132,52 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "device required", http.StatusBadRequest)
 		return
 	}
+	created := false
+	deviceID := req.URL.Query().Get("device_id")
 	key := ns + "/" + device
 	inst := req.URL.Query().Get("inst")
 	r.startHTTPReaper()
+	r.registrationMu.Lock()
 	r.hmu.Lock()
 	a := r.hagents[key]
 	wasHTTPLive := a != nil && time.Since(a.lastSeen) <= httpAgentTTL
 	if a == nil {
 		if r.countNamespaceAgentsLocked(ns) >= httpAgentsPerNS {
 			r.hmu.Unlock()
-			http.Error(w, "too many devices registered for this namespace", http.StatusTooManyRequests)
+			r.registrationMu.Unlock()
+			http.Error(w, "too many devices registered for this namespace", 429)
 			return
 		}
 		a = &httpAgent{ns: ns, device: device, open: make(chan sessionauth.Open, 8), changed: make(chan struct{})}
-		r.hagents[key] = a
 	}
-	if inst != "" {
-		if _, old := a.retired[inst]; old {
-			r.hmu.Unlock()
-			http.Error(w, "another agent instance registered this device name", http.StatusConflict)
+	if _, old := a.retired[inst]; inst != "" && old {
+		r.hmu.Unlock()
+		r.registrationMu.Unlock()
+		http.Error(w, "another agent instance registered this device ID", 409)
+		return
+	}
+	r.hmu.Unlock()
+	var err error
+	if deviceID != "" {
+		if deviceID != device {
+			r.registrationMu.Unlock()
+			http.Error(w, "device ID mismatch", 400)
 			return
 		}
+		created, err = r.registerDeviceID(ns, deviceID, req.URL.Query().Get("name"), req.URL.Query().Get("fp"))
+	} else {
+		err = r.allowLegacyRegistration(ns, device)
+		if err == nil {
+			created = r.recordDeviceRegistration(ns, device, req.URL.Query().Get("fp"))
+		}
+	}
+	if err != nil {
+		r.registrationMu.Unlock()
+		http.Error(w, "device registration failed", 409)
+		return
+	}
+	r.hmu.Lock()
+	if inst != "" {
 		if a.inst != "" && a.inst != inst {
 			if a.retired == nil {
 				a.retired = map[string]struct{}{}
@@ -163,11 +188,13 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 		}
 		a.inst = inst
 	}
+	a.name = req.URL.Query().Get("name")
 	a.lastSeen = time.Now()
+	r.hagents[key] = a
 	changed := a.changed
 	r.hmu.Unlock()
+	r.registrationMu.Unlock()
 	wasLive := wasHTTPLive || r.wsDeviceLive(key)
-	created := r.recordDeviceRegistration(ns, device, req.URL.Query().Get("fp"))
 	if !wasLive {
 		r.emitDeviceEvent(ns, device, onlineEvent(device))
 	}

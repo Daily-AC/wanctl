@@ -240,6 +240,18 @@ func (r *Relay) userShareGrant(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if body.Device != "" {
+		if store, ok := r.aliases.(interface {
+			ResolveDeviceTargetStrict(string, string) (string, error)
+		}); ok {
+			target, err := store.ResolveDeviceTargetStrict(namespace, body.Device)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			body.Device = target
+		}
+	}
 	id, err := r.admin.GrantACL(namespace, body.Device, body.Grantee, body.Perms)
 	if errors.Is(err, ErrNotFriends) {
 		writeErrorToken(w, http.StatusForbidden, ErrNotFriends.Error())
@@ -271,6 +283,18 @@ func (r *Relay) userShareRevoke(w http.ResponseWriter, req *http.Request) {
 	if body.ID <= 0 && (body.Device == "" || body.Grantee == "") {
 		http.Error(w, "id or device and grantee required", http.StatusBadRequest)
 		return
+	}
+	if body.Device != "" {
+		if store, ok := r.aliases.(interface {
+			ResolveDeviceTargetStrict(string, string) (string, error)
+		}); ok {
+			target, err := store.ResolveDeviceTargetStrict(namespace, body.Device)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			body.Device = target
+		}
 	}
 	revoked, err := r.admin.RevokeACLMatch(namespace, body.ID, body.Device, body.Grantee)
 	if err != nil {

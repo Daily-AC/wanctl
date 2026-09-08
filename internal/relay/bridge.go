@@ -214,7 +214,12 @@ func (r *Relay) liveDevices(ns string) []string {
 
 func (r *Relay) livePeers(ns string) ([]string, map[string]string) {
 	devices := r.liveDevices(ns)
-	aliases := map[string]string{}
+	aliases := r.liveLabels(ns)
+	for id, label := range aliases {
+		if id == label {
+			delete(aliases, id)
+		}
+	}
 	if r.aliases == nil || len(devices) == 0 {
 		return devices, aliases
 	}
@@ -223,7 +228,7 @@ func (r *Relay) livePeers(ns string) ([]string, map[string]string) {
 		return devices, aliases
 	}
 	for _, device := range devices {
-		if alias := stored[device]; alias != "" {
+		if alias := stored[device]; alias != "" && alias != device {
 			aliases[device] = alias
 		}
 	}
