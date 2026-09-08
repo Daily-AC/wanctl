@@ -15,13 +15,13 @@ wanctl 在 Android 上是以**被控设备**的身份运行的——你从一个
 | 需要另装一个 app | 不需要 | 需要 Termux，从 F-Droid 装 |
 | 依赖的绕行手法 | 没有 | 四个，全在 Termux 的内部机制上 |
 
-发出去的产物：每个 ABI 一个 APK 加一个裸二进制——`wanctl-android-arm64`
-（`arm64-v8a`，几乎所有手机和平板都是这个）、`wanctl-android-arm`
-（`armeabi-v7a`：老手机、电视盒子、手表）、`wanctl-android-386`（`x86`）和
-`wanctl-android-amd64`（`x86_64`：模拟器、Chromebook），每个都配一个对应的 `.apk`。
-装跟你设备 ABI 对上的那个 APK；之后 app 会通过与它携带的二进制相匹配的 APK 自我更新。
-arm64 那个二进制是静态的，另外三个是经 NDK 链接到 bionic 的，
-因为 Go 对那几个目标没法用内部链接器。
+发出去的产物：每个 ABI 一个 APK 加一个裸二进制，并额外提供给浏览器下载的
+`.tar.gz` 压缩包——`wanctl-android-arm64`（`arm64-v8a`，几乎所有手机和平板都是
+这个）、`wanctl-android-arm`（`armeabi-v7a`：老手机、电视盒子、手表）、
+`wanctl-android-386`（`x86`）和 `wanctl-android-amd64`（`x86_64`：模拟器、
+Chromebook），每个都配一个对应的 `.apk` 和 `.tar.gz`。装跟你设备 ABI 对上的那个
+APK；之后 app 会通过与它携带的二进制相匹配的 APK 自我更新。arm64 那个二进制是
+静态的，另外三个是经 NDK 链接到 bionic 的，因为 Go 对那几个目标没法用内部链接器。
 
 ## 这个 app
 

@@ -1385,14 +1385,14 @@
         var url = function (n) { var a = asset(n); return a ? a.browser_download_url : latest + '/' + n; };
         // 与 scripts/release-targets.sh 同序；每个系统里 64 位在前。
         var NAMES = [
-          ['wanctl-darwin-arm64', 'macOS · Apple silicon'], ['wanctl-darwin-amd64', 'macOS · Intel'],
-          ['wanctl-linux-amd64', 'Linux · x86_64'], ['wanctl-linux-arm64', 'Linux · ARM64'],
-          ['wanctl-linux-386', 'Linux · x86 32-bit'], ['wanctl-linux-arm', 'Linux · ARM 32-bit'],
-          ['wanctl-linux-mipsle', 'Linux · MIPS LE'], ['wanctl-linux-mips', 'Linux · MIPS BE'],
+          ['wanctl-darwin-arm64.tar.gz', 'macOS · Apple silicon'], ['wanctl-darwin-amd64.tar.gz', 'macOS · Intel'],
+          ['wanctl-linux-amd64.tar.gz', 'Linux · x86_64'], ['wanctl-linux-arm64.tar.gz', 'Linux · ARM64'],
+          ['wanctl-linux-386.tar.gz', 'Linux · x86 32-bit'], ['wanctl-linux-arm.tar.gz', 'Linux · ARM 32-bit'],
+          ['wanctl-linux-mipsle.tar.gz', 'Linux · MIPS LE'], ['wanctl-linux-mips.tar.gz', 'Linux · MIPS BE'],
           ['wanctl-windows-amd64.exe', 'Windows · x86_64'], ['wanctl-windows-386.exe', 'Windows · x86 32-bit'],
           ['wanctl-windows-arm64.exe', 'Windows · ARM64'],
-          ['wanctl-android-arm64', 'Android · binary (ARM64)'], ['wanctl-android-arm', 'Android · binary (ARM 32-bit)'],
-          ['wanctl-android-386', 'Android · binary (x86)'], ['wanctl-android-amd64', 'Android · binary (x86_64)']
+          ['wanctl-android-arm64.tar.gz', 'Android · binary (ARM64)'], ['wanctl-android-arm.tar.gz', 'Android · binary (ARM 32-bit)'],
+          ['wanctl-android-386.tar.gz', 'Android · binary (x86)'], ['wanctl-android-amd64.tar.gz', 'Android · binary (x86_64)']
         ];
         var apk = asset('wanctl-android-arm64.apk');
         var apkURL = apk ? apk.browser_download_url : latest + '/wanctl-android-arm64.apk';
