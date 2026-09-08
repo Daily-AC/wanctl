@@ -117,6 +117,16 @@ func newJobStoreWithLimits(l jobLimits) *jobStore {
 	return &jobStore{jobs: map[string]*job{}, limits: l}
 }
 
+// runningCount is how many background jobs are still executing. A job that has
+// finished and is only being retained for polling does not count: it is already
+// over, and the controller that started it has an exit code to collect either
+// way.
+func (s *jobStore) runningCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running
+}
+
 func (s *jobStore) get(id string) *job {
 	s.mu.Lock()
 	defer s.mu.Unlock()

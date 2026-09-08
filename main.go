@@ -518,13 +518,39 @@ func cmdAgent(ctx context.Context, args []string) error {
 	} else {
 		_ = config.RemoveManagedPID(config.ManagedPID())
 	}
+	// handedOver is set when a successor process — the one an auto-update
+	// started — already owns these files. Removing them then would leave the
+	// new agent invisible to `wanctl status` and `wanctl stop`.
+	handedOver := false
 	defer func() {
+		if handedOver {
+			return
+		}
 		_ = config.RemoveManagedPID(pid)
 		_ = config.RemovePID()
 	}()
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return ag.Run(ctx)
+
+	// Said before the relay is dialled, so a log that starts with a connection
+	// failure still records which build produced it.
+	fmt.Printf("wanctl agent %s 已启动\n", buildVersion)
+
+	// The updater stops this agent by cancelling its context; Run returns, and
+	// the restart below hands the device to the binary now on disk.
+	runCtx, stopRun := context.WithCancel(ctx)
+	defer stopRun()
+	updater := startAutoUpdate(runCtx, buildVersion, ag.Busy, stopRun)
+	runErr := ag.Run(runCtx)
+	if updater != nil && updater.updated() {
+		over, err := restartAgentForUpdate(updater.binaryPath(), os.Args, lock)
+		if err != nil {
+			return err
+		}
+		handedOver = over
+		return nil
+	}
+	return runErr
 }
 
 func cmdExec(ctx context.Context, args []string) error {
