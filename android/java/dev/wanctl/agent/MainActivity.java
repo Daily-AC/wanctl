@@ -1080,7 +1080,7 @@ public final class MainActivity extends Activity {
                                 credential = line(result.out, "凭证:");
                                 loggedIn = credential.contains("已登录");
                                 fingerprint = line(id.out, "fingerprint:");
-                                deviceId = line(id.out, "device_id:");
+                                deviceId = line(id.out, "device ID:");
                                 boolean first = !ready;
                                 ready = true;
                                 if (first && !pendingPage.isEmpty()) {
