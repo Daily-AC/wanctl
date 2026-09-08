@@ -18,7 +18,12 @@ import (
 	wanrelease "wanctl/internal/release"
 )
 
-func signedUpdateServer(t *testing.T, payload []byte, mutate func(path string, body []byte) []byte) *httptest.Server {
+// signedUpdateServer serves one release the way a relay's /dl mirror or a
+// GitHub release page does: manifest, detached signature, artifact. The OS,
+// arch and version are parameters because the auto-updater downloads for the
+// platform it is actually running on, so its tests cannot use a fixture that is
+// permanently linux/amd64.
+func signedUpdateServer(t *testing.T, payload []byte, goos, goarch, version string, mutate func(path string, body []byte) []byte) *httptest.Server {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -27,9 +32,10 @@ func signedUpdateServer(t *testing.T, payload []byte, mutate func(path string, b
 	wanrelease.TrustedPublicKeys = base64.StdEncoding.EncodeToString(pub)
 	t.Cleanup(func() { wanrelease.TrustedPublicKeys = "" })
 	h := sha256.Sum256(payload)
+	artifact := wanrelease.ArtifactName(goos, goarch)
 	manifest, err := json.Marshal(wanrelease.Manifest{
-		Schema: 1, Version: "v2.0.0", PublishedAt: time.Now().UTC(),
-		Artifacts: []wanrelease.Artifact{{OS: "linux", Arch: "amd64", Name: "wanctl-linux-amd64", Size: int64(len(payload)), SHA256: hex.EncodeToString(h[:])}},
+		Schema: 1, Version: version, PublishedAt: time.Now().UTC(),
+		Artifacts: []wanrelease.Artifact{{OS: goos, Arch: goarch, Name: artifact, Size: int64(len(payload)), SHA256: hex.EncodeToString(h[:])}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -38,11 +44,11 @@ func signedUpdateServer(t *testing.T, payload []byte, mutate func(path string, b
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var body []byte
 		switch req.URL.Path {
-		case "/dl/manifest.json":
+		case "/dl/" + wanrelease.ManifestName:
 			body = manifest
-		case "/dl/manifest.json.sig":
+		case "/dl/" + wanrelease.SignatureName:
 			body = signature
-		case "/dl/wanctl-linux-amd64":
+		case "/dl/" + artifact:
 			body = payload
 		default:
 			http.NotFound(w, req)
@@ -56,7 +62,7 @@ func signedUpdateServer(t *testing.T, payload []byte, mutate func(path string, b
 }
 
 func TestDownloadSignedUpdateVerifiesBeforeReturning(t *testing.T) {
-	srv := signedUpdateServer(t, []byte("signed binary"), nil)
+	srv := signedUpdateServer(t, []byte("signed binary"), "linux", "amd64", "v2.0.0", nil)
 	defer srv.Close()
 	dir := t.TempDir()
 	path, version, err := downloadSignedUpdate(t.Context(), srv.URL+"/dl", dir, "linux", "amd64", "v1.0.0")
@@ -77,7 +83,7 @@ func TestDownloadSignedUpdateVerifiesBeforeReturning(t *testing.T) {
 }
 
 func TestDownloadSignedUpdateRejectsTamperedArtifact(t *testing.T) {
-	srv := signedUpdateServer(t, []byte("signed binary"), func(path string, body []byte) []byte {
+	srv := signedUpdateServer(t, []byte("signed binary"), "linux", "amd64", "v2.0.0", func(path string, body []byte) []byte {
 		if path == "/dl/wanctl-linux-amd64" {
 			return []byte("attacker binary")
 		}
