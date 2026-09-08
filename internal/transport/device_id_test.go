@@ -3,6 +3,7 @@ package transport
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -66,8 +67,8 @@ func TestInvalidDeviceIDIsNotSilentlyReplaced(t *testing.T) {
 	if err := os.WriteFile(p, []byte("broken"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadOrCreateDeviceID(); err == nil {
-		t.Fatal("corruption must fail rather than orphan existing permissions")
+	if _, err := LoadOrCreateDeviceID(); err == nil || !strings.Contains(err.Error(), "initialize device ID:") {
+		t.Fatal("corruption must fail with the app fatal marker rather than orphan existing permissions")
 	}
 	b, _ := os.ReadFile(p)
 	if string(b) != "broken" {

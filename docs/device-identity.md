@@ -92,3 +92,19 @@ WANCTL_TEST_POSTGRES='postgres://postgres@127.0.0.1:5432/postgres?sslmode=disabl
 
 The integration test creates and removes its own schema. It requires permission
 to create schemas, and does not modify existing schemas.
+
+### Android application sandbox
+
+Android denies hard-link creation in an ordinary app's private data directory.
+Since v0.6.1, Android serializes first-time ID publishers with `device_id.lock`
+and atomically renames the synced temporary file after checking for an existing
+ID. The lock file is retained; kernel locks are released on process exit. Other
+platforms retain hard-link publication. Existing IDs are never replaced.
+
+For a packaged-binary regression check, start a disposable relay with
+`WANCTL_TOKENS=sandbox-token:sandbox go run . relay --addr 127.0.0.1:18740`, then
+run `scripts/android-id-smoke.sh /path/to/emulator-ABI.apk` with a booted emulator,
+Android SDK/JDK and the usual `~/.android/debug.keystore`. The probe is a normal,
+non-debuggable APK: it checks `untrusted_app` context, 16 concurrent ID processes,
+persistence, and agent registration. Running the binary as `adb shell` is not
+an equivalent permission test.
