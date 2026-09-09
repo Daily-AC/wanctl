@@ -15,6 +15,7 @@
  *   4. 文本截断   overflow:hidden / text-overflow:ellipsis 且 scrollWidth > clientWidth
  *   5. 手指靶子   手机视口下可点元素小于 40×40
  *   6. 控制台错误 exceptionThrown / console.error
+ *   7. 藏不住的元素 带 hidden 属性、计算出来的 display 却不是 none
  *
  * 依赖：Node 22 的全局 WebSocket 和一个本机 Chrome。不装任何东西。
  * CDP 的那几个坑（端点双栈、Page.enable 抢跑、输入事件不能 await）来自
@@ -77,6 +78,9 @@ const STATES = [
   { id: 'devset', q: '&view=device/bench-02/settings' },
   { id: 'devset-long', q: `&view=device/${enc(DEV_LONG)}/settings` },
   { id: 'settings', q: '&view=settings' },
+  // 普通用户的设置清单。工装默认是 admin，而「邀请」那一节只属于 admin ——
+  // 不摆出 role=user 这一屏，藏起来的东西有没有真藏住就没有一个状态问得出。
+  { id: 'settings-user', q: '&view=settings&role=user' },
   { id: 'set-tokens', q: '&view=settings/tokens' },
   { id: 'set-notify', q: '&view=settings/notify' },
   { id: 'set-invites', q: '&view=settings/invites' },
@@ -84,6 +88,10 @@ const STATES = [
   { id: 'set-invites-noreq', q: '&view=settings/invites&scene=noask' },
   { id: 'set-friends', q: '&view=settings/friends' },
   { id: 'set-acl', q: '&view=settings/acl' },
+  // 空表那一行。它是个 colspan 单元格，于是也 trivially 是「最后一列」，
+  // 被那条为操作列写的 td:last-child{text-align:right} 一起顶到了右缘。
+  // 有数据的时候看不出来，所以这里得有一屏是空的。
+  { id: 'set-acl-empty', q: '&view=settings/acl&scene=emptylists' },
   { id: 'set-downloads', q: '&view=settings/downloads', settle: 1400 },
   { id: 'set-downloads-open', q: '&view=settings/downloads', settle: 1400,
     open: `document.querySelector('#dl details').open = true` },
@@ -164,6 +172,15 @@ const AUDIT = (REF) => String.raw`(() => {
     (r.width > 0 || r.height > 0);
 
   const over = [], trunc = [], small = [], unbreak = [], scroll = [];
+  /* 藏不住的元素。hidden 是这套界面里唯一的「不存在」开关，可浏览器默认表里
+     [hidden]{display:none} 只有 (0,1,0) —— 随手一句带类名的 display 就压得过它，
+     而那一句通常离出问题的地方很远（.sgroup button{display:block} 把「邀请」
+     显示给了所有人）。这里不猜哪一句会犯，直接量结果：带着 hidden 却算出别的
+     display 的元素，一个都不该有。 */
+  const ghost = [...document.querySelectorAll('[hidden]')]
+    .map((el) => ({ sel: sel(el), display: getComputedStyle(el).display }))
+    .filter((g) => g.display !== 'none');
+
   let maxRight = 0;
   const all = [...document.querySelectorAll('body *')];
   const overSet = new Set();
@@ -256,7 +273,7 @@ const AUDIT = (REF) => String.raw`(() => {
     overflowX: Math.max(0, Math.round(maxRight) - REF,
                         document.documentElement.scrollWidth - REF, innerWidth - REF),
     maxRight: Math.round(maxRight),
-    over: overLeaf, trunc, small, unbreak, scroll, modal,
+    over: overLeaf, trunc, small, unbreak, scroll, modal, ghost,
   };
 })()`;
 
@@ -446,7 +463,8 @@ const bad = rows.filter((r) =>
   (r.overflowX > 0) ||
   (r.modal && (!r.modal.inside || !r.modal.centered || r.modal.btns.some((b) => !b.inside))) ||
   (r.trunc && r.trunc.length) || (r.unbreak && r.unbreak.length) || (r.scroll && r.scroll.length) ||
-  (r.small && r.small.length) || (r.errors && r.errors.length) || r.error);
+  (r.small && r.small.length) || (r.ghost && r.ghost.length) ||
+  (r.errors && r.errors.length) || r.error);
 
 const lines = [];
 lines.push(`runs: ${rows.length}   flagged: ${bad.length}`);
@@ -459,12 +477,35 @@ const kinds = {
   sideScroll: rows.filter((r) => r.scroll.length).length,
   unbreakable: rows.filter((r) => r.unbreak.length).length,
   tinyTaps: rows.filter((r) => r.small.length).length,
+  notHidden: rows.filter((r) => (r.ghost || []).length).length,
   consoleErr: rows.filter((r) => r.errors.length).length,
 };
 for (const [k, v] of Object.entries(kinds)) lines.push(`${k.padEnd(12)} ${v}`);
+/* 上面六条是缺陷清单：它们有「可接受」的余地，读的人自己判。
+   「藏不住的元素」不一样 —— 它的正确值是零，没有第二种读法：hidden 是这套
+   界面里唯一的「不存在」开关，凡是带着它却仍然算出别的 display 的，都是一处
+   本该消失却留在屏幕上的东西。所以这一条不只报数，还点名，并且让退出码不为零。 */
+const ghosts = new Map();
+for (const r of rows) {
+  for (const g of r.ghost || []) {
+    const k = `${g.sel} -> display:${g.display}`;
+    if (!ghosts.has(k)) ghosts.set(k, []);
+    ghosts.get(k).push(`${r.state}/${r.w}/${r.lang}`);
+  }
+}
+if (ghosts.size) {
+  lines.push('');
+  lines.push('藏不住的元素（应为 0）：');
+  for (const [k, where] of [...ghosts].sort()) {
+    lines.push(`  ${k}   ${where.length} 处，例如 ${where[0]}`);
+  }
+}
+
 const summary = lines.join('\n');
 writeFileSync(join(OUT, 'summary.txt'), summary + '\n');
 console.log(summary);
 
 cdp.close();
 chrome.kill();
+// 只有「藏不住的元素」判退出码。别的六条是给人读的清单，不是断言。
+if (ghosts.size) process.exitCode = 1;

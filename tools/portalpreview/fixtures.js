@@ -18,6 +18,7 @@
   //   ?scene=noask  没人在等 → 聚合待审批整块不出现
   //   ?scene=down   /api/devices 502 → 「连不上中继」（纯文本，真形状）
   //   ?scene=oddcode /api/devices 返回一个字典里没有的裸错误码 → 未知码那一路
+  //   ?scene=emptylists 令牌/邀请/好友/共享授权四张表全空 → 四处空态那一行
   var scene = new URLSearchParams(location.search).get('scene') || '';
 
   // 头像三态。真实端点只对 GitHub 会话返回 avatar_url，header(SSO) 模式不返回，
@@ -26,6 +27,19 @@
   //   ?avatar=broken  同一个源、必定 404 的路径，走 onerror 那一路
   //   ?avatar=off     不返回这个字段，等于 header(SSO) 模式
   var avatar = new URLSearchParams(location.search).get('avatar') || 'on';
+
+  // 角色。门户里只有 admin 能看见「邀请」那一节，而这个差别过去在工装里
+  // 摆不出来 —— /api/me 的 role 是写死的 admin，于是「普通用户看不看得见
+  // 邀请入口」这件事，离线预览里问不出来。
+  //   ?role=admin  默认
+  //   ?role=user   普通用户
+  var role = new URLSearchParams(location.search).get('role') === 'user' ? 'user' : 'admin';
+
+  // ?slow=<毫秒> 只把 /api/devices 拖慢。本机上这个请求是即时的，于是「设备页
+  // 在设备清单到达之前就画完了」那一类竞态在预览里根本重现不出来 —— 而它在
+  // 真网络上是常态（issue #48：共享设备直接开链接，只读门禁没生效）。
+  // 拖慢的只有这一个端点：它是那些竞态的唯一源头，全局延迟只会让每次普查更慢。
+  var slow = Number(new URLSearchParams(location.search).get('slow')) || 0;
 
   // ?now=<毫秒> 把「现在」钉住。页面上每一个时间都是从它算出来的，不钉住的话
   // 两次截图之间光是钟走了几分钟就够让每一张都不一样，前后对比无从做起。
@@ -121,7 +135,7 @@
     // 门户自己的指纹当成「你的编号」显示在人名旁边。别再这么干。
     '/api/me': {
       identity: 'ardith', login: 'ardith', name: 'Ardith Vale',
-      namespace: 'acme', provider: 'github', role: 'admin',
+      namespace: 'acme', provider: 'github', role: role,
       lark: true, relay_origin: 'https://relay.example.com',
       // 形状照抄 githubAvatarURL：同一个源、u/<数字账号 id>、?s=96。
       avatar_url: avatar === 'off' ? undefined
@@ -201,6 +215,14 @@
     // 两块都是「有人等你决定」，空掉时都该整块消失。
     if (scene === 'noask' && p === '/api/pending') return { items: [] };
     if (scene === 'noask' && p === '/api/access-requests') return { requests: [] };
+    // 四张设置表的空态。每张都是一行 <td colspan> 的 .tempty，而这一行落在
+    // 「最后一列」上 —— 那一列是右对齐的。有数据时看不出来，空的时候才看得出来。
+    if (scene === 'emptylists') {
+      if (p === '/api/tokens') return { tokens: [] };
+      if (p === '/api/invites') return [];
+      if (p === '/api/friends') return { friends: [], incoming: [], outgoing: [] };
+      if (p === '/api/acl') return { acl: [] };
+    }
     if (p === '/api/access-requests/decide') return {};
     if (p === '/api/devices/console') { var st = consoles[new URLSearchParams(url.split('?')[1]).get('device')]; if (st) { var android = new URLSearchParams(url.split('?')[1]).get('device') === 'bench-02'; st.info = {platform:android?'android':'linux', adb_pair:android}; } }
     if (p === '/api/devices/console') return consoles[new URLSearchParams(url.split('?')[1]).get('device')] || { mode: 'normal', pending: [], pending_pairings: [], rules: [], trusted: [] };
@@ -237,6 +259,13 @@
     var body = match(url);
     if (body === undefined) {
       return Promise.resolve(new Response('preview: no fixture for ' + url, { status: 404 }));
+    }
+    if (slow && url.split('?')[0] === '/api/devices') {
+      return new Promise(function (res) {
+        setTimeout(function () {
+          res(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+        }, slow);
+      });
     }
     if (opts && opts.method === 'POST') {
       // 写操作一律成功。工装不模拟状态机 —— 它是给眼睛看的，

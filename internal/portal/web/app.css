@@ -59,6 +59,15 @@
 }
 
 *{box-sizing:border-box}
+/* hidden 是这套界面里唯一的「不存在」开关：JS 从头到尾只用它藏东西，没有一处
+   指望用 display 把它盖回来。可浏览器默认表里的 [hidden]{display:none} 只有
+   (0,1,0)，任何一句带类名的 display 都压得过它 —— .sgroup button{display:block}
+   就这么把「邀请」那一栏给普通用户也显示了出来（管理员之外的人看得见一个自己
+   点不动的入口）。同一个坑在 .ava img 那里已经被躲过一次（见下面那条注释），
+   躲得过是因为那次有人记得；这条把它变成记不记得都躲得过。
+   量过：全站带 hidden 的元素里，只有 #sInvites 的计算值不是 none，所以这一句
+   除了修掉那一处，别处一个像素都不动（tools/portalpreview/sweep.mjs 的 hidden 断言）。 */
+[hidden]{display:none!important}
 html{-webkit-text-size-adjust:100%}
 body{
   margin:0;background:var(--canvas);color:var(--ink);
@@ -405,8 +414,19 @@ td.num{font-variant-numeric:tabular-nums}
 .tcap{margin:0 0 12px;color:var(--ink-2);font-size:13px}
 .dim{color:var(--ink-2)}
 .no{color:var(--red)}
-/* 全表空态：一行字，与 .blank 同一个声音 */
-.tempty{padding:26px 0;color:var(--ink-2);font-size:13.5px}
+/* 「机器自己报的那个名字」跟在显示名后面。.real 没有基础样式，每个用到它的地方
+   自己决定形状：设备卡上另起一行（.dev .real），聚合待审批里留 6px（.ask .head .real）。
+   共享授权表和配对单的 kv 是后来加的，两处都没写 —— 而 realHTML() 是直接拼进
+   字符串的，中间没有空白，于是那里渲染成「workshopbench-02」，两个名字粘成一个词。
+   用中点：新增授权那张表单里的设备选项本来就是「显示名 · 机器名」，表里跟它一致。 */
+#acl .real,#pair .kv dd .real{color:var(--ink-2)}
+#acl .real::before,#pair .kv dd .real::before{content:" · "}
+/* 全表空态：一行字，与 .blank 同一个声音 —— .blank 是居中的，所以这里也居中。
+   写成 td.tempty 而不是 .tempty：整行空态是一个 colspan 单元格，它同时也
+   trivially 是「最后一列」，于是上面那条为操作列写的 td:last-child{text-align:right}
+   把它一起右对齐了。四张表（令牌 / 邀请 / 好友 / 共享授权）的空态全都被顶到了
+   右缘，读起来像一句掉在角落里的碎话，而不是这张表的状态。 */
+td.tempty{padding:26px 0;color:var(--ink-2);font-size:13.5px;text-align:center}
 
 /* ── 设置：左分组右内容 ────────────────────────────────────────────────
    与文档站是同一个布局家族（左导航 + 内容），两个表面因此共用一套肌肉记忆。

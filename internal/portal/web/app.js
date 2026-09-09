@@ -1626,6 +1626,18 @@
       var settings = /\/settings$/.test(rest);
       var name = decodeURIComponent(settings ? rest.slice(0, -'/settings'.length) : rest);
       if (cur !== name) openDevice(name);
+      // 共享给你的那台设备没有「设备设置」这一屏：那一页从上到下都是设备主人
+      // 的开关（改别名、飞书、通知、解除设备），中继对它们一律 403。
+      // 以前这里照样切过去，而 openDevice 对共享设备是提前返回的 —— 它根本
+      // 没走到 loadDeviceSettings，于是那一屏上留着的是**上一台**设备的名字、
+      // 别名、飞书与通知卡片，还有一枚「解除设备」。用户点齿轮看见别人那台
+      // 机器的设置，就是这么来的。按门户已有的做法（allowedSet 把非管理员从
+      // 邀请退回令牌）退回设备页，地址一并改掉，收藏和刷新才落在同一屏。
+      if (settings && (devMeta[name] || {}).shared) {
+        history.replaceState(null, '', '#device/' + encodeURIComponent(name));
+        showView('device');
+        return;
+      }
       // 设备的待审批要接着轮询，所以进它的设置页时不断开连接，只换显示的那一屏。
       showView(settings ? 'devsettings' : 'device');
       return;

@@ -16,6 +16,23 @@ printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9
 }
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+
+# The portal's version badge is the newest file in internal/portal/changelog/,
+# and it is the only place most people ever see which version is live. v0.7.0
+# shipped without an entry, so a correctly deployed v0.7.0 portal kept showing
+# v0.6.1 and nothing failed. A Go test cannot catch this: the release version
+# only exists as -ldflags -X main.buildVersion at link time, so from inside the
+# test binary buildVersion is "dev" and there is nothing to compare against.
+# The tag is known here, so the check belongs here — and this script is the one
+# both the manual publisher and the release workflow run, so neither path can
+# ship a version the portal cannot name.
+test -f "$ROOT/internal/portal/changelog/$VERSION.md" || {
+  echo "no changelog entry for $VERSION: internal/portal/changelog/$VERSION.md is missing" >&2
+  echo "the portal's version badge reads the newest file in that directory, and the" >&2
+  echo "release notes are published from it. Add the entry before tagging." >&2
+  exit 1
+}
+
 DIST=$(CDPATH= cd -- "$DIST" && pwd)
 
 # The expected file list is derived from the same matrix the build loop runs
