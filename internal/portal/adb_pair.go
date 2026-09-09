@@ -18,7 +18,7 @@ func (s *Server) handleDeviceADBPair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	ns, ok := s.requireDeviceConsole(w, r, body.Device)
+	ns, ok := s.requireDeviceOwner(w, r, body.Device)
 	if !ok {
 		return
 	}

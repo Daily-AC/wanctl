@@ -1310,6 +1310,25 @@ func (s *Server) requireDeviceConsole(w http.ResponseWriter, r *http.Request, de
 // however it is set. The owner's notification settings are the owner's contact
 // details, not device state, so they stay behind this one even when the grantee
 // administers the device.
+// requireDeviceUse is the loosest of the three gates: the owner, or anyone
+// holding a live share, whatever its management switch says. requireDevice has
+// already established that this user can see the device at all, and under
+// ADR 0007 seeing it means holding its use-rights unconditionally.
+//
+// The activity log is one of those. `wanctl logs` already works for every
+// grantee — that was the point of deleting the capability ceiling — so putting
+// the same log behind the management switch in the portal would recreate the
+// split ADR 0007 removed: the same person, the same device, allowed in one
+// client and refused in the other. What the management switch decides is who
+// may *change* the device, not who may see what it did.
+func (s *Server) requireDeviceUse(w http.ResponseWriter, r *http.Request, device string) (string, bool) {
+	access, ok := s.requireDevice(w, r, device)
+	if !ok {
+		return "", false
+	}
+	return access.Owner, true
+}
+
 func (s *Server) requireDeviceOwner(w http.ResponseWriter, r *http.Request, device string) (string, bool) {
 	access, ok := s.requireDevice(w, r, device)
 	if !ok {
@@ -1707,7 +1726,7 @@ func (s *Server) handleDeviceMode(w http.ResponseWriter, r *http.Request) {
 // {"logs":[...]} for the SPA's activity timeline.
 func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request) {
 	device := r.URL.Query().Get("device")
-	ns, ok := s.requireDeviceConsole(w, r, device)
+	ns, ok := s.requireDeviceUse(w, r, device)
 	if !ok {
 		return
 	}
@@ -1735,7 +1754,7 @@ const eventPollWait = 25 * time.Second
 
 func (s *Server) handleDeviceEvents(w http.ResponseWriter, r *http.Request) {
 	device := r.URL.Query().Get("device")
-	ns, ok := s.requireDeviceConsole(w, r, device)
+	ns, ok := s.requireDeviceUse(w, r, device)
 	if !ok {
 		return
 	}
