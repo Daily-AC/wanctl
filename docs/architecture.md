@@ -86,13 +86,24 @@ Three independent layers; compromising one does not collapse the others:
    bypass or ordinary exec rules. Headless with no approver subscribed means
    deny, not hang.
 
-Cross-namespace sharing is a relay-side ACL grant `(owner, device, grantee,
-perms)`. Grants are capability-bounded at the protocol layer: a shared grantee
-can at most receive exec/read/write — console and logs capabilities cannot be
-expressed in a grant. The relay stamps each session with its capabilities over
-the authenticated agent control channel, and the device enforces them again
-per request. Shared devices are read-only in the portal: approvals, rules,
-mode, and unbinding stay with the owner.
+Cross-namespace sharing is a relay-side ACL grant `(owner, device, grantee)`.
+A grant is owner-equivalent: the relay stamps a grantee's session with the same
+full capability set the owner's session carries, over the authenticated agent
+control channel. The `acl.perms` column still exists and is written as the
+constant `full`, but nothing reads it (ADR 0007). A controlled device runs one
+agent bound to one account, so sharing is how a machine gets a second user; a
+narrower capability set here would be a second, weaker permission model layered
+over the device's own, and it is the device's model that decides each request.
+
+What constrains a grantee is therefore the device, not the grant. Its single
+mode and rule set apply to everyone: left on per-request approval, the owner
+answers for the grantee's commands; put into bypass, the grantee is bypassed
+too. Elevated exec is excluded from bypass for everyone. The device console —
+approvals, rules, mode, trust — additionally requires membership of the
+device's `portal_admins` set, which is how the control plane stays with the
+owner even though the capability is now in the session. Unbinding a device and
+revoking a share remain owner-only. Shared devices are still read-only in the
+portal pending the portal-side half of ADR 0007.
 
 `/peers` reports the grantee's own online devices under `devices`, unchanged,
 and the devices granted to them under `shared`, each with its owner namespace,

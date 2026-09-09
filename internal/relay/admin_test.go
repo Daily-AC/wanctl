@@ -351,17 +351,37 @@ func TestAdminResolveUserReturnsConflict(t *testing.T) {
 	}
 }
 
-func TestAdminACLRejectsMissingPermissions(t *testing.T) {
-	r := New(envTokens{})
-	r.SetAdminSecret("secret")
-	r.SetAdmin(&noopAdmin{})
-	req := httptest.NewRequest(http.MethodPost, "/admin/acl", strings.NewReader(
-		`{"namespace":"alice","device":"devbox","grantee":"bob"}`))
-	req.Header.Set("X-Admin-Secret", "secret")
-	rec := httptest.NewRecorder()
-	r.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body = %q", rec.Code, rec.Body.String())
+// A grant carries no permission set any more, so the three identifying fields
+// are all that is required - and a "perms" field from the portal's share form
+// is accepted and ignored rather than rejected.
+func TestAdminACLRequiresIdentifiersAndIgnoresPermissions(t *testing.T) {
+	post := func(body string) int {
+		r := New(envTokens{})
+		r.SetAdminSecret("secret")
+		r.SetAdmin(&noopAdmin{})
+		req := httptest.NewRequest(http.MethodPost, "/admin/acl", strings.NewReader(body))
+		req.Header.Set("X-Admin-Secret", "secret")
+		rec := httptest.NewRecorder()
+		r.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, body := range []string{
+		`{"namespace":"alice","device":"devbox","grantee":"bob"}`,
+		`{"namespace":"alice","device":"devbox","grantee":"bob","perms":"read"}`,
+		`{"namespace":"alice","device":"devbox","grantee":"bob","perms":"nonsense"}`,
+	} {
+		if code := post(body); code != http.StatusOK {
+			t.Fatalf("POST %s = %d, want 200", body, code)
+		}
+	}
+	for _, body := range []string{
+		`{"device":"devbox","grantee":"bob"}`,
+		`{"namespace":"alice","grantee":"bob"}`,
+		`{"namespace":"alice","device":"devbox"}`,
+	} {
+		if code := post(body); code != http.StatusBadRequest {
+			t.Fatalf("POST %s = %d, want 400", body, code)
+		}
 	}
 }
 
@@ -617,7 +637,7 @@ func TestPGStoreListDevicesIncludesOwnedAndSharedACLDevices(t *testing.T) {
 		t.Fatalf("grantee view should contain own + granted devices, got %+v", granteeView)
 	}
 	shared := granteeView[1]
-	if shared["name"] != "devbox" || shared["owner"] != "bob" || shared["shared"] != true || shared["perms"] != "exec" {
+	if shared["name"] != "devbox" || shared["owner"] != "bob" || shared["shared"] != true || shared["perms"] != SharedGrant {
 		t.Fatalf("shared row missing expected fields: %+v", shared)
 	}
 	if shared["alias"] != "office" {
@@ -649,10 +669,12 @@ func TestPGStoreACLPermsReturnsLiveGrant(t *testing.T) {
 	}
 }
 
-func TestPGStoreAddACLRejectsInvalidPermissionsBeforeDatabase(t *testing.T) {
+// A grant no longer carries a permission set, so the only pre-database check
+// left is the friendship one.
+func TestPGStoreAddACLRequiresAFriendship(t *testing.T) {
 	p := newAdminTestPGStore(t)
-	if err := p.AddACL("owner", "home-pc", "reader", "read,unknown"); err == nil {
-		t.Fatal("invalid permissions were accepted")
+	if err := p.AddACL("owner", "home-pc", "reader"); err == nil {
+		t.Fatal("a grant to a non-friend was accepted")
 	}
 }
 

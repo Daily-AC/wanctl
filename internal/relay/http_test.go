@@ -181,7 +181,7 @@ func TestHTTPPollReceivesRelayIssuedCapabilities(t *testing.T) {
 
 	select {
 	case got := <-poll:
-		if got.status != http.StatusOK || got.open.Capabilities != sessionauth.Read {
+		if got.status != http.StatusOK || got.open.Capabilities != sessionauth.FullCapabilities {
 			t.Fatalf("poll result = %+v", got)
 		}
 		if got.open.CallerNamespace != "reader" || got.open.OwnerNamespace != "owner" || got.open.Device != "home-pc" {

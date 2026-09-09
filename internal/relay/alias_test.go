@@ -196,7 +196,7 @@ func TestDialAllowedResolvesDeviceAliases(t *testing.T) {
 	if !ok || key != "owner/home-pc" || auth.Device != "home-pc" || auth.OwnerNamespace != "owner" {
 		t.Fatalf("cross-namespace alias = key %q auth %+v ok %v", key, auth, ok)
 	}
-	if acl.caller != "reader" || acl.owner != "owner" || acl.device != "home-pc" || auth.Capabilities != sessionauth.Read {
+	if acl.caller != "reader" || acl.owner != "owner" || acl.device != "home-pc" || auth.Capabilities != sessionauth.FullCapabilities {
 		t.Fatalf("ACL saw unresolved target: acl=%+v auth=%+v", acl, auth)
 	}
 

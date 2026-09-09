@@ -289,13 +289,15 @@ func (r *Relay) dialAllowedReason(callerNS, target string) (targetKey string, au
 		auth.Capabilities = sessionauth.FullCapabilities
 		return target, auth, "", true
 	}
+	// A grant is owner-equivalent. The controlled end runs one agent bound to
+	// one account, so sharing is how a machine gets a second user; a narrower
+	// capability set here would be a second, weaker permission model layered
+	// over the device's own mode and rules, which are what actually decide each
+	// request. acl.perms is no longer read.
 	if r.acl != nil {
-		if perms, found := r.acl.ACLPerms(callerNS, targetNS, device); found {
-			caps, err := sessionauth.ParseGrant(perms)
-			if err == nil {
-				auth.Capabilities = caps
-				return target, auth, "", true
-			}
+		if _, found := r.acl.ACLPerms(callerNS, targetNS, device); found {
+			auth.Capabilities = sessionauth.FullCapabilities
+			return target, auth, "", true
 		}
 	}
 	return target, auth, "", false

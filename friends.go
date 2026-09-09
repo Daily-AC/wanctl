@@ -24,7 +24,7 @@ const friendsHelp = `wanctl friends subcommands:
 
 const shareHelp = `wanctl share subcommands:
   share list
-  share grant --device DEV --to NS [--perms exec,read]
+  share grant --device DEV --to NS
   share revoke --device DEV --to NS`
 
 type relayHTTPError struct {
@@ -210,18 +210,17 @@ func shareGrant(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("share grant", flag.ContinueOnError)
 	device := fs.String("device", "", "device name")
 	to := fs.String("to", "", "friend namespace")
-	perms := fs.String("perms", "exec,read", "grant permissions")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *device == "" || *to == "" || fs.NArg() != 0 {
-		return fmt.Errorf("usage: wanctl share grant --device DEV --to NS [--perms exec,read]")
+		return fmt.Errorf("usage: wanctl share grant --device DEV --to NS")
 	}
 	var result struct {
 		ID int `json:"id"`
 	}
 	err := userRequest(ctx, http.MethodPost, "/u/shares/grant", map[string]string{
-		"device": *device, "grantee": *to, "perms": *perms,
+		"device": *device, "grantee": *to,
 	}, &result)
 	if isRelayError(err, http.StatusForbidden, "not-friends") {
 		return fmt.Errorf("%s 还不是你的好友；请先运行 `wanctl friends add %s`", *to, *to)
@@ -229,7 +228,7 @@ func shareGrant(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("✓ 已将设备 %s 共享给 %s（授权 #%d，权限 %s）\n", *device, *to, result.ID, *perms)
+	fmt.Printf("✓ 已将设备 %s 共享给 %s（授权 #%d）。对方拿到的权限与你相同；解绑和撤销共享仍然只有你能做。\n", *device, *to, result.ID)
 	return nil
 }
 
@@ -258,7 +257,6 @@ func shareList(ctx context.Context) error {
 			ID      int    `json:"id"`
 			Device  string `json:"device"`
 			Grantee string `json:"grantee"`
-			Perms   string `json:"perms"`
 		} `json:"given"`
 		Received []relay.ReceivedShare `json:"received"`
 	}
@@ -270,14 +268,14 @@ func shareList(ctx context.Context) error {
 		fmt.Println("  (无)")
 	}
 	for _, share := range result.Given {
-		fmt.Printf("  %-20s -> %-20s %s (#%d)\n", share.Device, share.Grantee, share.Perms, share.ID)
+		fmt.Printf("  %-20s -> %-20s (#%d)\n", share.Device, share.Grantee, share.ID)
 	}
 	fmt.Println("好友授给我的共享：")
 	if len(result.Received) == 0 {
 		fmt.Println("  (无)")
 	}
 	for _, share := range result.Received {
-		fmt.Printf("  %-20s / %-20s %s\n", share.Owner, share.Device, share.Perms)
+		fmt.Printf("  %-20s / %-20s\n", share.Owner, share.Device)
 	}
 	return nil
 }

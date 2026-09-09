@@ -188,20 +188,31 @@ type staticACL string
 
 func (p staticACL) ACLPerms(_, _, _ string) (string, bool) { return string(p), true }
 
-func TestDialAllowedParsesACLPermissionsStrictly(t *testing.T) {
+// A grant is owner-equivalent (ADR 0007). The stored perms string is not read,
+// so no value in it - including one written before v0.7.1, and including one
+// that never parsed - can hand a grantee less than the owner gets.
+func TestDialAllowedGivesAGrantTheOwnersCapabilities(t *testing.T) {
 	r := New(EnvTokenStore("tok:reader"))
-	r.SetACL(staticACL("read,exec"))
-	_, auth, ok := r.dialAllowed("reader", "owner/home-pc")
-	if !ok || auth.Capabilities != sessionauth.Read|sessionauth.Exec {
-		t.Fatalf("authorization = %#v, ok=%v", auth, ok)
+	for _, stored := range []string{"read,exec", "exec,read,write", "read", "", "read,unknown", "read,console"} {
+		r.SetACL(staticACL(stored))
+		_, auth, ok := r.dialAllowed("reader", "owner/home-pc")
+		if !ok || auth.Capabilities != sessionauth.FullCapabilities {
+			t.Fatalf("perms %q -> authorization = %#v, ok=%v", stored, auth, ok)
+		}
+		// The device still decides each request: console additionally requires
+		// membership of the device's portal_admins set (see the agent's
+		// console-session tests), and logs and files go through its policy engine.
+		if !auth.Capabilities.Has(sessionauth.Console) || !auth.Capabilities.Has(sessionauth.Logs) {
+			t.Fatalf("perms %q -> missing owner capabilities: %q", stored, auth.Capabilities)
+		}
 	}
-
-	r.SetACL(staticACL("read,unknown"))
+	// No grant is still no session.
+	r.SetACL(noACL{})
 	if _, _, ok := r.dialAllowed("reader", "owner/home-pc"); ok {
-		t.Fatal("unknown ACL permission must fail closed")
-	}
-	r.SetACL(staticACL("read,console"))
-	if _, _, ok := r.dialAllowed("reader", "owner/home-pc"); ok {
-		t.Fatal("owner-only capability must fail closed")
+		t.Fatal("a namespace with no grant was allowed to dial")
 	}
 }
+
+type noACL struct{}
+
+func (noACL) ACLPerms(_, _, _ string) (string, bool) { return "", false }

@@ -23,7 +23,6 @@ type userEndpointStore struct {
 	grantActor    string
 	grantDevice   string
 	grantGrantee  string
-	grantPerms    string
 	given         []map[string]any
 	received      []ReceivedShare
 }
@@ -53,8 +52,8 @@ func (s *userEndpointStore) FriendAccept(string, string) error  { return s.decis
 func (s *userEndpointStore) FriendDecline(string, string) error { return s.decisionErr }
 func (s *userEndpointStore) FriendRemove(string, string) error  { return s.decisionErr }
 
-func (s *userEndpointStore) GrantACL(actor, device, grantee, perms string) (int, error) {
-	s.grantActor, s.grantDevice, s.grantGrantee, s.grantPerms = actor, device, grantee, perms
+func (s *userEndpointStore) GrantACL(actor, device, grantee string) (int, error) {
+	s.grantActor, s.grantDevice, s.grantGrantee = actor, device, grantee
 	return 7, s.grantErr
 }
 
@@ -146,27 +145,21 @@ func TestUserEndpointErrorTokensAreExact(t *testing.T) {
 	}
 }
 
-func TestUserShareGrantRejectsInvalidPermissions(t *testing.T) {
-	r := New(envTokens{"token": "alice"})
-	r.SetAdmin(&userEndpointStore{})
-	rr := userEndpointRequest(t, r, http.MethodPost, "/u/shares/grant",
-		`{"device":"d","grantee":"bob","perms":"logs"}`, "token")
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("response = %d %q", rr.Code, rr.Body.String())
-	}
-}
-
-func TestUserShareGrantDefaultsToExecRead(t *testing.T) {
-	store := &userEndpointStore{}
-	r := New(envTokens{"token": "alice"})
-	r.SetAdmin(store)
-	rr := userEndpointRequest(t, r, http.MethodPost, "/u/shares/grant",
-		`{"device":"d","grantee":"bob"}`, "token")
-	if rr.Code != http.StatusOK || rr.Body.String() != `{"id":7}`+"\n" {
-		t.Fatalf("response = %d %q", rr.Code, rr.Body.String())
-	}
-	if store.grantActor != "alice" || store.grantDevice != "d" || store.grantGrantee != "bob" || store.grantPerms != "exec,read" {
-		t.Fatalf("grant = actor=%q device=%q grantee=%q perms=%q", store.grantActor, store.grantDevice, store.grantGrantee, store.grantPerms)
+// A grant is owner-equivalent, so a "perms" field from an older client or from
+// the portal's share form must be accepted and then ignored rather than
+// rejected — and it must not narrow what the grantee gets.
+func TestUserShareGrantIgnoresAnyRequestedPermissions(t *testing.T) {
+	for _, body := range []string{`{"device":"d","grantee":"bob"}`, `{"device":"d","grantee":"bob","perms":"read"}`, `{"device":"d","grantee":"bob","perms":"nonsense"}`} {
+		store := &userEndpointStore{}
+		r := New(envTokens{"token": "alice"})
+		r.SetAdmin(store)
+		rr := userEndpointRequest(t, r, http.MethodPost, "/u/shares/grant", body, "token")
+		if rr.Code != http.StatusOK || rr.Body.String() != `{"id":7}`+"\n" {
+			t.Fatalf("%s -> response = %d %q", body, rr.Code, rr.Body.String())
+		}
+		if store.grantActor != "alice" || store.grantDevice != "d" || store.grantGrantee != "bob" {
+			t.Fatalf("%s -> grant = actor=%q device=%q grantee=%q", body, store.grantActor, store.grantDevice, store.grantGrantee)
+		}
 	}
 }
 
@@ -224,12 +217,14 @@ func TestUserSharesContract(t *testing.T) {
 			"id": 1, "device": "d", "grantee": "bob", "perms": "exec,read",
 			"created_at": time.Date(2026, 8, 20, 1, 0, 0, 0, time.UTC),
 		}},
-		received: []ReceivedShare{{Device: "server", Owner: "carol", Perms: "read"}},
+		received: []ReceivedShare{{Device: "server", Owner: "carol", Perms: SharedGrant}},
 	}
 	r := New(envTokens{"token": "alice"})
 	r.SetAdmin(store)
 	rr := userEndpointRequest(t, r, http.MethodGet, "/u/shares", "", "token")
-	want := `{"given":[{"device":"d","grantee":"bob","id":1,"perms":"exec,read"}],"received":[{"device":"server","owner":"carol","perms":"read"}]}` + "\n"
+	// A stale "exec,read" in the database is reported as the one value a grant
+	// now has; the field is kept only so existing readers still see something.
+	want := `{"given":[{"device":"d","grantee":"bob","id":1,"perms":"full"}],"received":[{"device":"server","owner":"carol","perms":"full"}]}` + "\n"
 	if rr.Code != http.StatusOK || rr.Body.String() != want {
 		t.Fatalf("shares response = %d %q, want %q", rr.Code, rr.Body.String(), want)
 	}
@@ -284,7 +279,7 @@ func TestAdminACLMapsNotFriendsExactly(t *testing.T) {
 
 type adminACLNotFriendsStore struct{ *userEndpointStore }
 
-func (*adminACLNotFriendsStore) AddACL(string, string, string, string) error {
+func (*adminACLNotFriendsStore) AddACL(string, string, string) error {
 	return ErrNotFriends
 }
 

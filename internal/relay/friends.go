@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"wanctl/internal/sessionauth"
 )
 
 var (
@@ -28,6 +26,12 @@ type ReceivedShare struct {
 	Owner  string `json:"owner"`
 	Perms  string `json:"perms"`
 }
+
+// SharedGrant is the only value acl.perms takes. A grant is owner-equivalent,
+// so there is nothing left for the column to say; it is written and reported
+// rather than dropped so that no migration is needed and existing readers of
+// the field keep seeing a value. Values written before v0.7.1 are not read.
+const SharedGrant = "full"
 
 func (p *PGStore) LookupUser(namespace string) (bool, error) {
 	var exists bool
@@ -216,7 +220,7 @@ func (p *PGStore) ListFriends(namespace string) ([]Friend, error) {
 
 func (p *PGStore) ListReceivedACL(namespace string) ([]ReceivedShare, error) {
 	rows, err := p.db.Query(
-		`SELECT device, owner_namespace, perms FROM acl
+		`SELECT device, owner_namespace FROM acl
 		  WHERE grantee_namespace = $1 AND revoked_at IS NULL ORDER BY id DESC`, namespace,
 	)
 	if err != nil {
@@ -226,24 +230,18 @@ func (p *PGStore) ListReceivedACL(namespace string) ([]ReceivedShare, error) {
 	shares := []ReceivedShare{}
 	for rows.Next() {
 		var share ReceivedShare
-		if err := rows.Scan(&share.Device, &share.Owner, &share.Perms); err != nil {
+		if err := rows.Scan(&share.Device, &share.Owner); err != nil {
 			return nil, err
 		}
+		share.Perms = SharedGrant
 		shares = append(shares, share)
 	}
 	return shares, rows.Err()
 }
 
-func (p *PGStore) GrantACL(namespace, device, grantee, perms string) (id int, err error) {
+func (p *PGStore) GrantACL(namespace, device, grantee string) (id int, err error) {
 	if namespace == grantee {
 		return 0, ErrNotFriends
-	}
-	if perms == "" {
-		perms = "exec,read,write"
-	}
-	caps, err := sessionauth.ParseGrant(perms)
-	if err != nil {
-		return 0, fmt.Errorf("invalid ACL permissions: %w", err)
 	}
 	tx, err := p.db.Begin()
 	if err != nil {
@@ -271,7 +269,7 @@ func (p *PGStore) GrantACL(namespace, device, grantee, perms string) (id int, er
 	err = tx.QueryRow(
 		`INSERT INTO acl (owner_namespace, device, grantee_namespace, perms)
 		 VALUES ($1,$2,$3,$4) RETURNING id`,
-		namespace, device, grantee, caps.String(),
+		namespace, device, grantee, SharedGrant,
 	).Scan(&id)
 	if err != nil {
 		return 0, err

@@ -5,17 +5,20 @@ import (
 	"testing"
 )
 
-func TestParseGrant(t *testing.T) {
-	caps, err := ParseGrant("write, read,exec")
-	if err != nil {
-		t.Fatal(err)
+// A shared session carries what the owner's does. There is no reduced grant set
+// to parse any more, so nothing may quietly reintroduce one.
+func TestFullCapabilitiesCoversEveryCapability(t *testing.T) {
+	for _, item := range capabilityNames {
+		if !FullCapabilities.Has(item.cap) {
+			t.Fatalf("FullCapabilities is missing %q", item.name)
+		}
 	}
-	if caps != GrantCapabilities {
-		t.Fatalf("capabilities = %q", caps)
+	if got := FullCapabilities.String(); got != "exec,read,write,logs,console" {
+		t.Fatalf("FullCapabilities = %q", got)
 	}
-	for _, invalid := range []string{"", "read,unknown", "read,read", "logs", "console"} {
-		if _, err := ParseGrant(invalid); err == nil {
-			t.Errorf("ParseGrant(%q) succeeded", invalid)
+	for _, invalid := range []string{"", "read,unknown", "read,read"} {
+		if _, err := Parse(invalid); err == nil {
+			t.Errorf("Parse(%q) succeeded", invalid)
 		}
 	}
 }

@@ -47,11 +47,15 @@ across accounts starts with becoming friends:
 
 ## Sharing a device
 
-Once you are friends, the **Shared devices** page grants a friend rights on one
-of your devices, and it can be a subset of them (allow `exec` and pulling files
-but not writing, say). They can then drive it with
-`wanctl exec --target your-device-name …`, and risky operations still go
-through that device's own approvals.
+Once you are friends, the **Shared devices** page shares one of your devices
+with them. A share is not a reduced account: they get what you get on that
+device. They drive it with `wanctl exec --target your-namespace/your-device …`,
+and every request still goes through that device's own mode, rules and
+approvals — the ones you set. Leave the device on per-request approval and you
+answer for their commands too; put it in bypass and they are bypassed with you.
+Elevated commands are never covered by bypass, for them or for you.
+
+Only two things stay yours alone: unbinding the device, and revoking the share.
 
 **Removing a friend cascades into revoking every share in both directions**,
 and they lose access immediately.

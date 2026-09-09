@@ -80,7 +80,7 @@ USAGE
   wanctl friends                             list friends and pending requests
   wanctl friends add|accept|decline|remove <namespace>
   wanctl share list
-  wanctl share grant --device DEV --to NS [--perms exec,read]
+  wanctl share grant --device DEV --to NS
   wanctl share revoke --device DEV --to NS
   wanctl exec  [--target NS/DEV] [--oneshot] [NS/DEV|DEV] <command...>
   wanctl exec  [--target NS/DEV] --script <local-file> [--interp powershell|sh] [NS/DEV|DEV]

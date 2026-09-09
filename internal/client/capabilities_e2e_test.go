@@ -23,41 +23,56 @@ func (p grantACL) ACLPerms(callerNS, targetNS, device string) (string, bool) {
 	return p.perms, callerNS == "shared" && targetNS == "owner" && device == p.id
 }
 
-func TestSharedSessionCapabilities(t *testing.T) {
+// A shared device gives its grantee what the owner has (ADR 0007). The value
+// stored in acl.perms is not read, so the same end-to-end assertions hold for a
+// grant written as "read" and one written as "exec". What still constrains the
+// grantee is the device: its mode and rules gate every request, and its
+// console stays with whoever the device trusts to administer it.
+func TestSharedSessionHasTheOwnersCapabilities(t *testing.T) {
 	for _, transportName := range []string{"ws", "http"} {
-		t.Run(transportName+"/read", func(t *testing.T) {
-			c, ctx := startCapabilityFixture(t, transportName, "read")
-			remote := filepath.Join(t.TempDir(), "remote.txt")
-			if err := os.WriteFile(remote, []byte("readable"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			local := filepath.Join(t.TempDir(), "local.txt")
-			if err := c.Pull(ctx, "owner/home-pc", remote, local); err != nil {
-				t.Fatalf("read grant pull: %v", err)
-			}
-			if got, _ := os.ReadFile(local); string(got) != "readable" {
-				t.Fatalf("pulled content = %q", got)
-			}
-			requireCapabilityReject(t, execError(ctx, c), "exec")
-			requireCapabilityReject(t, c.PushBytes(ctx, "owner/home-pc", filepath.Join(t.TempDir(), "write.txt"), []byte("x"), 0o644), "write")
-			requireCapabilityReject(t, c.LogsTo(ctx, "owner/home-pc", "", "", "", 1, &bytes.Buffer{}), "logs")
-			_, err := c.OpenConsole(ctx, "owner/home-pc")
-			requireCapabilityReject(t, err, "console")
-		})
+		for _, storedGrant := range []string{"read", "exec"} {
+			t.Run(transportName+"/"+storedGrant, func(t *testing.T) {
+				c, ctx := startCapabilityFixture(t, transportName, storedGrant)
 
-		t.Run(transportName+"/exec", func(t *testing.T) {
-			c, ctx := startCapabilityFixture(t, transportName, "exec")
-			var stdout bytes.Buffer
-			code, err := c.ExecTo(ctx, ExecRequest{Target: "owner/home-pc", Command: "echo allowed", OneShot: true, Cwd: ""}, &stdout, &bytes.Buffer{})
-			if err != nil || code != 0 || strings.TrimSpace(stdout.String()) != "allowed" {
-				t.Fatalf("exec grant result: code=%d err=%v stdout=%q", code, err, stdout.String())
-			}
-			requireCapabilityReject(t, c.Pull(ctx, "owner/home-pc", filepath.Join(t.TempDir(), "missing"), filepath.Join(t.TempDir(), "local")), "read")
-			requireCapabilityReject(t, c.PushBytes(ctx, "owner/home-pc", filepath.Join(t.TempDir(), "write.txt"), []byte("x"), 0o644), "write")
-			requireCapabilityReject(t, c.LogsTo(ctx, "owner/home-pc", "", "", "", 1, &bytes.Buffer{}), "logs")
-			_, err = c.OpenConsole(ctx, "owner/home-pc")
-			requireCapabilityReject(t, err, "console")
-		})
+				var stdout bytes.Buffer
+				code, err := c.ExecTo(ctx, ExecRequest{Target: "owner/home-pc", Command: "echo allowed", OneShot: true}, &stdout, &bytes.Buffer{})
+				if err != nil || code != 0 || strings.TrimSpace(stdout.String()) != "allowed" {
+					t.Fatalf("exec: code=%d err=%v stdout=%q", code, err, stdout.String())
+				}
+
+				remote := filepath.Join(t.TempDir(), "remote.txt")
+				if err := os.WriteFile(remote, []byte("readable"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				local := filepath.Join(t.TempDir(), "local.txt")
+				if err := c.Pull(ctx, "owner/home-pc", remote, local); err != nil {
+					t.Fatalf("pull: %v", err)
+				}
+				if got, _ := os.ReadFile(local); string(got) != "readable" {
+					t.Fatalf("pulled content = %q", got)
+				}
+
+				written := filepath.Join(t.TempDir(), "write.txt")
+				if err := c.PushBytes(ctx, "owner/home-pc", written, []byte("x"), 0o644); err != nil {
+					t.Fatalf("push: %v", err)
+				}
+
+				var logs bytes.Buffer
+				if err := c.LogsTo(ctx, "owner/home-pc", "", "", "", 1, &logs); err != nil {
+					t.Fatalf("logs: %v", err)
+				}
+
+				// Console is not a capability the relay withholds any more. The
+				// device withholds it, from every controller that is not one of
+				// its console administrators - which is how approvals, rules and
+				// mode stay with the owner.
+				_, err = c.OpenConsole(ctx, "owner/home-pc")
+				var rejected *RejectError
+				if !errors.As(err, &rejected) || !strings.Contains(rejected.Reason, "console administrator") {
+					t.Fatalf("console error = %v, want a device-side console-administrator refusal", err)
+				}
+			})
+		}
 	}
 }
 
@@ -107,17 +122,4 @@ func startCapabilityFixture(t *testing.T, transportName, grant string) (*Client,
 		t.Fatal(err)
 	}
 	return c, ctx
-}
-
-func execError(ctx context.Context, c *Client) error {
-	_, err := c.ExecTo(ctx, ExecRequest{Target: "owner/home-pc", Command: "echo denied", OneShot: true, Cwd: ""}, &bytes.Buffer{}, &bytes.Buffer{})
-	return err
-}
-
-func requireCapabilityReject(t *testing.T, err error, capability string) {
-	t.Helper()
-	var rejected *RejectError
-	if !errors.As(err, &rejected) || !strings.Contains(rejected.Reason, "capability denied: "+capability) {
-		t.Fatalf("error = %v, want %s capability rejection", err, capability)
-	}
 }

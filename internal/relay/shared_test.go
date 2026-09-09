@@ -132,7 +132,7 @@ func TestPeerEndpointsListDevicesSharedWithTheCaller(t *testing.T) {
 		want := SharedPeer{
 			Owner: "daily-ac", Device: "8e894048-2222-4333-8444-555566667777",
 			Label: "bms-20558674", Target: "daily-ac/8e894048-2222-4333-8444-555566667777",
-			Perms: "exec,read,write", Online: true,
+			Online: true,
 		}
 		if got.Shared[0] != want {
 			t.Fatalf("GET %s shared[0] = %+v, want %+v", path, got.Shared[0], want)
@@ -286,9 +286,6 @@ func TestPGSharedPeersAndBareTargetResolutionAcrossGrants(t *testing.T) {
 	peers := r.sharedPeers("waerjili123")
 	if len(peers) != 1 || peers[0].Target != "daily-ac/"+sharedID || peers[0].Label != "bms-20558674" || !peers[0].Online {
 		t.Fatalf("shared peers = %+v", peers)
-	}
-	if perms := peers[0].Perms; perms != "exec,read,write" {
-		t.Fatalf("perms = %q", perms)
 	}
 	key, auth, reason, ok := r.dialAllowedReason("waerjili123", "bms-20558674")
 	if !ok || key != "daily-ac/"+sharedID || auth.OwnerNamespace != "daily-ac" {

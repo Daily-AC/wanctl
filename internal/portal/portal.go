@@ -1269,13 +1269,16 @@ func (s *Server) requireDevice(w http.ResponseWriter, r *http.Request, device st
 // requireOwnedConsole is requireDevice plus an owner gate. ACL-shared devices
 // get no console in the portal at all — neither writes (approvals, pairing,
 // trust, rules, mode) nor reads (console state, activity log, approval
-// events, Feishu settings). The protocol already says so: a grant can carry
-// exec/read/write but never console or logs (sessionauth.ParseGrant), and the
-// device refuses those kinds from a grantee's own session. The portal dials
-// with its own privileged token, so it must apply the same rule itself or it
-// becomes the way around it: every controller's commands, the rule set, the
-// trusted-controller fingerprints and the owner's notify address would be
-// readable by anyone holding a read-only share (audit 2026-08-28, SEC-B-01).
+// events, Feishu settings).
+//
+// ADR 0007 decided that a grant is owner-equivalent, which retires the reason
+// this gate was originally written for (audit 2026-08-28, SEC-B-01: a
+// *read-only* share must not read the control plane through the portal's
+// privileged token). The gate is deliberately left in place until the portal
+// change that goes with ADR 0007 lands, because relaxing it here without the
+// UI that shows a grantee whose device they are administering would put the
+// owner's approval queue and notify address behind no visible boundary at all.
+// See docs/adr/0007-shared-devices-inherit-owner-rights.md.
 func (s *Server) requireOwnedConsole(w http.ResponseWriter, r *http.Request, device string) (string, bool) {
 	ns, shared, ok := s.requireDevice(w, r, device)
 	if !ok {

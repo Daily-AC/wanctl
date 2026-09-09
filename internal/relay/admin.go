@@ -520,11 +520,12 @@ func (r *Relay) adminACL(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if req.Method == "POST" {
-		var body struct{ Namespace, Device, Grantee, Perms string }
+		// A "perms" field is accepted and ignored: a grant is owner-equivalent.
+		var body struct{ Namespace, Device, Grantee string }
 		json.NewDecoder(req.Body).Decode(&body)
 		if strings.TrimSpace(body.Namespace) == "" || strings.TrimSpace(body.Device) == "" ||
-			strings.TrimSpace(body.Grantee) == "" || strings.TrimSpace(body.Perms) == "" {
-			http.Error(w, "namespace, device, grantee and perms are required", http.StatusBadRequest)
+			strings.TrimSpace(body.Grantee) == "" {
+			http.Error(w, "namespace, device and grantee are required", http.StatusBadRequest)
 			return
 		}
 		if body.Device != "" {
@@ -539,7 +540,7 @@ func (r *Relay) adminACL(w http.ResponseWriter, req *http.Request) {
 				body.Device = target
 			}
 		}
-		if err := r.admin.AddACL(body.Namespace, body.Device, body.Grantee, body.Perms); err != nil {
+		if err := r.admin.AddACL(body.Namespace, body.Device, body.Grantee); err != nil {
 			if errors.Is(err, ErrNotFriends) {
 				writeErrorToken(w, http.StatusForbidden, ErrNotFriends.Error())
 				return
@@ -620,8 +621,8 @@ type AdminStore interface {
 	RemoveDevice(namespace, device string) error
 	ListACL(namespace string) ([]map[string]any, error)
 	ListReceivedACL(namespace string) ([]ReceivedShare, error)
-	AddACL(namespace, device, grantee, perms string) error
-	GrantACL(namespace, device, grantee, perms string) (int, error)
+	AddACL(namespace, device, grantee string) error
+	GrantACL(namespace, device, grantee string) (int, error)
 	RevokeACL(namespace string, id int) error
 	RevokeACLMatch(namespace string, id int, device, grantee string) (bool, error)
 	ListAudit(namespace string) ([]map[string]any, error)
@@ -1045,7 +1046,8 @@ func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 			row["device_id"] = name
 		}
 		if shared {
-			row["perms"] = perms
+			// The stored value is not read any more; a grant is owner-equivalent.
+			row["perms"] = SharedGrant
 		}
 		out = append(out, row)
 	}
@@ -1119,13 +1121,13 @@ func (p *PGStore) ListACL(namespace string) ([]map[string]any, error) {
 		var device, grantee, perms string
 		var created time.Time
 		rows.Scan(&id, &device, &grantee, &perms, &created)
-		out = append(out, map[string]any{"id": id, "device": device, "grantee": grantee, "perms": perms, "created_at": created})
+		out = append(out, map[string]any{"id": id, "device": device, "grantee": grantee, "perms": SharedGrant, "created_at": created})
 	}
 	return out, rows.Err()
 }
 
-func (p *PGStore) AddACL(namespace, device, grantee, perms string) error {
-	_, err := p.GrantACL(namespace, device, grantee, perms)
+func (p *PGStore) AddACL(namespace, device, grantee string) error {
+	_, err := p.GrantACL(namespace, device, grantee)
 	return err
 }
 

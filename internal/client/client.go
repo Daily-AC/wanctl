@@ -195,7 +195,6 @@ type SharedDevice struct {
 	Device string `json:"device"`
 	Label  string `json:"label"`
 	Target string `json:"target"`
-	Perms  string `json:"perms"`
 	Online bool   `json:"online"`
 }
 

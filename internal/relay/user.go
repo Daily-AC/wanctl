@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"wanctl/internal/notify"
-	"wanctl/internal/sessionauth"
 )
 
 func (r *Relay) registerUser(mux *http.ServeMux) {
@@ -201,7 +200,7 @@ func (r *Relay) userShares(w http.ResponseWriter, req *http.Request) {
 	for _, row := range givenRows {
 		given = append(given, map[string]any{
 			"id": row["id"], "device": row["device"],
-			"grantee": row["grantee"], "perms": row["perms"],
+			"grantee": row["grantee"], "perms": SharedGrant,
 		})
 	}
 	received, err := r.admin.ListReceivedACL(namespace)
@@ -217,10 +216,11 @@ func (r *Relay) userShareGrant(w http.ResponseWriter, req *http.Request) {
 	if !ok || !requireMethod(w, req, http.MethodPost) {
 		return
 	}
+	// A "perms" field sent by an older client or the portal is accepted and
+	// ignored: a grant is owner-equivalent, so there is nothing to narrow.
 	var body struct {
 		Device  string `json:"device"`
 		Grantee string `json:"grantee"`
-		Perms   string `json:"perms"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -228,16 +228,8 @@ func (r *Relay) userShareGrant(w http.ResponseWriter, req *http.Request) {
 	}
 	body.Device = strings.TrimSpace(body.Device)
 	body.Grantee = strings.TrimSpace(body.Grantee)
-	body.Perms = strings.TrimSpace(body.Perms)
 	if body.Device == "" || body.Grantee == "" {
 		http.Error(w, "device and grantee required", http.StatusBadRequest)
-		return
-	}
-	if body.Perms == "" {
-		body.Perms = "exec,read"
-	}
-	if _, err := sessionauth.ParseGrant(body.Perms); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if body.Device != "" {
@@ -252,7 +244,7 @@ func (r *Relay) userShareGrant(w http.ResponseWriter, req *http.Request) {
 			body.Device = target
 		}
 	}
-	id, err := r.admin.GrantACL(namespace, body.Device, body.Grantee, body.Perms)
+	id, err := r.admin.GrantACL(namespace, body.Device, body.Grantee)
 	if errors.Is(err, ErrNotFriends) {
 		writeErrorToken(w, http.StatusForbidden, ErrNotFriends.Error())
 		return
