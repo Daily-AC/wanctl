@@ -37,8 +37,11 @@ func TestSharedDeviceMutationRoutesFollowTheManagementSwitch(t *testing.T) {
 		{"/api/devices/rules", http.MethodPost, body, false, false},
 		{"/api/devices/mode", http.MethodPost, body, false, false},
 		{"/api/devices/identity/accept", http.MethodPost, body, false, false},
-		{"/api/devices/adb-pair", http.MethodPost, body, false, false},
+
 		// The owner's contact details, not device state. Never a grantee's.
+		// Pairing ADB is device setup rather than device operation, so it is
+		// the owner's even when the grantee administers everything else.
+		{"/api/devices/adb-pair", http.MethodPost, body, true, false},
 		{"/api/devices/lark", http.MethodPost, body, true, false},
 		{"/api/devices/notify", http.MethodPost, body, true, false},
 		// Reads of what the device did. `wanctl logs` gives these to every
