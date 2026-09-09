@@ -190,6 +190,7 @@ func TestEmbeddedMigrationsApplyEveryVersion(t *testing.T) {
 		{5, "devices_owner_namespace_alias_key"},
 		{6, "CREATE TABLE IF NOT EXISTS access_requests"},
 		{7, "RENAME COLUMN name TO device_id"},
+		{8, "ALTER TABLE acl ADD COLUMN IF NOT EXISTS manage"},
 	}
 	if len(state.committedBodies) != len(want) {
 		t.Fatalf("applied %d migrations, want %d: %#v",

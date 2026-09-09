@@ -60,6 +60,7 @@ func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/notify/test", r.adminNotifyTest)
 	mux.HandleFunc("/admin/devices/remove", r.adminDeviceRemove)
 	mux.HandleFunc("/admin/acl", r.adminACL)
+	mux.HandleFunc("/admin/acl/manage", r.adminACLManage)
 	mux.HandleFunc("/admin/acl/revoke", r.adminACLRevoke)
 	mux.HandleFunc("/admin/audit", r.adminAudit)
 	mux.HandleFunc("/admin/logs", r.adminLogs)
@@ -520,26 +521,24 @@ func (r *Relay) adminACL(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if req.Method == "POST" {
-		var body struct{ Namespace, Device, Grantee, Perms string }
+		// A "perms" field is accepted and ignored: a share inherits the owner's
+		// use of the device and cannot be narrowed.
+		var body struct {
+			Namespace, Device, Grantee string
+			Manage                     bool
+		}
 		json.NewDecoder(req.Body).Decode(&body)
 		if strings.TrimSpace(body.Namespace) == "" || strings.TrimSpace(body.Device) == "" ||
-			strings.TrimSpace(body.Grantee) == "" || strings.TrimSpace(body.Perms) == "" {
-			http.Error(w, "namespace, device, grantee and perms are required", http.StatusBadRequest)
+			strings.TrimSpace(body.Grantee) == "" {
+			http.Error(w, "namespace, device and grantee are required", http.StatusBadRequest)
 			return
 		}
-		if body.Device != "" {
-			if store, ok := r.aliases.(interface {
-				ResolveDeviceTargetStrict(string, string) (string, error)
-			}); ok {
-				target, err := store.ResolveDeviceTargetStrict(body.Namespace, body.Device)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusConflict)
-					return
-				}
-				body.Device = target
-			}
+		device, ok := r.resolveOwnedDevice(w, body.Namespace, body.Device)
+		if !ok {
+			return
 		}
-		if err := r.admin.AddACL(body.Namespace, body.Device, body.Grantee, body.Perms); err != nil {
+		body.Device = device
+		if err := r.admin.AddACL(body.Namespace, body.Device, body.Grantee, body.Manage); err != nil {
 			if errors.Is(err, ErrNotFriends) {
 				writeErrorToken(w, http.StatusForbidden, ErrNotFriends.Error())
 				return
@@ -556,6 +555,62 @@ func (r *Relay) adminACL(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"acl": out})
+}
+
+// resolveOwnedDevice turns a label into the device's canonical route inside one
+// namespace, so a share and a change to it name the same row even when the
+// caller typed a display name or an alias.
+func (r *Relay) resolveOwnedDevice(w http.ResponseWriter, namespace, device string) (string, bool) {
+	store, ok := r.aliases.(interface {
+		ResolveDeviceTargetStrict(string, string) (string, error)
+	})
+	if !ok || device == "" {
+		return device, true
+	}
+	target, err := store.ResolveDeviceTargetStrict(namespace, device)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return "", false
+	}
+	return target, true
+}
+
+// adminACLManage flips one share's management switch. Revoking and re-sharing
+// would do the same thing at the cost of making the grantee pair again, so an
+// owner who changes their mind gets a way that does not disturb the device.
+func (r *Relay) adminACLManage(w http.ResponseWriter, req *http.Request) {
+	if !r.adminOK(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Namespace, Device, Grantee string
+		Manage                     bool
+	}
+	json.NewDecoder(req.Body).Decode(&body)
+	body.Namespace, body.Device, body.Grantee = strings.TrimSpace(body.Namespace), strings.TrimSpace(body.Device), strings.TrimSpace(body.Grantee)
+	if body.Namespace == "" || body.Device == "" || body.Grantee == "" {
+		http.Error(w, "namespace, device and grantee are required", http.StatusBadRequest)
+		return
+	}
+	device, ok := r.resolveOwnedDevice(w, body.Namespace, body.Device)
+	if !ok {
+		return
+	}
+	changed, err := r.admin.SetACLManage(body.Namespace, device, body.Grantee, body.Manage)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !changed {
+		http.Error(w, "no live share of that device with that namespace", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]any{"device": device, "grantee": body.Grantee, "manage": body.Manage})
 }
 
 func (r *Relay) adminACLRevoke(w http.ResponseWriter, req *http.Request) {
@@ -620,8 +675,9 @@ type AdminStore interface {
 	RemoveDevice(namespace, device string) error
 	ListACL(namespace string) ([]map[string]any, error)
 	ListReceivedACL(namespace string) ([]ReceivedShare, error)
-	AddACL(namespace, device, grantee, perms string) error
-	GrantACL(namespace, device, grantee, perms string) (int, error)
+	AddACL(namespace, device, grantee string, manage bool) error
+	SetACLManage(namespace, device, grantee string, manage bool) (bool, error)
+	GrantACL(namespace, device, grantee string, manage bool) (int, error)
 	RevokeACL(namespace string, id int) error
 	RevokeACLMatch(namespace string, id int, device, grantee string) (bool, error)
 	ListAudit(namespace string) ([]map[string]any, error)
@@ -996,7 +1052,7 @@ func (p *PGStore) RevokeToken(namespace string, id int) error {
 
 func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 	rows, err := p.db.Query(
-		`SELECT device_id, alias, fingerprint, last_seen, owner_namespace, shared, perms, display_name, legacy_name, uses_device_id
+		`SELECT device_id, alias, fingerprint, last_seen, owner_namespace, shared, perms, manage, display_name, legacy_name, uses_device_id
 		   FROM (
 		     SELECT d.device_id,
 		            COALESCE(d.alias,'') AS alias,
@@ -1004,7 +1060,7 @@ func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 		            d.last_seen,
 		            d.owner_namespace,
 		            false AS shared,
-		            '' AS perms, d.display_name, COALESCE(d.legacy_name,'') AS legacy_name, d.uses_device_id
+		            '' AS perms, false AS manage, d.display_name, COALESCE(d.legacy_name,'') AS legacy_name, d.uses_device_id
 		       FROM devices d
 		      WHERE d.owner_namespace = $1
 		     UNION ALL
@@ -1014,7 +1070,7 @@ func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 		            d.last_seen,
 		            d.owner_namespace,
 		            true AS shared,
-		            a.perms, d.display_name, COALESCE(d.legacy_name,'') AS legacy_name, d.uses_device_id
+		            a.perms, a.manage, d.display_name, COALESCE(d.legacy_name,'') AS legacy_name, d.uses_device_id
 		       FROM acl a
 		       JOIN devices d
 		         ON d.owner_namespace = a.owner_namespace
@@ -1030,10 +1086,10 @@ func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 	out := []map[string]any{}
 	for rows.Next() {
 		var name, alias, fp, owner, perms, displayName, legacyName string
-		var usesID bool
+		var usesID, manage bool
 		var seen sql.NullTime
 		var shared bool
-		if err := rows.Scan(&name, &alias, &fp, &seen, &owner, &shared, &perms, &displayName, &legacyName, &usesID); err != nil {
+		if err := rows.Scan(&name, &alias, &fp, &seen, &owner, &shared, &perms, &manage, &displayName, &legacyName, &usesID); err != nil {
 			return nil, err
 		}
 		row := map[string]any{
@@ -1045,7 +1101,10 @@ func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 			row["device_id"] = name
 		}
 		if shared {
-			row["perms"] = perms
+			// perms is not read any more; a share inherits the owner's use of
+			// the device. manage is the one thing it varies.
+			row["perms"] = SharedGrant
+			row["manage"] = manage
 		}
 		out = append(out, row)
 	}
@@ -1107,7 +1166,7 @@ func (p *PGStore) RemoveDevice(namespace, device string) error {
 
 func (p *PGStore) ListACL(namespace string) ([]map[string]any, error) {
 	rows, err := p.db.Query(
-		`SELECT id, device, grantee_namespace, perms, created_at FROM acl
+		`SELECT id, device, grantee_namespace, perms, manage, created_at FROM acl
 		   WHERE owner_namespace = $1 AND revoked_at IS NULL ORDER BY id DESC`, namespace)
 	if err != nil {
 		return nil, err
@@ -1117,15 +1176,16 @@ func (p *PGStore) ListACL(namespace string) ([]map[string]any, error) {
 	for rows.Next() {
 		var id int
 		var device, grantee, perms string
+		var manage bool
 		var created time.Time
-		rows.Scan(&id, &device, &grantee, &perms, &created)
-		out = append(out, map[string]any{"id": id, "device": device, "grantee": grantee, "perms": perms, "created_at": created})
+		rows.Scan(&id, &device, &grantee, &perms, &manage, &created)
+		out = append(out, map[string]any{"id": id, "device": device, "grantee": grantee, "perms": SharedGrant, "manage": manage, "created_at": created})
 	}
 	return out, rows.Err()
 }
 
-func (p *PGStore) AddACL(namespace, device, grantee, perms string) error {
-	_, err := p.GrantACL(namespace, device, grantee, perms)
+func (p *PGStore) AddACL(namespace, device, grantee string, manage bool) error {
+	_, err := p.GrantACL(namespace, device, grantee, manage)
 	return err
 }
 

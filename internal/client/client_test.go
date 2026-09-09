@@ -223,7 +223,7 @@ func TestPeersAndSharedCarriesGrantedDevices(t *testing.T) {
 		return c
 	}
 	c := respond(`{"namespace":"waerjili123","devices":["mine"],"aliases":{},
-	  "shared":[{"owner":"daily-ac","device":"8e894048","label":"bms-20558674","target":"daily-ac/8e894048","perms":"exec,read,write","online":true}]}`)
+	  "shared":[{"owner":"daily-ac","device":"8e894048","label":"bms-20558674","target":"daily-ac/8e894048","online":true}]}`)
 	devices, _, shared, err := c.PeersAndShared(context.Background())
 	if err != nil || len(devices) != 1 || len(shared) != 1 {
 		t.Fatalf("peers = %v, shared = %+v, err = %v", devices, shared, err)

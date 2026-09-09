@@ -23,7 +23,12 @@ type userEndpointStore struct {
 	grantActor    string
 	grantDevice   string
 	grantGrantee  string
-	grantPerms    string
+	grantManage   bool
+	manageActor   string
+	manageDevice  string
+	manageGrantee string
+	manageValue   bool
+	manageMissing bool
 	given         []map[string]any
 	received      []ReceivedShare
 }
@@ -34,6 +39,11 @@ func (s *userEndpointStore) ListFriends(string) ([]Friend, error) {
 
 func (s *userEndpointStore) LookupUser(namespace string) (bool, error) {
 	return s.users[namespace], nil
+}
+
+func (s *userEndpointStore) SetACLManage(actor, device, grantee string, manage bool) (bool, error) {
+	s.manageActor, s.manageDevice, s.manageGrantee, s.manageValue = actor, device, grantee, manage
+	return !s.manageMissing, nil
 }
 
 func (s *userEndpointStore) ListACL(string) ([]map[string]any, error) {
@@ -53,8 +63,8 @@ func (s *userEndpointStore) FriendAccept(string, string) error  { return s.decis
 func (s *userEndpointStore) FriendDecline(string, string) error { return s.decisionErr }
 func (s *userEndpointStore) FriendRemove(string, string) error  { return s.decisionErr }
 
-func (s *userEndpointStore) GrantACL(actor, device, grantee, perms string) (int, error) {
-	s.grantActor, s.grantDevice, s.grantGrantee, s.grantPerms = actor, device, grantee, perms
+func (s *userEndpointStore) GrantACL(actor, device, grantee string, manage bool) (int, error) {
+	s.grantActor, s.grantDevice, s.grantGrantee, s.grantManage = actor, device, grantee, manage
 	return 7, s.grantErr
 }
 
@@ -146,27 +156,21 @@ func TestUserEndpointErrorTokensAreExact(t *testing.T) {
 	}
 }
 
-func TestUserShareGrantRejectsInvalidPermissions(t *testing.T) {
-	r := New(envTokens{"token": "alice"})
-	r.SetAdmin(&userEndpointStore{})
-	rr := userEndpointRequest(t, r, http.MethodPost, "/u/shares/grant",
-		`{"device":"d","grantee":"bob","perms":"logs"}`, "token")
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("response = %d %q", rr.Code, rr.Body.String())
-	}
-}
-
-func TestUserShareGrantDefaultsToExecRead(t *testing.T) {
-	store := &userEndpointStore{}
-	r := New(envTokens{"token": "alice"})
-	r.SetAdmin(store)
-	rr := userEndpointRequest(t, r, http.MethodPost, "/u/shares/grant",
-		`{"device":"d","grantee":"bob"}`, "token")
-	if rr.Code != http.StatusOK || rr.Body.String() != `{"id":7}`+"\n" {
-		t.Fatalf("response = %d %q", rr.Code, rr.Body.String())
-	}
-	if store.grantActor != "alice" || store.grantDevice != "d" || store.grantGrantee != "bob" || store.grantPerms != "exec,read" {
-		t.Fatalf("grant = actor=%q device=%q grantee=%q perms=%q", store.grantActor, store.grantDevice, store.grantGrantee, store.grantPerms)
+// A grant is owner-equivalent, so a "perms" field from an older client or from
+// the portal's share form must be accepted and then ignored rather than
+// rejected — and it must not narrow what the grantee gets.
+func TestUserShareGrantIgnoresAnyRequestedPermissions(t *testing.T) {
+	for _, body := range []string{`{"device":"d","grantee":"bob"}`, `{"device":"d","grantee":"bob","perms":"read"}`, `{"device":"d","grantee":"bob","perms":"nonsense"}`} {
+		store := &userEndpointStore{}
+		r := New(envTokens{"token": "alice"})
+		r.SetAdmin(store)
+		rr := userEndpointRequest(t, r, http.MethodPost, "/u/shares/grant", body, "token")
+		if rr.Code != http.StatusOK || rr.Body.String() != `{"id":7}`+"\n" {
+			t.Fatalf("%s -> response = %d %q", body, rr.Code, rr.Body.String())
+		}
+		if store.grantActor != "alice" || store.grantDevice != "d" || store.grantGrantee != "bob" {
+			t.Fatalf("%s -> grant = actor=%q device=%q grantee=%q", body, store.grantActor, store.grantDevice, store.grantGrantee)
+		}
 	}
 }
 
@@ -224,12 +228,14 @@ func TestUserSharesContract(t *testing.T) {
 			"id": 1, "device": "d", "grantee": "bob", "perms": "exec,read",
 			"created_at": time.Date(2026, 8, 20, 1, 0, 0, 0, time.UTC),
 		}},
-		received: []ReceivedShare{{Device: "server", Owner: "carol", Perms: "read"}},
+		received: []ReceivedShare{{Device: "server", Owner: "carol", Perms: SharedGrant, Manage: true}},
 	}
 	r := New(envTokens{"token": "alice"})
 	r.SetAdmin(store)
 	rr := userEndpointRequest(t, r, http.MethodGet, "/u/shares", "", "token")
-	want := `{"given":[{"device":"d","grantee":"bob","id":1,"perms":"exec,read"}],"received":[{"device":"server","owner":"carol","perms":"read"}]}` + "\n"
+	// A stale "exec,read" in the database is reported as the one value a grant
+	// now has; the field is kept only so existing readers still see something.
+	want := `{"given":[{"device":"d","grantee":"bob","id":1,"manage":false,"perms":"full"}],"received":[{"device":"server","owner":"carol","perms":"full","manage":true}]}` + "\n"
 	if rr.Code != http.StatusOK || rr.Body.String() != want {
 		t.Fatalf("shares response = %d %q, want %q", rr.Code, rr.Body.String(), want)
 	}
@@ -284,8 +290,51 @@ func TestAdminACLMapsNotFriendsExactly(t *testing.T) {
 
 type adminACLNotFriendsStore struct{ *userEndpointStore }
 
-func (*adminACLNotFriendsStore) AddACL(string, string, string, string) error {
+func (*adminACLNotFriendsStore) AddACL(string, string, string, bool) error {
 	return ErrNotFriends
 }
 
 var _ AdminStore = (*userEndpointStore)(nil)
+
+// The owner turns management on for a share they already made. Revoking and
+// re-sharing would do the same thing at the cost of making the grantee pair
+// with the device again.
+func TestUserShareManageFlipsAnExistingGrant(t *testing.T) {
+	for _, tc := range []struct {
+		body   string
+		status int
+		manage bool
+	}{
+		{`{"device":"d","grantee":"bob","manage":true}`, http.StatusOK, true},
+		{`{"device":"d","grantee":"bob","manage":false}`, http.StatusOK, false},
+		{`{"device":"d","grantee":"bob"}`, http.StatusOK, false},
+		{`{"grantee":"bob","manage":true}`, http.StatusBadRequest, false},
+		{`{"device":"d","manage":true}`, http.StatusBadRequest, false},
+	} {
+		store := &userEndpointStore{}
+		r := New(envTokens{"token": "alice"})
+		r.SetAdmin(store)
+		rr := userEndpointRequest(t, r, http.MethodPost, "/u/shares/manage", tc.body, "token")
+		if rr.Code != tc.status {
+			t.Fatalf("%s -> status %d, want %d (%q)", tc.body, rr.Code, tc.status, rr.Body.String())
+		}
+		if tc.status != http.StatusOK {
+			continue
+		}
+		if store.manageActor != "alice" || store.manageDevice != "d" || store.manageGrantee != "bob" || store.manageValue != tc.manage {
+			t.Fatalf("%s -> store saw actor=%q device=%q grantee=%q manage=%v",
+				tc.body, store.manageActor, store.manageDevice, store.manageGrantee, store.manageValue)
+		}
+	}
+}
+
+// A share that is not there cannot be quietly created by flipping its switch.
+func TestUserShareManageReportsAMissingShare(t *testing.T) {
+	store := &userEndpointStore{manageMissing: true}
+	r := New(envTokens{"token": "alice"})
+	r.SetAdmin(store)
+	rr := userEndpointRequest(t, r, http.MethodPost, "/u/shares/manage", `{"device":"d","grantee":"bob","manage":true}`, "token")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (%q)", rr.Code, rr.Body.String())
+	}
+}

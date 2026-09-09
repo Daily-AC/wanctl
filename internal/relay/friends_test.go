@@ -310,17 +310,18 @@ func TestFriendRemoveWithoutRelationshipDoesNotTouchACL(t *testing.T) {
 func TestAddACLRequiresAcceptedFriendAndRejectsSelf(t *testing.T) {
 	state := &friendState{users: map[string]bool{"alice": true, "bob": true}}
 	store := newFriendTestStore(t, state)
-	if err := store.AddACL("alice", "dev", "bob", "exec,read"); !errors.Is(err, ErrNotFriends) {
+	if err := store.AddACL("alice", "dev", "bob", false); !errors.Is(err, ErrNotFriends) {
 		t.Fatalf("non-friend AddACL error = %v", err)
 	}
-	if err := store.AddACL("alice", "dev", "alice", "exec,read"); !errors.Is(err, ErrNotFriends) {
+	if err := store.AddACL("alice", "dev", "alice", false); !errors.Is(err, ErrNotFriends) {
 		t.Fatalf("self AddACL error = %v", err)
 	}
 	state.friend = &friendRecord{id: 1, requester: "alice", addressee: "bob", status: "accepted"}
-	if err := store.AddACL("alice", "dev", "bob", "read,exec"); err != nil {
+	if err := store.AddACL("alice", "dev", "bob", false); err != nil {
 		t.Fatal(err)
 	}
-	if len(state.acl) != 1 || state.acl[0].perms != "exec,read" {
+	// The column keeps one value, so no caller can express a narrower grant.
+	if len(state.acl) != 1 || state.acl[0].perms != SharedGrant {
 		t.Fatalf("ACL = %+v", state.acl)
 	}
 }

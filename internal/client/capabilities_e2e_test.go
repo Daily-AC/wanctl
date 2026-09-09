@@ -17,51 +17,80 @@ import (
 	"wanctl/internal/transport"
 )
 
-type grantACL struct{ id, perms string }
-
-func (p grantACL) ACLPerms(callerNS, targetNS, device string) (string, bool) {
-	return p.perms, callerNS == "shared" && targetNS == "owner" && device == p.id
+type grantACL struct {
+	id     string
+	manage bool
 }
 
-func TestSharedSessionCapabilities(t *testing.T) {
-	for _, transportName := range []string{"ws", "http"} {
-		t.Run(transportName+"/read", func(t *testing.T) {
-			c, ctx := startCapabilityFixture(t, transportName, "read")
-			remote := filepath.Join(t.TempDir(), "remote.txt")
-			if err := os.WriteFile(remote, []byte("readable"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			local := filepath.Join(t.TempDir(), "local.txt")
-			if err := c.Pull(ctx, "owner/home-pc", remote, local); err != nil {
-				t.Fatalf("read grant pull: %v", err)
-			}
-			if got, _ := os.ReadFile(local); string(got) != "readable" {
-				t.Fatalf("pulled content = %q", got)
-			}
-			requireCapabilityReject(t, execError(ctx, c), "exec")
-			requireCapabilityReject(t, c.PushBytes(ctx, "owner/home-pc", filepath.Join(t.TempDir(), "write.txt"), []byte("x"), 0o644), "write")
-			requireCapabilityReject(t, c.LogsTo(ctx, "owner/home-pc", "", "", "", 1, &bytes.Buffer{}), "logs")
-			_, err := c.OpenConsole(ctx, "owner/home-pc")
-			requireCapabilityReject(t, err, "console")
-		})
+func (p grantACL) ACLGrant(callerNS, targetNS, device string) (relay.Grant, bool) {
+	return relay.Grant{Manage: p.manage}, callerNS == "shared" && targetNS == "owner" && device == p.id
+}
 
-		t.Run(transportName+"/exec", func(t *testing.T) {
-			c, ctx := startCapabilityFixture(t, transportName, "exec")
-			var stdout bytes.Buffer
-			code, err := c.ExecTo(ctx, ExecRequest{Target: "owner/home-pc", Command: "echo allowed", OneShot: true, Cwd: ""}, &stdout, &bytes.Buffer{})
-			if err != nil || code != 0 || strings.TrimSpace(stdout.String()) != "allowed" {
-				t.Fatalf("exec grant result: code=%d err=%v stdout=%q", code, err, stdout.String())
+// A share gives its grantee the owner's *use* of the device: exec, files and
+// logs, over either transport, with the device's own mode and rules deciding
+// each request. Management -- the device's approvals, rules and mode -- is one
+// switch the owner sets per share, and it is the only thing that differs
+// between the two runs below. See ADR 0007.
+func TestSharedSessionHasTheOwnersCapabilities(t *testing.T) {
+	for _, transportName := range []string{"ws", "http"} {
+		for _, manage := range []bool{false, true} {
+			name := transportName + "/use-only"
+			if manage {
+				name = transportName + "/manage"
 			}
-			requireCapabilityReject(t, c.Pull(ctx, "owner/home-pc", filepath.Join(t.TempDir(), "missing"), filepath.Join(t.TempDir(), "local")), "read")
-			requireCapabilityReject(t, c.PushBytes(ctx, "owner/home-pc", filepath.Join(t.TempDir(), "write.txt"), []byte("x"), 0o644), "write")
-			requireCapabilityReject(t, c.LogsTo(ctx, "owner/home-pc", "", "", "", 1, &bytes.Buffer{}), "logs")
-			_, err = c.OpenConsole(ctx, "owner/home-pc")
-			requireCapabilityReject(t, err, "console")
-		})
+			t.Run(name, func(t *testing.T) {
+				c, ctx := startCapabilityFixture(t, transportName, manage)
+
+				var stdout bytes.Buffer
+				code, err := c.ExecTo(ctx, ExecRequest{Target: "owner/home-pc", Command: "echo allowed", OneShot: true}, &stdout, &bytes.Buffer{})
+				if err != nil || code != 0 || strings.TrimSpace(stdout.String()) != "allowed" {
+					t.Fatalf("exec: code=%d err=%v stdout=%q", code, err, stdout.String())
+				}
+
+				remote := filepath.Join(t.TempDir(), "remote.txt")
+				if err := os.WriteFile(remote, []byte("readable"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				local := filepath.Join(t.TempDir(), "local.txt")
+				if err := c.Pull(ctx, "owner/home-pc", remote, local); err != nil {
+					t.Fatalf("pull: %v", err)
+				}
+				if got, _ := os.ReadFile(local); string(got) != "readable" {
+					t.Fatalf("pulled content = %q", got)
+				}
+
+				if err := c.PushBytes(ctx, "owner/home-pc", filepath.Join(t.TempDir(), "write.txt"), []byte("x"), 0o644); err != nil {
+					t.Fatalf("push: %v", err)
+				}
+
+				var logs bytes.Buffer
+				if err := c.LogsTo(ctx, "owner/home-pc", "", "", "", 1, &logs); err != nil {
+					t.Fatalf("logs: %v", err)
+				}
+
+				// Without the switch the relay withholds the console capability
+				// outright. With it, the session carries the capability and the
+				// device decides: this controller is not one of its console
+				// administrators, so it still says no. Two different refusals,
+				// and the difference is what the switch does.
+				_, err = c.OpenConsole(ctx, "owner/home-pc")
+				var rejected *RejectError
+				if !errors.As(err, &rejected) {
+					t.Fatalf("console error = %v, want a reject", err)
+				}
+				want := "session capability denied: console"
+				if manage {
+					want = "console administrator"
+				}
+				if !strings.Contains(rejected.Reason, want) {
+					t.Fatalf("console refusal = %q, want one mentioning %q", rejected.Reason, want)
+				}
+			})
+		}
 	}
 }
 
-func startCapabilityFixture(t *testing.T, transportName, grant string) (*Client, context.Context) {
+func startCapabilityFixture(t *testing.T, transportName string, manage bool) (*Client, context.Context) {
 	t.Helper()
 	r := relay.New(relay.EnvTokenStore("owner-token:owner,shared-token:shared"))
 	srv := httptest.NewServer(r.Handler())
@@ -83,7 +112,7 @@ func startCapabilityFixture(t *testing.T, transportName, grant string) (*Client,
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.SetACL(grantACL{id: ag.DeviceID(), perms: grant})
+	r.SetACL(grantACL{id: ag.DeviceID(), manage: manage})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	go ag.Run(ctx)
@@ -107,17 +136,4 @@ func startCapabilityFixture(t *testing.T, transportName, grant string) (*Client,
 		t.Fatal(err)
 	}
 	return c, ctx
-}
-
-func execError(ctx context.Context, c *Client) error {
-	_, err := c.ExecTo(ctx, ExecRequest{Target: "owner/home-pc", Command: "echo denied", OneShot: true, Cwd: ""}, &bytes.Buffer{}, &bytes.Buffer{})
-	return err
-}
-
-func requireCapabilityReject(t *testing.T, err error, capability string) {
-	t.Helper()
-	var rejected *RejectError
-	if !errors.As(err, &rejected) || !strings.Contains(rejected.Reason, "capability denied: "+capability) {
-		t.Fatalf("error = %v, want %s capability rejection", err, capability)
-	}
 }

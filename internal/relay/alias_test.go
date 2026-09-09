@@ -172,9 +172,9 @@ type recordingACL struct {
 	caller, owner, device string
 }
 
-func (a *recordingACL) ACLPerms(caller, owner, device string) (string, bool) {
+func (a *recordingACL) ACLGrant(caller, owner, device string) (Grant, bool) {
 	a.caller, a.owner, a.device = caller, owner, device
-	return "read", true
+	return Grant{}, true
 }
 
 func TestDialAllowedResolvesDeviceAliases(t *testing.T) {
@@ -196,7 +196,7 @@ func TestDialAllowedResolvesDeviceAliases(t *testing.T) {
 	if !ok || key != "owner/home-pc" || auth.Device != "home-pc" || auth.OwnerNamespace != "owner" {
 		t.Fatalf("cross-namespace alias = key %q auth %+v ok %v", key, auth, ok)
 	}
-	if acl.caller != "reader" || acl.owner != "owner" || acl.device != "home-pc" || auth.Capabilities != sessionauth.Read {
+	if acl.caller != "reader" || acl.owner != "owner" || acl.device != "home-pc" || auth.Capabilities != sessionauth.UseCapabilities {
 		t.Fatalf("ACL saw unresolved target: acl=%+v auth=%+v", acl, auth)
 	}
 

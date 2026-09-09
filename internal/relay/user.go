@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"wanctl/internal/notify"
-	"wanctl/internal/sessionauth"
 )
 
 func (r *Relay) registerUser(mux *http.ServeMux) {
@@ -20,6 +19,7 @@ func (r *Relay) registerUser(mux *http.ServeMux) {
 	mux.HandleFunc("/u/users/lookup", r.userLookup)
 	mux.HandleFunc("/u/shares", r.userShares)
 	mux.HandleFunc("/u/shares/grant", r.userShareGrant)
+	mux.HandleFunc("/u/shares/manage", r.userShareManage)
 	mux.HandleFunc("/u/shares/revoke", r.userShareRevoke)
 	mux.HandleFunc("/u/notify", r.userNotify)
 	mux.HandleFunc("/u/notify/test", r.userNotifyTest)
@@ -201,7 +201,7 @@ func (r *Relay) userShares(w http.ResponseWriter, req *http.Request) {
 	for _, row := range givenRows {
 		given = append(given, map[string]any{
 			"id": row["id"], "device": row["device"],
-			"grantee": row["grantee"], "perms": row["perms"],
+			"grantee": row["grantee"], "perms": SharedGrant, "manage": row["manage"] == true,
 		})
 	}
 	received, err := r.admin.ListReceivedACL(namespace)
@@ -217,10 +217,13 @@ func (r *Relay) userShareGrant(w http.ResponseWriter, req *http.Request) {
 	if !ok || !requireMethod(w, req, http.MethodPost) {
 		return
 	}
+	// A "perms" field sent by an older client or the portal is accepted and
+	// ignored: a share inherits the owner's use of the device. "manage" is the
+	// one thing it varies, and it is off unless asked for.
 	var body struct {
 		Device  string `json:"device"`
 		Grantee string `json:"grantee"`
-		Perms   string `json:"perms"`
+		Manage  bool   `json:"manage"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -228,31 +231,16 @@ func (r *Relay) userShareGrant(w http.ResponseWriter, req *http.Request) {
 	}
 	body.Device = strings.TrimSpace(body.Device)
 	body.Grantee = strings.TrimSpace(body.Grantee)
-	body.Perms = strings.TrimSpace(body.Perms)
 	if body.Device == "" || body.Grantee == "" {
 		http.Error(w, "device and grantee required", http.StatusBadRequest)
 		return
 	}
-	if body.Perms == "" {
-		body.Perms = "exec,read"
-	}
-	if _, err := sessionauth.ParseGrant(body.Perms); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	device, ok := r.resolveOwnedDevice(w, namespace, body.Device)
+	if !ok {
 		return
 	}
-	if body.Device != "" {
-		if store, ok := r.aliases.(interface {
-			ResolveDeviceTargetStrict(string, string) (string, error)
-		}); ok {
-			target, err := store.ResolveDeviceTargetStrict(namespace, body.Device)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusConflict)
-				return
-			}
-			body.Device = target
-		}
-	}
-	id, err := r.admin.GrantACL(namespace, body.Device, body.Grantee, body.Perms)
+	body.Device = device
+	id, err := r.admin.GrantACL(namespace, body.Device, body.Grantee, body.Manage)
 	if errors.Is(err, ErrNotFriends) {
 		writeErrorToken(w, http.StatusForbidden, ErrNotFriends.Error())
 		return
@@ -262,6 +250,44 @@ func (r *Relay) userShareGrant(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]int{"id": id})
+}
+
+// userShareManage lets an owner turn management on or off for a share they
+// already made, without revoking it and making the grantee pair again.
+func (r *Relay) userShareManage(w http.ResponseWriter, req *http.Request) {
+	namespace, ok := r.requireUserStore(w, req)
+	if !ok || !requireMethod(w, req, http.MethodPost) {
+		return
+	}
+	var body struct {
+		Device  string `json:"device"`
+		Grantee string `json:"grantee"`
+		Manage  bool   `json:"manage"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	body.Device = strings.TrimSpace(body.Device)
+	body.Grantee = strings.TrimSpace(body.Grantee)
+	if body.Device == "" || body.Grantee == "" {
+		http.Error(w, "device and grantee required", http.StatusBadRequest)
+		return
+	}
+	device, ok := r.resolveOwnedDevice(w, namespace, body.Device)
+	if !ok {
+		return
+	}
+	changed, err := r.admin.SetACLManage(namespace, device, body.Grantee, body.Manage)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !changed {
+		http.Error(w, "no live share of that device with that namespace", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]any{"device": device, "grantee": body.Grantee, "manage": body.Manage})
 }
 
 func (r *Relay) userShareRevoke(w http.ResponseWriter, req *http.Request) {

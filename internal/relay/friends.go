@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"wanctl/internal/sessionauth"
 )
 
 var (
@@ -27,7 +25,14 @@ type ReceivedShare struct {
 	Device string `json:"device"`
 	Owner  string `json:"owner"`
 	Perms  string `json:"perms"`
+	Manage bool   `json:"manage"`
 }
+
+// SharedGrant is the only value acl.perms takes. A grant is owner-equivalent,
+// so there is nothing left for the column to say; it is written and reported
+// rather than dropped so that no migration is needed and existing readers of
+// the field keep seeing a value. Values written before v0.7.1 are not read.
+const SharedGrant = "full"
 
 func (p *PGStore) LookupUser(namespace string) (bool, error) {
 	var exists bool
@@ -216,7 +221,7 @@ func (p *PGStore) ListFriends(namespace string) ([]Friend, error) {
 
 func (p *PGStore) ListReceivedACL(namespace string) ([]ReceivedShare, error) {
 	rows, err := p.db.Query(
-		`SELECT device, owner_namespace, perms FROM acl
+		`SELECT device, owner_namespace, manage FROM acl
 		  WHERE grantee_namespace = $1 AND revoked_at IS NULL ORDER BY id DESC`, namespace,
 	)
 	if err != nil {
@@ -226,24 +231,18 @@ func (p *PGStore) ListReceivedACL(namespace string) ([]ReceivedShare, error) {
 	shares := []ReceivedShare{}
 	for rows.Next() {
 		var share ReceivedShare
-		if err := rows.Scan(&share.Device, &share.Owner, &share.Perms); err != nil {
+		if err := rows.Scan(&share.Device, &share.Owner, &share.Manage); err != nil {
 			return nil, err
 		}
+		share.Perms = SharedGrant
 		shares = append(shares, share)
 	}
 	return shares, rows.Err()
 }
 
-func (p *PGStore) GrantACL(namespace, device, grantee, perms string) (id int, err error) {
+func (p *PGStore) GrantACL(namespace, device, grantee string, manage bool) (id int, err error) {
 	if namespace == grantee {
 		return 0, ErrNotFriends
-	}
-	if perms == "" {
-		perms = "exec,read,write"
-	}
-	caps, err := sessionauth.ParseGrant(perms)
-	if err != nil {
-		return 0, fmt.Errorf("invalid ACL permissions: %w", err)
 	}
 	tx, err := p.db.Begin()
 	if err != nil {
@@ -269,9 +268,9 @@ func (p *PGStore) GrantACL(namespace, device, grantee, perms string) (id int, er
 		return 0, err
 	}
 	err = tx.QueryRow(
-		`INSERT INTO acl (owner_namespace, device, grantee_namespace, perms)
-		 VALUES ($1,$2,$3,$4) RETURNING id`,
-		namespace, device, grantee, caps.String(),
+		`INSERT INTO acl (owner_namespace, device, grantee_namespace, perms, manage)
+		 VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+		namespace, device, grantee, SharedGrant, manage,
 	).Scan(&id)
 	if err != nil {
 		return 0, err
@@ -300,4 +299,22 @@ func (p *PGStore) RevokeACLMatch(namespace string, id int, device, grantee strin
 	}
 	affected, err := result.RowsAffected()
 	return affected > 0, err
+}
+
+// SetACLManage turns management on or off for every live grant of one device to
+// one grantee, so an owner can change their mind without revoking and
+// re-sharing (which would make the grantee re-pair). It reports whether any
+// live grant matched.
+func (p *PGStore) SetACLManage(namespace, device, grantee string, manage bool) (bool, error) {
+	result, err := p.db.Exec(
+		`UPDATE acl SET manage = $4
+		  WHERE owner_namespace = $1 AND device = $2
+		    AND grantee_namespace = $3 AND revoked_at IS NULL`,
+		namespace, device, grantee, manage,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n > 0, err
 }

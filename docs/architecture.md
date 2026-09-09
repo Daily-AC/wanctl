@@ -87,12 +87,28 @@ Three independent layers; compromising one does not collapse the others:
    deny, not hang.
 
 Cross-namespace sharing is a relay-side ACL grant `(owner, device, grantee,
-perms)`. Grants are capability-bounded at the protocol layer: a shared grantee
-can at most receive exec/read/write — console and logs capabilities cannot be
-expressed in a grant. The relay stamps each session with its capabilities over
-the authenticated agent control channel, and the device enforces them again
-per request. Shared devices are read-only in the portal: approvals, rules,
-mode, and unbinding stay with the owner.
+manage)`. A share inherits the owner's *use* of the device: the relay stamps a
+grantee's session with `UseCapabilities` — exec, read, write, logs — over the
+authenticated agent control channel. The `acl.perms` column still exists and is
+written as the constant `full`, but nothing reads it (ADR 0007). A controlled
+device runs one agent bound to one account, so sharing is how a machine gets a
+second user; a permission matrix here would be a second, weaker model layered
+over the device's own, and it is the device's model that decides each request.
+
+What constrains a grantee is therefore the device, not the grant. Its single
+mode and rule set apply to everyone: left on per-request approval, the owner
+answers for the grantee's commands; put into bypass, the grantee is bypassed
+too. Elevated exec is excluded from bypass for everyone.
+
+Management — the device console: approvals, rules, mode, trusted controllers —
+is the one thing a share varies, through `acl.manage` (migration 008), off
+unless the owner turns it on. It adds `Console` to that grantee's sessions and
+opens the portal's console for them. Two independent checks still guard it: the
+relay's switch says whether the owner agreed, and the device's own
+`portal_admins` set says which controller identity may act, so a grantee's own
+controller cannot administer the device directly even with the switch on.
+Unbinding, renaming, revoking a share, and the owner's notification settings
+are never granted.
 
 `/peers` reports the grantee's own online devices under `devices`, unchanged,
 and the devices granted to them under `shared`, each with its owner namespace,

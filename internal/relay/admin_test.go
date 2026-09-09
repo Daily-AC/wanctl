@@ -118,14 +118,17 @@ func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
 			values:  [][]driver.Value{{"alice"}, {"bob"}},
 		}, nil
 	}
-	if strings.Contains(s.query, "SELECT perms FROM acl") {
+	if strings.Contains(s.query, "SELECT manage FROM acl") {
 		if !strings.Contains(s.query, "revoked_at IS NULL") {
 			return nil, errors.New("ACL lookup must exclude revoked grants")
 		}
-		if len(args) == 3 && args[0] == "owner" && args[1] == "home-pc" && args[2] == "reader" {
-			return &adminRows{columns: []string{"perms"}, values: [][]driver.Value{{"read"}}}, nil
+		if !strings.Contains(s.query, "ORDER BY manage DESC") {
+			return nil, errors.New("duplicate live grants must resolve to the managing one")
 		}
-		return &adminRows{columns: []string{"perms"}}, nil
+		if len(args) == 3 && args[0] == "owner" && args[1] == "home-pc" && args[2] == "reader" {
+			return &adminRows{columns: []string{"manage"}, values: [][]driver.Value{{true}}}, nil
+		}
+		return &adminRows{columns: []string{"manage"}}, nil
 	}
 	if !strings.Contains(s.query, "UNION ALL") || !strings.Contains(s.query, "revoked_at IS NULL") {
 		return nil, errors.New("ListDevices query must include own devices, ACL devices, and revoked filter")
@@ -135,16 +138,16 @@ func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
 	rows := [][]driver.Value{}
 	switch ns {
 	case "bob":
-		rows = append(rows, []driver.Value{"devbox", "office", "fp-devbox", seen, "bob", false, ""})
+		rows = append(rows, []driver.Value{"devbox", "office", "fp-devbox", seen, "bob", false, "", false})
 	case "alice":
-		rows = append(rows, []driver.Value{"book", "", "fp-book", seen, "alice", false, ""})
-		rows = append(rows, []driver.Value{"devbox", "office", "fp-devbox", seen, "bob", true, "exec"})
+		rows = append(rows, []driver.Value{"book", "", "fp-book", seen, "alice", false, "", false})
+		rows = append(rows, []driver.Value{"devbox", "office", "fp-devbox", seen, "bob", true, "exec", true})
 	}
 	for i := range rows {
 		rows[i] = append(rows[i], rows[i][0], "", false)
 	}
 	return &adminRows{
-		columns: []string{"name", "alias", "fingerprint", "last_seen", "owner", "shared", "perms", "display_name", "legacy_name", "uses_device_id"},
+		columns: []string{"name", "alias", "fingerprint", "last_seen", "owner", "shared", "perms", "manage", "display_name", "legacy_name", "uses_device_id"},
 		values:  rows,
 	}, nil
 }
@@ -351,17 +354,37 @@ func TestAdminResolveUserReturnsConflict(t *testing.T) {
 	}
 }
 
-func TestAdminACLRejectsMissingPermissions(t *testing.T) {
-	r := New(envTokens{})
-	r.SetAdminSecret("secret")
-	r.SetAdmin(&noopAdmin{})
-	req := httptest.NewRequest(http.MethodPost, "/admin/acl", strings.NewReader(
-		`{"namespace":"alice","device":"devbox","grantee":"bob"}`))
-	req.Header.Set("X-Admin-Secret", "secret")
-	rec := httptest.NewRecorder()
-	r.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body = %q", rec.Code, rec.Body.String())
+// A grant carries no permission set any more, so the three identifying fields
+// are all that is required - and a "perms" field from the portal's share form
+// is accepted and ignored rather than rejected.
+func TestAdminACLRequiresIdentifiersAndIgnoresPermissions(t *testing.T) {
+	post := func(body string) int {
+		r := New(envTokens{})
+		r.SetAdminSecret("secret")
+		r.SetAdmin(&noopAdmin{})
+		req := httptest.NewRequest(http.MethodPost, "/admin/acl", strings.NewReader(body))
+		req.Header.Set("X-Admin-Secret", "secret")
+		rec := httptest.NewRecorder()
+		r.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, body := range []string{
+		`{"namespace":"alice","device":"devbox","grantee":"bob"}`,
+		`{"namespace":"alice","device":"devbox","grantee":"bob","perms":"read"}`,
+		`{"namespace":"alice","device":"devbox","grantee":"bob","perms":"nonsense"}`,
+	} {
+		if code := post(body); code != http.StatusOK {
+			t.Fatalf("POST %s = %d, want 200", body, code)
+		}
+	}
+	for _, body := range []string{
+		`{"device":"devbox","grantee":"bob"}`,
+		`{"namespace":"alice","grantee":"bob"}`,
+		`{"namespace":"alice","device":"devbox"}`,
+	} {
+		if code := post(body); code != http.StatusBadRequest {
+			t.Fatalf("POST %s = %d, want 400", body, code)
+		}
 	}
 }
 
@@ -617,8 +640,15 @@ func TestPGStoreListDevicesIncludesOwnedAndSharedACLDevices(t *testing.T) {
 		t.Fatalf("grantee view should contain own + granted devices, got %+v", granteeView)
 	}
 	shared := granteeView[1]
-	if shared["name"] != "devbox" || shared["owner"] != "bob" || shared["shared"] != true || shared["perms"] != "exec" {
+	if shared["name"] != "devbox" || shared["owner"] != "bob" || shared["shared"] != true || shared["perms"] != SharedGrant {
 		t.Fatalf("shared row missing expected fields: %+v", shared)
+	}
+	// The portal reads this to decide whether to offer the device console.
+	if shared["manage"] != true {
+		t.Fatalf("shared row lost the management switch: %+v", shared)
+	}
+	if _, present := granteeView[0]["manage"]; present {
+		t.Fatalf("an owned device must not carry a management switch: %+v", granteeView[0])
 	}
 	if shared["alias"] != "office" {
 		t.Fatalf("shared row alias = %#v, want office", shared["alias"])
@@ -638,21 +668,23 @@ func TestPGStoreListUsersReturnsNamespaces(t *testing.T) {
 	}
 }
 
-func TestPGStoreACLPermsReturnsLiveGrant(t *testing.T) {
+func TestPGStoreACLGrantReturnsLiveGrantAndItsManagementSwitch(t *testing.T) {
 	p := newAdminTestPGStore(t)
-	perms, ok := p.ACLPerms("reader", "owner", "home-pc")
-	if !ok || perms != "read" {
-		t.Fatalf("ACLPerms = %q, %v", perms, ok)
+	grant, ok := p.ACLGrant("reader", "owner", "home-pc")
+	if !ok || !grant.Manage {
+		t.Fatalf("ACLGrant = %+v, %v", grant, ok)
 	}
-	if _, ok := p.ACLPerms("other", "owner", "home-pc"); ok {
+	if _, ok := p.ACLGrant("other", "owner", "home-pc"); ok {
 		t.Fatal("missing grant should not be allowed")
 	}
 }
 
-func TestPGStoreAddACLRejectsInvalidPermissionsBeforeDatabase(t *testing.T) {
+// A grant no longer carries a permission set, so the only pre-database check
+// left is the friendship one.
+func TestPGStoreAddACLRequiresAFriendship(t *testing.T) {
 	p := newAdminTestPGStore(t)
-	if err := p.AddACL("owner", "home-pc", "reader", "read,unknown"); err == nil {
-		t.Fatal("invalid permissions were accepted")
+	if err := p.AddACL("owner", "home-pc", "reader", false); err == nil {
+		t.Fatal("a grant to a non-friend was accepted")
 	}
 }
 

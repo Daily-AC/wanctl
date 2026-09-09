@@ -20,8 +20,15 @@ const (
 )
 
 const (
-	GrantCapabilities = Exec | Read | Write
-	FullCapabilities  = GrantCapabilities | Logs | Console
+	// UseCapabilities is using the device: running commands, moving files,
+	// reading its log. Every session carries these, an owner's and a grantee's
+	// alike; the device's own mode, rules and approvals decide each request.
+	UseCapabilities = Exec | Read | Write | Logs
+	// FullCapabilities adds the device's control plane -- approvals, rules,
+	// mode. An owner always has it. A grantee has it only where the owner
+	// turned that share's single management switch on.
+	// See docs/adr/0007-shared-devices-inherit-owner-rights.md.
+	FullCapabilities = UseCapabilities | Console
 )
 
 var capabilityNames = []struct {
@@ -70,19 +77,6 @@ func Parse(value string) (Capabilities, error) {
 			return 0, fmt.Errorf("duplicate capability %q", name)
 		}
 		caps |= found
-	}
-	return caps, nil
-}
-
-// ParseGrant parses capabilities stored in acl.perms. Administrative console
-// and device logs are owner-only and therefore invalid in an ACL grant.
-func ParseGrant(value string) (Capabilities, error) {
-	caps, err := Parse(value)
-	if err != nil {
-		return 0, err
-	}
-	if caps&^GrantCapabilities != 0 {
-		return 0, fmt.Errorf("ACL grant contains owner-only capabilities")
 	}
 	return caps, nil
 }

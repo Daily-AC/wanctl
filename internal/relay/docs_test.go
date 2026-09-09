@@ -185,17 +185,20 @@ func (n *noopAdmin) DecideAccessRequest(int, string, string) (AccessRequest, boo
 func (n *noopAdmin) FriendRequest(string, string, string) (string, error) {
 	return "", nil
 }
-func (n *noopAdmin) FriendAccept(string, string) error                    { return nil }
-func (n *noopAdmin) FriendDecline(string, string) error                   { return nil }
-func (n *noopAdmin) FriendRemove(string, string) error                    { return nil }
-func (n *noopAdmin) ListFriends(string) ([]Friend, error)                 { return nil, nil }
-func (n *noopAdmin) IsFriend(string, string) (bool, error)                { return false, nil }
-func (n *noopAdmin) RemoveDevice(string, string) error                    { return nil }
-func (n *noopAdmin) ListACL(string) ([]map[string]any, error)             { return nil, nil }
-func (n *noopAdmin) ListReceivedACL(string) ([]ReceivedShare, error)      { return nil, nil }
-func (n *noopAdmin) AddACL(string, string, string, string) error          { return nil }
-func (n *noopAdmin) GrantACL(string, string, string, string) (int, error) { return 0, nil }
-func (n *noopAdmin) RevokeACL(string, int) error                          { return nil }
+func (n *noopAdmin) FriendAccept(string, string) error               { return nil }
+func (n *noopAdmin) FriendDecline(string, string) error              { return nil }
+func (n *noopAdmin) FriendRemove(string, string) error               { return nil }
+func (n *noopAdmin) ListFriends(string) ([]Friend, error)            { return nil, nil }
+func (n *noopAdmin) IsFriend(string, string) (bool, error)           { return false, nil }
+func (n *noopAdmin) RemoveDevice(string, string) error               { return nil }
+func (n *noopAdmin) ListACL(string) ([]map[string]any, error)        { return nil, nil }
+func (n *noopAdmin) ListReceivedACL(string) ([]ReceivedShare, error) { return nil, nil }
+func (n *noopAdmin) AddACL(string, string, string, bool) error       { return nil }
+func (n *noopAdmin) SetACLManage(string, string, string, bool) (bool, error) {
+	return true, nil
+}
+func (n *noopAdmin) GrantACL(string, string, string, bool) (int, error) { return 0, nil }
+func (n *noopAdmin) RevokeACL(string, int) error                        { return nil }
 func (n *noopAdmin) RevokeACLMatch(string, int, string, string) (bool, error) {
 	return false, nil
 }
