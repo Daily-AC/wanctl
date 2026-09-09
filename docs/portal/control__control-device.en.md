@@ -30,6 +30,13 @@ after the real device name, and the `--target` of the commands above takes
 either the real device name or the alias. For a shared device, write
 `owner-namespace/alias` the same way.
 
+Besides your own online devices, `wanctl peers` prints a separate **shared with
+you** section listing the devices other people shared with you, written as
+`owner-namespace/device` — paste a whole line into `--target` as it stands. A
+name with no namespace is looked up in your own namespace first, and only then
+among the devices shared with you; two owners may use the same label, and a
+label that matches both is refused rather than guessed.
+
 The first time you drive a new device, it waits for that device's own
 **Waiting** / **Trusted controllers** page to say yes. Driving a friend's device
 needs a share first (see "Invites, friends and sharing").

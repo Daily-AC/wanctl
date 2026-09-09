@@ -209,3 +209,64 @@ func TestResolveMapsAliasOntoTheDeviceItsHostnamePinned(t *testing.T) {
 		t.Fatalf("resolve(atlas) = %q, %v", got, err)
 	}
 }
+
+// A grantee's only way to learn the owner namespace is this list, so it has to
+// arrive intact alongside their own devices - and an older relay that omits it
+// must not break the call.
+func TestPeersAndSharedCarriesGrantedDevices(t *testing.T) {
+	respond := func(body string) *Client {
+		c := NewWith(nil, transport.NewMemStore(), "https://relay.test", "tok", "http")
+		c.httpc = &http.Client{Transport: peerRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header),
+				Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+		})}
+		return c
+	}
+	c := respond(`{"namespace":"waerjili123","devices":["mine"],"aliases":{},
+	  "shared":[{"owner":"daily-ac","device":"8e894048","label":"bms-20558674","target":"daily-ac/8e894048","perms":"exec,read,write","online":true}]}`)
+	devices, _, shared, err := c.PeersAndShared(context.Background())
+	if err != nil || len(devices) != 1 || len(shared) != 1 {
+		t.Fatalf("peers = %v, shared = %+v, err = %v", devices, shared, err)
+	}
+	if shared[0].Target != "daily-ac/8e894048" || shared[0].Label != "bms-20558674" || !shared[0].Online {
+		t.Fatalf("shared device = %+v", shared[0])
+	}
+	spellings, err := c.PeerAliases(context.Background())
+	if err != nil || !slicesContain(spellings, "daily-ac/8e894048") || !slicesContain(spellings, "daily-ac/bms-20558674") {
+		t.Fatalf("target completion = %v, err = %v", spellings, err)
+	}
+
+	old := respond(`{"namespace":"alice","devices":["legion"],"aliases":{}}`)
+	if _, _, shared, err := old.PeersAndShared(context.Background()); err != nil || len(shared) != 0 {
+		t.Fatalf("relay without shared support = %+v, %v", shared, err)
+	}
+}
+
+func slicesContain(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// The relay explains a refused target ("no device ... run wanctl peers"); the
+// controller used to print only the status code, which told the user nothing.
+func TestRelayExplanationKeepsPlainTextAndDropsEverythingElse(t *testing.T) {
+	body := func(s string) *http.Response {
+		return &http.Response{Body: io.NopCloser(strings.NewReader(s))}
+	}
+	msg := `no device "bms-20558674" in namespace "waerjili123"; a device shared with you is addressed as owner/device`
+	if got := relayExplanation(body(msg + "\n")); got != msg {
+		t.Fatalf("explanation = %q", got)
+	}
+	for _, in := range []string{"", "   ", "<html><body>502 Bad Gateway</body></html>", strings.Repeat("x", 500), "bad\x00text"} {
+		if got := relayExplanation(body(in)); got != "" {
+			t.Fatalf("relayExplanation(%.20q) = %q, want empty", in, got)
+		}
+	}
+	if got := relayExplanation(nil); got != "" {
+		t.Fatalf("nil response = %q", got)
+	}
+}

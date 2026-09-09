@@ -94,6 +94,16 @@ the authenticated agent control channel, and the device enforces them again
 per request. Shared devices are read-only in the portal: approvals, rules,
 mode, and unbinding stay with the owner.
 
+`/peers` reports the grantee's own online devices under `devices`, unchanged,
+and the devices granted to them under `shared`, each with its owner namespace,
+route, label and online state — a grantee has no other way to learn the owner
+namespace a `--target` needs. A `--target` with no namespace resolves in the
+caller's own namespace first and then, if exactly one grant matches by route,
+name or alias, against the shared devices; a label two owners both use is
+refused rather than guessed. A refusal names the target only when it was asked
+for in the caller's own namespace; a target in a namespace the caller holds no
+grant on gets a bare `forbidden`, which reveals nothing about what is there.
+
 ## Remote device console
 
 The portal opens a live console to a device over the E2E tunnel: pending

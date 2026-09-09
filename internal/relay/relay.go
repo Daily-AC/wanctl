@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -222,19 +223,48 @@ func (r *Relay) SetPortalNS(ns string) { r.portalNS = ns }
 
 // dialAllowed splits target into namespace/device and checks access for caller.
 func (r *Relay) dialAllowed(callerNS, target string) (targetKey string, auth sessionauth.Open, ok bool) {
-	if !strings.Contains(target, "/") {
+	targetKey, auth, _, ok = r.dialAllowedReason(callerNS, target)
+	return targetKey, auth, ok
+}
+
+// dialAllowedReason is dialAllowed plus a caller-safe explanation of a refusal.
+// The reason is empty when there is nothing the caller may be told, and handlers
+// fall back to a bare "forbidden" then: an explanation about a namespace the
+// caller holds no grant on would itself be a disclosure.
+func (r *Relay) dialAllowedReason(callerNS, target string) (targetKey string, auth sessionauth.Open, reason string, ok bool) {
+	bare := !strings.Contains(target, "/")
+	if bare {
 		target = callerNS + "/" + target
 	}
 	i := strings.Index(target, "/")
 	targetNS, device := target[:i], target[i+1:]
+	// Only the caller's own namespace may be described. Anything else is either
+	// a namespace they have a grant on (and the grant path answers) or one they
+	// must not be able to probe.
+	own := targetNS == callerNS
 	if strict, yes := r.aliases.(interface {
 		ResolveDeviceTargetStrict(string, string) (string, error)
 	}); yes {
 		resolved, err := strict.ResolveDeviceTargetStrict(targetNS, device)
-		if err != nil {
-			return "", auth, false
+		switch {
+		case err == nil:
+			device = resolved
+		case own && bare:
+			// Not in the caller's namespace. A device shared with them is the
+			// other thing a bare label can mean, so try that before refusing.
+			// A written-out namespace is taken at its word instead: silently
+			// dialing a different namespace than the one asked for would be a
+			// surprising thing for a remote-control tool to do.
+			peer, why, found := r.resolveShared(callerNS, device)
+			if !found {
+				return "", auth, why, false
+			}
+			targetNS, device = peer.Owner, peer.Device
+		case own:
+			return "", auth, noSuchDeviceReason(callerNS, device), false
+		default:
+			return "", auth, "", false
 		}
-		device = resolved
 	} else if r.aliases != nil {
 		if resolved, found := r.aliases.ResolveDeviceTarget(targetNS, device); found {
 			device = resolved
@@ -243,29 +273,32 @@ func (r *Relay) dialAllowed(callerNS, target string) (targetKey string, auth ses
 	}
 	resolved, unambiguous := r.resolveLiveLabel(targetNS, device)
 	if !unambiguous {
-		return "", auth, false
+		if !own {
+			return "", auth, "", false
+		}
+		return "", auth, fmt.Sprintf("label %q matches more than one online device; use its device ID", device), false
 	}
 	device = resolved
 	target = targetNS + "/" + device
 	auth = sessionauth.Open{CallerNamespace: callerNS, OwnerNamespace: targetNS, Device: device}
 	if r.portalNS != "" && callerNS == r.portalNS {
 		auth.Capabilities = sessionauth.FullCapabilities
-		return target, auth, true
+		return target, auth, "", true
 	}
 	if targetNS == callerNS {
 		auth.Capabilities = sessionauth.FullCapabilities
-		return target, auth, true
+		return target, auth, "", true
 	}
 	if r.acl != nil {
 		if perms, found := r.acl.ACLPerms(callerNS, targetNS, device); found {
 			caps, err := sessionauth.ParseGrant(perms)
 			if err == nil {
 				auth.Capabilities = caps
-				return target, auth, true
+				return target, auth, "", true
 			}
 		}
 	}
-	return target, auth, false
+	return target, auth, "", false
 }
 
 func newID() string {
@@ -362,9 +395,9 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	targetKey, auth, ok := r.dialAllowed(ns, req.URL.Query().Get("target"))
+	targetKey, auth, reason, ok := r.dialAllowedReason(ns, req.URL.Query().Get("target"))
 	if !ok {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, dialRefusal(reason), http.StatusForbidden)
 		return
 	}
 	r.mu.Lock()
@@ -447,7 +480,7 @@ func (r *Relay) handlePeers(w http.ResponseWriter, req *http.Request) {
 	}
 	devices, aliases := r.livePeers(ns)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"namespace": ns, "devices": devices, "aliases": aliases})
+	json.NewEncoder(w).Encode(peersBody(ns, devices, aliases, r.sharedPeers(ns)))
 }
 
 // pipe copies bytes both directions until either side closes, then tears down.

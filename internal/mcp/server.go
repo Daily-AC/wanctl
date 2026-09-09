@@ -767,29 +767,51 @@ func mcpPeers(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolRe
 	if hint != nil {
 		return hint, nil
 	}
-	devs, aliases, err := c.PeersWithAliases(ctx)
+	devs, aliases, shared, err := c.PeersAndShared(ctx)
 	if err != nil {
 		return mcpapi.NewToolResultError(err.Error()), nil
 	}
-	return peerToolResult(devs, aliases), nil
+	return peerToolResult(devs, aliases, shared), nil
 }
 
-func peerToolResult(devs []string, aliases map[string]string) *mcpapi.CallToolResult {
-	if len(devs) == 0 {
+func peerToolResult(devs []string, aliases map[string]string, shared []client.SharedDevice) *mcpapi.CallToolResult {
+	structured := map[string]any{"devices": devs, "aliases": aliases}
+	if len(shared) > 0 {
+		structured["shared"] = shared
+	}
+	if len(devs) == 0 && len(shared) == 0 {
 		result := mcpapi.NewToolResultText("no devices online for this token")
-		result.StructuredContent = map[string]any{"devices": devs, "aliases": aliases}
+		result.StructuredContent = structured
 		return result
 	}
-	out := "online devices:\n"
-	for _, d := range devs {
-		if alias := aliases[d]; alias != "" {
-			out += "  " + d + "  (" + alias + ")\n"
-		} else {
-			out += "  " + d + "\n"
+	out := ""
+	if len(devs) > 0 {
+		out = "online devices:\n"
+		for _, d := range devs {
+			if alias := aliases[d]; alias != "" {
+				out += "  " + d + "  (" + alias + ")\n"
+			} else {
+				out += "  " + d + "\n"
+			}
+		}
+	}
+	// A device someone shared with you is only reachable as owner/device; the
+	// bare label is looked up in your own namespace first.
+	if len(shared) > 0 {
+		out += "shared with you (use the whole owner/device as target):\n"
+		for _, s := range shared {
+			line := "  " + s.Target
+			if s.Label != "" && s.Label != s.Device {
+				line += "  (" + s.Label + ")"
+			}
+			if !s.Online {
+				line += "  [offline]"
+			}
+			out += line + "\n"
 		}
 	}
 	result := mcpapi.NewToolResultText(out)
-	result.StructuredContent = map[string]any{"devices": devs, "aliases": aliases}
+	result.StructuredContent = structured
 	return result
 }
 

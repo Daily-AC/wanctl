@@ -70,7 +70,11 @@ wanctl id                                 # this controller's fingerprint
 ```
 
 - `--target` is `DEVICE` or its owner-assigned alias (your namespace), or
-  `NS/DEVICE` / `NS/ALIAS` (shared). `wanctl peers` shows aliases in parentheses.
+  `NS/DEVICE` / `NS/ALIAS` (shared). `wanctl peers` shows aliases in parentheses,
+  and lists devices shared with you under a "shared with you" heading, already
+  written as `NS/DEVICE`. A bare name is looked up in your own namespace first
+  and then among shared devices; if two owners use the same label, the dial is
+  refused and the relay says so — use `NS/DEVICE`.
   New agents use persistent UUID device IDs, independent of names and aliases.
   Names and aliases may repeat: use the full ID whenever a label is ambiguous.
   Renaming does not change identity; a changed certificate still requires verification.

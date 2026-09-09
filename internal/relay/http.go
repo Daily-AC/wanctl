@@ -253,9 +253,9 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 	// polling. Start the session reaper on this path too, or abandoned hybrid
 	// sessions live forever despite the idle deadline.
 	r.startHTTPReaper()
-	targetKey, auth, ok := r.dialAllowed(ns, req.URL.Query().Get("target"))
+	targetKey, auth, reason, ok := r.dialAllowedReason(ns, req.URL.Query().Get("target"))
 	if !ok {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, dialRefusal(reason), http.StatusForbidden)
 		return
 	}
 	r.hmu.Lock()
@@ -345,7 +345,7 @@ func (r *Relay) handleHPeers(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	devices, aliases := r.livePeers(ns)
-	writeJSON(w, map[string]any{"namespace": ns, "devices": devices, "aliases": aliases})
+	writeJSON(w, peersBody(ns, devices, aliases, r.sharedPeers(ns)))
 }
 
 func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
