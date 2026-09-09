@@ -147,9 +147,12 @@ func (r *Relay) handleResolve(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", 401)
 		return
 	}
-	key, auth, ok := r.dialAllowed(ns, req.URL.Query().Get("target"))
+	key, auth, reason, ok := r.dialAllowedReason(ns, req.URL.Query().Get("target"))
 	if !ok {
-		http.Error(w, "device unavailable or ambiguous; use its device ID", 409)
+		if reason == "" {
+			reason = "device unavailable or ambiguous; use its device ID"
+		}
+		http.Error(w, reason, 409)
 		return
 	}
 	out := map[string]string{"target": key}

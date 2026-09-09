@@ -17,6 +17,8 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"wanctl/internal/admission"
 	"wanctl/internal/config"
@@ -146,6 +148,19 @@ func (c *Client) PeersWithAliases(ctx context.Context) ([]string, map[string]str
 	return info.Devices, info.Aliases, nil
 }
 
+// PeersAndShared is PeersWithAliases plus the devices other namespaces have
+// shared with this token. Older relays omit the shared list entirely.
+func (c *Client) PeersAndShared(ctx context.Context) ([]string, map[string]string, []SharedDevice, error) {
+	info, err := c.peerInfo(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if info.Aliases == nil {
+		info.Aliases = map[string]string{}
+	}
+	return info.Devices, info.Aliases, info.Shared, nil
+}
+
 // PeerAliases lists IDs and unambiguous display labels for target completion,
 // both short and namespace-qualified.
 func (c *Client) PeerAliases(ctx context.Context) ([]string, error) {
@@ -164,13 +179,31 @@ func (c *Client) PeerAliases(ctx context.Context) ([]string, error) {
 			aliases = append(aliases, alias, info.Namespace+"/"+alias)
 		}
 	}
+	for _, shared := range info.Shared {
+		aliases = append(aliases, shared.Target)
+		if shared.Label != "" && !strings.ContainsAny(shared.Label, " /") {
+			aliases = append(aliases, shared.Owner+"/"+shared.Label)
+		}
+	}
 	return aliases, nil
+}
+
+// SharedDevice is a device another namespace granted this token access to. Its
+// Target is namespace-qualified and can be passed to --target verbatim.
+type SharedDevice struct {
+	Owner  string `json:"owner"`
+	Device string `json:"device"`
+	Label  string `json:"label"`
+	Target string `json:"target"`
+	Perms  string `json:"perms"`
+	Online bool   `json:"online"`
 }
 
 type peerInfo struct {
 	Namespace string            `json:"namespace"`
 	Devices   []string          `json:"devices"`
 	Aliases   map[string]string `json:"aliases"`
+	Shared    []SharedDevice    `json:"shared"`
 }
 
 func (c *Client) peerInfo(ctx context.Context) (peerInfo, error) {
@@ -266,6 +299,9 @@ func (c *Client) resolve(ctx context.Context, target string) (string, error) {
 		return c.resolveLegacy(ctx, target)
 	}
 	if resp.StatusCode != 200 {
+		if detail := relayExplanation(resp); detail != "" {
+			return "", fmt.Errorf("%s", detail)
+		}
 		return "", fmt.Errorf("cannot resolve device (%d); for duplicate names use a device ID", resp.StatusCode)
 	}
 	var out struct {
@@ -360,6 +396,9 @@ func (c *Client) dialWS(ctx context.Context, target string) (net.Conn, error) {
 	nc, resp, err := wsconn.Dial(ctx, dialURL, admission.Header(c.token))
 	if err != nil {
 		if resp != nil {
+			if detail := relayExplanation(resp); detail != "" {
+				return nil, fmt.Errorf("dial relay (%d): %s", resp.StatusCode, detail)
+			}
 			return nil, fmt.Errorf("dial relay (%d): is %q online?", resp.StatusCode, target)
 		}
 		return nil, err
@@ -381,6 +420,9 @@ func (c *Client) dialHTTP(ctx context.Context, target string) (net.Conn, error) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
+		if detail := relayExplanation(resp); detail != "" {
+			return nil, fmt.Errorf("dial relay (%d): %s", resp.StatusCode, detail)
+		}
 		return nil, fmt.Errorf("dial relay (%d): is %q online?", resp.StatusCode, target)
 	}
 	var out struct{ Session string }
@@ -619,4 +661,29 @@ func (c *Client) ExecTo(ctx context.Context, req ExecRequest, stdout, stderr io.
 			}
 		}
 	}
+}
+
+// relayExplanation returns the relay's own account of a rejected request. The
+// relay answers a refused dial with a short plain-text line ("no device %q in
+// namespace ..."), and printing only the status code threw that away: users saw
+// a bare 403 and had no way to tell a missing grant from a mistyped target.
+//
+// Anything that does not look like that line - an HTML error page from a proxy
+// in front of the relay, a long body, control characters - is discarded and the
+// caller falls back to its own wording.
+func relayExplanation(resp *http.Response) string {
+	if resp == nil || resp.Body == nil {
+		return ""
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	text := strings.TrimSpace(string(raw))
+	if text == "" || len(text) > 400 || strings.HasPrefix(text, "<") || !utf8.ValidString(text) {
+		return ""
+	}
+	for _, r := range text {
+		if r != '\n' && r != '\t' && unicode.IsControl(r) {
+			return ""
+		}
+	}
+	return strings.Join(strings.Fields(text), " ")
 }

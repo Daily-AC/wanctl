@@ -101,7 +101,7 @@ The same binary selects its role by subcommand:
 wanctl relay --addr :8080
 wanctl portal --addr :8080
 wanctl agent --relay https://relay.example.com --token TOKEN --name DEVICE
-wanctl peers
+wanctl peers                          # your online devices, plus any shared with you
 wanctl exec --target DEVICE "uname -a"
 ```
 

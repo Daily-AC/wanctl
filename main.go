@@ -835,13 +835,16 @@ func cmdPeers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	devs, aliases, err := c.PeersWithAliases(ctx)
+	devs, aliases, shared, err := c.PeersAndShared(ctx)
 	if err != nil {
 		return err
 	}
-	if len(devs) == 0 {
+	if len(devs) == 0 && len(shared) == 0 {
 		fmt.Println("no devices online for this token")
 		return nil
+	}
+	if len(devs) == 0 {
+		fmt.Println("no devices of your own are online")
 	}
 	for _, d := range devs {
 		if alias := aliases[d]; alias != "" {
@@ -850,7 +853,30 @@ func cmdPeers(ctx context.Context) error {
 			fmt.Println(d)
 		}
 	}
+	fmt.Print(sharedPeerLines(shared))
 	return nil
+}
+
+// sharedPeerLines lists devices other people shared with this token. They are
+// always printed in their owner/device form, because that is the only spelling
+// --target accepts from anywhere, and a grantee otherwise has no way to learn
+// the owner namespace at all.
+func sharedPeerLines(shared []client.SharedDevice) string {
+	if len(shared) == 0 {
+		return ""
+	}
+	out := "\nshared with you (pass the whole owner/device to --target):\n"
+	for _, s := range shared {
+		line := s.Target
+		if s.Label != "" && s.Label != s.Device {
+			line += "  (" + s.Label + ")"
+		}
+		if !s.Online {
+			line += "  [offline]"
+		}
+		out += line + "\n"
+	}
+	return out
 }
 
 // cmdLabel shows or sets this controller's self-description. A device asked to
