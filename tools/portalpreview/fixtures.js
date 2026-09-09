@@ -27,6 +27,13 @@
   //   ?avatar=off     不返回这个字段，等于 header(SSO) 模式
   var avatar = new URLSearchParams(location.search).get('avatar') || 'on';
 
+  // 角色。门户里只有 admin 能看见「邀请」那一节，而这个差别过去在工装里
+  // 摆不出来 —— /api/me 的 role 是写死的 admin，于是「普通用户看不看得见
+  // 邀请入口」这件事，离线预览里问不出来。
+  //   ?role=admin  默认
+  //   ?role=user   普通用户
+  var role = new URLSearchParams(location.search).get('role') === 'user' ? 'user' : 'admin';
+
   // ?now=<毫秒> 把「现在」钉住。页面上每一个时间都是从它算出来的，不钉住的话
   // 两次截图之间光是钟走了几分钟就够让每一张都不一样，前后对比无从做起。
   var now = Number(new URLSearchParams(location.search).get('now')) || Date.now();
@@ -121,7 +128,7 @@
     // 门户自己的指纹当成「你的编号」显示在人名旁边。别再这么干。
     '/api/me': {
       identity: 'ardith', login: 'ardith', name: 'Ardith Vale',
-      namespace: 'acme', provider: 'github', role: 'admin',
+      namespace: 'acme', provider: 'github', role: role,
       lark: true, relay_origin: 'https://relay.example.com',
       // 形状照抄 githubAvatarURL：同一个源、u/<数字账号 id>、?s=96。
       avatar_url: avatar === 'off' ? undefined

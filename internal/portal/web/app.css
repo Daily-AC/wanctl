@@ -59,6 +59,15 @@
 }
 
 *{box-sizing:border-box}
+/* hidden 是这套界面里唯一的「不存在」开关：JS 从头到尾只用它藏东西，没有一处
+   指望用 display 把它盖回来。可浏览器默认表里的 [hidden]{display:none} 只有
+   (0,1,0)，任何一句带类名的 display 都压得过它 —— .sgroup button{display:block}
+   就这么把「邀请」那一栏给普通用户也显示了出来（管理员之外的人看得见一个自己
+   点不动的入口）。同一个坑在 .ava img 那里已经被躲过一次（见下面那条注释），
+   躲得过是因为那次有人记得；这条把它变成记不记得都躲得过。
+   量过：全站带 hidden 的元素里，只有 #sInvites 的计算值不是 none，所以这一句
+   除了修掉那一处，别处一个像素都不动（tools/portalpreview/sweep.mjs 的 hidden 断言）。 */
+[hidden]{display:none!important}
 html{-webkit-text-size-adjust:100%}
 body{
   margin:0;background:var(--canvas);color:var(--ink);
