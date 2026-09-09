@@ -22,22 +22,29 @@ func TestSharedDeviceMutationRoutesFollowTheManagementSwitch(t *testing.T) {
 		body   string
 		// owner is true for routes a share never carries, however it is set.
 		owner bool
+		// use is true for routes that come with the share itself, so the
+		// management switch does not gate them either way.
+		use bool
 	}
 	// One body covers every handler: each reads only the fields it knows.
 	const body = `{"device":"devbox","id":7,"verdict":"y","fp":"SHA256:kQ2p","op":"rm","index":0,` +
 		`"kind":"exec","pattern":"*","mode":"normal","port":5555,"code":"123456"}`
 
 	routes := []route{
-		{"/api/devices/decide", http.MethodPost, body, false},
-		{"/api/devices/pair", http.MethodPost, body, false},
-		{"/api/devices/untrust", http.MethodPost, body, false},
-		{"/api/devices/rules", http.MethodPost, body, false},
-		{"/api/devices/mode", http.MethodPost, body, false},
-		{"/api/devices/identity/accept", http.MethodPost, body, false},
-		{"/api/devices/adb-pair", http.MethodPost, body, false},
+		{"/api/devices/decide", http.MethodPost, body, false, false},
+		{"/api/devices/pair", http.MethodPost, body, false, false},
+		{"/api/devices/untrust", http.MethodPost, body, false, false},
+		{"/api/devices/rules", http.MethodPost, body, false, false},
+		{"/api/devices/mode", http.MethodPost, body, false, false},
+		{"/api/devices/identity/accept", http.MethodPost, body, false, false},
+		{"/api/devices/adb-pair", http.MethodPost, body, false, false},
 		// The owner's contact details, not device state. Never a grantee's.
-		{"/api/devices/lark", http.MethodPost, body, true},
-		{"/api/devices/notify", http.MethodPost, body, true},
+		{"/api/devices/lark", http.MethodPost, body, true, false},
+		{"/api/devices/notify", http.MethodPost, body, true, false},
+		// Reads of what the device did. `wanctl logs` gives these to every
+		// grantee, so the portal does too, switch or no switch.
+		{"/api/devices/events", http.MethodGet, "", false, true},
+		{"/api/devices/logs", http.MethodGet, "", false, true},
 	}
 
 	for _, manage := range []bool{false, true} {
@@ -75,16 +82,23 @@ func TestSharedDeviceMutationRoutesFollowTheManagementSwitch(t *testing.T) {
 						"/api/devices/adb-pair":        s.handleDeviceADBPair,
 						"/api/devices/lark":            s.handleDeviceLarkWrite,
 						"/api/devices/notify":          s.handleDeviceNotify,
+						"/api/devices/events":          s.handleDeviceEvents,
+						"/api/devices/logs":            s.handleDeviceLogs,
 					}[rt.path]
 
+					target := rt.path
+					if rt.method == http.MethodGet {
+						target += "?device=devbox"
+					}
 					rec := httptest.NewRecorder()
-					req := httptest.NewRequest(rt.method, rt.path, strings.NewReader(rt.body))
+					req := httptest.NewRequest(rt.method, target, strings.NewReader(rt.body))
 					req.Header.Set("X-User", "bob@example.com")
 					h(rec, req)
 
-					// Owner-only routes are refused in both states. Control-plane
-					// routes are refused only without the switch.
-					wantRefused := rt.owner || !manage
+					// Three kinds of route, three answers. Owner-only is refused in
+					// both states; use-rights are admitted in both; control-plane
+					// follows the switch.
+					wantRefused := rt.owner || (!rt.use && !manage)
 					if wantRefused {
 						if rec.Code != http.StatusForbidden {
 							t.Errorf("status = %d, want 403; body = %q", rec.Code, strings.TrimSpace(rec.Body.String()))
@@ -97,8 +111,11 @@ func TestSharedDeviceMutationRoutesFollowTheManagementSwitch(t *testing.T) {
 						return
 					}
 					if rec.Code == http.StatusForbidden {
-						t.Errorf("status = 403 with the management switch on; body = %q",
-							strings.TrimSpace(rec.Body.String()))
+						why := "with the management switch on"
+						if rt.use {
+							why = "although it is a use-right that comes with the share itself"
+						}
+						t.Errorf("status = 403 %s; body = %q", why, strings.TrimSpace(rec.Body.String()))
 					}
 				})
 			}

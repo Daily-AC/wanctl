@@ -106,6 +106,13 @@ const READ = `
     notifyCard: vis(document.querySelector('#dsNotify')),
     larkCard: vis(document.querySelector('#dsLark')),
     removeButton: vis(document.querySelector('#dsRemove')),
+    // 三个页签。活动跟着共享走，另外两个跟着 manage 走。
+    tabAsks: vis(document.querySelector('.tab[data-tab="asks"]')),
+    tabTrust: vis(document.querySelector('.tab[data-tab="trust"]')),
+    tabLog: vis(document.querySelector('.tab[data-tab="log"]')),
+    tabOn: (document.querySelector('.tab.on') || {}).dataset ? document.querySelector('.tab.on').dataset.tab : null,
+    logRows: document.querySelectorAll('#devlog tr').length,
+    logEmpty: !!document.querySelector('#devlog .tempty'),
   };`;
 
 const cdp = await connect(PORT);
@@ -119,6 +126,12 @@ function checkReadOnly(where, r) {
   if (!r.banner) note(where, '横幅没出现，看不出这是谁的机器');
   if (!r.fingerprint) note(where, '指纹是空的（设备清单还没到就把这一屏画出来了）');
   if (r.approveButtons) note(where, `待审批上有 ${r.approveButtons} 枚可点的按钮，而这份授权没给管理权`);
+  // 活动是使用权的一部分：CLI 上的 wanctl logs 每个被授权方本来就有。
+  if (!r.tabLog) note(where, '活动页签不见了，而看这台机器做过什么是使用权的一部分');
+  if (r.tabAsks) note(where, '待审批页签还摆着，可它整页都点不动');
+  if (r.tabTrust) note(where, '信任与规则页签还摆着，可它整页都点不动');
+  if (r.tabOn !== 'log') note(where, `第一眼停在 ${r.tabOn}，只有使用权时唯一有内容的是活动`);
+  if (!r.logRows || r.logEmpty) note(where, '活动是空的 —— 页签开了但日志没拉到（后端把它当管理权拦了？）');
   checkOwnerOnlyHidden(where, r);
 }
 
@@ -131,6 +144,7 @@ function checkManaged(where, r) {
   if (!r.fingerprint) note(where, '指纹是空的');
   if (!r.approveButtons) note(where, '待审批上没有可点的按钮，而这份授权给了管理权');
   if (r.roNotice) note(where, '待审批上还留着「只有设备主人能回答」那句灰字');
+  if (!r.tabAsks || !r.tabTrust || !r.tabLog) note(where, '三个页签没齐，拿到管理权的这一屏和自己的设备应该一样');
   checkOwnerOnlyHidden(where, r);
 }
 
@@ -206,7 +220,7 @@ if (fails.length) {
   process.exitCode = 1;
 } else {
   console.log(`共享设备门禁：${runs} 次检查全部合格`);
-  console.log('  只读共享：齿轮不可见 · 模式胶囊不可交互 · 横幅在 · 指纹已填 · 无审批按钮 · 设置地址退回设备页');
+  console.log('  只读共享：齿轮不可见 · 模式胶囊不可交互 · 横幅在 · 指纹已填 · 无审批按钮 · 只剩活动一页且有内容 · 设置地址退回设备页');
   console.log('  可管共享：控制面在（审批按钮、模式胶囊）· 横幅点出设备主人 · 通知/飞书/解绑一律不可见');
 }
 cdp.ws.close();

@@ -701,8 +701,13 @@
       if (cur) {
         paintDeviceName(cur);
         $('#dsAliasIn').value = aliasOf(cur);
-        if (applyDeviceGating(cur)) startConsole(cur);
-        else showReadOnlyConsole();
+        if (applyDeviceGating(cur)) {
+          startConsole(cur);
+        } else {
+          showReadOnlyConsole();
+          // 清单迟到时这一屏可能停在待审批上，而那一页刚刚被藏起来了。
+          if ($('.tab[data-tab="asks"]').classList.contains('on')) selTab('log');
+        }
       }
     }).catch(function (e) {
       if (version !== deviceListVersion) return;
@@ -761,6 +766,11 @@
     // manage 一条也够不着，所以共享设备上它照旧不出现 —— 少一屏点不动的开关。
     $('#dGear').hidden = !!m.shared;
     $('#dMode').disabled = !admin;
+    // 待审批和信任与规则是「改这台机器」，跟着 manage 走。活动是「这台机器
+    // 做过什么」，那是使用权的一部分：CLI 上的 wanctl logs 每个被授权方本来
+    // 就有，同一份日志在门户里反而看不到，就又变成两套说法（ADR 0007）。
+    // 点不动的两页直接不摆出来，而不是摆出来再说一句「你不能」。
+    $$('.tab[data-tab="asks"],.tab[data-tab="trust"]').forEach(function (b) { b.hidden = !admin; });
     var d = devRow(name);
     $('#dFp').textContent = d ? (d.fingerprint || '') : '';
     return admin;
@@ -793,7 +803,8 @@
     paintDeviceName(name);
     var admin = applyDeviceGating(name);
     showView('device');
-    selTab('asks');
+    // 只有使用权时第一眼就是活动 —— 那是这一屏上唯一有内容的一页。
+    selTab(admin ? 'asks' : 'log');
     var h = '#device/' + encodeURIComponent(name);
     // 设置页是这台设备的子路由。以前这里无条件改写地址，于是直接打开
     // #device/X/settings 会被换成 #device/X —— 页面对了，地址错了，
