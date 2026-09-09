@@ -14,7 +14,6 @@ type SharedPeer struct {
 	Device string `json:"device"`
 	Label  string `json:"label"`
 	Target string `json:"target"`
-	Perms  string `json:"perms"`
 	Online bool   `json:"online"`
 }
 
@@ -43,13 +42,11 @@ func (r *Relay) sharedPeers(ns string) []SharedPeer {
 		if owner == "" || owner == ns || device == "" {
 			continue
 		}
-		perms, _ := row["perms"].(string)
 		out = append(out, SharedPeer{
 			Owner:  owner,
 			Device: device,
 			Label:  sharedPeerLabel(row),
 			Target: owner + "/" + device,
-			Perms:  perms,
 			Online: r.deviceLive(owner, device),
 		})
 	}

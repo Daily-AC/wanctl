@@ -24,7 +24,8 @@ const friendsHelp = `wanctl friends subcommands:
 
 const shareHelp = `wanctl share subcommands:
   share list
-  share grant --device DEV --to NS [--perms exec,read]
+  share grant --device DEV --to NS [--manage]
+  share manage --device DEV --to NS on|off
   share revoke --device DEV --to NS`
 
 type relayHTTPError struct {
@@ -196,6 +197,8 @@ func cmdShare(ctx context.Context, args []string) error {
 		return shareList(ctx)
 	case "grant":
 		return shareGrant(ctx, args[1:])
+	case "manage":
+		return shareManage(ctx, args[1:])
 	case "revoke":
 		return shareRevoke(ctx, args[1:])
 	case "-h", "--help", "help":
@@ -210,18 +213,18 @@ func shareGrant(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("share grant", flag.ContinueOnError)
 	device := fs.String("device", "", "device name")
 	to := fs.String("to", "", "friend namespace")
-	perms := fs.String("perms", "exec,read", "grant permissions")
+	manage := fs.Bool("manage", false, "also let them administer the device (approvals, rules, mode)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *device == "" || *to == "" || fs.NArg() != 0 {
-		return fmt.Errorf("usage: wanctl share grant --device DEV --to NS [--perms exec,read]")
+		return fmt.Errorf("usage: wanctl share grant --device DEV --to NS [--manage]")
 	}
 	var result struct {
 		ID int `json:"id"`
 	}
-	err := userRequest(ctx, http.MethodPost, "/u/shares/grant", map[string]string{
-		"device": *device, "grantee": *to, "perms": *perms,
+	err := userRequest(ctx, http.MethodPost, "/u/shares/grant", map[string]any{
+		"device": *device, "grantee": *to, "manage": *manage,
 	}, &result)
 	if isRelayError(err, http.StatusForbidden, "not-friends") {
 		return fmt.Errorf("%s 还不是你的好友；请先运行 `wanctl friends add %s`", *to, *to)
@@ -229,8 +232,71 @@ func shareGrant(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("✓ 已将设备 %s 共享给 %s（授权 #%d，权限 %s）\n", *device, *to, result.ID, *perms)
+	fmt.Printf("✓ 已将设备 %s 共享给 %s（授权 #%d）。对方对这台设备的使用权限与你相同%s。解绑和撤销共享仍然只有你能做。\n",
+		*device, *to, result.ID, manageSuffix(*manage))
 	return nil
+}
+
+// shareManage flips management on a share that already exists. Revoking and
+// re-sharing would do the same thing, at the cost of making the grantee pair
+// with the device again.
+func shareManage(ctx context.Context, args []string) error {
+	device, to, manage, err := parseShareManage(args)
+	if err != nil {
+		return err
+	}
+	if err := userRequest(ctx, http.MethodPost, "/u/shares/manage", map[string]any{
+		"device": device, "grantee": to, "manage": manage,
+	}, nil); err != nil {
+		return err
+	}
+	if manage {
+		fmt.Printf("✓ %s 现在可以管理设备 %s（审批、规则、模式）\n", to, device)
+	} else {
+		fmt.Printf("✓ %s 不再能管理设备 %s，仍然可以使用它\n", to, device)
+	}
+	return nil
+}
+
+// parseShareManage reads `--device DEV --to NS on|off`. The switch is a word
+// rather than a flag because it is the thing being set, and because `--manage`
+// and `--no-manage` would be two ways to say one thing.
+func parseShareManage(args []string) (device, to string, manage bool, err error) {
+	usage := fmt.Errorf("usage: wanctl share manage --device DEV --to NS on|off")
+	fs := flag.NewFlagSet("share manage", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dev := fs.String("device", "", "device name")
+	grantee := fs.String("to", "", "friend namespace")
+	if err := fs.Parse(args); err != nil {
+		return "", "", false, err
+	}
+	if *dev == "" || *grantee == "" || fs.NArg() != 1 {
+		return "", "", false, usage
+	}
+	switch fs.Arg(0) {
+	case "on":
+		manage = true
+	case "off":
+		manage = false
+	default:
+		return "", "", false, usage
+	}
+	return *dev, *grantee, manage, nil
+}
+
+// manageLabel names the one thing a share varies, in both listings.
+func manageLabel(manage bool) string {
+	if manage {
+		return "可管理"
+	}
+	return "仅使用"
+}
+
+func manageSuffix(manage bool) string {
+	if manage {
+		return "，并且可以管理这台设备（审批、规则、模式）"
+	}
+	return "，但不能管理这台设备（审批、规则、模式）"
 }
 
 func shareRevoke(ctx context.Context, args []string) error {
@@ -258,7 +324,7 @@ func shareList(ctx context.Context) error {
 			ID      int    `json:"id"`
 			Device  string `json:"device"`
 			Grantee string `json:"grantee"`
-			Perms   string `json:"perms"`
+			Manage  bool   `json:"manage"`
 		} `json:"given"`
 		Received []relay.ReceivedShare `json:"received"`
 	}
@@ -270,14 +336,14 @@ func shareList(ctx context.Context) error {
 		fmt.Println("  (无)")
 	}
 	for _, share := range result.Given {
-		fmt.Printf("  %-20s -> %-20s %s (#%d)\n", share.Device, share.Grantee, share.Perms, share.ID)
+		fmt.Printf("  %-20s -> %-20s %-8s (#%d)\n", share.Device, share.Grantee, manageLabel(share.Manage), share.ID)
 	}
 	fmt.Println("好友授给我的共享：")
 	if len(result.Received) == 0 {
 		fmt.Println("  (无)")
 	}
 	for _, share := range result.Received {
-		fmt.Printf("  %-20s / %-20s %s\n", share.Owner, share.Device, share.Perms)
+		fmt.Printf("  %-20s / %-20s %s\n", share.Owner, share.Device, manageLabel(share.Manage))
 	}
 	return nil
 }

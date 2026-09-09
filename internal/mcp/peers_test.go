@@ -34,7 +34,7 @@ func TestPeerToolResultIncludesAliasesWithoutRemovingDevices(t *testing.T) {
 // of them.
 func TestPeerToolResultListsSharedDevicesAsQualifiedTargets(t *testing.T) {
 	shared := []client.SharedDevice{
-		{Owner: "daily-ac", Device: "8e894048-1111-4222-8333-444455556666", Label: "bms-20558674", Target: "daily-ac/8e894048-1111-4222-8333-444455556666", Perms: "exec,read,write", Online: true},
+		{Owner: "daily-ac", Device: "8e894048-1111-4222-8333-444455556666", Label: "bms-20558674", Target: "daily-ac/8e894048-1111-4222-8333-444455556666", Online: true},
 		{Owner: "daily-ac", Device: "aa11", Label: "spare", Target: "daily-ac/aa11"},
 	}
 	text := resultText(peerToolResult([]string{"mine"}, nil, shared))

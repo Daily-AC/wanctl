@@ -39,4 +39,5 @@ label that matches both is refused rather than guessed.
 
 The first time you drive a new device, it waits for that device's own
 **Waiting** / **Trusted controllers** page to say yes. Driving a friend's device
-needs a share first (see "Invites, friends and sharing").
+needs a share first, and answering its approvals yourself needs that share to
+carry management (see "Invites, friends and sharing").

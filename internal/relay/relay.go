@@ -46,10 +46,17 @@ type pendingSession struct {
 	done      chan struct{}
 }
 
-// ACLChecker returns raw permissions for a live cross-namespace grant. Relay
-// parses them strictly before opening a capability-scoped session.
+// Grant is a live cross-namespace share.
+type Grant struct {
+	// Manage adds the device's control plane -- approvals, rules, mode -- to
+	// the grantee's sessions. It is the only thing a share can vary, and it is
+	// off unless the owner turned it on.
+	Manage bool
+}
+
+// ACLChecker reports a live cross-namespace grant, if there is one.
 type ACLChecker interface {
-	ACLPerms(callerNS, targetNS, device string) (string, bool)
+	ACLGrant(callerNS, targetNS, device string) (Grant, bool)
 }
 
 // Auditor records relay-side metadata events (nil = no audit).
@@ -289,13 +296,20 @@ func (r *Relay) dialAllowedReason(callerNS, target string) (targetKey string, au
 		auth.Capabilities = sessionauth.FullCapabilities
 		return target, auth, "", true
 	}
+	// A grant inherits the owner's use of the device. The controlled end runs
+	// one agent bound to one account, so sharing is how a machine gets a second
+	// user; a permission matrix here would be a second, weaker model layered
+	// over the device's own mode and rules, which are what actually decide each
+	// request. The one thing a share varies is management -- the device's
+	// approvals, rules and mode -- and only the owner can turn it on.
+	// acl.perms is not read.
 	if r.acl != nil {
-		if perms, found := r.acl.ACLPerms(callerNS, targetNS, device); found {
-			caps, err := sessionauth.ParseGrant(perms)
-			if err == nil {
-				auth.Capabilities = caps
-				return target, auth, "", true
+		if grant, found := r.acl.ACLGrant(callerNS, targetNS, device); found {
+			auth.Capabilities = sessionauth.UseCapabilities
+			if grant.Manage {
+				auth.Capabilities = sessionauth.FullCapabilities
 			}
+			return target, auth, "", true
 		}
 	}
 	return target, auth, "", false

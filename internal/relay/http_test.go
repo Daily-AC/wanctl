@@ -167,7 +167,7 @@ func TestHTTPPollLegacyEmptyInstanceKeepsExistingBehavior(t *testing.T) {
 
 func TestHTTPPollReceivesRelayIssuedCapabilities(t *testing.T) {
 	r := New(EnvTokenStore("owner-token:owner,reader-token:reader"))
-	r.SetACL(staticACL("read"))
+	r.SetACL(staticACL(true))
 	h := r.Handler()
 	poll := startHTTPPoll(t, h, "token=owner-token&device=home-pc&inst=A")
 	waitHTTPAgentInst(t, r, "owner/home-pc", "A")
@@ -181,7 +181,7 @@ func TestHTTPPollReceivesRelayIssuedCapabilities(t *testing.T) {
 
 	select {
 	case got := <-poll:
-		if got.status != http.StatusOK || got.open.Capabilities != sessionauth.Read {
+		if got.status != http.StatusOK || got.open.Capabilities != sessionauth.FullCapabilities {
 			t.Fatalf("poll result = %+v", got)
 		}
 		if got.open.CallerNamespace != "reader" || got.open.OwnerNamespace != "owner" || got.open.Device != "home-pc" {

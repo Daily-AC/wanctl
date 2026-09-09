@@ -147,8 +147,8 @@ func TestRequireDeviceRejectsForeign(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/devices/console?device=evil", nil)
 	req.Header.Set("X-User", "alice@corp")
 	w := httptest.NewRecorder()
-	if ns, _, ok := s.requireDevice(w, req, "evil"); ok {
-		t.Fatalf("expected reject of foreign device, got ns=%s", ns)
+	if access, ok := s.requireDevice(w, req, "evil"); ok {
+		t.Fatalf("expected reject of foreign device, got ns=%s", access.Owner)
 	}
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("want 403, got %d", w.Code)
@@ -171,14 +171,14 @@ func TestRequireDeviceAllowsOwn(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/devices/console?device=legion", nil)
 	req.Header.Set("X-User", "alice@corp")
 	w := httptest.NewRecorder()
-	ns, shared, ok := s.requireDevice(w, req, "legion")
+	access, ok := s.requireDevice(w, req, "legion")
 	if !ok {
 		t.Fatalf("expected own device to be allowed, got ok=false (status %d)", w.Code)
 	}
-	if ns != "alice" {
-		t.Fatalf("expected ns=alice, got %q", ns)
+	if access.Owner != "alice" {
+		t.Fatalf("expected ns=alice, got %q", access.Owner)
 	}
-	if shared {
+	if access.Shared {
 		t.Fatalf("expected own device shared=false")
 	}
 }
@@ -190,7 +190,7 @@ func TestRequireDeviceReturnsSharedOwnerNamespace(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]string{"namespace": "bob"})
 		case "/admin/devices":
 			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{
-				{"name": "devbox", "owner": "alice", "shared": true, "perms": "exec"},
+				{"name": "devbox", "owner": "alice", "shared": true, "perms": "full", "manage": true},
 			}})
 		default:
 			w.WriteHeader(404)
@@ -200,15 +200,15 @@ func TestRequireDeviceReturnsSharedOwnerNamespace(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/devices/console?device=devbox", nil)
 	req.Header.Set("X-User", "bob@corp")
 	w := httptest.NewRecorder()
-	ns, shared, ok := s.requireDevice(w, req, "devbox")
+	access, ok := s.requireDevice(w, req, "devbox")
 	if !ok {
 		t.Fatalf("expected shared device to be allowed, got ok=false (status %d body %s)", w.Code, w.Body.String())
 	}
-	if ns != "alice" {
-		t.Fatalf("expected owner namespace alice, got %q", ns)
+	if access.Owner != "alice" {
+		t.Fatalf("expected owner namespace alice, got %q", access.Owner)
 	}
-	if !shared {
-		t.Fatalf("expected shared=true")
+	if !access.Shared || !access.Manage {
+		t.Fatalf("expected shared=true manage=true, got %+v", access)
 	}
 }
 
@@ -230,8 +230,8 @@ func TestRequireDeviceRejectsAmbiguousSharedName(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/devices/console?device=build", nil)
 	req.Header.Set("X-User", "bob@corp")
 	w := httptest.NewRecorder()
-	if ns, _, ok := s.requireDevice(w, req, "build"); ok {
-		t.Fatalf("expected ambiguous shared device to be rejected, got ns=%s", ns)
+	if access, ok := s.requireDevice(w, req, "build"); ok {
+		t.Fatalf("expected ambiguous shared device to be rejected, got ns=%s", access.Owner)
 	}
 	if w.Code != http.StatusConflict {
 		t.Fatalf("want 409, got %d body %s", w.Code, w.Body.String())
@@ -365,14 +365,23 @@ func TestHandleDeviceAliasForOwnedDevicePassesThroughRelayResponse(t *testing.T)
 	}
 }
 
-func TestConsoleWriteEndpointsRejectSharedDevice(t *testing.T) {
+// Approvals, pairing, trust, rules and mode are the device's control plane.
+// A share reaches them only where the owner turned management on.
+func TestConsoleWriteEndpointsFollowTheManagementSwitch(t *testing.T) {
+	for _, manage := range []bool{false, true} {
+		testConsoleWritesForShare(t, manage)
+	}
+}
+
+func testConsoleWritesForShare(t *testing.T, manage bool) {
+	t.Helper()
 	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/admin/resolve-user":
 			json.NewEncoder(w).Encode(map[string]string{"namespace": "bob"})
 		case "/admin/devices":
 			json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{
-				{"name": "devbox", "owner": "alice", "shared": true, "perms": "exec"},
+				{"name": "devbox", "owner": "alice", "shared": true, "perms": "full", "manage": manage},
 			}})
 		default:
 			w.WriteHeader(404)
@@ -395,8 +404,9 @@ func TestConsoleWriteEndpointsRejectSharedDevice(t *testing.T) {
 		req.Header.Set("X-User", "bob@corp")
 		w := httptest.NewRecorder()
 		e.h(w, req)
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("%s: shared device must be read-only, want 403, got %d body %s", e.name, w.Code, w.Body.String())
+		refused := w.Code == http.StatusForbidden
+		if refused == manage {
+			t.Fatalf("%s with manage=%v: status %d body %s", e.name, manage, w.Code, w.Body.String())
 		}
 	}
 }

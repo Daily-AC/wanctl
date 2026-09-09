@@ -184,24 +184,56 @@ func TestDialAllowedPortal(t *testing.T) {
 	}
 }
 
-type staticACL string
+// staticACL is a live grant with the management switch in a fixed position.
+type staticACL bool
 
-func (p staticACL) ACLPerms(_, _, _ string) (string, bool) { return string(p), true }
+func (p staticACL) ACLGrant(_, _, _ string) (Grant, bool) { return Grant{Manage: bool(p)}, true }
 
-func TestDialAllowedParsesACLPermissionsStrictly(t *testing.T) {
+// A share inherits the owner's use of the device, and management is the one
+// thing it varies (ADR 0007). Nothing in the ACL row can hand a grantee less
+// than the owner's use, and nothing but the owner's switch adds the console.
+func TestDialAllowedGivesAGrantTheOwnersUseAndOnlySwitchesManagement(t *testing.T) {
 	r := New(EnvTokenStore("tok:reader"))
-	r.SetACL(staticACL("read,exec"))
+
+	r.SetACL(staticACL(false))
 	_, auth, ok := r.dialAllowed("reader", "owner/home-pc")
-	if !ok || auth.Capabilities != sessionauth.Read|sessionauth.Exec {
-		t.Fatalf("authorization = %#v, ok=%v", auth, ok)
+	if !ok || auth.Capabilities != sessionauth.UseCapabilities {
+		t.Fatalf("use-only grant = %#v, ok=%v", auth, ok)
+	}
+	// Use is the whole of the device except its control plane.
+	for _, cap := range []sessionauth.Capabilities{sessionauth.Exec, sessionauth.Read, sessionauth.Write, sessionauth.Logs} {
+		if !auth.Capabilities.Has(cap) {
+			t.Fatalf("use-only grant is missing %q", cap)
+		}
+	}
+	if auth.Capabilities.Has(sessionauth.Console) {
+		t.Fatal("a share without the management switch must not carry the console")
 	}
 
-	r.SetACL(staticACL("read,unknown"))
-	if _, _, ok := r.dialAllowed("reader", "owner/home-pc"); ok {
-		t.Fatal("unknown ACL permission must fail closed")
+	r.SetACL(staticACL(true))
+	_, auth, ok = r.dialAllowed("reader", "owner/home-pc")
+	if !ok || auth.Capabilities != sessionauth.FullCapabilities {
+		t.Fatalf("managing grant = %#v, ok=%v", auth, ok)
 	}
-	r.SetACL(staticACL("read,console"))
+	// Even then the device decides: the console additionally requires
+	// membership of its portal_admins set (see the agent's console-session
+	// tests), and everything else goes through its policy engine.
+	if !auth.Capabilities.Has(sessionauth.Console) {
+		t.Fatal("the management switch did not add the console")
+	}
+
+	// An owner needs no switch.
+	if _, auth, ok := r.dialAllowed("owner", "owner/home-pc"); !ok || auth.Capabilities != sessionauth.FullCapabilities {
+		t.Fatalf("owner = %#v, ok=%v", auth, ok)
+	}
+
+	// No grant is still no session.
+	r.SetACL(noACL{})
 	if _, _, ok := r.dialAllowed("reader", "owner/home-pc"); ok {
-		t.Fatal("owner-only capability must fail closed")
+		t.Fatal("a namespace with no grant was allowed to dial")
 	}
 }
+
+type noACL struct{}
+
+func (noACL) ACLGrant(_, _, _ string) (Grant, bool) { return Grant{}, false }
