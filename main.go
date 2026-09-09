@@ -491,10 +491,10 @@ func cmdAgent(ctx context.Context, args []string) error {
 	if ag.Mode() == policy.ModeBypass {
 		fmt.Fprintln(os.Stderr, "wanctl: BYPASS mode — every command and file op is auto-allowed. Use only on trusted, isolated devices.")
 	}
-	lock, err := config.AcquireAgentLock()
+	lock, err := awaitAgentLock(config.AcquireAgentLock, agentLockAttempts, agentLockPoll, time.Sleep)
 	if err != nil {
 		if config.IsAgentLockHeld(err) {
-			fmt.Fprintf(os.Stderr, "wanctl: another agent is already running for this config dir (pid %d); exiting\n", config.ReadPID())
+			fmt.Fprintln(os.Stderr, "wanctl: "+lockHeldMessage(config.ReadPID(), os.Getpid()))
 			return nil
 		}
 		return err
@@ -543,6 +543,42 @@ func cmdAgent(ctx context.Context, args []string) error {
 		return nil
 	}
 	return runErr
+}
+
+// agentLockAttempts/agentLockPoll bound the wait for a predecessor to let go of
+// the config-dir lock. An agent started by `wanctl start` (or by the restart
+// half of `wanctl update`) can arrive while the agent it replaces is still
+// shutting down: the parent signalled it and did not wait. Exiting immediately
+// then left the machine with no agent at all, after the parent had already told
+// the user one was running. Five seconds covers an ordinary shutdown; beyond
+// that something is wrong and saying so beats waiting.
+const (
+	agentLockAttempts = 50
+	agentLockPoll     = 100 * time.Millisecond
+)
+
+// awaitAgentLock retries acquisition while the lock is merely held, and returns
+// any other error at once. The clock is injected so the retry is testable.
+func awaitAgentLock(acquire func() (*config.AgentLock, error), attempts int, poll time.Duration, sleep func(time.Duration)) (*config.AgentLock, error) {
+	lock, err := acquire()
+	for attempt := 0; attempt < attempts && err != nil && config.IsAgentLockHeld(err); attempt++ {
+		sleep(poll)
+		lock, err = acquire()
+	}
+	return lock, err
+}
+
+// lockHeldMessage explains a lock this agent could not take. The pid file is
+// not proof of who holds it: `wanctl start` records the pid of the child it
+// spawned before that child has locked anything, so an agent that lost this
+// race read its *own* pid there and reported "another agent is already running
+// (pid <itself>)" -- which sent the reader looking for a process that was the
+// one printing the message.
+func lockHeldMessage(recordedPID, self int) string {
+	if recordedPID == self || recordedPID <= 0 {
+		return "the previous agent has not released this config dir yet; exiting. Run `wanctl start` once it has stopped"
+	}
+	return fmt.Sprintf("another agent is already running for this config dir (pid %d); exiting", recordedPID)
 }
 
 func cmdExec(ctx context.Context, args []string) error {
