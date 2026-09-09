@@ -88,6 +88,10 @@ const STATES = [
   { id: 'set-invites-noreq', q: '&view=settings/invites&scene=noask' },
   { id: 'set-friends', q: '&view=settings/friends' },
   { id: 'set-acl', q: '&view=settings/acl' },
+  // 空表那一行。它是个 colspan 单元格，于是也 trivially 是「最后一列」，
+  // 被那条为操作列写的 td:last-child{text-align:right} 一起顶到了右缘。
+  // 有数据的时候看不出来，所以这里得有一屏是空的。
+  { id: 'set-acl-empty', q: '&view=settings/acl&scene=emptylists' },
   { id: 'set-downloads', q: '&view=settings/downloads', settle: 1400 },
   { id: 'set-downloads-open', q: '&view=settings/downloads', settle: 1400,
     open: `document.querySelector('#dl details').open = true` },
