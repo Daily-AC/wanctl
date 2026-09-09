@@ -87,7 +87,7 @@ func cmdUpdate(ctx context.Context, args []string) error {
 		return fmt.Errorf("chmod new binary: %w", err)
 	}
 
-	plan := planUpdateRestart(*noRestart, config.ReadPID())
+	plan := planUpdateRestart(*noRestart)
 	if plan.stopDetached {
 		fmt.Println("正在停止后台 agent …")
 		if err := cmdStop(); err != nil {
@@ -275,7 +275,7 @@ func splitUpdateViaSudo(ctx context.Context, self string) error {
 		return fmt.Errorf("升级 %s 需要 root 权限,但本机找不到 sudo。请用 root 身份直接跑: wanctl update", self)
 	}
 
-	plan := planUpdateRestart(false, config.ReadPID())
+	plan := planUpdateRestart(false)
 	if plan.stopDetached {
 		fmt.Println("正在停止后台 agent …")
 		if err := cmdStop(); err != nil {
@@ -312,8 +312,14 @@ type updateRestartPlan struct {
 	restartManagedPID int
 }
 
-func planUpdateRestart(noRestart bool, pid int) updateRestartPlan {
-	return planUpdateRestartWithLiveness(noRestart, pid, processAlive(pid))
+// planUpdateRestart decides what this update owes the running agent. Liveness
+// comes from the agent lock: a pid file left behind by a dead agent, plus the
+// pid reuse that eventually follows, previously made an update stop a stranger
+// and then *start* an agent on a machine that had never run one -- which is how
+// a controller-only PC registered itself as a controlled device.
+func planUpdateRestart(noRestart bool) updateRestartPlan {
+	pid, running := agentRunning()
+	return planUpdateRestartWithLiveness(noRestart, pid, running)
 }
 
 func planUpdateRestartWithLiveness(noRestart bool, pid int, alive bool) updateRestartPlan {
@@ -418,7 +424,10 @@ func cmdRestartManaged(args []string) error {
 		return fmt.Errorf("invalid managed agent pid %q", args[0])
 	}
 	time.Sleep(time.Second)
-	if config.ReadPID() != pid || config.ManagedPID() != pid || !processAlive(pid) {
+	// Same rule as cmdStop: never signal a pid unless an agent still holds the
+	// lock for this config dir.
+	live, running := agentRunning()
+	if !running || live != pid || config.ManagedPID() != pid {
 		return nil
 	}
 	return terminatePID(pid)
