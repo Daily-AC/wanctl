@@ -62,9 +62,28 @@ func cmdUp(ctx context.Context) error {
 	return cmdStart()
 }
 
+// agentRunning answers "is an agent serving this config dir" from the lock the
+// agent holds, not from whether the number in agent.pid happens to name a live
+// process. It also clears a pid file that provably belongs to nobody.
+//
+// The cleanup is deliberately conditional. A pid file whose process is gone is
+// unambiguously stale. A pid file whose process is alive while the lock is free
+// is either pid reuse or an agent that was just launched and has not reached
+// AcquireAgentLock yet -- cmdStart and the Windows update handover both record
+// the pid on the new agent's behalf before it locks -- and deleting that file
+// would hide a starting agent from `wanctl stop` for good. Reporting it as not
+// running is safe in both readings; deleting it is not.
+func agentRunning() (int, bool) {
+	pid, running := config.AgentRunning()
+	if !running && pid > 0 && !processAlive(pid) {
+		_ = config.RemovePID()
+	}
+	return pid, running
+}
+
 // cmdStart launches the agent detached in the background and records its pid.
 func cmdStart() error {
-	if pid := config.ReadPID(); processAlive(pid) {
+	if pid, running := agentRunning(); running {
 		fmt.Printf("wanctl 服务已在运行 (pid %d)。停止用: wanctl stop\n", pid)
 		return nil
 	}
@@ -105,11 +124,24 @@ func cmdStart() error {
 }
 
 // cmdStop terminates the background agent.
+//
+// It refuses to signal a pid whose lock nobody holds. Trusting the pid file
+// alone meant that a stale one, plus the pid reuse that follows sooner or
+// later, made `wanctl stop` (and the stop that `wanctl update` performs on its
+// way to a restart) kill whatever process had inherited the number.
 func cmdStop() error {
-	pid := config.ReadPID()
-	if !processAlive(pid) {
-		_ = config.RemovePID()
+	recorded := config.ReadPID()
+	pid, running := agentRunning()
+	if !running {
+		if recorded > 0 {
+			fmt.Printf("wanctl 服务未在运行（agent.pid 里记的 %d 已失效%s）\n", recorded, staleNote(recorded))
+			return nil
+		}
 		fmt.Println("wanctl 服务未在运行")
+		return nil
+	}
+	if pid <= 0 {
+		fmt.Println("wanctl 服务在运行,但没有记录 pid,无法从这里停止它。请停止启动它的那个服务(计划任务/systemd/launchd)")
 		return nil
 	}
 	if err := terminatePID(pid); err != nil {
@@ -118,6 +150,15 @@ func cmdStop() error {
 	_ = config.RemovePID()
 	fmt.Printf("✓ 已停止 wanctl 服务 (pid %d)\n", pid)
 	return nil
+}
+
+// staleNote distinguishes the two ways a pid file outlives its agent, because
+// the second one is the one that used to make wanctl kill a stranger.
+func staleNote(pid int) string {
+	if processAlive(pid) {
+		return "，该 pid 现在属于别的进程，不会去动它"
+	}
+	return "，已清理"
 }
 
 // cmdStatus reports either the local background agent or a specified remote
@@ -167,7 +208,7 @@ func parseStatusArgs(args []string) (string, error) {
 
 func printLocalStatus() error {
 	fmt.Println("本机 agent:")
-	if pid := config.ReadPID(); processAlive(pid) {
+	if pid, running := agentRunning(); running {
 		fmt.Printf("● 运行中 (pid %d)\n", pid)
 		// Worth saying before an upgrade rather than after: `wanctl update` can
 		// swap the binary here but cannot restart this agent, so the old build
