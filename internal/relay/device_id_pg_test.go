@@ -89,7 +89,7 @@ func TestDeviceIDPostgresMigrationAndDuplicateNames(t *testing.T) {
 	if _, err := p.ResolveDeviceTargetStrict("alice", "fcs-ubuntu"); err == nil {
 		t.Fatal("legacy and upgraded same-name devices must also be ambiguous")
 	}
-	if _, ok := p.ACLPerms("bob", "alice", second); ok {
+	if _, ok := p.ACLGrant("bob", "alice", second); ok {
 		t.Fatal("duplicate inherited old sharing")
 	}
 	if created, err := p.RegisterDevice("alice", first, "fcs-ubuntu", fp); err != nil || created {
@@ -101,8 +101,8 @@ func TestDeviceIDPostgresMigrationAndDuplicateNames(t *testing.T) {
 			t.Fatalf("%s association: %d %v", table, count, err)
 		}
 	}
-	if perms, ok := p.ACLPerms("bob", "alice", first); !ok || perms != "read" {
-		t.Fatalf("migrated ACL: %s %v", perms, ok)
+	if _, ok := p.ACLGrant("bob", "alice", first); !ok {
+		t.Fatal("migrated ACL")
 	}
 	rows, err := p.ListDevices("alice")
 	if err != nil || len(rows) != 2 {
@@ -131,7 +131,7 @@ func TestDeviceIDPostgresMigrationAndDuplicateNames(t *testing.T) {
 	if id, err := p.ResolveDeviceTargetStrict("alice", "renamed"); err != nil || id != first {
 		t.Fatalf("rename ID: %s %v", id, err)
 	}
-	if _, ok := p.ACLPerms("bob", "alice", first); !ok {
+	if _, ok := p.ACLGrant("bob", "alice", first); !ok {
 		t.Fatal("rename lost ACL")
 	}
 	rows, err = p.ListDevices("bob")
@@ -228,8 +228,8 @@ func TestDeviceIDPostgresPromotesLegacyRowWhenOnlyTheNameChanged(t *testing.T) {
 	if row["alias"] != "我的 Mac" {
 		t.Fatalf("alias lost in promotion: %+v", row)
 	}
-	if perms, ok := p.ACLPerms("bob", "alice", id); !ok || perms != "read" {
-		t.Fatalf("grant did not follow the promotion: %s %v", perms, ok)
+	if _, ok := p.ACLGrant("bob", "alice", id); !ok {
+		t.Fatal("grant did not follow the promotion")
 	}
 	var audits int
 	if err := db.QueryRow(`SELECT count(*) FROM audit WHERE namespace='alice' AND device=$1`, id).Scan(&audits); err != nil || audits != 1 {
@@ -264,7 +264,7 @@ func TestDeviceIDPostgresRefusesPromotionOnFingerprintMismatch(t *testing.T) {
 	if created, err := p.RegisterDevice("alice", id, "shared-name", other); err != nil || !created {
 		t.Fatalf("a different installation must register separately: created=%v err=%v", created, err)
 	}
-	if _, ok := p.ACLPerms("bob", "alice", id); ok {
+	if _, ok := p.ACLGrant("bob", "alice", id); ok {
 		t.Fatal("a same-name device with a different certificate inherited the grant")
 	}
 	rows, err := p.ListDevices("alice")

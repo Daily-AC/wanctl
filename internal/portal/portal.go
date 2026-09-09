@@ -198,6 +198,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/releases", s.handleReleases)
 	mux.HandleFunc("/api/downloads", s.handleDownloads)
 	mux.HandleFunc("/api/acl", s.handleACL)
+	mux.HandleFunc("/api/acl/manage", s.handleACLManage)
 	mux.HandleFunc("/api/acl/revoke", s.handleACLRevoke)
 	mux.HandleFunc("/api/audit", s.handleAudit)
 	mux.HandleFunc("/api/devices/console", s.handleDeviceConsole)
@@ -262,6 +263,7 @@ var mutationPaths = map[string]bool{
 	"/api/tokens":                  true,
 	"/api/tokens/revoke":           true,
 	"/api/acl":                     true,
+	"/api/acl/manage":              true,
 	"/api/acl/revoke":              true,
 	"/api/devices/decide":          true,
 	"/api/devices/pair":            true,
@@ -1023,7 +1025,7 @@ func (s *Server) handleDeviceNotify(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		ns, ok := s.requireOwnedConsole(w, r, body.Device)
+		ns, ok := s.requireDeviceOwner(w, r, body.Device)
 		if !ok {
 			return
 		}
@@ -1039,7 +1041,7 @@ func (s *Server) handleDeviceNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	device := r.URL.Query().Get("device")
-	ns, ok := s.requireOwnedConsole(w, r, device)
+	ns, ok := s.requireDeviceOwner(w, r, device)
 	if !ok {
 		return
 	}
@@ -1082,7 +1084,7 @@ func (s *Server) handleDeviceLark(w http.ResponseWriter, r *http.Request) {
 	}
 
 	device := r.URL.Query().Get("device")
-	ns, ok := s.requireOwnedConsole(w, r, device)
+	ns, ok := s.requireDeviceOwner(w, r, device)
 	if !ok {
 		return
 	}
@@ -1125,7 +1127,7 @@ func (s *Server) handleDeviceLarkWrite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	ns, ok := s.requireOwnedConsole(w, r, body.Device)
+	ns, ok := s.requireDeviceOwner(w, r, body.Device)
 	if !ok {
 		return
 	}
@@ -1195,6 +1197,14 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 	s.proxyGet(w, ns, "/admin/acl")
 }
 
+// handleACLManage turns one share's management switch on or off. It is a plain
+// proxy: the relay checks that the caller owns the device.
+func (s *Server) handleACLManage(w http.ResponseWriter, r *http.Request) {
+	if ns, ok := s.requireNS(w, r); ok {
+		s.proxyPost(w, r, ns, "/admin/acl/manage")
+	}
+}
+
 func (s *Server) handleACLRevoke(w http.ResponseWriter, r *http.Request) {
 	if ns, ok := s.requireNS(w, r); ok {
 		s.proxyPost(w, r, ns, "/admin/acl/revoke")
@@ -1207,88 +1217,109 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// deviceAccess is what this user may do with one device. Owner is the device
+// owner's namespace, because console dials must target owner/device even for
+// ACL-shared devices.
+type deviceAccess struct {
+	Owner  string
+	Shared bool
+	// Manage is the share's management switch, and is meaningless unless
+	// Shared: an owner needs no switch to administer their own device.
+	Manage bool
+}
+
 // requireDevice authenticates the user, resolves their namespace, and verifies
-// the named device is visible to them. It returns the device owner's namespace,
-// because console dials must target owner/device even for ACL-shared devices.
-func (s *Server) requireDevice(w http.ResponseWriter, r *http.Request, device string) (string, bool, bool) {
+// the named device is visible to them.
+func (s *Server) requireDevice(w http.ResponseWriter, r *http.Request, device string) (deviceAccess, bool) {
 	ns, ok := s.requireNS(w, r)
 	if !ok {
-		return "", false, false
+		return deviceAccess{}, false
 	}
 	if device == "" {
 		http.Error(w, "missing device", http.StatusBadRequest)
-		return "", false, false
+		return deviceAccess{}, false
 	}
 	resp, err := s.adminReq("GET", "/admin/devices", url.Values{"namespace": {ns}}, nil)
 	if err != nil {
 		http.Error(w, "relay unreachable", http.StatusBadGateway)
-		return "", false, false
+		return deviceAccess{}, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		http.Error(w, "relay admin error", resp.StatusCode)
-		return "", false, false
+		return deviceAccess{}, false
 	}
 	var out struct {
 		Devices []struct {
 			Name   string `json:"name"`
 			Owner  string `json:"owner"`
 			Shared bool   `json:"shared"`
+			Manage bool   `json:"manage"`
 		} `json:"devices"`
 	}
 	json.NewDecoder(resp.Body).Decode(&out)
-	matches := []struct {
-		Name   string `json:"name"`
-		Owner  string `json:"owner"`
-		Shared bool   `json:"shared"`
-	}{}
+	var matches []deviceAccess
 	for _, d := range out.Devices {
-		if d.Name == device {
-			if d.Owner == "" {
-				d.Owner = ns
-			}
-			matches = append(matches, d)
+		if d.Name != device {
+			continue
 		}
+		owner := d.Owner
+		if owner == "" {
+			owner = ns
+		}
+		matches = append(matches, deviceAccess{Owner: owner, Shared: d.Shared || owner != ns, Manage: d.Manage})
 	}
 	if len(matches) == 1 {
-		return matches[0].Owner, matches[0].Shared || matches[0].Owner != ns, true
+		return matches[0], true
 	}
 	for _, d := range matches {
-		if d.Owner == ns {
-			return d.Owner, false, true
+		if !d.Shared {
+			return deviceAccess{Owner: d.Owner}, true
 		}
 	}
 	if len(matches) > 1 {
 		http.Error(w, "设备名有歧义，请用 CLI 指定 owner/device", http.StatusConflict)
-		return "", false, false
+		return deviceAccess{}, false
 	}
 	http.Error(w, "device not in your namespace", http.StatusForbidden)
-	return "", false, false
+	return deviceAccess{}, false
 }
 
-// requireOwnedConsole is requireDevice plus an owner gate. ACL-shared devices
-// get no console in the portal at all — neither writes (approvals, pairing,
-// trust, rules, mode) nor reads (console state, activity log, approval
-// events, Feishu settings).
+// requireDeviceConsole is requireDevice plus the management gate: the device's
+// own namespace, or a share whose owner turned management on.
 //
-// ADR 0007 decided that a grant is owner-equivalent, which retires the reason
-// this gate was originally written for (audit 2026-08-28, SEC-B-01: a
-// *read-only* share must not read the control plane through the portal's
-// privileged token). The gate is deliberately left in place until the portal
-// change that goes with ADR 0007 lands, because relaxing it here without the
-// UI that shows a grantee whose device they are administering would put the
-// owner's approval queue and notify address behind no visible boundary at all.
+// The gate this replaces refused every shared device, from audit 2026-08-28
+// SEC-B-01: a *read-only* share must not read the owner's control plane through
+// the portal's privileged token. ADR 0007 retires the read-only share and
+// replaces it with one switch the owner sets per share, so the check is now
+// "did the owner say yes" rather than "is this the owner".
 // See docs/adr/0007-shared-devices-inherit-owner-rights.md.
-func (s *Server) requireOwnedConsole(w http.ResponseWriter, r *http.Request, device string) (string, bool) {
-	ns, shared, ok := s.requireDevice(w, r, device)
+func (s *Server) requireDeviceConsole(w http.ResponseWriter, r *http.Request, device string) (string, bool) {
+	access, ok := s.requireDevice(w, r, device)
 	if !ok {
 		return "", false
 	}
-	if shared {
-		http.Error(w, "共享设备只读：审批、规则、模式等设置只能由设备主人操作", http.StatusForbidden)
+	if access.Shared && !access.Manage {
+		http.Error(w, "这台共享设备没有开管理权限：审批、规则、模式要设备主人打开「管理」后才能操作", http.StatusForbidden)
 		return "", false
 	}
-	return ns, true
+	return access.Owner, true
+}
+
+// requireDeviceOwner is the stricter gate, for the things a share never carries
+// however it is set. The owner's notification settings are the owner's contact
+// details, not device state, so they stay behind this one even when the grantee
+// administers the device.
+func (s *Server) requireDeviceOwner(w http.ResponseWriter, r *http.Request, device string) (string, bool) {
+	access, ok := s.requireDevice(w, r, device)
+	if !ok {
+		return "", false
+	}
+	if access.Shared {
+		http.Error(w, "共享设备的通知设置只能由设备主人操作", http.StatusForbidden)
+		return "", false
+	}
+	return access.Owner, true
 }
 
 // deviceConnFor returns a warm console connection to ns/device, dialing if needed.
@@ -1428,7 +1459,7 @@ func (s *Server) connError(w http.ResponseWriter, device string, err error) {
 func (s *Server) handleDeviceIdentityAccept(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Device, Fingerprint string }
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, ok := s.requireOwnedConsole(w, r, body.Device)
+	ns, ok := s.requireDeviceConsole(w, r, body.Device)
 	if !ok {
 		return
 	}
@@ -1479,7 +1510,7 @@ func (s *Server) dropConn(ns, device string) {
 
 func (s *Server) handleDeviceConsole(w http.ResponseWriter, r *http.Request) {
 	device := r.URL.Query().Get("device")
-	ns, ok := s.requireOwnedConsole(w, r, device)
+	ns, ok := s.requireDeviceConsole(w, r, device)
 	if !ok {
 		return
 	}
@@ -1503,7 +1534,7 @@ func (s *Server) handleDeviceConsole(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeviceDecide(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Device, ID, Verdict string }
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, ok := s.requireOwnedConsole(w, r, body.Device)
+	ns, ok := s.requireDeviceConsole(w, r, body.Device)
 	if !ok {
 		return
 	}
@@ -1523,7 +1554,7 @@ func (s *Server) handleDeviceDecide(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Device, FP, Verdict string }
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, ok := s.requireOwnedConsole(w, r, body.Device)
+	ns, ok := s.requireDeviceConsole(w, r, body.Device)
 	if !ok {
 		return
 	}
@@ -1543,7 +1574,7 @@ func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeviceUntrust(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Device, FP string }
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, ok := s.requireOwnedConsole(w, r, body.Device)
+	ns, ok := s.requireDeviceConsole(w, r, body.Device)
 	if !ok {
 		return
 	}
@@ -1563,14 +1594,15 @@ func (s *Server) handleDeviceUntrust(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeviceRemove(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Device string }
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, shared, ok := s.requireDevice(w, r, body.Device)
+	access, ok := s.requireDevice(w, r, body.Device)
 	if !ok {
 		return
 	}
-	if shared {
+	if access.Shared {
 		http.Error(w, "只能解绑自己的设备", http.StatusForbidden)
 		return
 	}
+	ns := access.Owner
 	s.dropConn(ns, body.Device) // close any cached console session to it
 	s.forgetPin(ns, body.Device)
 	resp, err := s.adminReq("POST", "/admin/devices/remove", nil, map[string]string{"namespace": ns, "device": body.Device})
@@ -1601,14 +1633,15 @@ func (s *Server) handleDeviceAlias(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	ns, shared, ok := s.requireDevice(w, r, body.Device)
+	access, ok := s.requireDevice(w, r, body.Device)
 	if !ok {
 		return
 	}
-	if shared {
+	if access.Shared {
 		http.Error(w, "只能修改自己设备的别名", http.StatusForbidden)
 		return
 	}
+	ns := access.Owner
 	resp, err := s.adminReq("POST", "/admin/devices/alias", nil, map[string]string{
 		"namespace": ns,
 		"device":    body.Device,
@@ -1628,7 +1661,7 @@ func (s *Server) handleDeviceRules(w http.ResponseWriter, r *http.Request) {
 		Index                                 int
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, ok := s.requireOwnedConsole(w, r, body.Device)
+	ns, ok := s.requireDeviceConsole(w, r, body.Device)
 	if !ok {
 		return
 	}
@@ -1653,7 +1686,7 @@ func (s *Server) handleDeviceRules(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeviceMode(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Device, Mode string }
 	json.NewDecoder(r.Body).Decode(&body)
-	ns, ok := s.requireOwnedConsole(w, r, body.Device)
+	ns, ok := s.requireDeviceConsole(w, r, body.Device)
 	if !ok {
 		return
 	}
@@ -1674,7 +1707,7 @@ func (s *Server) handleDeviceMode(w http.ResponseWriter, r *http.Request) {
 // {"logs":[...]} for the SPA's activity timeline.
 func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request) {
 	device := r.URL.Query().Get("device")
-	ns, ok := s.requireOwnedConsole(w, r, device)
+	ns, ok := s.requireDeviceConsole(w, r, device)
 	if !ok {
 		return
 	}
@@ -1702,7 +1735,7 @@ const eventPollWait = 25 * time.Second
 
 func (s *Server) handleDeviceEvents(w http.ResponseWriter, r *http.Request) {
 	device := r.URL.Query().Get("device")
-	ns, ok := s.requireOwnedConsole(w, r, device)
+	ns, ok := s.requireDeviceConsole(w, r, device)
 	if !ok {
 		return
 	}

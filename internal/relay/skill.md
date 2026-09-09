@@ -75,9 +75,10 @@ wanctl id                                 # this controller's fingerprint
   written as `NS/DEVICE`. A bare name is looked up in your own namespace first
   and then among shared devices; if two owners use the same label, the dial is
   refused and the relay says so — use `NS/DEVICE`.
-  A shared device gives you what its owner has: exec, files and logs all work,
-  and the device's own mode, rules and approvals decide each request. Its
-  console and its bindings stay with the owner.
+  A shared device is used the way its owner uses it: exec, files and logs all
+  work, and the device's own mode, rules and approvals decide each request.
+  Managing it — approvals, rules, mode — needs the owner to have shared it with
+  `--manage`; its bindings and the owner's notification settings never transfer.
   New agents use persistent UUID device IDs, independent of names and aliases.
   Names and aliases may repeat: use the full ID whenever a label is ambiguous.
   Renaming does not change identity; a changed certificate still requires verification.

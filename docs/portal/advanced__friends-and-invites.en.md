@@ -48,14 +48,26 @@ across accounts starts with becoming friends:
 ## Sharing a device
 
 Once you are friends, the **Shared devices** page shares one of your devices
-with them. A share is not a reduced account: they get what you get on that
-device. They drive it with `wanctl exec --target your-namespace/your-device …`,
-and every request still goes through that device's own mode, rules and
-approvals — the ones you set. Leave the device on per-request approval and you
-answer for their commands too; put it in bypass and they are bypassed with you.
-Elevated commands are never covered by bypass, for them or for you.
+with them. A share is not a reduced account: they use the device the way you
+do. They drive it with `wanctl exec --target your-namespace/your-device …`, and
+every request still goes through that device's own mode, rules and approvals —
+the ones you set. Leave the device on per-request approval and you answer for
+their commands too; put it in bypass and they are bypassed with you. Elevated
+commands are never covered by bypass, for them or for you.
 
-Only two things stay yours alone: unbinding the device, and revoking the share.
+One switch separates using the device from running it. **Management** is off by
+default: without it a share can work on the device but not touch its approvals,
+rules or mode, and the device console stays yours. Turn it on when you want
+someone to answer approvals and change rules themselves — when sharing, or
+afterwards, without revoking:
+
+```
+wanctl share grant --device DEV --to NS --manage
+wanctl share manage --device DEV --to NS on|off
+```
+
+Unbinding the device, renaming it, revoking the share, and your notification
+settings are never shared, whichever way that switch is set.
 
 **Removing a friend cascades into revoking every share in both directions**,
 and they lose access immediately.

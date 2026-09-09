@@ -17,22 +17,29 @@ import (
 	"wanctl/internal/transport"
 )
 
-type grantACL struct{ id, perms string }
-
-func (p grantACL) ACLPerms(callerNS, targetNS, device string) (string, bool) {
-	return p.perms, callerNS == "shared" && targetNS == "owner" && device == p.id
+type grantACL struct {
+	id     string
+	manage bool
 }
 
-// A shared device gives its grantee what the owner has (ADR 0007). The value
-// stored in acl.perms is not read, so the same end-to-end assertions hold for a
-// grant written as "read" and one written as "exec". What still constrains the
-// grantee is the device: its mode and rules gate every request, and its
-// console stays with whoever the device trusts to administer it.
+func (p grantACL) ACLGrant(callerNS, targetNS, device string) (relay.Grant, bool) {
+	return relay.Grant{Manage: p.manage}, callerNS == "shared" && targetNS == "owner" && device == p.id
+}
+
+// A share gives its grantee the owner's *use* of the device: exec, files and
+// logs, over either transport, with the device's own mode and rules deciding
+// each request. Management -- the device's approvals, rules and mode -- is one
+// switch the owner sets per share, and it is the only thing that differs
+// between the two runs below. See ADR 0007.
 func TestSharedSessionHasTheOwnersCapabilities(t *testing.T) {
 	for _, transportName := range []string{"ws", "http"} {
-		for _, storedGrant := range []string{"read", "exec"} {
-			t.Run(transportName+"/"+storedGrant, func(t *testing.T) {
-				c, ctx := startCapabilityFixture(t, transportName, storedGrant)
+		for _, manage := range []bool{false, true} {
+			name := transportName + "/use-only"
+			if manage {
+				name = transportName + "/manage"
+			}
+			t.Run(name, func(t *testing.T) {
+				c, ctx := startCapabilityFixture(t, transportName, manage)
 
 				var stdout bytes.Buffer
 				code, err := c.ExecTo(ctx, ExecRequest{Target: "owner/home-pc", Command: "echo allowed", OneShot: true}, &stdout, &bytes.Buffer{})
@@ -52,8 +59,7 @@ func TestSharedSessionHasTheOwnersCapabilities(t *testing.T) {
 					t.Fatalf("pulled content = %q", got)
 				}
 
-				written := filepath.Join(t.TempDir(), "write.txt")
-				if err := c.PushBytes(ctx, "owner/home-pc", written, []byte("x"), 0o644); err != nil {
+				if err := c.PushBytes(ctx, "owner/home-pc", filepath.Join(t.TempDir(), "write.txt"), []byte("x"), 0o644); err != nil {
 					t.Fatalf("push: %v", err)
 				}
 
@@ -62,21 +68,29 @@ func TestSharedSessionHasTheOwnersCapabilities(t *testing.T) {
 					t.Fatalf("logs: %v", err)
 				}
 
-				// Console is not a capability the relay withholds any more. The
-				// device withholds it, from every controller that is not one of
-				// its console administrators - which is how approvals, rules and
-				// mode stay with the owner.
+				// Without the switch the relay withholds the console capability
+				// outright. With it, the session carries the capability and the
+				// device decides: this controller is not one of its console
+				// administrators, so it still says no. Two different refusals,
+				// and the difference is what the switch does.
 				_, err = c.OpenConsole(ctx, "owner/home-pc")
 				var rejected *RejectError
-				if !errors.As(err, &rejected) || !strings.Contains(rejected.Reason, "console administrator") {
-					t.Fatalf("console error = %v, want a device-side console-administrator refusal", err)
+				if !errors.As(err, &rejected) {
+					t.Fatalf("console error = %v, want a reject", err)
+				}
+				want := "session capability denied: console"
+				if manage {
+					want = "console administrator"
+				}
+				if !strings.Contains(rejected.Reason, want) {
+					t.Fatalf("console refusal = %q, want one mentioning %q", rejected.Reason, want)
 				}
 			})
 		}
 	}
 }
 
-func startCapabilityFixture(t *testing.T, transportName, grant string) (*Client, context.Context) {
+func startCapabilityFixture(t *testing.T, transportName string, manage bool) (*Client, context.Context) {
 	t.Helper()
 	r := relay.New(relay.EnvTokenStore("owner-token:owner,shared-token:shared"))
 	srv := httptest.NewServer(r.Handler())
@@ -98,7 +112,7 @@ func startCapabilityFixture(t *testing.T, transportName, grant string) (*Client,
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.SetACL(grantACL{id: ag.DeviceID(), perms: grant})
+	r.SetACL(grantACL{id: ag.DeviceID(), manage: manage})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	go ag.Run(ctx)

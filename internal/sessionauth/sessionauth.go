@@ -19,11 +19,17 @@ const (
 	Console
 )
 
-// FullCapabilities is what a session may carry. There is no smaller set for a
-// shared device: a grant gives its holder what the owner has, and the device's
-// own mode, rules and approvals are what actually decide each request. See
-// docs/adr/0007-shared-devices-inherit-owner-rights.md.
-const FullCapabilities = Exec | Read | Write | Logs | Console
+const (
+	// UseCapabilities is using the device: running commands, moving files,
+	// reading its log. Every session carries these, an owner's and a grantee's
+	// alike; the device's own mode, rules and approvals decide each request.
+	UseCapabilities = Exec | Read | Write | Logs
+	// FullCapabilities adds the device's control plane -- approvals, rules,
+	// mode. An owner always has it. A grantee has it only where the owner
+	// turned that share's single management switch on.
+	// See docs/adr/0007-shared-devices-inherit-owner-rights.md.
+	FullCapabilities = UseCapabilities | Console
+)
 
 var capabilityNames = []struct {
 	name string

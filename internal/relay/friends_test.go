@@ -310,14 +310,14 @@ func TestFriendRemoveWithoutRelationshipDoesNotTouchACL(t *testing.T) {
 func TestAddACLRequiresAcceptedFriendAndRejectsSelf(t *testing.T) {
 	state := &friendState{users: map[string]bool{"alice": true, "bob": true}}
 	store := newFriendTestStore(t, state)
-	if err := store.AddACL("alice", "dev", "bob"); !errors.Is(err, ErrNotFriends) {
+	if err := store.AddACL("alice", "dev", "bob", false); !errors.Is(err, ErrNotFriends) {
 		t.Fatalf("non-friend AddACL error = %v", err)
 	}
-	if err := store.AddACL("alice", "dev", "alice"); !errors.Is(err, ErrNotFriends) {
+	if err := store.AddACL("alice", "dev", "alice", false); !errors.Is(err, ErrNotFriends) {
 		t.Fatalf("self AddACL error = %v", err)
 	}
 	state.friend = &friendRecord{id: 1, requester: "alice", addressee: "bob", status: "accepted"}
-	if err := store.AddACL("alice", "dev", "bob"); err != nil {
+	if err := store.AddACL("alice", "dev", "bob", false); err != nil {
 		t.Fatal(err)
 	}
 	// The column keeps one value, so no caller can express a narrower grant.

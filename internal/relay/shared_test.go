@@ -14,6 +14,7 @@ import (
 type sharedTestDevice struct {
 	owner, id, label, alias string
 	grantee, perms          string
+	manage                  bool
 }
 
 type memSharedAdmin struct {
@@ -79,13 +80,13 @@ func (m *memSharedAdmin) SetDeviceAlias(string, string, string) (DeviceAlias, er
 	return DeviceAlias{}, ErrDeviceNotFound
 }
 
-func (m *memSharedAdmin) ACLPerms(caller, owner, device string) (string, bool) {
+func (m *memSharedAdmin) ACLGrant(caller, owner, device string) (Grant, bool) {
 	for _, d := range m.devices {
 		if d.owner == owner && d.id == device && d.grantee == caller && d.perms != "" {
-			return d.perms, true
+			return Grant{Manage: d.manage}, true
 		}
 	}
-	return "", false
+	return Grant{}, false
 }
 
 // The reported case: daily-ac shared bms-20558674 with waerjili123, whose token
@@ -300,5 +301,122 @@ func TestPGSharedPeersAndBareTargetResolutionAcrossGrants(t *testing.T) {
 	}
 	if _, _, _, ok := r.dialAllowedReason("waerjili123", "bms-20558674"); ok {
 		t.Fatal("a revoked grant still resolved a bare target")
+	}
+}
+
+// Migration 008 and the switch it adds, against a real PostgreSQL server: a
+// share starts unmanaged, the owner can turn management on without revoking,
+// and a revoked row stops counting either way.
+func TestPGACLManageSwitchRoundTrip(t *testing.T) {
+	db := deviceIDTestDB(t)
+	if err := runMigrations(db, migrationFiles); err != nil {
+		t.Fatal(err)
+	}
+	var isNullable, dflt string
+	err := db.QueryRow(`SELECT is_nullable, column_default FROM information_schema.columns
+	                     WHERE table_name='acl' AND column_name='manage'`).Scan(&isNullable, &dflt)
+	if err != nil || isNullable != "NO" || dflt != "false" {
+		t.Fatalf("acl.manage = nullable %q default %q, err %v", isNullable, dflt, err)
+	}
+
+	p := &PGStore{db: db}
+	const device = "8e894048-2222-4333-8444-555566667777"
+	if _, err := db.Exec(`INSERT INTO devices(owner_namespace,device_id,display_name,uses_device_id) VALUES ('daily-ac',$1,'bms',true)`, device); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO friends(requester_ns,addressee_ns,status,accepted_at) VALUES ('daily-ac','waerjili123','accepted',now())`); err != nil {
+		t.Fatal(err)
+	}
+
+	// A share is unmanaged unless it is asked for.
+	if _, err := p.GrantACL("daily-ac", device, "waerjili123", false); err != nil {
+		t.Fatal(err)
+	}
+	grant, ok := p.ACLGrant("waerjili123", "daily-ac", device)
+	if !ok || grant.Manage {
+		t.Fatalf("a new share = %+v, %v; want an unmanaged grant", grant, ok)
+	}
+
+	// The owner changes their mind without revoking, so the grantee does not
+	// have to pair with the device again.
+	changed, err := p.SetACLManage("daily-ac", device, "waerjili123", true)
+	if err != nil || !changed {
+		t.Fatalf("turning management on: changed=%v err=%v", changed, err)
+	}
+	if grant, ok := p.ACLGrant("waerjili123", "daily-ac", device); !ok || !grant.Manage {
+		t.Fatalf("after turning it on = %+v, %v", grant, ok)
+	}
+	if changed, err := p.SetACLManage("daily-ac", device, "waerjili123", false); err != nil || !changed {
+		t.Fatalf("turning management off: changed=%v err=%v", changed, err)
+	}
+	if grant, ok := p.ACLGrant("waerjili123", "daily-ac", device); !ok || grant.Manage {
+		t.Fatalf("after turning it off = %+v, %v", grant, ok)
+	}
+
+	// Someone else's namespace is not a share, and neither is a revoked one.
+	if changed, err := p.SetACLManage("daily-ac", device, "stranger", true); err != nil || changed {
+		t.Fatalf("flipped a share that does not exist: changed=%v err=%v", changed, err)
+	}
+	if _, err := db.Exec(`UPDATE acl SET revoked_at = now()`); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.ACLGrant("waerjili123", "daily-ac", device); ok {
+		t.Fatal("a revoked share still granted access")
+	}
+	if changed, err := p.SetACLManage("daily-ac", device, "waerjili123", true); err != nil || changed {
+		t.Fatalf("a revoked share was re-enabled by flipping the switch: changed=%v err=%v", changed, err)
+	}
+}
+
+// The listings the portal and the CLI read must carry the switch, or an owner
+// cannot see which of their shares can administer the device.
+func TestPGShareListingsCarryTheManagementSwitch(t *testing.T) {
+	db := deviceIDTestDB(t)
+	if err := runMigrations(db, migrationFiles); err != nil {
+		t.Fatal(err)
+	}
+	p := &PGStore{db: db}
+	if _, err := db.Exec(`INSERT INTO devices(owner_namespace,device_id,display_name,uses_device_id) VALUES ('alice','dev-a','a',true),('alice','dev-b','b',true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO friends(requester_ns,addressee_ns,status,accepted_at) VALUES ('alice','bob','accepted',now())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.GrantACL("alice", "dev-a", "bob", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.GrantACL("alice", "dev-b", "bob", false); err != nil {
+		t.Fatal(err)
+	}
+
+	given, err := p.ListACL("alice")
+	if err != nil || len(given) != 2 {
+		t.Fatalf("owner listing = %+v %v", given, err)
+	}
+	for _, row := range given {
+		want := row["device"] == "dev-a"
+		if row["manage"] != want {
+			t.Fatalf("owner listing row %+v: manage should be %v", row, want)
+		}
+	}
+
+	received, err := p.ListReceivedACL("bob")
+	if err != nil || len(received) != 2 {
+		t.Fatalf("grantee listing = %+v %v", received, err)
+	}
+	for _, share := range received {
+		if share.Manage != (share.Device == "dev-a") {
+			t.Fatalf("grantee listing %+v carries the wrong switch", share)
+		}
+	}
+
+	devices, err := p.ListDevices("bob")
+	if err != nil || len(devices) != 2 {
+		t.Fatalf("grantee device list = %+v %v", devices, err)
+	}
+	for _, row := range devices {
+		if row["manage"] != (row["name"] == "dev-a") {
+			t.Fatalf("device row %+v carries the wrong switch", row)
+		}
 	}
 }
