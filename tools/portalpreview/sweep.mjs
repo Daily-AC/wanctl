@@ -73,6 +73,11 @@ const STATES = [
   { id: 'dev-trust-long', q: `&view=device/${enc(DEV_LONG)}`, open: `document.querySelector('.tab[data-tab="trust"]').click()` },
   { id: 'dev-log', q: '&view=device/bench-02', open: `document.querySelector('.tab[data-tab="log"]').click()` },
   { id: 'dev-shared', q: '&view=device/slate' },
+  // 共享设备的两种样子。只能用的那台是一句话加一条横幅；能管的那台整屏都在，
+  // 和自己的设备一模一样 —— 两张都得量，因为它们的排版根本不是同一屏。
+  { id: 'dev-shared-manage', q: '&view=device/quarry' },
+  { id: 'dev-shared-manage-trust', q: '&view=device/quarry',
+    open: `document.querySelector('.tab[data-tab="trust"]').click()` },
   { id: 'dev-offline', q: '&view=device/orchard' },
   { id: 'dev-bypass', q: '&view=device/kestrel' },
   { id: 'devset', q: '&view=device/bench-02/settings' },
@@ -106,6 +111,8 @@ const STATES = [
     open: `document.querySelector('.tab[data-tab="trust"]').click();await new Promise(r=>setTimeout(r,300));document.querySelector('#trusted .act').click()` },
   { id: 'ask-clear-notify', q: '&view=settings/notify', open: `document.querySelector('#nDelete').click()` },
   { id: 'ask-revoke-invite', q: '&view=settings/invites', open: `document.querySelector('#invites .act').click()` },
+  // 把管理权交出去要问一句，而这句话在窄屏上最长 —— 它得跟着每个视口量。
+  { id: 'ask-acl-manage', q: '&view=settings/acl', open: `document.querySelector('#acl tr .sw').click()` },
   { id: 'ask-remove-friend', q: '&view=settings/friends',
     open: `[...document.querySelectorAll('#friends .act')].filter(b=>b.classList.contains('danger'))[0].click()` },
   { id: 'form-rule', q: '&view=device/bench-02',

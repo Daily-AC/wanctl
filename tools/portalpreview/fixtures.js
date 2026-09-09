@@ -56,7 +56,10 @@
     { name: 'kestrel', alias: '', fingerprint: 'SHA256:h0RDd+bD2hACHcciN6gURa+hq8s2HvrGVHYtuq8/WwS=', online: true, last_seen: ago(31) },
     { name: 'mill-01', alias: '', fingerprint: 'SHA256:MuNP5qNocP+eOX8Mrk4WsY2w75moRVPREKo9OKcf2QM=', online: false, last_seen: ago(7 * 3600) },
     { name: 'orchard', alias: '', fingerprint: 'SHA256:6ZcygFUIXuJXcOnbOLUCnvv2JwanktR0hjN+GiUSt7B=', online: false, last_seen: ago(4 * 86400) },
-    { name: 'slate', alias: '', fingerprint: 'SHA256:OR0q3ilFsfmwBgQ7u5z1ejTTiVb5OPLm1n3Y8QzhQib=', online: true, last_seen: ago(12), shared: true, owner: 'rowan', perms: 'exec,read' }
+    { name: 'slate', alias: '', fingerprint: 'SHA256:OR0q3ilFsfmwBgQ7u5z1ejTTiVb5OPLm1n3Y8QzhQib=', online: true, last_seen: ago(12), shared: true, owner: 'rowan', manage: false },
+    // 同样是共享来的，但这一份授权带着 manage：控制面归你，属主的东西不归。
+    // 两台一起摆着，是因为「能管」和「只能用」在屏幕上必须一眼分得开。
+    { name: 'quarry', alias: '', fingerprint: 'SHA256:Yb2NpQ8sMxKe5Wj1TrLvA7ZcHnFo3DiU6gPqRtEwSaM=', online: true, last_seen: ago(20), shared: true, owner: 'rowan', manage: true }
   ];
 
   var waiting = [
@@ -118,6 +121,16 @@
     },
     'slate': {
       mode: 'normal', pending: [], pending_pairings: [], rules: [], trusted: []
+    },
+    // 能管的那台共享设备。它得有东西可管 —— 一条待审批、一条待信任、一条规则、
+    // 一个已信任的控制端 —— 否则「管理权到手了」这一屏和「只能用」那一屏在
+    // 截图上长得一样，看不出差别的状态等于没摆出来。
+    'quarry': {
+      mode: 'normal',
+      pending: [{ id: 77, peer: 'rowan-laptop', cmd: 'rsync -a /data/quarry/ /backup/quarry/', cwd: '/data/quarry', created: ago(18) }],
+      pending_pairings: [{ fp: 'SHA256:Lq7WdEr2ZmXc4Nv8TbKiA1YpHs6UoJf3RgQeSxCwPaB=', name: 'rowan-phone', label: 'wanctl on rowan-phone', created: ago(40) }],
+      rules: [{ kind: 'read', pattern: '/data/quarry/**', scope: 'global' }],
+      trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(9) }]
     }
   };
 
@@ -151,7 +164,12 @@
         { id: 1, label: 'old laptop', created_at: ago(120 * 86400), expires_at: null, revoked_at: ago(30 * 86400) }
       ]
     },
-    '/api/acl': { acl: [{ id: 2, device: 'bench-02', grantee: 'rowan', perms: 'exec,read' }] },
+    // 两行，因为「可管理」这一列有两种状态，只摆一种就看不出开关长什么样。
+    // perms 仍然回 full：中继照旧接受这个字段并忽略它（ADR 0007）。
+    '/api/acl': { acl: [
+      { id: 2, device: 'bench-02', grantee: 'rowan', perms: 'full', manage: false },
+      { id: 5, device: 'DESKTOP-RQFV0SH-workstation-long', grantee: 'juniper', perms: 'full', manage: true }
+    ] },
     '/api/friends': {
       friends: [
         { namespace: 'rowan', status: 'accepted', since: ago(60 * 86400) },
@@ -233,6 +251,7 @@
     // POST-only endpoints still need an entry here: match() returning undefined
     // is what produces the preview's 404, before the write branch is reached.
     if (p === '/api/devices/remove' || p === '/api/devices/adb-pair') return {};
+    if (p === '/api/acl/manage') return {};
     if (p === '/api/devices/alias') return {};
     if (p === '/api/devices/mode') return {};
     return db[p];
@@ -288,6 +307,15 @@
       if (url.indexOf('/api/devices/mode') === 0) {
         var mw = JSON.parse((opts && opts.body) || '{}');
         if (consoles[mw.device]) consoles[mw.device].mode = mw.mode;
+      }
+      // 形状照抄 /admin/acl/manage 的回包，而且真的把这一笔记下来 ——
+      // 不记的话开关会在一次成功的切换之后自己弹回原样，那是工装在撒谎。
+      if (url.indexOf('/api/acl/manage') === 0) {
+        var mw = JSON.parse((opts && opts.body) || '{}');
+        (db['/api/acl'].acl || []).forEach(function (row) {
+          if (row.device === mw.device && row.grantee === mw.grantee) row.manage = mw.manage === true;
+        });
+        out = { device: mw.device, grantee: mw.grantee, manage: mw.manage === true };
       }
       if (url.indexOf('/api/tokens') === 0) out = { token: 'wanctl_9fQ2mXbLpR7tZv4NcKwJaHe1UgSoD5iM3xNrTqCEy' };
       if (url.indexOf('/api/invites') === 0) out = { code: 'winv_4TmQb9RvNc7WpLd2FjKa5Y' };

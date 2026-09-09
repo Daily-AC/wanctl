@@ -55,6 +55,9 @@
       idAcceptM: 'Run wanctl on that machine and check the fingerprint it prints matches the new one here, then confirm.',
       roConsole: 'Only the owner can answer this.',
       roBanner: function (o) { return 'Shared with you by ' + o + '. Approvals and activity belong to the owner; use the CLI or MCP for what you were granted.'; },
+      // 能管的那一台。第一句先说清这是谁的机器 —— 底下这一屏和自己的设备
+      // 一模一样，不说的话你会以为在管自己的。
+      manageBanner: function (o) { return "You are managing " + o + "'s device. Approvals, trust, rules and mode here are the same ones the owner sees, and apply to everyone using it. Only " + o + ' can rename or unbind it.'; },
       roGuard: 'Shared device, read-only. Ask the owner.',
       allowed: 'Allowed', refused: 'Refused',
       trusted: 'Trusted', refusedPair: 'Refused',
@@ -66,6 +69,12 @@
       noInvites: 'No invites yet.',
       noFriends: 'No friends yet.',
       noACL: 'Nothing shared yet.',
+      aclManage: 'Manage',
+      aclManageField: 'Let them manage this device',
+      aclManageHint: 'Approvals, trusted controllers, rules and mode. Off by default — sharing gives them the use of the device, not a say over it.',
+      aclManageOnT: 'Hand over management?',
+      aclManageOnM: function (d, g) { return g + ' will answer approvals on ' + d + ', trust and revoke controllers, edit its rules and change its mode. Those are the same ones you see, and they apply to everyone using the device. You can turn this off again at any time.'; },
+      aclManageOnYes: 'Hand over',
       noAudit: 'No relay events yet.',
       addRule: 'Add a rule', ruleKind: 'Kind', rulePattern: 'Command or directory',
       rulePlaceholder: 'echo *   or   /data',
@@ -161,6 +170,9 @@
       idAcceptM: '先到那台机器上跑一次 wanctl，核对它打印的指纹跟这里的新指纹一致，再确认。',
       roConsole: '只有设备主人能回答。',
       roBanner: function (o) { return o + ' 把这台设备共享给你。审批和活动属于设备主人；你被授予的操作请直接用 CLI 或 MCP。'; },
+      // 能管的那一台。第一句先说清这是谁的机器 —— 底下这一屏和自己的设备
+      // 一模一样，不说的话你会以为在管自己的。
+      manageBanner: function (o) { return '你正在管理 ' + o + ' 的设备。这里的审批、信任、规则和模式就是设备主人看到的那一套，对所有使用者一起生效。改名和解绑仍然只有 ' + o + ' 能做。'; },
       roGuard: '共享设备只读，请联系设备主人。',
       allowed: '已允许', refused: '已拒绝',
       trusted: '已信任', refusedPair: '已拒绝',
@@ -172,6 +184,12 @@
       noInvites: '还没有邀请。',
       noFriends: '还没有好友。',
       noACL: '还没有共享授权。',
+      aclManage: '可管理',
+      aclManageField: '让对方管理这台设备',
+      aclManageHint: '审批、信任的控制端、规则和模式。默认关闭 —— 共享给出去的是这台机器的使用权，不是它的话事权。',
+      aclManageOnT: '把管理权交出去？',
+      aclManageOnM: function (d, g) { return g + ' 将可以回答 ' + d + ' 上的审批、信任和撤销控制端、改它的规则、切它的模式。这些就是你自己看到的那一套，对所有使用者一起生效。随时可以再关掉。'; },
+      aclManageOnYes: '交出管理权',
       noAudit: '还没有中继事件。',
       addRule: '加一条规则', ruleKind: '类型', rulePattern: '命令或目录',
       rulePlaceholder: 'echo *   或   /data',
@@ -429,6 +447,13 @@
       $('#formT').textContent = title;
       $('#formYes').textContent = okLabel;
       $('#formF').innerHTML = fields.map(function (f) {
+        // 勾选项自己带标签（.check 把方框和字排成一行），所以它不套 .field 的
+        // 「标签在上、控件在下」那一层 —— 那样会把一句话拆成两行读。
+        if (f.check) {
+          return '<label class="check"><input type="checkbox" data-k="' + f.key + '"' +
+            (f.value ? ' checked' : '') + '><span>' + esc(f.label) + '</span></label>' +
+            (f.hint ? '<p class="tcap">' + esc(f.hint) + '</p>' : '');
+        }
         var input = f.options
           ? '<select data-k="' + f.key + '">' + f.options.map(function (o) {
               return '<option value="' + esc(typeof o === 'string' ? o : o.value) + '">' + esc(typeof o === 'string' ? o : o.label) + '</option>';
@@ -447,7 +472,9 @@
       }
       $('#formYes').onclick = function () {
         var v = {};
-        $$('[data-k]', $('#formF')).forEach(function (el) { v[el.dataset.k] = ('' + el.value).trim(); });
+        $$('[data-k]', $('#formF')).forEach(function (el) {
+          v[el.dataset.k] = el.type === 'checkbox' ? el.checked : ('' + el.value).trim();
+        });
         done(v);
       };
       $('#formNo').onclick = function () { done(null); };
@@ -529,7 +556,7 @@
   }
 
   function decide(dev, id, v, el) {
-    if (roGuard(dev)) return;
+    if (adminGuard(dev)) return;
     jpost('/api/devices/decide', { device: dev, id: id, verdict: v }).then(function () {
       if (el) el.classList.add('gone');
       toast(v === 'n' ? t().refused : t().allowed, v === 'n');
@@ -537,7 +564,7 @@
     }).catch(oops);
   }
   function pairDecide(dev, fp, v, el) {
-    if (roGuard(dev)) return;
+    if (adminGuard(dev)) return;
     jpost('/api/devices/pair', { device: dev, fp: fp, verdict: v }).then(function () {
       if (el) el.classList.add('gone');
       toast(v === 'n' ? t().refusedPair : t().trusted, v === 'n');
@@ -554,7 +581,10 @@
   }, 1000);
 
   /* ── 设备 ────────────────────────────────────────────────────────── */
-  var devMeta = {};   // name -> {shared, owner}；自有设备优先（与后端 requireDevice 一致）
+  // name -> {shared, owner, manage}；自有设备优先（与后端 requireDevice 一致）。
+  // manage 只对共享设备有意义：使用权是无条件继承的，而「能不能管这台机器」
+  // （审批、信任与规则、模式）是每一份共享授权上的一个开关，默认关。
+  var devMeta = {};
   var devices = [];
   var me = null;
 
@@ -571,6 +601,25 @@
   }
   function realHTML(d) { return d.real ? '<span class="real">' + esc(d.real) + '</span>' : ''; }
 
+  // 这台机器的控制面 —— 审批、配对、信任与规则、模式、活动 —— 归谁。
+  // 自己的设备当然归自己；共享来的设备只有在那份授权带着 manage 时才归你。
+  // 与后端 requireConsoleAdmin 同一个判据，前端只是别把点不动的按钮画出来。
+  function mayAdminister(dev) {
+    var m = devMeta[dev];
+    if (!m) return false;
+    return !m.shared || m.manage === true;
+  }
+
+  // 控制面动作的门。挡住的是「这台设备的主人没把管理权给你」。
+  function adminGuard(dev) {
+    if (mayAdminister(dev)) return false;
+    toast(t().roGuard, true);
+    return true;
+  }
+
+  // 属主动作的门。别名、解绑、飞书、通知、ADB 配对是设备主人的东西，
+  // 不是这台机器的控制面 —— 拿到 manage 也够不着它们（后端 requireOwnedConsole
+  // 同样拦着）。所以这一道只看「是不是你的设备」，不看 manage。
   function roGuard(dev) {
     var m = devMeta[dev];
     if (m && m.shared) { toast(t().roGuard, true); return true; }
@@ -582,7 +631,9 @@
     devMeta = {};
     devices.forEach(function (x) {
       var sh = x.shared === true;
-      if (!(x.name in devMeta) || !sh) devMeta[x.name] = { shared: sh, owner: x.owner || '' };
+      if (!(x.name in devMeta) || !sh) {
+        devMeta[x.name] = { shared: sh, owner: x.owner || '', manage: x.manage === true };
+      }
     });
   }
 
@@ -642,9 +693,21 @@
       // The device screen is then already up, drawn from an empty list — and an
       // alias field showing "" for a device that has one would wipe that alias
       // on the next Save.
+      //
+      // 名字和别名以前是这里唯一补的两样，可那一刻空着的不止它们：devMeta 空
+      // 着，于是一台共享设备被当成自己的画完 —— 齿轮在、模式能点、横幅没有、
+      // 指纹空着，而且再也不会自己好（issue #48）。门禁整套重算一遍，
+      // 该开的控制台补开，该只读的补上那句话。
       if (cur) {
         paintDeviceName(cur);
         $('#dsAliasIn').value = aliasOf(cur);
+        if (applyDeviceGating(cur)) {
+          startConsole(cur);
+        } else {
+          showReadOnlyConsole();
+          // 清单迟到时这一屏可能停在待审批上，而那一页刚刚被藏起来了。
+          if ($('.tab[data-tab="asks"]').classList.contains('on')) selTab('log');
+        }
       }
     }).catch(function (e) {
       if (version !== deviceListVersion) return;
@@ -665,7 +728,7 @@
       waitCount = {};
       items.forEach(function (i) { waitCount[i.device] = (waitCount[i.device] || 0) + 1; });
       $('#asks').innerHTML = items.map(function (i) {
-        var ro = (devMeta[i.device] || {}).shared;
+        var ro = !mayAdminister(i.device);
         return i.fp ? pairCard(i, i.device, ro) : askCard(i, i.device, ro);
       }).join('');
       bindAsks($('#asks'));
@@ -686,32 +749,71 @@
     $('#dReal').hidden = !d.real;
   }
 
-  function openDevice(name) {
-    cur = name;
-    paintDeviceName(name);
+  // 这一屏上「你是谁」决定的每一处，都在这里，一次算完。
+  // 它要能跑两遍：设备页可能在设备清单到达之前就画完了（见 loadDevices），
+  // 而这些结论一条都不能停在「清单还没到」那一刻的样子 —— 那一刻 devMeta 是
+  // 空的，于是共享设备看起来像自己的：齿轮在、模式能点、横幅没有、指纹空着。
+  function applyDeviceGating(name) {
     var m = devMeta[name] || {};
+    var admin = mayAdminister(name);
+    // 横幅在每一台共享设备上都出现，但说的不是同一件事：能管的那台要先说清
+    // 你在管**谁**的机器，因为接下来这一屏和自己的设备长得一模一样。
     $('#dShared').hidden = !m.shared;
-    if (m.shared) $('#dShared').textContent = t().roBanner(m.owner || '—');
+    if (m.shared) {
+      $('#dShared').textContent = (admin ? t().manageBanner : t().roBanner)(m.owner || '—');
+    }
+    // 齿轮后面那一屏整页都是设备主人的东西（别名、飞书、通知、ADB、解绑），
+    // manage 一条也够不着，所以共享设备上它照旧不出现 —— 少一屏点不动的开关。
     $('#dGear').hidden = !!m.shared;
-    $('#dMode').disabled = !!m.shared;
+    $('#dMode').disabled = !admin;
+    // 待审批和信任与规则是「改这台机器」，跟着 manage 走。活动是「这台机器
+    // 做过什么」，那是使用权的一部分：CLI 上的 wanctl logs 每个被授权方本来
+    // 就有，同一份日志在门户里反而看不到，就又变成两套说法（ADR 0007）。
+    // 点不动的两页直接不摆出来，而不是摆出来再说一句「你不能」。
+    $$('.tab[data-tab="asks"],.tab[data-tab="trust"]').forEach(function (b) { b.hidden = !admin; });
     var d = devRow(name);
     $('#dFp').textContent = d ? (d.fingerprint || '') : '';
+    return admin;
+  }
+
+  // 控制台只开一次。清单迟到时 applyDeviceGating 会重跑，那一遍不该把已经
+  // 在轮询的连接再开一条。
+  var consoleFor = null;
+  function startConsole(name) {
+    if (consoleFor === name) return;
+    consoleFor = name;
+    $('#dAsks').innerHTML = '';
+    $('#dBlank').hidden = false;
+    $('#dBlank').textContent = t().loading;
+    renderConsole();
+    // 设置只在自己的设备上加载：那一屏归设备主人，而且拉它会去要飞书和通知
+    // 两个属主端点，后端对共享设备一律 403。
+    if (!(devMeta[name] || {}).shared) loadDeviceSettings(name);
+    poll(name);
+  }
+  function showReadOnlyConsole() {
+    $('#dAsks').innerHTML = '';
+    $('#dBlank').hidden = false;
+    $('#dBlank').textContent = t().roConsole;
+  }
+
+  function openDevice(name) {
+    cur = name;
+    consoleFor = null;
+    paintDeviceName(name);
+    var admin = applyDeviceGating(name);
     showView('device');
-    selTab('asks');
+    // 只有使用权时第一眼就是活动 —— 那是这一屏上唯一有内容的一页。
+    selTab(admin ? 'asks' : 'log');
     var h = '#device/' + encodeURIComponent(name);
     // 设置页是这台设备的子路由。以前这里无条件改写地址，于是直接打开
     // #device/X/settings 会被换成 #device/X —— 页面对了，地址错了，
     // 刷新或后退就掉回设备页，收藏和分享出去的链接也不再指向同一屏。
     if (location.hash !== h && location.hash !== h + '/settings') history.pushState(null, '', h);
-    if (m.shared) { $('#dAsks').innerHTML = ''; $('#dBlank').hidden = false; $('#dBlank').textContent = t().roConsole; return; }
-    $('#dAsks').innerHTML = '';
-    $('#dBlank').hidden = false;
-    $('#dBlank').textContent = t().loading;
-    renderConsole();
-    loadDeviceSettings(name);
-    poll(name);
+    if (!admin) { showReadOnlyConsole(); return; }
+    startConsole(name);
   }
-  function closeDevice() { pollGen++; cur = null; }
+  function closeDevice() { pollGen++; cur = null; consoleFor = null; }
 
   /* 长轮询快照，而不是依赖异步推送 —— 推送穿不过中继那一跳的 HTTP 长轮询。
      换设备或离开时用世代号停掉旧循环。 */
@@ -752,7 +854,7 @@
   function applyState(st) {
     if (!st || !st.mode) return;
     lastState = st;
-    $('#dsAdb').hidden = !(st.info && st.info.adb_pair) || !!(devMeta[cur] || {}).shared;
+    $('#dsAdb').hidden = !(st.info && st.info.adb_pair) || !!(devMeta[cur] || {}).shared;   // 属主专属，与 manage 无关
     curMode = st.mode;
     setModeUI(st.mode);
 
@@ -760,7 +862,7 @@
     var total = pend.length + pairs.length;
     $('#nWait').hidden = !total;
     $('#nWait').textContent = total;
-    var ro = (devMeta[cur] || {}).shared;
+    var ro = !mayAdminister(cur);
     $('#dAsks').innerHTML =
       pairs.map(function (p) { return pairCard(p, cur, ro, true); }).join('') +
       pend.map(function (p) { return askCard(p, cur, ro, true); }).join('');
@@ -777,7 +879,7 @@
     relabel();
     $$('#rules .act').forEach(function (b) {
       b.onclick = function () {
-        if (roGuard(cur)) return;
+        if (adminGuard(cur)) return;
         jpost('/api/devices/rules', { device: cur, op: 'rm', index: +b.dataset.i })
           .then(renderConsole).catch(oops);
       };
@@ -799,7 +901,7 @@
     relabel();
     $$('#trusted .act').forEach(function (b) {
       b.onclick = function () {
-        if (roGuard(cur)) return;
+        if (adminGuard(cur)) return;
         confirmBox(t().revokeTrustT, t().revokeTrustM, t().revoke).then(function (ok) {
           if (!ok) return;
           jpost('/api/devices/untrust', { device: cur, fp: b.dataset.fp })
@@ -810,7 +912,7 @@
   }
 
   function renderIdentityChanged(d) {
-    var ro = (devMeta[cur] || {}).shared;
+    var ro = !mayAdminister(cur);
     $('#dBlank').hidden = true;
     $('#dAsks').innerHTML = '<div class="ask">' +
       '<div class="head"><span class="host no">' + esc(t().idChanged) + '</span></div>' +
@@ -890,7 +992,7 @@
     modeMenu(false);
     modeBtn.focus();
     if (next === curMode) return;
-    if (roGuard(cur)) return;
+    if (adminGuard(cur)) return;
     var apply = function () {
       jpost('/api/devices/mode', { device: cur, mode: next }).then(renderConsole).catch(function (e) {
         setModeUI(curMode); oops(e);
@@ -938,7 +1040,7 @@
   });
 
   $('#rAdd').onclick = function () {
-    if (roGuard(cur)) return;
+    if (adminGuard(cur)) return;
     formBox(t().addRule, t().addRule, [
       { key: 'kind', label: t().ruleKind, options: ['exec', 'read', 'write'] },
       { key: 'pattern', label: t().rulePattern, hint: t().rulePlaceholder }
@@ -1365,14 +1467,34 @@
     jget('/api/acl').then(function (d) {
       var xs = d.acl || [];
       $('#acl').innerHTML = xs.length ? xs.map(function (a) {
+        // 权限那一列没了：每一份共享带的都是同一套（ADR 0007）。真正因人而异
+        // 的只剩这一个开关，它接上去。
         return '<tr><td>' + esc(devName(a.device).label) + realHTML(devName(a.device)) + '</td><td>' + esc(a.grantee) + '</td>' +
-          '<td class="mono">' + esc(a.perms) + '</td>' +
+          '<td><button class="sw' + (a.manage ? ' on' : '') + '" data-mg="' + a.id + '"' +
+            ' data-dev="' + esc(a.device) + '" data-to="' + esc(a.grantee) + '"' +
+            ' aria-pressed="' + (a.manage ? 'true' : 'false') + '"' +
+            ' aria-label="' + esc(t().aclManage) + '"></button></td>' +
           '<td><button class="act danger" data-i="' + a.id + '">' + esc(t().revoke) + '</button></td></tr>';
       }).join('') : '<tr><td colspan="4" class="tempty">' + esc(t().noACL) + '</td></tr>';
       relabel();
       $$('#acl .act').forEach(function (b) {
         b.onclick = function () {
           jpost('/api/acl/revoke', { id: Number(b.dataset.i) }).then(loadACL).catch(oops);
+        };
+      });
+      // 开这个开关等于把这台机器的审批、信任、规则和模式交出去，所以它问一句。
+      // 关掉不问：收回权限不需要拦一道，拦了反而让人犹豫该不该收。
+      $$('#acl .sw').forEach(function (b) {
+        b.onclick = function () {
+          var on = !b.classList.contains('on');
+          var dev = b.dataset.dev, to = b.dataset.to;
+          var go = function () {
+            jpost('/api/acl/manage', { device: dev, grantee: to, manage: on })
+              .then(loadACL).catch(oops);
+          };
+          if (!on) return go();
+          confirmBox(t().aclManageOnT, t().aclManageOnM(devName(dev).label, to), t().aclManageOnYes)
+            .then(function (ok) { if (ok) go(); });
         };
       });
     }).catch(oops);
@@ -1388,11 +1510,13 @@
       return formBox(t().shareDevice, t().share, [
         { key: 'device', label: t().shareDevice, options: own },
         { key: 'grantee', label: t().shareGrantee, options: nss },
-        { key: 'perms', label: t().sharePerms, options: ['exec', 'read', 'exec,read', 'exec,read,write'] }
+        // 默认关。共享出去的是使用权，把这台机器的审批和规则也交出去是另一件事，
+        // 得有人明确点一下才算数。
+        { key: 'manage', label: t().aclManageField, hint: t().aclManageHint, check: true }
       ]);
     }).then(function (v) {
       if (!v || !v.device || !v.grantee) return;
-      jpost('/api/acl', { device: v.device, grantee: v.grantee, perms: v.perms || 'exec' })
+      jpost('/api/acl', { device: v.device, grantee: v.grantee, manage: v.manage === true })
         .then(loadACL).catch(oops);
     }).catch(oops);
   };

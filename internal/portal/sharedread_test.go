@@ -8,10 +8,15 @@ import (
 )
 
 // A share that the owner did not mark manageable gives its grantee the device
-// but not its control plane: no console, no approval events, no activity log
-// in the portal. The portal dials with a privileged token, so it has to apply
-// the rule itself rather than rely on the session's capabilities (audit
-// 2026-08-28, SEC-B-01, restated for ADR 0007's single switch).
+// but not its control plane: no console state, no approval queue, no rules or
+// mode. The portal dials with a privileged token, so it has to apply the rule
+// itself rather than rely on the session's capabilities (audit 2026-08-28,
+// SEC-B-01, restated for ADR 0007's single switch).
+//
+// The approval event stream and the activity log are deliberately not in this
+// list. They are reads of what the device did, which every grantee already has
+// through `wanctl logs`; gating them here would allow in one client what it
+// refuses in the other. They have their own case below.
 func TestSharedDeviceConsoleNeedsTheManagementSwitch(t *testing.T) {
 	relayHits := 0
 	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
@@ -29,8 +34,6 @@ func TestSharedDeviceConsoleNeedsTheManagementSwitch(t *testing.T) {
 	})
 	routes := map[string]http.HandlerFunc{
 		"/api/devices/console": s.handleDeviceConsole,
-		"/api/devices/logs":    s.handleDeviceLogs,
-		"/api/devices/events":  s.handleDeviceEvents,
 		"/api/devices/lark":    s.handleDeviceLark,
 		"/api/devices/notify":  s.handleDeviceNotify,
 	}
@@ -45,6 +48,40 @@ func TestSharedDeviceConsoleNeedsTheManagementSwitch(t *testing.T) {
 	}
 	if relayHits != 0 {
 		t.Fatalf("a refused shared-device read reached the relay %d times; nothing beyond the device list may be fetched", relayHits)
+	}
+}
+
+// The other half of that decision. A grantee sees what the device did whether
+// or not the owner handed over management, because that is a use-right and
+// ADR 0007 makes use-rights unconditional. The assertion is only that the gate
+// lets the request through: with no relay wired the handler then fails at the
+// dial, which is a 502 and not a refusal.
+func TestActivityAndEventsComeWithTheShareNotTheSwitch(t *testing.T) {
+	for _, manage := range []bool{false, true} {
+		s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/admin/resolve-user":
+				json.NewEncoder(w).Encode(map[string]string{"namespace": "bob"})
+			case "/admin/devices":
+				json.NewEncoder(w).Encode(map[string]any{"devices": []map[string]any{{
+					"name": "devbox", "owner": "alice", "shared": true, "perms": "full", "manage": manage,
+				}}})
+			default:
+				w.WriteHeader(http.StatusOK)
+			}
+		})
+		for path, h := range map[string]http.HandlerFunc{
+			"/api/devices/logs":   s.handleDeviceLogs,
+			"/api/devices/events": s.handleDeviceEvents,
+		} {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", path+"?device=devbox", nil)
+			req.Header.Set("X-User", "bob@example.com")
+			h(rec, req)
+			if rec.Code == http.StatusForbidden {
+				t.Errorf("%s with manage=%v: refused; the activity log comes with the share, not the switch", path, manage)
+			}
+		}
 	}
 }
 
