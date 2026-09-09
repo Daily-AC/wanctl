@@ -203,7 +203,7 @@ on any platform:
 curl -fsSL https://github.com/Daily-AC/wanctl/releases/latest/download/install.sh | sh
 wanctl config set relay=@WANCTL_RELAY@ portal=<the portal URL — ask the user>
 wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
-wanctl                          # then run this on that machine — opens the
+wanctl start                    # then run this on that machine — opens the
                                 # browser for the portal login, takes a code,
                                 # and starts the agent in the background.
 ```
@@ -213,7 +213,7 @@ wanctl                          # then run this on that machine — opens the
 irm https://github.com/Daily-AC/wanctl/releases/latest/download/install.ps1 | iex
 wanctl config set relay=@WANCTL_RELAY@ portal=<the portal URL — ask the user>
 wanctl portal-admins add --fingerprints SHA256:<independently-verified-portal-fingerprint>
-wanctl                          # same flow: browser → portal login → agent runs.
+wanctl start                    # same flow: browser → portal login → agent runs.
 ```
 
 The release page is independent of the relay, so the installer can vouch for

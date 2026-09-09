@@ -104,7 +104,7 @@ func cmdUpdate(ctx context.Context, args []string) error {
 	reportPATHShadow(self)
 	if plan.restartDetached {
 		fmt.Println("正在重启后台 agent …")
-		if err := cmdStart(); err != nil {
+		if err := cmdStart(ctx); err != nil {
 			return fmt.Errorf("restart daemon: %w", err)
 		}
 	} else if plan.restartManagedPID > 0 {
@@ -294,7 +294,7 @@ func splitUpdateViaSudo(ctx context.Context, self string) error {
 
 	if plan.restartDetached {
 		fmt.Println("正在重启后台 agent …")
-		if err := cmdStart(); err != nil {
+		if err := cmdStart(ctx); err != nil {
 			return fmt.Errorf("restart daemon: %w", err)
 		}
 	} else if plan.restartManagedPID > 0 {

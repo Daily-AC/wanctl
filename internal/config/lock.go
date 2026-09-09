@@ -52,18 +52,31 @@ func IsAgentLockHeld(err error) bool {
 // holds the lock. A pid of 0 with running true means an agent holds the lock
 // but recorded no pid: callers may report it, but have nothing to signal.
 func AgentRunning() (pid int, running bool) {
-	lock, err := AcquireAgentLock()
-	if err == nil {
-		lock.Close()
+	path, err := fileIn("agent.lock")
+	if err != nil {
+		return 0, false
+	}
+	// Deliberately opened without O_CREATE. Asking whether an agent runs must
+	// not create the file that records that one ever did, so `wanctl` and
+	// `wanctl status` leave an untouched config dir exactly as they found it.
+	// No lock file also answers the question: nothing has ever locked here.
+	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
 		return ReadPID(), false
 	}
-	if IsAgentLockHeld(err) {
-		return ReadPID(), true
+	defer f.Close()
+	if err := lockAgentFile(f); err != nil {
+		if IsAgentLockHeld(err) {
+			return ReadPID(), true
+		}
+		// The lock could not be evaluated at all (permissions, a filesystem
+		// without locking). Report not running: the agent's own
+		// AcquireAgentLock is what actually keeps two agents apart, so being
+		// wrong here costs a redundant start or a refused stop, never a second
+		// agent.
+		return ReadPID(), false
 	}
-	// The lock could not be evaluated at all (unreadable config dir, a
-	// filesystem without locking). Report not running: the agent's own
-	// AcquireAgentLock is what actually keeps two agents apart, so being wrong
-	// here costs a redundant start or a refused stop, never a second agent.
+	// Acquired, so nobody else holds it; the deferred Close releases ours.
 	return ReadPID(), false
 }
 

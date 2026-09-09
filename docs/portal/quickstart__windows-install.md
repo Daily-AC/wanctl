@@ -3,7 +3,7 @@
 ```powershell
 irm https://github.com/Daily-AC/wanctl/releases/latest/download/install.ps1 | iex
 wanctl config set relay=https://relay.example.com portal=https://portal.example.com
-wanctl
+wanctl start
 ```
 
 不需要装 OpenSSL——安装器用 PowerShell 自带的加密接口验证发布签名，验过了才落盘。Windows 7 之后的每个版本都自带够用的 PowerShell。
