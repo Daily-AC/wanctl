@@ -50,8 +50,22 @@ func (p *PGStore) RegisterDevice(ns, id, name, fp string) (bool, error) {
 		return false, err
 	}
 	if !exists {
+		// Promote by certificate fingerprint, not by name. The fingerprint is
+		// per-installation and survives restarts; the name is a label that moves on
+		// its own. macOS reports the kernel hostname, which DHCP and reverse DNS
+		// rewrite to "localhost" or "bogon" at will, so requiring the old name to
+		// match orphaned the legacy row and re-registered the same installation as a
+		// brand-new device. A name-only match is deliberately not promoted: an old
+		// agent that happens to share a hostname must never inherit another
+		// installation's grants. Matching on the fingerprint alone therefore
+		// subsumes the previous name-and-fingerprint rule, which needs no separate
+		// query; the name only breaks ties among rows that share a fingerprint
+		// (one certificate per install, so in practice there are none).
 		var old string
-		err = tx.QueryRow(`SELECT device_id FROM devices WHERE owner_namespace=$1 AND device_id=$2 AND fingerprint=$3 AND NOT uses_device_id FOR UPDATE`, ns, name, fp).Scan(&old)
+		err = tx.QueryRow(`SELECT device_id FROM devices
+ WHERE owner_namespace=$1 AND fingerprint=$3 AND NOT uses_device_id
+ ORDER BY CASE WHEN device_id=$2 THEN 0 ELSE 1 END, device_id
+ LIMIT 1 FOR UPDATE`, ns, name, fp).Scan(&old)
 		if err != nil && err != sql.ErrNoRows {
 			return false, err
 		}

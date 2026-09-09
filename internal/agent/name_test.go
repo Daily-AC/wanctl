@@ -3,6 +3,7 @@ package agent
 import (
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -44,12 +45,12 @@ func TestSanitizeDeviceName(t *testing.T) {
 	}
 }
 
-// Non-Android platforms must keep whatever hostname they had, including
-// "localhost": renaming an existing device on upgrade would re-register it
-// under a new name and break every controller's pinned identity for the old one.
-func TestDefaultDeviceNameLeavesNonAndroidHostnamesAlone(t *testing.T) {
-	if runtime.GOOS == "android" {
-		t.Skip("this asserts the non-Android path")
+// Platforms without a better source keep whatever hostname they had, including
+// "localhost". The relay promotes a legacy record by certificate fingerprint, so
+// the label may change freely, but changing it for no reason is still noise.
+func TestDefaultDeviceNameLeavesPlainHostnamesAlone(t *testing.T) {
+	if runtime.GOOS == "android" || runtime.GOOS == "darwin" {
+		t.Skip("this asserts the platforms with no better name source")
 	}
 	host, err := os.Hostname()
 	if err != nil || host == "" {
@@ -57,5 +58,39 @@ func TestDefaultDeviceNameLeavesNonAndroidHostnamesAlone(t *testing.T) {
 	}
 	if got := defaultDeviceName(); got != host {
 		t.Fatalf("defaultDeviceName() = %q, want the hostname %q", got, host)
+	}
+}
+
+// The bug this fixes: os.Hostname() on this Mac reads "bogon" behind a router
+// with no reverse DNS and "localhost" on a bare boot, while the local host name
+// stays "zyldeMacBook-Pro" across both.
+func TestDarwinDeviceNamePrefersLocalHostName(t *testing.T) {
+	if got := darwinDeviceName(func() string { return "zyldeMacBook-Pro\n" }); got != "zyldeMacBook-Pro" {
+		t.Fatalf("got %q want %q", got, "zyldeMacBook-Pro")
+	}
+}
+
+// scutil exits non-zero (and prints nothing) when no local host name is set;
+// the caller must fall back rather than register an empty label.
+func TestDarwinDeviceNameEmptyWhenUnset(t *testing.T) {
+	for _, in := range []string{"", "  \n", "name/with-slash", "ctrl\x01char", strings.Repeat("x", 256)} {
+		if got := darwinDeviceName(func() string { return in }); got != "" {
+			t.Fatalf("darwinDeviceName(%q) = %q, want empty", in, got)
+		}
+	}
+}
+
+// On a real Mac the two sources disagree, and the agent must take the stable one.
+func TestDefaultDeviceNameOnDarwinUsesLocalHostName(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("this asserts the darwin path")
+	}
+	want := darwinDeviceName(scutilLocalHostName)
+	if want == "" {
+		host, _ := os.Hostname()
+		want = host
+	}
+	if got := defaultDeviceName(); got != want {
+		t.Fatalf("defaultDeviceName() = %q, want %q", got, want)
 	}
 }
