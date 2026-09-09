@@ -22,7 +22,8 @@ func fileIn(name string) (string, error) {
 // TokenPath is where the OAuth-enrolled agent token is stored.
 func TokenPath() (string, error) { return fileIn("token") }
 
-// StoredToken returns the token saved by `wanctl up`, or "" if none. Errors are
+// StoredToken returns the token saved by `wanctl start`/`wanctl login`, or ""
+// if none. Errors are
 // swallowed (treated as "no token") so it composes cleanly as an EnvOr default.
 func StoredToken() string {
 	p, err := TokenPath()

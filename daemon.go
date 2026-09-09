@@ -43,25 +43,6 @@ func cmdSupervise(ctx context.Context, args []string) error {
 	}
 }
 
-// cmdUp is the bare-`wanctl` entrypoint: enroll over OAuth if we have no token
-// yet, then make sure the agent is running in the background. Idempotent.
-func cmdUp(ctx context.Context) error {
-	tok := config.EnvOr("WANCTL_TOKEN", config.StoredToken())
-	if tok == "" {
-		if err := ensureEndpointsConfigured(); err != nil {
-			return err
-		}
-		t, err := enroll(ctx)
-		if err != nil {
-			return err
-		}
-		if err := config.SaveToken(t); err != nil {
-			return fmt.Errorf("save token: %w", err)
-		}
-	}
-	return cmdStart()
-}
-
 // agentRunning answers "is an agent serving this config dir" from the lock the
 // agent holds, not from whether the number in agent.pid happens to name a live
 // process. It also clears a pid file that provably belongs to nobody.
@@ -81,14 +62,30 @@ func agentRunning() (int, bool) {
 	return pid, running
 }
 
-// cmdStart launches the agent detached in the background and records its pid.
-func cmdStart() error {
+// cmdStart makes this machine a controlled device: it logs in if there is no
+// token yet, then runs the agent detached in the background and records its pid.
+//
+// The login step lives here rather than in a separate entrypoint because
+// enrolling a device and running its agent are one intention. Bare `wanctl`
+// used to do both, which meant that someone on a controller-only machine who
+// typed `wanctl` to see what it does had their machine registered as a
+// controlled device; it prints help now and does nothing.
+func cmdStart(ctx context.Context) error {
 	if pid, running := agentRunning(); running {
 		fmt.Printf("wanctl 服务已在运行 (pid %d)。停止用: wanctl stop\n", pid)
 		return nil
 	}
 	if config.EnvOr("WANCTL_TOKEN", config.StoredToken()) == "" {
-		return fmt.Errorf("尚未登录：先运行 `wanctl`（无参）完成登录授权")
+		if err := ensureEndpointsConfigured(); err != nil {
+			return err
+		}
+		t, err := enrollForStart(ctx)
+		if err != nil {
+			return err
+		}
+		if err := config.SaveToken(t); err != nil {
+			return fmt.Errorf("save token: %w", err)
+		}
 	}
 	self, err := selfPath()
 	if err != nil {
@@ -121,6 +118,29 @@ func cmdStart() error {
 	_ = cmd.Process.Release() // detach: don't reap; it runs until `wanctl stop`
 	fmt.Printf("✓ 服务已转后台 (pid %d)，日志: %s\n  停止用: wanctl stop\n", pid, logPath)
 	return nil
+}
+
+// enrollForStart is the browser login `wanctl start` performs on a device that
+// has no token. It is a variable so a test can drive the rest of start without
+// a portal.
+var enrollForStart = enroll
+
+// localStatusLine is the one line bare `wanctl` adds under the help text: what
+// this machine is right now, so that someone reading the help knows which half
+// of it applies to them. It only reads -- printing help must change nothing.
+func localStatusLine() string {
+	credential := "未登录"
+	if config.EnvOr("WANCTL_TOKEN", config.StoredToken()) != "" {
+		credential = "已登录"
+	}
+	agent := "agent 未运行"
+	if pid, running := config.AgentRunning(); running {
+		agent = "agent 运行中"
+		if pid > 0 {
+			agent = fmt.Sprintf("agent 运行中 (pid %d)", pid)
+		}
+	}
+	return fmt.Sprintf("本机: %s · %s", credential, agent)
 }
 
 // cmdStop terminates the background agent.

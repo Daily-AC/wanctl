@@ -6,7 +6,7 @@ Run three lines in PowerShell — install the tool, set the instance addresses
 ```powershell
 irm https://github.com/Daily-AC/wanctl/releases/latest/download/install.ps1 | iex
 wanctl config set relay=https://relay.example.com portal=https://portal.example.com
-wanctl
+wanctl start
 ```
 
 No OpenSSL needed — the installer verifies the release signature with

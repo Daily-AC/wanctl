@@ -6,7 +6,7 @@ the instance addresses (once), sign in and join:
 ```
 curl -fsSL https://github.com/Daily-AC/wanctl/releases/latest/download/install.sh | sh
 wanctl config set relay=https://relay.example.com portal=https://portal.example.com
-wanctl
+wanctl start
 ```
 
 A browser opens the portal login (GitHub account) and shows a one-time code.
@@ -19,7 +19,7 @@ Installing needs **no token at all**.
 > after that needs an invite code from an administrator, redeemed after login
 > (see "Invites, friends and sharing").
 >
-> You can skip the second line and run `wanctl` on its own — the first run asks
+> You can skip the second line and run `wanctl start` on its own — the first run asks
 > in the terminal which relay to use, this deployment's or the project's hosted
 > instance, and saves your answer. `wanctl config` shows and changes what you
 > set, and `WANCTL_RELAY`/`WANCTL_PORTAL` still override it for one run. Nothing
