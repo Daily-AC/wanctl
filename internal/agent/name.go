@@ -12,13 +12,55 @@ import (
 // Android's hostname is usually localhost, so use its product model instead.
 // Device identity and routing are independent of this label.
 func defaultDeviceName() string {
-	if runtime.GOOS == "android" {
+	switch runtime.GOOS {
+	case "android":
 		if name := androidDeviceName(getprop); name != "" {
+			return name
+		}
+	case "darwin":
+		if name := darwinDeviceName(scutilLocalHostName); name != "" {
 			return name
 		}
 	}
 	host, _ := os.Hostname()
 	return host
+}
+
+// darwinDeviceName prefers the macOS local host name over the kernel hostname.
+//
+// os.Hostname() on macOS returns the kernel hostname, which the system rewrites
+// from whatever the current network hands it: it reads "localhost" on a bare
+// boot and "bogon" behind a router with no reverse DNS, and it changes at
+// runtime when the machine moves between networks. The local host name (the
+// Bonjour name, System Settings > General > Sharing) is user-set and stays put.
+//
+// The label alone no longer decides identity - the relay promotes a legacy
+// record by certificate fingerprint - but a name that changes on every DHCP
+// lease is still useless in `wanctl peers` output and in `--target`.
+func darwinDeviceName(localHostName func() string) string {
+	name := strings.TrimSpace(localHostName())
+	if name == "" || len(name) > 255 || strings.Contains(name, "/") {
+		return ""
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return ""
+		}
+	}
+	return name
+}
+
+// scutilLocalHostName reads the local host name from the system configuration
+// database. The absolute path is deliberate, for the same reason getprop uses
+// one: a name lookup can find some other binary on PATH.
+const scutilPath = "/usr/sbin/scutil"
+
+func scutilLocalHostName() string {
+	out, err := exec.Command(scutilPath, "--get", "LocalHostName").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
 }
 
 // androidDeviceName derives a device name from the Android property service.

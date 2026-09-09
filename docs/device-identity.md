@@ -10,7 +10,8 @@ The three concepts are independent:
 
 - `device_id` identifies an installation. Relay routes, sharing grants, notification
   settings, audit associations, and controller pins use `namespace/device_id`.
-- `--name` sets a display name (hostname by default, product model on Android).
+- `--name` sets a display name (the local host name on macOS, the product model
+  on Android, the hostname elsewhere).
   Portal aliases are display labels too. Both may repeat and change without
   replacing the installation.
 - The certificate fingerprint authenticates the endpoint. Keeping the device ID
@@ -32,12 +33,15 @@ database before deploying; rolling back requires restoring the corresponding
 schema/data snapshot as well as the old binaries.
 
 Legacy agents can keep their old routing key until upgraded. When a new agent
-first reports its UUID, a legacy row is promoted only if its namespace, old name,
-and certificate fingerprint all match. Promotion preserves the database row,
-alias, sharing grants, notification settings/health, and audit associations in one
-transaction. A same-name device with a different fingerprint creates a separate
-record and inherits none of those associations. The old name cannot be
-re-registered by an outdated agent once promoted.
+first reports its UUID, a legacy row in the same namespace is promoted if its
+certificate fingerprint matches, whatever its old name was. Promotion preserves
+the database row, alias, sharing grants, notification settings/health, and audit
+associations in one transaction. The old name is kept as `legacy_name`; the
+display name becomes the label the agent reports, as it does on any later rename.
+A same-name device with a different fingerprint creates a separate record and
+inherits none of those associations - the name is a label and cannot move an
+installation's identity. The old name cannot be re-registered by an outdated
+agent once promoted.
 
 New controllers resolve targets before checking trust. A promoted row exposes its
 previous target so an existing pin can be copied to the UUID target. The copied
@@ -45,8 +49,14 @@ value is always the controller's stored fingerprint, never the relay's offered
 value. Existing UUID pins are never overwritten. Old controllers can still target
 UUIDs, but need an explicit initial pin because they do not migrate name-based pins.
 
-Changing a device name during its first upgrade prevents the name-and-fingerprint
-migration match; upgrade once with the original name before renaming it.
+Renaming a device across its first upgrade is safe: promotion follows the
+certificate, not the name. Until v0.7.1 the match also required the old name, so
+a host whose name drifted on its own registered as a new device and left the old
+row offline - macOS is the usual case, where `os.Hostname()` reads `localhost` or
+`bogon` depending on the network. On macOS the agent now labels itself with
+`scutil --get LocalHostName`, which does not drift. Repairing a database that
+already split one installation in two is a manual step: delete the orphaned new
+row and let the agent re-register, or re-point its associations.
 A legacy record already overwritten by the old same-name collision cannot recover
 the overwritten device's identity automatically.
 
