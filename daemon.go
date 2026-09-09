@@ -12,6 +12,7 @@ import (
 
 	"wanctl/internal/client"
 	"wanctl/internal/config"
+	"wanctl/internal/transport"
 )
 
 // cmdSupervise is the restart loop used by the Windows Scheduled Task, whose
@@ -143,12 +144,34 @@ func localStatusLine() string {
 	return fmt.Sprintf("本机: %s · %s", credential, agent)
 }
 
-// cmdStop terminates the background agent.
+// terminateAgent is terminatePID behind a variable so a test can drive the
+// stop-then-start sequence without signalling a real process.
+var terminateAgent = terminatePID
+
+// agentStopTimeout bounds the wait for a signalled agent to release the
+// config-dir lock. An agent shutting down closes relay connections and finishes
+// whatever request it was serving first; ten seconds is far longer than that
+// takes and still short enough to report rather than hang.
+// Variables, not constants, so a test can exercise the give-up path without
+// waiting out the real deadline.
+var (
+	agentStopTimeout = 10 * time.Second
+	agentStopPoll    = 50 * time.Millisecond
+)
+
+// cmdStop terminates the background agent and waits for it to let go.
 //
 // It refuses to signal a pid whose lock nobody holds. Trusting the pid file
 // alone meant that a stale one, plus the pid reuse that follows sooner or
 // later, made `wanctl stop` (and the stop that `wanctl update` performs on its
 // way to a restart) kill whatever process had inherited the number.
+//
+// Returning as soon as the signal was delivered was the other half of the same
+// bug. Terminating is asynchronous: `wanctl update` stopped the old agent,
+// swapped the binary and started a new one while the old process was still
+// shutting down and still holding the lock, so the new agent could not acquire
+// it and exited. The parent had already printed "✓ 服务已转后台" and nothing
+// restarted it -- a device dropped off the relay for fifty minutes that way.
 func cmdStop() error {
 	recorded := config.ReadPID()
 	pid, running := agentRunning()
@@ -164,12 +187,40 @@ func cmdStop() error {
 		fmt.Println("wanctl 服务在运行,但没有记录 pid,无法从这里停止它。请停止启动它的那个服务(计划任务/systemd/launchd)")
 		return nil
 	}
-	if err := terminatePID(pid); err != nil {
+	if err := terminateAgent(pid); err != nil {
 		return fmt.Errorf("stop pid %d: %w", pid, err)
+	}
+	if !awaitAgentLockRelease(config.AgentRunning, agentStopTimeout, agentStopPoll, time.Sleep) {
+		return fmt.Errorf("已向 agent (pid %d) 发出停止信号,但它在 %s 内没有释放 %s 的锁 —— 没有重启它,以免两个 agent 抢同一个配置目录。等它退出后再跑 wanctl start",
+			pid, agentStopTimeout, configDirForMessage())
 	}
 	_ = config.RemovePID()
 	fmt.Printf("✓ 已停止 wanctl 服务 (pid %d)\n", pid)
 	return nil
+}
+
+// awaitAgentLockRelease polls until nobody holds the config-dir lock, and
+// reports whether that happened before the deadline. The clock and the probe
+// are injected so the decision is testable without a real agent.
+func awaitAgentLockRelease(running func() (int, bool), timeout, poll time.Duration, sleep func(time.Duration)) bool {
+	for waited := time.Duration(0); ; waited += poll {
+		if _, held := running(); !held {
+			return true
+		}
+		if waited >= timeout {
+			return false
+		}
+		sleep(poll)
+	}
+}
+
+// configDirForMessage names the directory in an error, or says nothing useful
+// rather than failing when it cannot be resolved.
+func configDirForMessage() string {
+	if dir, err := transport.ConfigDir(); err == nil {
+		return dir
+	}
+	return "配置目录"
 }
 
 // staleNote distinguishes the two ways a pid file outlives its agent, because
@@ -238,7 +289,7 @@ func printLocalStatus() error {
 			fmt.Println("        升级后需以管理员/root 重启该服务才能生效")
 		}
 	} else {
-		fmt.Println("○ 未运行（运行 `wanctl` 启动）")
+		fmt.Println("○ 未运行（运行 `wanctl start` 启动）")
 	}
 	// The endpoints, so a front-end that cannot run `wanctl config` (the
 	// Android app) can still show which instance this device belongs to.
