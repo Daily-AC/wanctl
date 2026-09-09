@@ -414,8 +414,19 @@ td.num{font-variant-numeric:tabular-nums}
 .tcap{margin:0 0 12px;color:var(--ink-2);font-size:13px}
 .dim{color:var(--ink-2)}
 .no{color:var(--red)}
-/* 全表空态：一行字，与 .blank 同一个声音 */
-.tempty{padding:26px 0;color:var(--ink-2);font-size:13.5px}
+/* 「机器自己报的那个名字」跟在显示名后面。.real 没有基础样式，每个用到它的地方
+   自己决定形状：设备卡上另起一行（.dev .real），聚合待审批里留 6px（.ask .head .real）。
+   共享授权表和配对单的 kv 是后来加的，两处都没写 —— 而 realHTML() 是直接拼进
+   字符串的，中间没有空白，于是那里渲染成「workshopbench-02」，两个名字粘成一个词。
+   用中点：新增授权那张表单里的设备选项本来就是「显示名 · 机器名」，表里跟它一致。 */
+#acl .real,#pair .kv dd .real{color:var(--ink-2)}
+#acl .real::before,#pair .kv dd .real::before{content:" · "}
+/* 全表空态：一行字，与 .blank 同一个声音 —— .blank 是居中的，所以这里也居中。
+   写成 td.tempty 而不是 .tempty：整行空态是一个 colspan 单元格，它同时也
+   trivially 是「最后一列」，于是上面那条为操作列写的 td:last-child{text-align:right}
+   把它一起右对齐了。四张表（令牌 / 邀请 / 好友 / 共享授权）的空态全都被顶到了
+   右缘，读起来像一句掉在角落里的碎话，而不是这张表的状态。 */
+td.tempty{padding:26px 0;color:var(--ink-2);font-size:13.5px;text-align:center}
 
 /* ── 设置：左分组右内容 ────────────────────────────────────────────────
    与文档站是同一个布局家族（左导航 + 内容），两个表面因此共用一套肌肉记忆。
