@@ -135,13 +135,14 @@ enroll and start it:
 ```bash
 curl -fsSL https://github.com/Daily-AC/wanctl/releases/latest/download/install.sh | sh
 wanctl config set relay=https://relay.example.com portal=https://portal.example.com
-wanctl
+wanctl start
 ```
 
 The last command opens the portal, asks for the one-time enrollment code shown
 there, stores the issued token, and starts the agent. The agent makes outbound
-connections only. (A bare `wanctl` with nothing configured prompts for the two
-URLs on a terminal.)
+connections only. (`wanctl start` with nothing configured prompts for the two
+URLs on a terminal. Bare `wanctl` prints the help and does nothing, so running
+it on a machine you only control *from* leaves that machine alone.)
 
 ### Optional: enable the portal device console
 

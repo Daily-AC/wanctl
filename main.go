@@ -45,8 +45,9 @@ var usage = `wanctl — control a device across the internet over an encrypted, 
 
 USAGE
  DEVICE LIFECYCLE (run on the box you want to control)
-  wanctl                                      log in if needed, then run the agent detached in the background
-  wanctl start                                (re)start the background agent without re-login; records its pid
+  wanctl start                                log in if needed, then run the agent detached in the background;
+                                              this is what makes a machine a controlled device
+  wanctl                                      print this help and one line of local status; changes nothing
   wanctl stop                                 stop the background agent
   wanctl status [-target NS/DEV]              show local agent/credential status, or remote agent mode + version
   wanctl logout                               stop the agent and forget the saved login
@@ -56,7 +57,7 @@ USAGE
                                               omit --mode so the persisted mode and portal switches survive a restart
   wanctl service uninstall                     remove that service
   wanctl service status                        show whether the service is installed + active
-  wanctl agent [flags]                         run the agent in the FOREGROUND (what 'wanctl'/'start'/the service spawn)
+  wanctl agent [flags]                         run the agent in the FOREGROUND (what 'start'/the service spawn)
   Persistence: 'wanctl start' survives THIS terminal but may die on logout/reboot.
   'wanctl service install' adds OS-native autostart. Linux needs user lingering
   for boot-without-login; Windows starts the limited-user task at the next logon.
@@ -159,12 +160,13 @@ func configuredDisplay(value, empty string) string {
 
 func main() {
 	if len(os.Args) < 2 {
-		// Bare `wanctl`: onboard if needed, then ensure the agent runs in the
-		// background — the claude-code-style "just works" entrypoint.
-		if err := runRelayCommand(func() error { return cmdUp(context.Background()) }); err != nil {
-			fmt.Fprintln(os.Stderr, "wanctl: "+err.Error())
-			os.Exit(1)
-		}
+		// Bare `wanctl` explains itself and does nothing else. It used to
+		// enroll and start an agent, so someone on a controller-only machine
+		// who ran it to see what it does turned that machine into a controlled
+		// device. `wanctl start` is the device command; `wanctl login` is the
+		// controller one.
+		fmt.Print(usage)
+		fmt.Println(localStatusLine())
 		return
 	}
 	ctx := context.Background()
@@ -209,8 +211,6 @@ func main() {
 		err = cmdLogs(ctx, os.Args[2:])
 	case "label":
 		err = cmdLabel(os.Args[2:])
-	case "up":
-		err = cmdUp(ctx)
 	case "login":
 		err = cmdLogin(ctx, os.Args[2:])
 	case "config":
@@ -222,7 +222,7 @@ func main() {
 	case "share":
 		err = cmdShare(ctx, os.Args[2:])
 	case "start":
-		err = cmdStart()
+		err = cmdStart(ctx)
 	case "stop":
 		err = cmdStop()
 	case "status":
@@ -265,19 +265,10 @@ func main() {
 // (a diagnostic that reports the missing relay itself), and the servers
 // `relay`/`portal`. `agent` runs the same gate itself, after parsing --relay.
 var relayCommands = map[string]bool{
-	"up": true, "start": true, "login": true,
+	"start": true, "login": true,
 	"exec": true, "screenshot": true, "push": true, "pull": true,
 	"peers": true, "pair": true, "friends": true, "share": true,
 	"docs": true, "admin": true,
-}
-
-// runRelayCommand gates the bare-`wanctl` path, which never reaches the
-// dispatch switch.
-func runRelayCommand(run func() error) error {
-	if err := ensureRelayConfigured(""); err != nil {
-		return err
-	}
-	return run()
 }
 
 // settingValue is config.Setting without the source, for flag defaults and

@@ -129,12 +129,13 @@ docker compose exec -e WANCTL_RELAY=http://127.0.0.1:8080 relay wanctl admin inv
 ```bash
 curl -fsSL https://github.com/Daily-AC/wanctl/releases/latest/download/install.sh | sh
 wanctl config set relay=https://relay.example.com portal=https://portal.example.com
-wanctl
+wanctl start
 ```
 
 最后那条命令会打开门户，问你门户上显示的那个一次性接入码，存下签发的令牌，
-然后把 agent 启动起来。agent 只发起出站连接。（什么都没配的情况下直接跑 `wanctl`，
-它会在终端里问你要这两个 URL。）
+然后把 agent 启动起来。agent 只发起出站连接。（什么都没配的情况下跑 `wanctl start`，
+它会在终端里问你要这两个 URL。直接跑 `wanctl` 只打印帮助，什么都不做——
+在只用来当控制端的机器上敲它，不会把那台机器变成被控设备。）
 
 ### 可选：打开门户的设备控制台
 
