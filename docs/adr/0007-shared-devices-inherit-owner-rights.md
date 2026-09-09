@@ -103,10 +103,14 @@ than one that is gone.
   `requireDeviceConsole`, which the switch opens, and `requireDeviceOwner`,
   which nothing does. The exposure the finding described is now something an
   owner chooses per share rather than something the code prevents.
-- The portal's device activity log stays behind the management gate, while the
-  same log is available to any grantee through `wanctl logs`. That is
-  inconsistent, and it is inconsistent in the safe direction; which way to
-  resolve it belongs with the portal UI work.
+- The device's activity log is a use right, not a management one. It is in
+  `UseCapabilities`, so `wanctl logs` works for every grantee, and the portal
+  opens its activity view to every grantee to match; the portal change lands
+  with the UI work rather than here, so between the two the portal is briefly
+  the stricter of the two surfaces. Reading the log is reading what the device
+  did, which is part of working on it — a grantee who can run a command and see
+  its output learns nothing new from the record that they ran it. Deciding what
+  the device may do next is the part that needs the switch.
 - The relay stops being a place where sharing can be tuned, apart from the one
   switch. An owner who wants a colleague to read files but not run commands can
   no longer express it, and must not share the device. Expressing it properly
