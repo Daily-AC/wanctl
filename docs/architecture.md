@@ -6,7 +6,7 @@ issues tokens and manages sharing; a Postgres-backed relay authenticates and
 brokers; devices enforce a local, approval-based permission policy.
 
 Devices use persistent UUIDs for routing and associations, independently of their
-display names and TLS fingerprints. See [device identity and upgrading](device-identity.md).
+display names and TLS fingerprints. See [device identity and upgrading](https://github.com/Daily-AC/wanctl/blob/main/docs/device-identity.md).
 
 ```
 controller (you/agent) ──┐                            ┌── device (wanctl agent)

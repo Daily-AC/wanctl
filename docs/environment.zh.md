@@ -20,7 +20,7 @@
 | `WANCTL_MCP_LOCAL_ROOT` | MCP stdio | 否 | 进程工作目录 | `wanctl_push` 和 `wanctl_pull` 唯一可以访问的本地目录树。wanctl 配置目录永远被排除在外。 |
 | `WANCTL_MCP_ALLOWED_ORIGINS` | MCP HTTP | 否 | 无 | 逗号分隔的浏览器 Origin 白名单。带 Origin 的请求不在名单里就拒绝；程序化的客户端通常一个都不带。 |
 | `WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER` | MCP | 否 | `0` | 只有想恢复「模型可调用的设备 TOFU 钉扎」时才设成 `1`。默认是失败即关闭，因为模型分不清一个独立验证过的指纹和一个由敌意 relay 递过来的指纹。 |
-| `WANCTL_WEBFETCH_SEED` | relay 内的控制端适配器 | 否 | 关闭 | 至少 32 字节的十六进制秘密种子，启用 `/webfetch`；必须连接 PostgreSQL。见 [WebFetch](webfetch.zh.md)。 |
+| `WANCTL_WEBFETCH_SEED` | relay 内的控制端适配器 | 否 | 关闭 | 至少 32 字节的十六进制秘密种子，启用 `/webfetch`；必须连接 PostgreSQL。见 [WebFetch](webfetch.md)。 |
 | `WANCTL_WEBFETCH_PORTAL_ORIGIN` | WebFetch | 视情况 | 无 | 设备主人审批所用的门户 HTTPS origin。 |
 | `WANCTL_WEBFETCH_RELAY_URL` | WebFetch | 否 | `WANCTL_PUBLIC_ORIGIN` | 适配器连接 relay 的 origin；仅接受 HTTPS 或回环 HTTP。 |
 | `RELAY_ADMIN_URL` | portal | 是 | 无 | 门户的管理代理所用的 relay 内网基址，比如 `http://relay:8080`。 |

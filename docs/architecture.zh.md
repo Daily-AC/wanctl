@@ -4,6 +4,9 @@
 由 relay 转发的通道。网页门户签发令牌、管理共享；由 Postgres 支撑的 relay 负责认证和
 撮合；设备本地执行一套基于审批的权限策略。
 
+设备使用持久 UUID 进行路由和关联，与显示名称和 TLS 指纹无关。
+设备的稳定 ID、证书指纹与配对边界见[设备身份说明](https://github.com/Daily-AC/wanctl/blob/main/docs/device-identity.md)。
+
 ```
 controller (you/agent) ──┐                            ┌── device (wanctl agent)
    wanctl exec/push/logs  │   relay (public broker)   │     policy engine + approval
@@ -36,7 +39,7 @@ controller (you/agent) ──┐                            ┌── device (wa
 `server`（shell + 文件）、`policy`（规则 + 审批者）、`console`（与传输无关的审批队列）、
 `portal`、`eventlog`、`sessionauth`（relay 签发的能力授予）。
 
-可选的 [WebFetch 接入层](webfetch.zh.md) 支持只会读取 URL 的网页 AI。申请、审批、
+可选的 [WebFetch 接入层](webfetch.md) 支持只会读取 URL 的网页 AI。申请、审批、
 设备范围、过期和吊销使用现有门户与 Token 存储；适配器以每份授权独立的控制端身份连接设备。
 这个主动启用的控制端组件能看到自己收发的指令和结果，普通 broker 仍然只转发加密字节。
 操作权限仍由设备决定；委托凭证不会在旧的 namespace-only 接口中被降级为账号全权凭证。

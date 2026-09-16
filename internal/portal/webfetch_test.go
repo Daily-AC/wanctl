@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,44 @@ import (
 )
 
 const testDelegationID = "request_test_1234"
+
+func TestWebFetchConnectUsesIndependentBootstrapURLsWithoutGrantingAccess(t *testing.T) {
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "alice", "role": "user"})
+		case "/webfetch/v1":
+			json.NewEncoder(w).Encode(map[string]string{"protocol": "wanctl.webfetch.v1", "start_url_template": "https://relay.test/webfetch/new/{client_nonce}"})
+		default:
+			t.Fatalf("starter page must not create or approve a grant: %s", r.URL.Path)
+		}
+	})
+	pattern := regexp.MustCompile(`https://relay\.test/webfetch/new/[a-f0-9]{48}`)
+	previous := ""
+	for i := 0; i < 2; i++ {
+		r := httptest.NewRequest(http.MethodGet, "/webfetch/connect", nil)
+		r.Header.Set("X-User", "alice@example.com")
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		start := pattern.FindString(w.Body.String())
+		if w.Code != 200 || start == "" || start == previous || w.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("starter page reused or omitted its fresh URL: %d", w.Code)
+		}
+		if strings.Contains(w.Body.String(), "/webfetch/s/") || strings.Contains(w.Body.String(), "wfd_") || !strings.Contains(w.Body.String(), `id="webfetchCopy"`) {
+			t.Fatal("starter page exposed a credential or omitted its copy action")
+		}
+		previous = start
+	}
+}
+
+func TestWebFetchConnectRequiresOwnerLogin(t *testing.T) {
+	s := newOAuthPortal(t, resolveOKAs("alice", "user"))
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/webfetch/connect", nil))
+	if w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "next=%2Fwebfetch%2Fconnect") {
+		t.Fatalf("unauthenticated starter page = %d %s", w.Code, w.Header().Get("Location"))
+	}
+}
 
 func delegationFixture() delegation.Request {
 	return delegation.Request{ID: testDelegationID, Label: "Qwen experiment", Status: "pending",
@@ -212,6 +251,37 @@ func TestDelegationRequestCannotReadAnotherOwnersGrant(t *testing.T) {
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("foreign grant status = %d", rec.Code)
 		}
+		if strings.HasPrefix(path, "/webfetch/") {
+			page := rec.Body.String()
+			if !strings.Contains(page, "already belong to another account") || !strings.Contains(page, "cached page") || !strings.Contains(page, `id="out"`) {
+				t.Fatal("owner cannot recover from a foreign/cached approval link")
+			}
+			for _, secret := range []string{"bob", req.Label, req.ControllerFingerprint, testDelegationID} {
+				if strings.Contains(page, secret) {
+					t.Errorf("foreign grant detail exposed: %q", secret)
+				}
+			}
+		}
+	}
+}
+
+func TestDelegationPageExplainsRelayDenialWithoutForwardingItsBody(t *testing.T) {
+	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/resolve-user":
+			json.NewEncoder(w).Encode(map[string]string{"namespace": "alice", "role": "user"})
+		case "/admin/delegations/request":
+			http.Error(w, "delegation forbidden: private upstream detail", http.StatusForbidden)
+		default:
+			t.Errorf("unexpected relay call: %s", r.URL.Path)
+		}
+	})
+	r := httptest.NewRequest(http.MethodGet, "/webfetch/approve?request="+testDelegationID, nil)
+	r.Header.Set("X-User", "alice@example.com")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Header().Get("Content-Type"), "text/html") || !strings.Contains(rec.Body.String(), "fresh request") || strings.Contains(rec.Body.String(), "private upstream detail") {
+		t.Fatalf("unhelpful or leaking denial: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
