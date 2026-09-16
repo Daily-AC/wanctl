@@ -27,13 +27,13 @@ It uses the identity `wanctl login` already stored on that machine, so a restart
 
 ## Hosted (HTTP)
 
-The endpoint is `https://relay.example.com/wanctl-mcp`. In Claude Code:
+The endpoint is `https://relay.example.com/mcp`. In Claude Code:
 
 ```sh
-claude mcp add --transport http wanctl https://relay.example.com/wanctl-mcp
+claude mcp add --transport http wanctl https://relay.example.com/mcp
 ```
 
-Any other host takes the same URL in its "MCP server / HTTP" field. It needs no file from your machine, and you never hand it a token.
+Any other host takes the same URL in its "MCP server / HTTP" field. It needs no file from your machine, and you never hand it a token. Some relays answer on `/wanctl-mcp` instead, because the proxy in front of them has claimed the `/mcp` prefix; ask whoever runs it which one to use.
 
 > The endpoint is public and anyone can complete a handshake with it — and see no devices at all afterwards. What a session can see is decided entirely by the login below.
 

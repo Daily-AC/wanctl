@@ -353,12 +353,12 @@ func cmdRelay(args []string) error {
 		if err != nil {
 			return fmt.Errorf("WANCTL_MCP_SEED must be hex-encoded: %w", err)
 		}
-		h, err := mcppkg.Handler(seed, "/wanctl-mcp")
+		h, err := mcppkg.Handler(seed, "/mcp")
 		if err != nil {
 			return fmt.Errorf("mcp handler: %w", err)
 		}
 		r.SetMCPHandler(h)
-		log.Print("wanctl relay: MCP server enabled at /wanctl-mcp (Streamable HTTP)")
+		log.Print("wanctl relay: MCP server enabled at /mcp (alias /wanctl-mcp, Streamable HTTP)")
 	}
 	if seedHex := os.Getenv("WANCTL_WEBFETCH_SEED"); seedHex != "" {
 		if pgStore == nil {
