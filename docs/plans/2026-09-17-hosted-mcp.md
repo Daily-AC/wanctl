@@ -57,15 +57,28 @@ link its source carries, and three documents linked to `webfetch.md`, which the
 docs site does not publish. The webfetch links now point at the repository copy,
 and `device-identity.md` joined the site.
 
-## Known limit
+## The device-trust opt-in, and why this deployment took it
 
 A hosted session keeps device trust in an in-memory store, and
 `wanctl_trust_server` is fail-closed unless the operator sets
-`WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1`. So out of the box a hosted session can
-log in and list devices but cannot run anything: the first `wanctl_exec` stops
-at `DEVICE IDENTITY CONFIRMATION REQUIRED`. Whether to accept the weaker flow on
-a relay you own yourself is an owner decision, so this deployment ships with the
-opt-in unset and the endpoint read-only. Both documents say so.
+`WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1`. Without it a hosted session can log in
+and list devices but cannot run anything: the first `wanctl_exec` stops at
+`DEVICE IDENTITY CONFIRMATION REQUIRED`, and the tool that would resolve it
+refuses. That was measured, not inferred.
+
+The guard exists because a model cannot prove it verified a fingerprint
+independently of the relay that handed it over. The attacker it describes is a
+hostile relay. Here the relay, the MCP server and the portal are one process on
+one machine with one owner, and that same relay is equally able to lie to a
+stdio controller, which this guard does not protect. Read-only was therefore the
+wrong trade for this deployment, and the owner turned the opt-in on on
+2026-09-17. A self-hoster who does not own their relay should leave it unset;
+`docs/self-hosting.md` states the trade in those terms.
+
+Turning it on does not skip device-side pairing. The first `wanctl_exec` still
+returns `PAIRING REQUIRED` with a URL, and a human still approves the controller
+on the device's page. The opt-in only decides who may pin the device's identity
+fingerprint.
 
 ## Acceptance (z10 deployment, 2026-09-17)
 
@@ -81,6 +94,27 @@ opt-in unset and the endpoint read-only. Both documents say so.
   restarted; both `/healthz` endpoints answer `ok`; the local stdio path is
   unaffected.
 
+After the opt-in was enabled, the full control path was exercised from a fresh
+session, and the three gates fired in the order the design intends:
+
+1. `wanctl_exec` on a device this session had never met returned
+   `DEVICE IDENTITY CONFIRMATION REQUIRED` with a fingerprint.
+2. The fingerprint was checked against a pin an ordinary stdio controller had
+   recorded for the same device on 2026-09-08, out of band from this relay, and
+   matched byte for byte. `wanctl_trust_server` then accepted it.
+3. `wanctl_exec` returned `PAIRING REQUIRED` with a URL. The portal showed the
+   controller as `AI 助手 · MCP 会话 (ns: …)` with the same fingerprint the
+   error carried, and a human approved it there.
+
+The same call then ran `hostname` on the device and returned `exit: 0` with the
+device's real hostname. `wanctl_logout` cleared the session afterwards, and the
+next `wanctl_peers` returned `LOGIN REQUIRED`.
+
+One thing worth knowing before reading a failure wrong: a `PAIRING REQUIRED` URL
+is valid for five minutes, and the portal keeps rendering the card after it
+expires. Clicking the expired card does nothing and `/api/pending` is already
+empty. `wanctl_pair` reports the real state.
+
 ## Rollback
 
 Delete the `WANCTL_MCP_SEED=` line from `selfhost/.env` and recreate the relay:
@@ -92,3 +126,8 @@ docker compose up -d --no-deps relay
 The endpoint goes back to 404 and every hosted session and rebind credential
 dies with it. Nothing else on the relay changes. `--no-deps` keeps the postgres
 container out of the recreate.
+
+To keep the endpoint but return it to read-only, delete the
+`WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1` line instead and recreate the relay the
+same way. Sessions that already pinned a device keep nothing: the pin lived in
+that session's memory.
