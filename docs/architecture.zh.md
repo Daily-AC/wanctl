@@ -4,8 +4,8 @@
 由 relay 转发的通道。网页门户签发令牌、管理共享；由 Postgres 支撑的 relay 负责认证和
 撮合；设备本地执行一套基于审批的权限策略。
 
-设备使用持久 UUID 进行路由和关联，与显示名称和 TLS 指纹无关。
-设备的稳定 ID、证书指纹与配对边界见[设备身份说明](https://github.com/Daily-AC/wanctl/blob/main/docs/device-identity.md)。
+设备用一个长期不变的 UUID 做路由和关联，与它的显示名、TLS 指纹都无关。
+见[设备身份与升级](device-identity.md)。
 
 ```
 controller (you/agent) ──┐                            ┌── device (wanctl agent)

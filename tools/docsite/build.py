@@ -110,6 +110,7 @@ TECH_GROUPS = [
         "zh": "自部署与架构",
         "files": [
             "architecture.md",
+            "device-identity.md",
             "webfetch.md",
             "self-hosting.md",
             "environment.md",
