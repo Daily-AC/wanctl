@@ -99,3 +99,50 @@ func TestDecidePairDenyReturnsFalse(t *testing.T) {
 		t.Fatal("AskPair should return false when denied")
 	}
 }
+
+// An undecided pairing past pairTTL must stop being offered to the portal, and
+// must stop being approvable. Only askPair pruned, so a request nobody dialled
+// again stayed on screen forever; the portal kept drawing a card whose fp the
+// device would no longer honour, and clicking it looked like a dead button
+// (issue #79).
+func TestExpiredPairingLeavesTheConsole(t *testing.T) {
+	s := newSvc(t)
+	s.timeout = time.Second
+
+	// URL flow: no front-end attending, entry persists for a retroactive click.
+	if s.AskPair("SHA256:stale", "kestrel", "claude-code on kestrel") {
+		t.Fatal("expected false with no front-end")
+	}
+	if len(s.State().PendingPairings) != 1 {
+		t.Fatalf("pair entry not persisted: %+v", s.State().PendingPairings)
+	}
+
+	// Five minutes later.
+	s.mu.Lock()
+	s.pairs["SHA256:stale"].expires = time.Now().Add(-time.Second)
+	s.mu.Unlock()
+
+	if got := s.State().PendingPairings; len(got) != 0 {
+		t.Fatalf("expired pairing still offered to the portal: %+v", got)
+	}
+	if s.DecidePair("SHA256:stale", true) {
+		t.Fatal("an expired pairing request must not still be approvable")
+	}
+}
+
+// Same guarantee reached from the other side: the verdict arrives first, with
+// nothing having called State(). DecidePair must not trust an expired request.
+func TestDecidePairRefusesExpiredWithoutAStateRead(t *testing.T) {
+	s := newSvc(t)
+	s.timeout = time.Second
+	s.AskPair("SHA256:late", "kestrel", "")
+	s.mu.Lock()
+	s.pairs["SHA256:late"].expires = time.Now().Add(-time.Second)
+	s.mu.Unlock()
+	if s.DecidePair("SHA256:late", true) {
+		t.Fatal("DecidePair trusted a request that had already expired")
+	}
+	if s.AskPair("SHA256:late", "kestrel", "") {
+		t.Fatal("controller retry must not find itself trusted")
+	}
+}
