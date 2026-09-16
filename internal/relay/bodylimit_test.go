@@ -57,6 +57,8 @@ func TestBodyCapPerRoute(t *testing.T) {
 		"/admin/tokens/issue":     limits.RelayControlBodyBytes,
 		"/admin/docs/articles":    limits.RelayDocsBodyBytes,
 		"/docs/articles":          limits.RelayDocsBodyBytes,
+		"/mcp":                    limits.RelayMCPBodyBytes,
+		"/mcp/session/abc":        limits.RelayMCPBodyBytes,
 		"/wanctl-mcp":             limits.RelayMCPBodyBytes,
 		"/wanctl-mcp/session/abc": limits.RelayMCPBodyBytes,
 	}

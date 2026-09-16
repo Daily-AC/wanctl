@@ -146,10 +146,15 @@ func (r *Relay) Handler() http.Handler {
 	r.registerUser(mux)
 	r.registerDist(mux)
 	if r.mcpHandler != nil {
-		// AI hosts register https://<relay>/wanctl-mcp as their MCP server URL.
-		// (We can't use /mcp directly: thunderbox's edge nginx reserves any
-		// path starting with /mcp for its own gateway, returning 401 Bearer
-		// Token required before our backend sees the request.)
+		// /mcp is the canonical URL an AI host registers:
+		// https://<relay>/mcp. /wanctl-mcp is an alias kept for deployments
+		// whose edge proxy has already claimed the /mcp prefix — thunderbox's
+		// edge nginx is one, routing any path under /mcp to its own gateway
+		// and answering 401 Bearer Token required before the relay sees the
+		// request. Both prefixes reach the same handler and therefore the
+		// same sessions; a session opened on one can be resumed on the other.
+		mux.Handle("/mcp", r.mcpHandler)
+		mux.Handle("/mcp/", r.mcpHandler)
 		mux.Handle("/wanctl-mcp", r.mcpHandler)
 		mux.Handle("/wanctl-mcp/", r.mcpHandler)
 	}
@@ -183,7 +188,7 @@ func bodyCapFor(path string) int64 {
 	switch {
 	case path == "/h/up":
 		return 0
-	case strings.HasPrefix(path, "/wanctl-mcp"):
+	case strings.HasPrefix(path, "/mcp"), strings.HasPrefix(path, "/wanctl-mcp"):
 		return limits.RelayMCPBodyBytes
 	case strings.HasPrefix(path, "/docs/"), strings.HasPrefix(path, "/admin/docs/"):
 		return limits.RelayDocsBodyBytes
@@ -193,7 +198,8 @@ func bodyCapFor(path string) int64 {
 }
 
 // SetMCPHandler installs the HTTP/Streamable MCP handler the relay will expose
-// at GET/POST /mcp. Pass nil (or never call) to disable the endpoint.
+// at GET/POST /mcp, and at the /wanctl-mcp alias. Pass nil (or never call) to
+// disable the endpoint.
 func (r *Relay) SetMCPHandler(h http.Handler) { r.mcpHandler = h }
 
 // SetWebFetchHandler installs the optional delegated GET adapter.

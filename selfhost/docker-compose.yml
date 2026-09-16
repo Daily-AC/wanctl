@@ -43,7 +43,8 @@ services:
       WANCTL_ADMIN_SECRET: ${WANCTL_ADMIN_SECRET:?set WANCTL_ADMIN_SECRET in selfhost/.env}
       WANCTL_PORTAL_NS: portal
       WANCTL_PUBLIC_ORIGIN: ${RELAY_PUBLIC_ORIGIN:?set RELAY_PUBLIC_ORIGIN in selfhost/.env}
-      # Hosted MCP endpoint at /wanctl-mcp; empty keeps it off. Every MCP
+      # Hosted MCP endpoint at /mcp, plus a /wanctl-mcp alias for edges
+      # that have claimed the /mcp prefix; empty keeps it off. Every MCP
       # session authenticates through the portal and then talks to this relay
       # as an ordinary controller, so the relay needs the portal origin and a
       # way to reach itself. A hosted session pins device identities in

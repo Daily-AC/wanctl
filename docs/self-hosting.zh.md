@@ -166,8 +166,10 @@ openssl rand -hex 32   # paste the value into WANCTL_MCP_SEED in selfhost/.env
 docker compose up -d --no-deps relay
 ```
 
-relay 启动时会打印 `MCP server enabled at /wanctl-mcp`，并开始提供
-`https://relay.example.com/wanctl-mcp`。每个 MCP 会话各自通过门户登录；
+relay 启动时会打印 `MCP server enabled at /mcp`，并开始提供
+`https://relay.example.com/mcp`。如果你的边缘代理已经占掉了 `/mcp` 前缀，就让
+宿主改填 `https://relay.example.com/wanctl-mcp`：它是同一个 handler、同一批
+会话的别名，别的什么都不用改。每个 MCP 会话各自通过门户登录；
 [让 AI 通过 MCP 连上来](#docs/mcp) 是写给登录的人看的那一篇。种子要稳定——
 换掉它等于把所有会话登出，所有存下来的 rebind 凭证一起作废。
 
