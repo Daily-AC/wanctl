@@ -111,6 +111,7 @@ TECH_GROUPS = [
         "files": [
             "architecture.md",
             "device-identity.md",
+            "webfetch.md",
             "self-hosting.md",
             "environment.md",
             "release-signing.md",

@@ -96,7 +96,7 @@ func TestDownloadTableUsesFilesWithExtensions(t *testing.T) {
 // before the language switch is wired, on the very first page of the product.
 func TestAuthScriptMatchesItsPages(t *testing.T) {
 	js := readWeb(t, "web/auth.js")
-	pageNames := []string{"web/login.html", "web/pending.html", "web/enroll.html", "web/delegation.html"}
+	pageNames := []string{"web/login.html", "web/pending.html", "web/enroll.html", "web/delegation.html", "web/delegation-error.html", "web/webfetch-connect.html"}
 
 	id := regexp.MustCompile(`id="([A-Za-z0-9_-]+)"`)
 	anywhere := map[string]bool{}

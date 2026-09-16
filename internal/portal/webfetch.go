@@ -1,14 +1,62 @@
 package portal
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"wanctl/internal/delegation"
 	"wanctl/internal/transport"
 )
+
+func (s *Server) handleWebFetchConnect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	ns, ok := s.pageAuth(w, r, "/webfetch/connect")
+	if !ok {
+		return
+	}
+	// Consume the same public discovery document as other clients, through the
+	// configured internal relay address. This also checks that WebFetch is on.
+	resp, err := s.hc.Get(s.relayURL + "/webfetch/v1?format=json")
+	if err != nil {
+		s.renderStatus(w, http.StatusServiceUnavailable, "webfetch-connect.html", map[string]any{"NS": ns})
+		return
+	}
+	defer resp.Body.Close()
+	var entry struct {
+		Protocol string `json:"protocol"`
+		Template string `json:"start_url_template"`
+	}
+	const suffix = "/webfetch/new/{client_nonce}"
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&entry) != nil || entry.Protocol != "wanctl.webfetch.v1" || !strings.HasSuffix(entry.Template, suffix) {
+		s.renderStatus(w, http.StatusServiceUnavailable, "webfetch-connect.html", map[string]any{"NS": ns})
+		return
+	}
+	origin := strings.TrimSuffix(entry.Template, suffix)
+	if relayPublicOrigin(origin) != origin {
+		http.Error(w, "invalid WebFetch discovery origin", http.StatusBadGateway)
+		return
+	}
+	var nonce [24]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		http.Error(w, "cannot generate a fresh connection", http.StatusInternalServerError)
+		return
+	}
+	// The authenticated owner gets a unique bootstrap URL, not a grant. The AI
+	// still creates its request and waits for the owner's separate approval.
+	startURL := origin + "/webfetch/new/" + hex.EncodeToString(nonce[:])
+	s.render(w, "webfetch-connect.html", map[string]any{"NS": ns, "Relay": origin, "StartURL": startURL})
+}
 
 type delegationDevice struct {
 	Name        string `json:"name"`
@@ -43,32 +91,37 @@ func validDelegationRequestID(id string) bool {
 }
 
 func (s *Server) delegationRequest(w http.ResponseWriter, ns, id string) (delegation.Request, bool) {
+	out, status, err := s.loadDelegationRequest(ns, id)
+	if err != nil {
+		http.Error(w, err.Error(), status)
+		return delegation.Request{}, false
+	}
+	return out, true
+}
+
+func (s *Server) loadDelegationRequest(ns, id string) (delegation.Request, int, error) {
 	var out delegation.Request
 	if !validDelegationRequestID(id) {
-		http.Error(w, "invalid request id", http.StatusBadRequest)
-		return out, false
+		return out, http.StatusBadRequest, errors.New("invalid request id")
 	}
 	resp, err := s.adminReq(http.MethodGet, "/admin/delegations/request", url.Values{"namespace": {ns}, "id": {id}}, nil)
 	if err != nil {
-		http.Error(w, "relay unreachable", http.StatusBadGateway)
-		return out, false
+		return out, http.StatusBadGateway, errors.New("relay unreachable")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		copyResp(w, resp)
-		return out, false
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return out, resp.StatusCode, errors.New(strings.TrimSpace(string(body)))
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		http.Error(w, "invalid relay response", http.StatusBadGateway)
-		return out, false
+		return out, http.StatusBadGateway, errors.New("invalid relay response")
 	}
 	// Pending requests have not selected an owner. Once decided, only that
 	// owner can read the resulting grant through the human portal.
 	if out.Namespace != "" && out.Namespace != ns {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return delegation.Request{}, false
+		return delegation.Request{}, http.StatusForbidden, errors.New("forbidden")
 	}
-	return out, true
+	return out, http.StatusOK, nil
 }
 
 func (s *Server) delegationDevices(w http.ResponseWriter, ns string) ([]delegationDevice, bool) {
@@ -101,7 +154,7 @@ func (s *Server) delegationDevices(w http.ResponseWriter, ns string) ([]delegati
 func (s *Server) handleDelegationPage(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("request")
 	if !validDelegationRequestID(id) {
-		http.Error(w, "invalid request id", http.StatusBadRequest)
+		s.renderStatus(w, http.StatusBadRequest, "delegation-error.html", map[string]any{"Status": http.StatusBadRequest})
 		return
 	}
 	next := "/webfetch/approve?" + url.Values{"request": {id}}.Encode()
@@ -109,8 +162,10 @@ func (s *Server) handleDelegationPage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, ok := s.delegationRequest(w, ns, id)
-	if !ok {
+	req, statusCode, err := s.loadDelegationRequest(ns, id)
+	if err != nil {
+		// Never render the other owner's grant or raw relay response here.
+		s.renderStatus(w, statusCode, "delegation-error.html", map[string]any{"NS": ns, "Status": statusCode})
 		return
 	}
 	pending := req.Status == "pending" && time.Now().Before(req.RequestExpiresAt)

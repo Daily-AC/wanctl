@@ -95,6 +95,7 @@ func liveWebFetch(t *testing.T) *liveFixture {
 	t.Cleanup(webServer.Close)
 	agentDir, root := t.TempDir(), t.TempDir()
 	t.Setenv("WANCTL_CONFIG_DIR", agentDir)
+	t.Setenv("WANCTL_PORTAL", "http://127.0.0.1:9999")
 	identity, err := transport.LoadOrCreateIdentity()
 	if err != nil {
 		t.Fatal(err)
@@ -278,6 +279,10 @@ func TestWebFetchPairingNotBypassedAndInputBoundaries(t *testing.T) {
 	job = awaitJob(t, job)
 	if job["status"] != "failed" {
 		t.Fatalf("unpaired execution=%v", job)
+	}
+	result := job["result"].(map[string]any)
+	if result["error_code"] != "pairing_required" || result["execution_started"] != false || !strings.Contains(result["instruction"].(string), "NEW rid") {
+		t.Fatalf("pairing recovery is ambiguous: %v", result)
 	}
 	if !strings.Contains(fmt.Sprint(job["result"]), "approve") && !strings.Contains(fmt.Sprint(job["result"]), "paired") {
 		t.Fatalf("missing pairing refusal: %v", job)
