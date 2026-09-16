@@ -165,6 +165,34 @@ Set the returned `wanctl_...` value as `WANCTL_PORTAL_TOKEN` in
 docker compose up -d portal
 ```
 
+### Optional: enable the hosted MCP endpoint
+
+An AI host that cannot start a local `wanctl` process — a browser chat, a
+cloud agent runner — can talk to the relay's built-in MCP server over HTTP
+instead. Give the relay a seed and recreate it:
+
+```bash
+openssl rand -hex 32   # paste the value into WANCTL_MCP_SEED in selfhost/.env
+docker compose up -d --no-deps relay
+```
+
+The relay logs `MCP server enabled at /wanctl-mcp` on startup and serves
+`https://relay.example.com/wanctl-mcp`. Each MCP session signs in separately
+through the portal; [Connect an AI over MCP](#docs/mcp) is the guide for
+whoever does that. Keep the seed stable — changing it signs every session out
+and voids every saved rebind credential.
+
+A hosted session keeps its device trust in memory only, so the first time it
+reaches a device it stops at a fingerprint it cannot confirm by itself: the
+session can list devices but run nothing. Accepting that your own relay is
+not the attacker this guards against is what the opt-in costs; leave it unset
+and the endpoint stays read-only:
+
+```ini
+# selfhost/.env, then: docker compose up -d --no-deps relay
+WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1
+```
+
 ### Optional: serve signed releases to devices
 
 With release distribution enabled, devices install with one line and later

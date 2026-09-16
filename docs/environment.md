@@ -21,7 +21,7 @@ Variables marked "conditional" are required only for the feature described.
 | `WANCTL_MCP_LOCAL_ROOT` | MCP stdio | No | process working directory | Only local tree `wanctl_push` and `wanctl_pull` may access. The wanctl config directory is always excluded. |
 | `WANCTL_MCP_ALLOWED_ORIGINS` | MCP HTTP | No | none | Comma-separated browser Origin allowlist. Requests with an Origin are denied unless listed; programmatic clients normally send none. |
 | `WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER` | MCP | No | `0` | Set to `1` only to restore model-callable device TOFU pinning. Default is fail-closed because the model cannot distinguish an independently verified fingerprint from one supplied by a hostile relay. |
-| `WANCTL_WEBFETCH_SEED` | relay/controller adapter | No | disabled | Secret hex seed, at least 32 decoded bytes, enabling `/webfetch`; requires PostgreSQL. See [WebFetch](webfetch.md). |
+| `WANCTL_WEBFETCH_SEED` | relay/controller adapter | No | disabled | Secret hex seed, at least 32 decoded bytes, enabling `/webfetch`; requires PostgreSQL. See [WebFetch](https://github.com/Daily-AC/wanctl/blob/main/docs/webfetch.md). |
 | `WANCTL_WEBFETCH_PORTAL_ORIGIN` | WebFetch | Conditional | none | Canonical HTTPS portal origin for authenticated owner approvals. |
 | `WANCTL_WEBFETCH_RELAY_URL` | WebFetch | No | `WANCTL_PUBLIC_ORIGIN` | Internal controller-to-relay origin; HTTPS or loopback HTTP. |
 | `RELAY_ADMIN_URL` | portal | Yes | none | Internal relay base URL used for the portal's admin proxy, such as `http://relay:8080`. |

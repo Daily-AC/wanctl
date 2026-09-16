@@ -156,6 +156,30 @@ curl -fsS https://relay.example.com/admin/tokens/issue \
 docker compose up -d portal
 ```
 
+### 可选：打开托管的 MCP 端点
+
+起不了本地 `wanctl` 进程的 AI 宿主——网页版聊天、云端 agent 运行器——可以改用
+HTTP 连 relay 内置的 MCP server。给 relay 一个种子，然后重建它：
+
+```bash
+openssl rand -hex 32   # paste the value into WANCTL_MCP_SEED in selfhost/.env
+docker compose up -d --no-deps relay
+```
+
+relay 启动时会打印 `MCP server enabled at /wanctl-mcp`，并开始提供
+`https://relay.example.com/wanctl-mcp`。每个 MCP 会话各自通过门户登录；
+[让 AI 通过 MCP 连上来](#docs/mcp) 是写给登录的人看的那一篇。种子要稳定——
+换掉它等于把所有会话登出，所有存下来的 rebind 凭证一起作废。
+
+托管会话的设备信任只存在内存里，所以它第一次连上某台设备时会停在一个自己无法确认的
+指纹上：这个会话能列出设备，但什么都跑不了。打开那个开关的代价，就是承认你自己的
+relay 不是它要防的那个攻击者；不打开，这个端点就只能读：
+
+```ini
+# selfhost/.env, then: docker compose up -d --no-deps relay
+WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1
+```
+
 ### 可选：给设备提供签名过的发布包
 
 打开发布分发之后，设备一行就能装上，之后用 `wanctl update` 升级，两者都对着项目的
