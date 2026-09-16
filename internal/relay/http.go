@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wanctl/internal/delegation"
 	"wanctl/internal/limits"
 	"wanctl/internal/sessionauth"
 )
@@ -21,6 +22,7 @@ type httpAgent struct {
 	inst             string
 	retired          map[string]struct{}
 	changed          chan struct{}
+	delegation       bool
 }
 
 // sideQueue is one direction of a session's byte flow. The relay never inspects
@@ -94,9 +96,11 @@ type httpSession struct {
 	// inject into or tear down a session in another (audit 2026-08-28,
 	// SEC-A-02). lastActive is bumped by every /h/up and /h/down so the sweeper
 	// can reap sessions that both parties have abandoned (SEC-A-03).
-	callerNS   string
-	ownerNS    string
-	lastActive time.Time
+	callerNS     string
+	credentialID string
+	lease        *accessLease
+	ownerNS      string
+	lastActive   time.Time
 }
 
 func (s *httpSession) close() {
@@ -189,6 +193,7 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 		a.inst = inst
 	}
 	a.name = req.URL.Query().Get("name")
+	a.delegation = req.URL.Query().Get("delegation") == "1"
 	a.lastSeen = time.Now()
 	r.hagents[key] = a
 	changed := a.changed
@@ -244,7 +249,7 @@ func (r *Relay) requeueHTTPJob(key string, open sessionauth.Open) {
 }
 
 func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(w, req)
+	access, token, ok := r.authAccess(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -253,7 +258,7 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 	// polling. Start the session reaper on this path too, or abandoned hybrid
 	// sessions live forever despite the idle deadline.
 	r.startHTTPReaper()
-	targetKey, auth, reason, ok := r.dialAllowedReason(ns, req.URL.Query().Get("target"))
+	targetKey, auth, reason, ok := r.dialAccessAllowed(access, req.URL.Query().Get("target"))
 	if !ok {
 		http.Error(w, dialRefusal(reason), http.StatusForbidden)
 		return
@@ -262,13 +267,18 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 	a := r.hagents[targetKey]
 	if a == nil || time.Since(a.lastSeen) > httpAgentTTL {
 		r.hmu.Unlock()
-		r.handleHDialToWS(w, targetKey, auth)
+		r.handleHDialToWS(w, targetKey, auth, access, token)
+		return
+	}
+	if access.Delegated && !a.delegation {
+		r.hmu.Unlock()
+		http.Error(w, "device agent must be upgraded for delegated access", http.StatusConflict)
 		return
 	}
 	sid := newID()
 	auth.Session = sid
 	r.hmu.Unlock()
-	r.newHTTPSession(sid, auth)
+	r.newHTTPSession(sid, auth, access, token)
 
 	select {
 	case a.open <- auth:
@@ -339,22 +349,21 @@ func (r *Relay) wsDeviceLive(key string) bool {
 }
 
 func (r *Relay) handleHPeers(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(w, req)
+	access, _, ok := r.authAccess(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	devices, aliases := r.livePeers(ns)
-	writeJSON(w, peersBody(ns, devices, aliases, r.sharedPeers(ns)))
+	writeJSON(w, r.accessPeers(access))
 }
 
 func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(w, req)
+	access, _, ok := r.authAccess(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	s := r.sessionForParty(req.URL.Query().Get("session"), ns)
+	s := r.sessionForAccess(req.URL.Query().Get("session"), access, req.URL.Query().Get("role"))
 	if s == nil {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
@@ -370,6 +379,11 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "read body", http.StatusBadRequest)
 		return
 	}
+	if s.lease != nil && !s.lease.credentialValid() {
+		r.closeHTTPSession(req.URL.Query().Get("session"), s)
+		http.Error(w, "session closed", http.StatusGone)
+		return
+	}
 	dst := s.toAgent // role=client writes toward the agent
 	if req.URL.Query().Get("role") == "agent" {
 		dst = s.toClient
@@ -382,12 +396,12 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(w, req)
+	access, _, ok := r.authAccess(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	s := r.sessionForParty(req.URL.Query().Get("session"), ns)
+	s := r.sessionForAccess(req.URL.Query().Get("session"), access, req.URL.Query().Get("role"))
 	if s == nil {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
@@ -397,6 +411,11 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 		src = s.toAgent
 	}
 	data, closed := src.drain(downPollWait)
+	if s.lease != nil && !s.lease.credentialValid() {
+		r.closeHTTPSession(req.URL.Query().Get("session"), s)
+		http.Error(w, "session closed", http.StatusGone)
+		return
+	}
 	if closed && len(data) == 0 {
 		http.Error(w, "session closed", http.StatusGone)
 		return
@@ -411,7 +430,7 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(w, req)
+	access, _, ok := r.authAccess(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -419,7 +438,7 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 	sid := req.URL.Query().Get("session")
 	r.hmu.Lock()
 	s := r.hsess[sid]
-	if s == nil || (ns != s.callerNS && ns != s.ownerNS) {
+	if s == nil || !s.allowsAccess(access, req.URL.Query().Get("role")) {
 		r.hmu.Unlock()
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
@@ -427,6 +446,9 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 	delete(r.hsess, sid)
 	r.hmu.Unlock()
 	s.close()
+	if s.lease != nil {
+		s.lease.close()
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -436,14 +458,20 @@ func (r *Relay) session(sid string) *httpSession {
 	return r.hsess[sid]
 }
 
-// sessionForParty returns the session only if ns is one of its two parties
-// (the dialing controller or the device owner), and marks it active. A caller
-// that is neither gets nil — indistinguishable from an unknown id.
-func (r *Relay) sessionForParty(sid, ns string) *httpSession {
+// Delegated controllers can touch only their own session's client role. Full
+// credentials preserve the existing owner/controller namespace behavior.
+func (s *httpSession) allowsAccess(a delegation.Access, role string) bool {
+	if a.Delegated {
+		return (role == "" || role == "client") && s.credentialID != "" && a.CredentialID == s.credentialID && a.Namespace == s.callerNS
+	}
+	return a.Namespace == s.callerNS || a.Namespace == s.ownerNS
+}
+
+func (r *Relay) sessionForAccess(sid string, a delegation.Access, role string) *httpSession {
 	r.hmu.Lock()
 	defer r.hmu.Unlock()
 	s := r.hsess[sid]
-	if s == nil || (ns != s.callerNS && ns != s.ownerNS) {
+	if s == nil || !s.allowsAccess(a, role) {
 		return nil
 	}
 	s.lastActive = time.Now()
@@ -505,6 +533,9 @@ func (r *Relay) reapHTTP(now time.Time) {
 	}
 	for _, s := range dead {
 		s.close()
+		if s.lease != nil {
+			s.lease.close()
+		}
 	}
 }
 

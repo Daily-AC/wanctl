@@ -156,12 +156,12 @@ func (r *Relay) resolveLiveLabel(ns, target string) (string, bool) {
 // handleResolve gives controllers the exact route before they look up TLS pins.
 // Metadata is released only after the same owner/ACL check used for dialing.
 func (r *Relay) handleResolve(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(w, req)
+	access, _, ok := r.authAccess(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", 401)
 		return
 	}
-	key, auth, reason, ok := r.dialAllowedReason(ns, req.URL.Query().Get("target"))
+	key, auth, reason, ok := r.dialAccessAllowed(access, req.URL.Query().Get("target"))
 	if !ok {
 		if reason == "" {
 			reason = "device unavailable or ambiguous; use its device ID"

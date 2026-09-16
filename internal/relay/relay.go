@@ -27,12 +27,13 @@ import (
 )
 
 type agentConn struct {
-	device string
-	name   string
-	ns     string
-	inst   string
-	ctrl   io.Writer
-	mu     sync.Mutex // serialize control writes
+	device     string
+	name       string
+	ns         string
+	inst       string
+	ctrl       io.Writer
+	delegation bool
+	mu         sync.Mutex // serialize control writes
 }
 
 func (a *agentConn) send(v any) error {
@@ -44,6 +45,7 @@ func (a *agentConn) send(v any) error {
 type pendingSession struct {
 	agentSide chan io.ReadWriteCloser
 	done      chan struct{}
+	ownerNS   string
 }
 
 // Grant is a live cross-namespace share.
@@ -70,18 +72,19 @@ type webhookSender interface {
 
 // Relay is the broker.
 type Relay struct {
-	ts          TokenStore
-	acl         ACLChecker
-	audit       Auditor
-	admin       AdminStore
-	aliases     DeviceAliasStore
-	notifyStore NotifyStore
-	notifySend  webhookSender
-	docs        DocsStore
-	mcpHandler  http.Handler // optional: HTTP/Streamable MCP at /mcp
-	adminSecret string
-	portalNS    string
-	logs        *serverlog.Buffer
+	ts              TokenStore
+	acl             ACLChecker
+	audit           Auditor
+	admin           AdminStore
+	aliases         DeviceAliasStore
+	notifyStore     NotifyStore
+	notifySend      webhookSender
+	docs            DocsStore
+	mcpHandler      http.Handler // optional: HTTP/Streamable MCP at /mcp
+	webfetchHandler http.Handler // optional: GET adapter for delegated controllers
+	adminSecret     string
+	portalNS        string
+	logs            *serverlog.Buffer
 
 	registrationMu sync.Mutex
 	mu             sync.Mutex
@@ -92,6 +95,8 @@ type Relay struct {
 	hagents    map[string]*httpAgent   // key "ns/device" (HTTP transport)
 	hsess      map[string]*httpSession // key session id (HTTP transport)
 	reaperOnce sync.Once
+	leaseMu    sync.Mutex
+	leases     map[string]*accessLease
 
 	enrollMu    sync.Mutex
 	enrollCodes map[string]*enrollCode // one-time device-enrollment codes
@@ -122,6 +127,7 @@ func (r *Relay) Handler() http.Handler {
 	mux.HandleFunc("/agent", r.handleAgent)
 	mux.HandleFunc("/agent/notify-policy", r.handleAgentNotifyPolicy)
 	mux.HandleFunc("/agent/events", r.handleAgentEvent)
+	mux.HandleFunc("/agent/delegation-check", r.handleAgentDelegationCheck)
 	mux.HandleFunc("/dial", r.handleDial)
 	mux.HandleFunc("/session/", r.handleSession)
 	mux.HandleFunc("/peers", r.handlePeers)
@@ -146,6 +152,10 @@ func (r *Relay) Handler() http.Handler {
 		// Token required before our backend sees the request.)
 		mux.Handle("/wanctl-mcp", r.mcpHandler)
 		mux.Handle("/wanctl-mcp/", r.mcpHandler)
+	}
+	if r.webfetchHandler != nil {
+		mux.Handle("/webfetch", r.webfetchHandler)
+		mux.Handle("/webfetch/", r.webfetchHandler)
 	}
 	return limitBodies(mux)
 }
@@ -186,6 +196,9 @@ func bodyCapFor(path string) int64 {
 // at GET/POST /mcp. Pass nil (or never call) to disable the endpoint.
 func (r *Relay) SetMCPHandler(h http.Handler) { r.mcpHandler = h }
 
+// SetWebFetchHandler installs the optional delegated GET adapter.
+func (r *Relay) SetWebFetchHandler(h http.Handler) { r.webfetchHandler = h }
+
 // SetAdmin installs the admin store backing the /admin/* endpoints.
 func (r *Relay) SetAdmin(a AdminStore) {
 	r.admin = a
@@ -210,6 +223,9 @@ func (r *Relay) SetLogBuffer(logs *serverlog.Buffer) { r.logs = logs }
 func (r *Relay) auth(w http.ResponseWriter, req *http.Request) (ns string, ok bool) {
 	token, legacy, ok := admission.Token(req)
 	if !ok {
+		return "", false
+	}
+	if strings.HasPrefix(token, "wfd_") {
 		return "", false
 	}
 	if legacy {
@@ -337,6 +353,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	var reg struct {
 		Op, Device, Fingerprint, Inst, Name string
 		DeviceID                            string `json:"device_id"`
+		Delegation                          string `json:"delegation"`
 	}
 	if err := dec.Decode(&reg); err != nil || reg.Op != "register" || reg.Device == "" {
 		c.Close(websocket.StatusPolicyViolation, "expected register")
@@ -367,7 +384,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	}
 	key := ns + "/" + reg.Device
 	wasLive := r.deviceLive(ns, reg.Device)
-	ac := &agentConn{device: reg.Device, name: reg.Name, ns: ns, inst: reg.Inst, ctrl: nc}
+	ac := &agentConn{device: reg.Device, name: reg.Name, ns: ns, inst: reg.Inst, ctrl: nc, delegation: reg.Delegation == "1"}
 	r.mu.Lock()
 	r.agents[key] = ac
 	r.mu.Unlock()
@@ -404,12 +421,12 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(w, req)
+	access, token, ok := r.authAccess(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	targetKey, auth, reason, ok := r.dialAllowedReason(ns, req.URL.Query().Get("target"))
+	targetKey, auth, reason, ok := r.dialAccessAllowed(access, req.URL.Query().Get("target"))
 	if !ok {
 		http.Error(w, dialRefusal(reason), http.StatusForbidden)
 		return
@@ -418,14 +435,20 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 	ac := r.agents[targetKey]
 	r.mu.Unlock()
 	if ac == nil {
-		r.handleWSDialToHTTP(w, req, targetKey, auth)
+		r.handleWSDialToHTTP(w, req, targetKey, auth, access, token)
+		return
+	}
+	if access.Delegated && !ac.delegation {
+		http.Error(w, "device agent must be upgraded for delegated access", http.StatusConflict)
 		return
 	}
 	if r.audit != nil {
 		r.audit.Audit(auth.OwnerNamespace, auth.Device, "dial")
 	}
 	sid := newID()
-	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), done: make(chan struct{})}
+	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), done: make(chan struct{}), ownerNS: auth.OwnerNamespace}
+	lease := r.beginAccessLease(sid, targetKey, access, token)
+	defer lease.close()
 	r.mu.Lock()
 	r.pending[sid] = ps
 	r.mu.Unlock()
@@ -449,17 +472,22 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 	}
 	limits.ClearHijackedDeadline(req.Context())
 	clientNC := wsconn.FromAccepted(req.Context(), c)
+	lease.addCloser(func() { clientNC.Close() })
 
 	select {
 	case agentNC := <-ps.agentSide:
+		lease.addCloser(func() { agentNC.Close() })
 		pipe(clientNC, agentNC)
+	case <-lease.done:
+		return
 	case <-time.After(agentSessionOpenTimeout):
 		c.Close(websocket.StatusBadGateway, "agent did not open session")
 	}
 }
 
 func (r *Relay) handleSession(w http.ResponseWriter, req *http.Request) {
-	if _, ok := r.auth(w, req); !ok {
+	ns, ok := r.auth(w, req)
+	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -467,7 +495,7 @@ func (r *Relay) handleSession(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	ps := r.pending[sid]
 	r.mu.Unlock()
-	if ps == nil {
+	if ps == nil || (ps.ownerNS != "" && ps.ownerNS != ns) {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
 	}
@@ -487,14 +515,12 @@ func (r *Relay) handleSession(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) handlePeers(w http.ResponseWriter, req *http.Request) {
-	ns, ok := r.auth(w, req)
+	access, _, ok := r.authAccess(w, req)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	devices, aliases := r.livePeers(ns)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(peersBody(ns, devices, aliases, r.sharedPeers(ns)))
+	writeJSON(w, r.accessPeers(access))
 }
 
 // pipe copies bytes both directions until either side closes, then tears down.

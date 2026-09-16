@@ -138,7 +138,7 @@ func TestAuthPagesAbsentInHeaderMode(t *testing.T) {
 // which still carry their placeholders.
 func TestAssetsRefuseHTML(t *testing.T) {
 	s := New(Config{})
-	for _, name := range []string{"index.html", "login.html", "pending.html", "enroll.html"} {
+	for _, name := range []string{"index.html", "login.html", "pending.html", "enroll.html", "delegation.html"} {
 		rec := httptest.NewRecorder()
 		s.handleAsset(rec, httptest.NewRequest("GET", "/assets/"+name, nil))
 		if rec.Code != http.StatusNotFound {

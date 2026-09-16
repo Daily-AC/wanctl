@@ -21,7 +21,7 @@ import (
 //
 // All three share /assets/app.css and /assets/auth.js with the app. That is
 // what handleAsset's deliberate lack of authentication is for.
-var pages = template.Must(template.ParseFS(assets, "web/login.html", "web/pending.html", "web/enroll.html"))
+var pages = template.Must(template.ParseFS(assets, "web/login.html", "web/pending.html", "web/enroll.html", "web/delegation.html"))
 
 // render writes one of those pages. It buffers first: a template that fails
 // halfway would otherwise have already sent 200 plus half a page, which reads
