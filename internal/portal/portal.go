@@ -1590,6 +1590,13 @@ func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.pairDecide(body.FP, body.Verdict); err != nil {
+		// A request the device no longer holds is not a broken device. 404 with
+		// the token the SPA already knows how to turn into one sentence, so a
+		// card that outlived its request says so instead of pretending it won.
+		if errors.Is(err, errPairingGone) {
+			http.Error(w, "pairing_gone", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}

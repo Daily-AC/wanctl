@@ -106,6 +106,7 @@
       eNotFriends: 'You are not friends yet.',
       ePending: 'That invite has not been accepted yet.',
       eBadCode: 'That code is not valid.',
+      ePairGone: 'That pairing request expired or was already answered. Ask the AI to try again.',
       failedGeneric: 'That did not work.',
       failedCode: 'Failed:',
       aliasTaken: 'Another device already answers to that alias.',
@@ -221,6 +222,7 @@
       eNotFriends: '你们还不是好友。',
       ePending: '这条邀请还没被接受。',
       eBadCode: '这个码不对。',
+      ePairGone: '这条配对请求已经过期或被人答过了。让 AI 再试一次。',
       failedGeneric: '没成功。',
       failedCode: '失败：',
       aliasTaken: '这个别名已经指向另一台设备了。',
@@ -378,6 +380,7 @@
     unauthorized: 'eUnauthorized',
     not_found: 'eNotFound',
     bad_verification_code: 'eBadCode',
+    pairing_gone: 'ePairGone',
     'no-such-user': 'eNoUser',
     'no-such-friend': 'eNoFriend',
     'not-friends': 'eNotFriends',
@@ -571,7 +574,13 @@
       if (el) el.classList.add('gone');
       toast(v === 'n' ? t().refusedPair : t().trusted, v === 'n');
       setTimeout(refreshAsks, 340);
-    }).catch(oops);
+    }).catch(function (e) {
+      // 失败的那一路也要再读一遍。这张卡是一份快照，而它刚刚被证明是过期的
+      // （404 pairing_gone）：不重读，人就只拿到一句话，那张已经作废的卡还
+      // 留在屏幕上等着被再点一次（issue #79）。
+      oops(e);
+      setTimeout(refreshAsks, 340);
+    });
   }
 
   /* 秒表每秒跳一次。它是真的 —— `wanctl exec` 就阻塞在那儿等人回答。 */
@@ -1709,6 +1718,11 @@
         toast(v === 'y' ? t().trustedNow : t().refusedPair, v === 'n');
         setTimeout(function () { try { window.close(); } catch (_) {} }, 1400);
       }).catch(function (e) {
+        // 这一屏整个是从链接里的参数画出来的，设备说了什么它不知道 —— 于是
+        // 五分钟之后它照旧摆在那儿，而且是个关不掉的浮层，盖住底下那份真的
+        // 待审批清单（issue #79）。设备回 404 就是「这条已经不在了」：收掉
+        // 浮层，剩下那一句话，而不是把两个按钮重新点亮再让人点一遍。
+        if (e && e.status === 404) { hidePair(); return oops(e); }
         $('#pairYes').disabled = $('#pairNo').disabled = false;
         oops(e);
       });
@@ -1733,6 +1747,12 @@
     $('#pair').classList.remove('show');
     if (location.hash.indexOf('#pair') === 0) history.replaceState(null, '', '#devices');
   }
+  // 这是四张浮层里唯一一张没有出口的：确认框和表单都吃 Esc，它不吃。一张
+  // 从链接里画出来的、答不掉也关不掉的浮层，会一直盖在待审批清单上 —— 人
+  // 去点底下那张卡，点到的是遮罩，三次都没有任何请求发出去（issue #79）。
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && $('#pair').classList.contains('show')) hidePair();
+  });
 
   /* ── 路由 ────────────────────────────────────────────────────────── */
   function showView(v) {
