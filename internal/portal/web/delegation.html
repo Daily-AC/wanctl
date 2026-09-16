@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Web AI access · wanctl</title>
+<link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css?v={{.V}}">
+</head>
+<body class="auth delegation">
+<header class="top">
+  <a class="brand" href="/"><svg class="mk" viewBox="0 0 32 32" aria-hidden="true"><path d="M5.6 12.4 10.2 21.8 15.2 14.6 19.6 21.8 26.4 7.6" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"/></svg>wanctl</a>
+  <div class="tools"><button class="chip" id="lang">中文</button></div>
+</header>
+<main>
+  <h1 data-en="Web AI access" data-zh="网页 AI 授权">Web AI access</h1>
+  <p class="lead" data-en="Let this client use selected devices for a short time. Your devices keep deciding which operations to allow."
+     data-zh="让这个客户端临时使用选中的设备。每次操作仍由设备现有的规则和审批决定。">Let this client use selected devices for a short time. Your devices keep deciding which operations to allow.</p>
+  <dl class="delegate-details">
+    <dt data-en="Your account" data-zh="你的账号">Your account</dt><dd>{{.NS}}</dd>
+    <dt data-en="Client label (self-reported)" data-zh="客户端名称（自行填写）">Client label (self-reported)</dt><dd>{{.Request.Label}}</dd>
+    <dt data-en="Controller fingerprint" data-zh="控制端指纹">Controller fingerprint</dt><dd class="fp">{{.Request.ControllerFingerprint}}</dd>
+    <dt data-en="Request" data-zh="申请编号">Request</dt><dd class="mono">{{.Request.ID}}</dd>
+  </dl>
+  {{if .Pending}}
+  <form id="delegate" data-request="{{.Request.ID}}" data-controller-fingerprint="{{.Request.ControllerFingerprint}}">
+    <fieldset class="delegate-devices">
+      <legend data-en="Choose your devices" data-zh="选择你的设备">Choose your devices</legend>
+      {{range .Devices}}
+      <label class="delegate-device">
+        <input type="checkbox" name="device" value="{{.Name}}" data-fingerprint="{{.Fingerprint}}">
+        <span><b>{{.Label}}</b>{{if not .Online}} <small data-en="offline" data-zh="离线">offline</small>{{end}}
+          <span class="delegate-id mono">{{.Name}}</span>
+          <span class="fp">{{.Fingerprint}}</span>
+        </span>
+      </label>
+      {{else}}
+      <p class="fine" data-en="No owned devices with a registered identity. Enroll a device first."
+         data-zh="还没有已登记身份的自有设备，请先接入设备。">No owned devices with a registered identity. Enroll a device first.</p>
+      {{end}}
+    </fieldset>
+    <label class="delegate-duration" for="delegateMinutes"><span data-en="Expires in" data-zh="有效期">Expires in</span>
+      <select id="delegateMinutes" name="minutes">
+        <option value="5" data-en="5 minutes" data-zh="5 分钟">5 minutes</option>
+        <option value="15" selected data-en="15 minutes" data-zh="15 分钟">15 minutes</option>
+        <option value="30" data-en="30 minutes" data-zh="30 分钟">30 minutes</option>
+        <option value="60" data-en="60 minutes" data-zh="60 分钟">60 minutes</option>
+      </select>
+    </label>
+    <label class="delegate-confirm"><input id="delegateConfirm" type="checkbox" required>
+      <span data-en="I recognize this request and have checked the controller and selected device fingerprints."
+            data-zh="我确认这是我的申请，已核对控制端和所选设备的指纹。">I recognize this request and have checked the controller and selected device fingerprints.</span>
+    </label>
+    <p class="fine" data-en="This grants device use only. It cannot change trust, rules or mode, or approve operations. First connections still use the existing pairing flow. A device in bypass mode allows operations without asking."
+       data-zh="只授予设备使用权，不能修改信任、规则和模式，也不能审批操作。首次连接仍需按现有流程配对；处于 bypass 模式的设备会直接放行操作。">This grants device use only. It cannot change trust, rules or mode, or approve operations. First connections still use the existing pairing flow. A device in bypass mode allows operations without asking.</p>
+    <div class="delegate-actions">
+      <button type="submit" class="btn" id="delegateApprove" disabled data-en="Approve access" data-zh="同意访问">Approve access</button>
+      <button type="button" class="btn soft" id="delegateReject" data-en="Reject" data-zh="拒绝">Reject</button>
+    </div>
+    <p class="err" id="delegateError" role="alert"></p>
+  </form>
+  {{else}}
+  <p class="lead" id="delegateStatus" data-status="{{.Status}}">
+    {{if eq .Status "approved"}}<span data-en="Access approved. Return to your AI chat to continue. You can revoke it in Access tokens."
+      data-zh="已同意访问。返回 AI 对话继续，可在访问令牌中随时吊销。">Access approved. Return to your AI chat to continue. You can revoke it in Access tokens.</span>
+    {{else if eq .Status "rejected"}}<span data-en="This request was rejected." data-zh="此申请已被拒绝。">This request was rejected.</span>
+    {{else}}<span data-en="This request is no longer active. Ask your AI to start again." data-zh="此申请已失效，请让 AI 重新发起。">This request is no longer active. Ask your AI to start again.</span>{{end}}
+  </p>
+  {{if .Request.ExpiresAt}}<p class="fine"><span data-en="Expires: " data-zh="到期时间：">Expires: </span><time>{{.Request.ExpiresAt.Format "2006-01-02 15:04:05 MST"}}</time></p>{{end}}
+  {{end}}
+  <p class="fine"><a href="/#settings/tokens" data-en="Manage access tokens" data-zh="管理访问令牌">Manage access tokens</a></p>
+</main>
+<script src="/assets/auth.js?v={{.V}}"></script>
+</body>
+</html>

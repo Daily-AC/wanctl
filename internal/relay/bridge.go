@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"wanctl/internal/delegation"
 	"wanctl/internal/limits"
 	"wanctl/internal/sessionauth"
 	"wanctl/internal/wsconn"
@@ -64,27 +65,43 @@ func (c *httpSessionConn) Close() error {
 	return nil
 }
 
-func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open) *httpSession {
+func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegation.Access, token string) *httpSession {
 	s := &httpSession{
-		toClient:   newSideQueue(),
-		toAgent:    newSideQueue(),
-		callerNS:   auth.CallerNamespace,
-		ownerNS:    auth.OwnerNamespace,
-		lastActive: time.Now(),
+		toClient:     newSideQueue(),
+		toAgent:      newSideQueue(),
+		callerNS:     auth.CallerNamespace,
+		credentialID: auth.CredentialID,
+		ownerNS:      auth.OwnerNamespace,
+		lastActive:   time.Now(),
 	}
 	r.hmu.Lock()
 	r.hsess[sid] = s
 	r.hmu.Unlock()
+	s.lease = r.beginAccessLease(sid, auth.OwnerNamespace+"/"+auth.Device, access, token)
+	s.lease.addCloser(func() {
+		r.hmu.Lock()
+		if r.hsess[sid] == s {
+			delete(r.hsess, sid)
+		}
+		r.hmu.Unlock()
+		s.close()
+	})
 	return s
 }
 
 func (r *Relay) closeHTTPSession(sid string, s *httpSession) {
+	if s == nil {
+		return
+	}
 	r.hmu.Lock()
 	if r.hsess[sid] == s {
 		delete(r.hsess, sid)
 	}
 	r.hmu.Unlock()
 	s.close()
+	if s.lease != nil {
+		s.lease.close()
+	}
 }
 
 func (r *Relay) httpSessionConn(sid string, s *httpSession, role string) io.ReadWriteCloser {
@@ -99,7 +116,7 @@ func (r *Relay) httpSessionConn(sid string, s *httpSession, role string) io.Read
 	}
 }
 
-func (r *Relay) handleWSDialToHTTP(w http.ResponseWriter, req *http.Request, targetKey string, auth sessionauth.Open) {
+func (r *Relay) handleWSDialToHTTP(w http.ResponseWriter, req *http.Request, targetKey string, auth sessionauth.Open, access delegation.Access, token string) {
 	r.hmu.Lock()
 	a := r.hagents[targetKey]
 	if a == nil || time.Since(a.lastSeen) > httpAgentTTL {
@@ -107,10 +124,15 @@ func (r *Relay) handleWSDialToHTTP(w http.ResponseWriter, req *http.Request, tar
 		http.Error(w, "device offline", http.StatusNotFound)
 		return
 	}
+	if access.Delegated && !a.delegation {
+		r.hmu.Unlock()
+		http.Error(w, "device agent must be upgraded for delegated access", http.StatusConflict)
+		return
+	}
 	sid := newID()
 	auth.Session = sid
 	r.hmu.Unlock()
-	s := r.newHTTPSession(sid, auth)
+	s := r.newHTTPSession(sid, auth, access, token)
 
 	select {
 	case a.open <- auth:
@@ -129,10 +151,11 @@ func (r *Relay) handleWSDialToHTTP(w http.ResponseWriter, req *http.Request, tar
 	}
 	limits.ClearHijackedDeadline(req.Context())
 	clientNC := wsconn.FromAccepted(req.Context(), c)
+	s.lease.addCloser(func() { clientNC.Close() })
 	pipe(clientNC, r.httpSessionConn(sid, s, "client"))
 }
 
-func (r *Relay) handleHDialToWS(w http.ResponseWriter, targetKey string, auth sessionauth.Open) {
+func (r *Relay) handleHDialToWS(w http.ResponseWriter, targetKey string, auth sessionauth.Open, access delegation.Access, token string) {
 	r.mu.Lock()
 	ac := r.agents[targetKey]
 	r.mu.Unlock()
@@ -141,12 +164,16 @@ func (r *Relay) handleHDialToWS(w http.ResponseWriter, targetKey string, auth se
 		return
 	}
 
+	if access.Delegated && !ac.delegation {
+		http.Error(w, "device agent must be upgraded for delegated access", http.StatusConflict)
+		return
+	}
 	sid := newID()
 	auth.Op = "open"
 	auth.Session = sid
 	auth.URL = "/session/" + sid
-	s := r.newHTTPSession(sid, auth)
-	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), done: make(chan struct{})}
+	s := r.newHTTPSession(sid, auth, access, token)
+	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), done: make(chan struct{}), ownerNS: auth.OwnerNamespace}
 	r.mu.Lock()
 	r.pending[sid] = ps
 	r.mu.Unlock()
@@ -169,6 +196,7 @@ func (r *Relay) bridgeHTTPControllerToWS(sid string, s *httpSession, ps *pending
 	defer timer.Stop()
 	select {
 	case agentNC := <-ps.agentSide:
+		s.lease.addCloser(func() { agentNC.Close() })
 		pipe(r.httpSessionConn(sid, s, "agent"), agentNC)
 	case <-timer.C:
 		r.closeHTTPSession(sid, s)

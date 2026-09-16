@@ -39,6 +39,7 @@ import (
 	"wanctl/internal/script"
 	"wanctl/internal/serverlog"
 	"wanctl/internal/transport"
+	"wanctl/internal/webfetch"
 )
 
 var usage = `wanctl — control a device across the internet over an encrypted, relayed channel
@@ -298,12 +299,14 @@ func cmdRelay(args []string) error {
 		return err
 	}
 	var r *relay.Relay
+	var pgStore *relay.PGStore
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
 		pg, err := relay.OpenPG(dsn)
 		if err != nil {
 			return fmt.Errorf("postgres: %w", err)
 		}
 		r = relay.New(pg)
+		pgStore = pg
 		r.SetACL(pg)
 		r.SetAuditor(pg)
 		r.SetAdmin(pg)
@@ -356,6 +359,31 @@ func cmdRelay(args []string) error {
 		}
 		r.SetMCPHandler(h)
 		log.Print("wanctl relay: MCP server enabled at /wanctl-mcp (Streamable HTTP)")
+	}
+	if seedHex := os.Getenv("WANCTL_WEBFETCH_SEED"); seedHex != "" {
+		if pgStore == nil {
+			return fmt.Errorf("WebFetch requires DATABASE_URL for durable delegation and job records")
+		}
+		seed, err := hex.DecodeString(seedHex)
+		if err != nil {
+			return fmt.Errorf("WANCTL_WEBFETCH_SEED must be hex-encoded")
+		}
+		publicOrigin := os.Getenv("WANCTL_PUBLIC_ORIGIN")
+		relayURL := os.Getenv("WANCTL_WEBFETCH_RELAY_URL")
+		if relayURL == "" {
+			relayURL = publicOrigin
+		}
+		h, err := webfetch.New(webfetch.Config{
+			Store: pgStore, Jobs: pgStore, Seed: seed,
+			PublicOrigin: publicOrigin, RelayURL: relayURL,
+			PortalOrigin: os.Getenv("WANCTL_WEBFETCH_PORTAL_ORIGIN"),
+		})
+		if err != nil {
+			return fmt.Errorf("webfetch: %w", err)
+		}
+		defer h.Close()
+		r.SetWebFetchHandler(h)
+		log.Print("wanctl relay: WebFetch enabled at /webfetch (owner-approved device delegation)")
 	}
 	log.Printf("wanctl relay listening on %s", *addr)
 	return limits.HTTPServer(*addr, r.Handler()).ListenAndServe()

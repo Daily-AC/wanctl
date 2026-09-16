@@ -60,6 +60,46 @@
     });
   }
 
+  /* WebFetch uses the same authenticated approval surface as other clients.
+     GET displays the request; only this CSRF-protected POST grants access. */
+  var delegate = $('#delegate');
+  if (delegate) {
+    var approve = $('#delegateApprove'), reject = $('#delegateReject');
+    var delegateError = $('#delegateError');
+    var selectedDevices = function () { return $$('#delegate input[name="device"]:checked'); };
+    var updateApprove = function () {
+      approve.disabled = !$('#delegateConfirm').checked || !selectedDevices().length;
+    };
+    delegate.addEventListener('change', function (event) {
+      if (event.target.name === 'device' || event.target.name === 'minutes') $('#delegateConfirm').checked = false;
+      updateApprove();
+    });
+    var decide = function (path, body) {
+      approve.disabled = reject.disabled = true;
+      delegateError.textContent = '';
+      post(path, body).then(function (r) {
+        if (r.ok) { location.reload(); return; }
+        return r.text().then(function (msg) { throw new Error(msg.trim() || ('HTTP ' + r.status)); });
+      }).catch(function (err) {
+        delegateError.textContent = err.message || (lang === 'en' ? 'Network error — try again.' : '网络错误，请重试。');
+        reject.disabled = false;
+        updateApprove();
+      });
+    };
+    delegate.onsubmit = function (event) {
+      event.preventDefault();
+      var selected = selectedDevices(), fingerprints = {};
+      if (!selected.length || !$('#delegateConfirm').checked) return;
+      selected.forEach(function (input) { fingerprints[input.value] = input.dataset.fingerprint; });
+      decide('/api/delegations/approve', {
+        request_id: delegate.dataset.request, devices: selected.map(function (input) { return input.value; }),
+        minutes: Number($('#delegateMinutes').value), confirmed: true,
+        controller_fingerprint: delegate.dataset.controllerFingerprint, device_fingerprints: fingerprints
+      });
+    };
+    reject.onclick = function () { decide('/api/delegations/reject', { request_id: delegate.dataset.request }); };
+  }
+
   /* ── 设备授权页：复制授权码 ────────────────────────────────────────
      复制成功后「点一下复制」换成「已复制」，有效期那半句留着 —— 它在
      复制之后依然是这一行里唯一还会变的信息。 */

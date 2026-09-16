@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"wanctl/internal/protocol"
+	"wanctl/internal/wsconn"
 )
 
 const fileChunk = 64 << 10
@@ -52,6 +53,7 @@ func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io
 		return err
 	}
 	defer conn.Close()
+	defer wsconn.CloseOnCancel(ctx, conn)()
 
 	if err := protocol.WriteMessage(conn, protocol.Message{
 		Kind: protocol.KindFilePut,

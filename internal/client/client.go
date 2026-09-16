@@ -387,6 +387,9 @@ func (c *Client) connectKind(ctx context.Context, target, helloKind string) (*tl
 	if err != nil {
 		return nil, err
 	}
+	// TLS handshaking observes ctx itself, but the following application hello
+	// reads from a connection that intentionally outlives its dial context.
+	defer wsconn.CloseOnCancel(ctx, nc)()
 	return c.finishHandshake(ctx, nc, target, helloKind)
 }
 

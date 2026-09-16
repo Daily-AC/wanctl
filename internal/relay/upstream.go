@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"wanctl/internal/delegation"
 )
 
 // UpstreamTokenStore resolves tokens by asking another relay's admin API
@@ -50,6 +53,9 @@ func NewUpstreamTokenStore(upstreamURL, secret string) *UpstreamTokenStore {
 
 // Resolve implements TokenStore.
 func (u *UpstreamTokenStore) Resolve(token string) (string, bool) {
+	if strings.HasPrefix(token, "wfd_") {
+		return "", false
+	}
 	u.mu.Lock()
 	if e, hit := u.cache[token]; hit && time.Now().Before(e.expiry) {
 		u.mu.Unlock()
@@ -104,4 +110,61 @@ func (c ChainTokenStore) Resolve(token string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func (c ChainTokenStore) ResolveAccess(token string) (delegation.Access, bool) {
+	for _, ts := range c {
+		if access, ok := ResolveAccess(ts, token); ok {
+			return access, true
+		}
+	}
+	return delegation.Access{}, false
+}
+
+// Delegated grants are deliberately not cached: revocation is rechecked by
+// active-session leases, and a minutes-long cache would outlive the grant.
+func (u *UpstreamTokenStore) ResolveAccess(token string) (delegation.Access, bool) {
+	u.mu.Lock()
+	if e, hit := u.cache[token]; hit && e.ok && time.Now().Before(e.expiry) {
+		u.mu.Unlock()
+		return delegation.Access{Namespace: e.ns, CredentialID: HashToken(token)}, true
+	}
+	u.mu.Unlock()
+	body, _ := json.Marshal(map[string]string{"token": token})
+	req, err := http.NewRequest(http.MethodPost, u.url+"/admin/tokens/inspect", bytes.NewReader(body))
+	if err != nil {
+		return delegation.Access{}, false
+	}
+	req.Header.Set("X-Admin-Secret", u.secret)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := u.hc.Do(req)
+	if err != nil {
+		return delegation.Access{}, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		if strings.HasPrefix(token, "wfd_") {
+			return delegation.Access{}, false
+		}
+		// A pre-delegation upstream has no inspect route. Its legacy route is
+		// permitted only for complete credentials; modern upstreams enforce it.
+		ns, ok := u.Resolve(token)
+		return delegation.Access{Namespace: ns, CredentialID: HashToken(token)}, ok
+	}
+	if resp.StatusCode != http.StatusOK {
+		return delegation.Access{}, false
+	}
+	var a delegation.Access
+	if json.NewDecoder(resp.Body).Decode(&a) != nil || a.Namespace == "" {
+		return delegation.Access{}, false
+	}
+	if a.CredentialID == "" {
+		a.CredentialID = HashToken(token)
+	}
+	if !a.Delegated {
+		u.mu.Lock()
+		u.cache[token] = upstreamEntry{ns: a.Namespace, ok: true, expiry: time.Now().Add(upstreamHitTTL)}
+		u.mu.Unlock()
+	}
+	return a, true
 }

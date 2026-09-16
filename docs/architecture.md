@@ -46,6 +46,14 @@ transport + pgstore + admin + dist), `agent`, `client`, `server` (shell+files),
 `policy` (rules+approver), `console` (transport-neutral approval queue),
 `portal`, `eventlog`, `sessionauth` (relay-issued capability grants).
 
+The opt-in [WebFetch adapter](webfetch.md) adds URL-only AI clients. Its owner
+approval and short-lived device scopes live in the existing portal/token store;
+the adapter is an ordinary E2E controller with a distinct identity per grant.
+Unlike the opaque broker, this explicitly enabled controller component sees
+the plaintext it sends and receives. Device-local action policy remains the
+authority. Delegated metadata is preserved across admission and both carriers;
+namespace-only legacy paths refuse delegated credentials.
+
 ## Transports
 
 Two carriers speak the **same** TLS + framed protocol:

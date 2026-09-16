@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type Capabilities uint8
@@ -103,16 +104,23 @@ func (c *Capabilities) UnmarshalJSON(data []byte) error {
 
 // Open is relay-authenticated metadata for one E2E controller session.
 type Open struct {
-	Op              string       `json:"op,omitempty"`
-	Session         string       `json:"session"`
-	URL             string       `json:"url,omitempty"`
-	CallerNamespace string       `json:"caller_namespace"`
-	OwnerNamespace  string       `json:"owner_namespace"`
-	Device          string       `json:"device"`
-	Capabilities    Capabilities `json:"capabilities"`
+	Op                    string       `json:"op,omitempty"`
+	Session               string       `json:"session"`
+	URL                   string       `json:"url,omitempty"`
+	CallerNamespace       string       `json:"caller_namespace"`
+	OwnerNamespace        string       `json:"owner_namespace"`
+	Device                string       `json:"device"`
+	Capabilities          Capabilities `json:"capabilities"`
+	GrantID               string       `json:"grant_id,omitempty"`
+	CredentialID          string       `json:"credential_id,omitempty"`
+	ControllerFingerprint string       `json:"controller_fingerprint,omitempty"`
+	ExpiresAt             time.Time    `json:"expires_at,omitempty"`
 }
 
 func (o Open) ValidFor(device string) bool {
+	if o.GrantID != "" && (o.CredentialID == "" || o.ControllerFingerprint == "" || o.ExpiresAt.IsZero() || !time.Now().Before(o.ExpiresAt) || o.Capabilities != UseCapabilities) {
+		return false
+	}
 	return o.Session != "" && o.CallerNamespace != "" && o.OwnerNamespace != "" &&
 		o.Device == device && o.Capabilities.Valid()
 }

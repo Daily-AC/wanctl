@@ -662,6 +662,27 @@ pre code{background:none;padding:0;font-size:1em}
 .auth form .go{margin-top:0}
 .auth .err{margin:10px 0 0;font-size:13px;color:var(--red);min-height:1.3em}
 
+/* Temporary web-client grants reuse the auth page's single-column rhythm. */
+.delegation main{max-width:38rem;justify-content:flex-start;padding-top:52px}
+.delegate-details{margin:24px 0 0;display:grid;gap:5px;min-width:0}
+.delegate-details dt{margin-top:9px;font-size:12px;color:var(--ink-2)}
+.delegate-details dd{margin:0;overflow-wrap:anywhere}
+.delegate-details dd.fp{margin-top:0}
+.delegate-devices{min-width:0;margin:0;padding:0;border:0}
+.delegate-devices legend{font-weight:600;margin-bottom:8px}
+.delegate-device{display:flex;align-items:flex-start;gap:12px;padding:14px 0;border-bottom:1px solid var(--hairline)}
+.delegate-device>span{min-width:0}
+.delegate-device .fp,.delegate-id{display:block}
+.delegate-id{margin-top:4px;font-size:11px;color:var(--ink-2);overflow-wrap:anywhere}
+.delegate-device small{font-size:12px;color:var(--ink-2)}
+.auth .delegate-device input,.auth .delegate-confirm input{width:17px;height:17px;flex:none;margin-top:3px;padding:0;accent-color:var(--blue)}
+.delegate-duration{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:12px 0}
+.delegate-duration select{max-width:13rem}
+.delegate-confirm{display:flex;align-items:flex-start;gap:12px;font-size:13px;line-height:1.5}
+.delegate-actions{display:flex;gap:10px;margin-top:8px}
+.delegation form .fine{margin:2px 0}
+.token-scope{display:block;font-size:11px;color:var(--ink-2);overflow-wrap:anywhere;max-width:26rem}
+
 /* 申请访问的四种状态。页面把四段都发下来，选哪一段由 <body data-req>
    决定 —— 纯 CSS，脚本没跑起来的时候看到的也是对的那一段。
    状态是服务端算的：不能让人看见一张交上去会被拒的表单。 */
