@@ -43,6 +43,12 @@ WebFetch is disabled unless `WANCTL_WEBFETCH_SEED` is set. Configure:
 | `WANCTL_WEBFETCH_PORTAL_ORIGIN` | Canonical public HTTPS portal origin used in owner approval links |
 | `WANCTL_WEBFETCH_RELAY_URL` | Optional adapter-to-relay origin; defaults to the public relay origin. HTTPS or loopback HTTP only |
 
+The self-host Compose file forwards these settings: provide the seed through a
+protected environment file, and it reuses `PORTAL_PUBLIC_ORIGIN` plus the relay
+container's loopback endpoint. For example, run Compose with both
+`--env-file .env --env-file /secure/webfetch.env`. Keep using the same protected
+file on subsequent deployments so an omitted seed does not disable the adapter.
+
 Keep the seed stable while delegations are active. Domain-separated derivation
 produces a controller identity and a relay credential for each request. Browser
 pages receive a temporary browser ticket, never the reusable seed, private key,
