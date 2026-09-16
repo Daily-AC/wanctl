@@ -176,8 +176,11 @@ openssl rand -hex 32   # paste the value into WANCTL_MCP_SEED in selfhost/.env
 docker compose up -d --no-deps relay
 ```
 
-The relay logs `MCP server enabled at /wanctl-mcp` on startup and serves
-`https://relay.example.com/wanctl-mcp`. Each MCP session signs in separately
+The relay logs `MCP server enabled at /mcp` on startup and serves
+`https://relay.example.com/mcp`. If your edge proxy has already claimed the
+`/mcp` prefix, point hosts at `https://relay.example.com/wanctl-mcp` instead:
+it is an alias onto the same handler and the same sessions, so nothing else
+changes. Each MCP session signs in separately
 through the portal; [Connect an AI over MCP](#docs/mcp) is the guide for
 whoever does that. Keep the seed stable — changing it signs every session out
 and voids every saved rebind credential.
