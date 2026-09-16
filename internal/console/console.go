@@ -184,6 +184,17 @@ func New(engine *policy.Engine, log *eventlog.Logger, info Info) *Service {
 // reject + URL right away, the user clicks it whenever, the next dial finds the
 // fp already trusted and goes through.
 func (s *Service) AskPair(fp, name, label string) bool {
+	return s.askPair(fp, name, label, true)
+}
+
+// AskPairNonBlocking publishes the same owner approval request but immediately
+// returns its current decision. URL-only clients must receive the pairing link
+// before their bounded task deadline, even while a portal console is watching.
+func (s *Service) AskPairNonBlocking(fp, name, label string) bool {
+	return s.askPair(fp, name, label, false)
+}
+
+func (s *Service) askPair(fp, name, label string, waitForDecision bool) bool {
 	s.mu.Lock()
 	s.pruneExpiredPairsLocked()
 	p := s.pairs[fp]
@@ -214,7 +225,7 @@ func (s *Service) AskPair(fp, name, label string) bool {
 		}
 		s.pairs[fp] = p
 	}
-	hasFrontend := len(s.subs) > 0
+	hasFrontend := waitForDecision && len(s.subs) > 0
 	pairingFn := s.pairingFn
 	pairingView := p.view
 	decided := p.decided
