@@ -262,6 +262,11 @@ func (s *Service) askPair(fp, name, label string, waitForDecision bool) bool {
 // retry produces a fresh URL the user can act on differently.
 func (s *Service) DecidePair(fp string, trust bool) bool {
 	s.mu.Lock()
+	// Prune first: a verdict can arrive from a page that has been open longer
+	// than the request lived. pairTTL is the window for answering, so past it
+	// the answer is refused rather than silently granting trust for a request
+	// the user can no longer see in context.
+	s.pruneExpiredPairsLocked()
 	p := s.pairs[fp]
 	if p == nil {
 		s.mu.Unlock()
@@ -347,8 +352,14 @@ func (s *Service) Ask(req policy.Request) policy.Decision {
 }
 
 // State returns a snapshot for a front-end.
+//
+// It prunes first. Until it did, pairTTL only ever elapsed for a controller that
+// dialled again — askPair was the sole pruner — so a request nobody retried
+// stayed in this snapshot forever. The portal kept drawing a card the device
+// would no longer honour, and pressing it read as a dead button (issue #79).
 func (s *Service) State() State {
 	s.mu.Lock()
+	s.pruneExpiredPairsLocked()
 	pend := make([]Pending, 0, len(s.pend))
 	for _, p := range s.pend {
 		pend = append(pend, p.view)

@@ -41,6 +41,12 @@
   // 拖慢的只有这一个端点：它是那些竞态的唯一源头，全局延迟只会让每次普查更慢。
   var slow = Number(new URLSearchParams(location.search).get('slow')) || 0;
 
+  // ?pairgone=1 让设备侧当作「手上这些配对请求都已经过期或被人答过了」。
+  // 这是 issue #79 那个形状：浏览器手里那张卡还在，而设备早就把它丢了。
+  // 清单照旧把卡发出来，裁决一律 404 pairing_gone —— 真代码里由 console
+  // 的 pairTTL 和 DecidePair 决定，工装只是把那个结果摆出来。
+  var pairGone = new URLSearchParams(location.search).get('pairgone') === '1';
+
   // ?now=<毫秒> 把「现在」钉住。页面上每一个时间都是从它算出来的，不钉住的话
   // 两次截图之间光是钟走了几分钟就够让每一张都不一样，前后对比无从做起。
   var now = Number(new URLSearchParams(location.search).get('now')) || Date.now();
@@ -251,6 +257,7 @@
     // POST-only endpoints still need an entry here: match() returning undefined
     // is what produces the preview's 404, before the write branch is reached.
     if (p === '/api/devices/remove' || p === '/api/devices/adb-pair') return {};
+    if (p === '/api/devices/pair') return {};
     if (p === '/api/acl/manage') return {};
     if (p === '/api/devices/alias') return {};
     if (p === '/api/devices/mode') return {};
@@ -295,6 +302,22 @@
         for (var i = devices.length - 1; i >= 0; i--) if (devices[i].name === removed) devices.splice(i, 1);
       }
       if (url.indexOf('/api/devices/adb-pair') === 0) out = { paired: true };
+      // 配对裁决是有状态的：设备只认自己手上还留着的那条请求。答得掉的就从两份
+      // 清单里消失，答不掉的回 404 pairing_gone（handleDevicePair 的真形状）。
+      // 工装这里必须照做 —— 「写操作一律成功」正是把这个 bug 藏了一整版的那条。
+      if (url.indexOf('/api/devices/pair') === 0) {
+        var pq = JSON.parse((opts && opts.body) || '{}');
+        var pend = (consoles[pq.device] || {}).pending_pairings || [];
+        var at = pairGone ? -1 : pend.map(function (x) { return x.fp; }).indexOf(pq.fp);
+        if (at < 0) {
+          return Promise.resolve(new Response('pairing_gone',
+            { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }));
+        }
+        pend.splice(at, 1);
+        for (var wi = waiting.length - 1; wi >= 0; wi--) {
+          if (waiting[wi].fp === pq.fp && waiting[wi].device === pq.device) waiting.splice(wi, 1);
+        }
+      }
       if (url.indexOf('/api/devices/alias') === 0) {
         var want = JSON.parse((opts && opts.body) || '{}');
         var row = devices.filter(function (x) { return x.name === want.device; })[0];

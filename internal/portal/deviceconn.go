@@ -2,6 +2,7 @@ package portal
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -124,10 +125,27 @@ func (d *deviceConn) decide(id, verdict, approver string) error {
 	return err
 }
 
+// errPairingGone means the device no longer holds that pending pairing: it
+// expired (pairTTL) or somebody already answered it. It is not a transport
+// failure, and the two want different words in front of a person.
+var errPairingGone = errors.New("pairing_gone")
+
 // pairDecide trusts (verdict "y") or denies a pending controller pairing.
+//
+// The agent reports a refusal by echoing the same kind back with the reason in
+// Data rather than as KindError, so rpc sees a well-formed reply and returns no
+// error. Reading Data is what turns "the device dropped that request" from a
+// silent 200 into something the browser can say out loud (issue #79).
 func (d *deviceConn) pairDecide(fp, verdict string) error {
-	_, err := d.rpc(protocol.Message{Kind: protocol.KindPairDecide, FP: fp, Verdict: verdict})
-	return err
+	m, err := d.rpc(protocol.Message{Kind: protocol.KindPairDecide, FP: fp, Verdict: verdict})
+	if err != nil {
+		return err
+	}
+	var reason string
+	if len(m.Data) > 0 && json.Unmarshal(m.Data, &reason) == nil && reason != "" {
+		return errPairingGone
+	}
+	return nil
 }
 
 // untrust drops a trusted controller from the device by fingerprint.
