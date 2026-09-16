@@ -617,7 +617,13 @@ func (a *Agent) authorize(fp, name, label string, scopes ...sessionAudit) bool {
 	// Surface the pairing request to a connected front-end (the portal web
 	// console) and block for a human's trust decision. A headless agent with no
 	// portal connected denies (pre-trust with --portal-fps or --yes instead).
-	if a.console.AskPair(fp, name, label) {
+	var paired bool
+	if firstAudit(scopes).grantID != "" {
+		paired = a.console.AskPairNonBlocking(fp, name, label)
+	} else {
+		paired = a.console.AskPair(fp, name, label)
+	}
+	if paired {
 		a.known.AddLabeled(fp, name, label)
 		fmt.Printf("[paired] controller %q trusted via console: %s\n", name, fp)
 		a.logSessionEvent(firstAudit(scopes), eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "console"})

@@ -125,6 +125,36 @@ func TestDelegatedDevicesStillEnforcePolicyAndTrust(t *testing.T) {
 	}
 }
 
+func TestDelegatedPairingReturnsLinkWhilePortalIsWatching(t *testing.T) {
+	for _, carrier := range []string{"ws", "http"} {
+		t.Run(carrier, func(t *testing.T) {
+			t.Setenv("WANCTL_PORTAL", "https://portal.example")
+			f := startDelegationFixture(t, carrier, "http", policy.ModeNormal, false, time.Minute)
+			f.a.setApprover(policy.DenyApprover{})
+			_, unsubscribe := f.a.console.Subscribe()
+			defer unsubscribe()
+			defer f.a.console.DecidePair(f.c.Identity().Fingerprint, false)
+			ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+			defer cancel()
+			_, err := f.c.ExecTo(ctx, client.ExecRequest{Target: f.target, Command: "echo blocked", OneShot: true}, io.Discard, io.Discard)
+			var rejected *client.RejectError
+			if !errors.As(err, &rejected) || rejected.PairingURL == "" || !strings.Contains(rejected.Reason, "paired") {
+				t.Fatalf("watching portal hid pairing response: %v", err)
+			}
+			if f.a.known.Has(f.c.Identity().Fingerprint) {
+				t.Fatal("unapproved controller was trusted")
+			}
+			if !f.a.console.DecidePair(f.c.Identity().Fingerprint, true) {
+				t.Fatal("pairing request was not retained for owner approval")
+			}
+			_, err = f.c.ExecTo(f.ctx, client.ExecRequest{Target: f.target, Command: "echo still blocked by policy", OneShot: true}, io.Discard, io.Discard)
+			if !errors.As(err, &rejected) || !strings.Contains(rejected.Reason, "policy") || !f.a.known.Has(f.c.Identity().Fingerprint) {
+				t.Fatalf("owner pairing was not applied without changing policy: %v", err)
+			}
+		})
+	}
+}
+
 func TestDelegatedUseOverAllCarriersAndNoManagement(t *testing.T) {
 	for _, agentTransport := range []string{"ws", "http"} {
 		for _, controllerTransport := range []string{"ws", "http"} {
