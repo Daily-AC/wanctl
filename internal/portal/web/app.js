@@ -1201,6 +1201,7 @@
      设置和设备设置都是页面，顶栏因此一直在 —— 覆盖层会把「你是谁」盖掉。
      更新日志仍是浮层：它是只读速览，不值得一个地址。 */
   $('#gear').onclick = function () { go('settings'); };
+  $('#webfetchConnect').onclick = function () { location.href = '/webfetch/connect'; };
   $('#sClose').onclick = function () { go('devices'); };
   $('#sBack').onclick = function () { go('settings'); };
   $('#dGear').onclick = function () { go('device/' + encodeURIComponent(cur) + '/settings'); };

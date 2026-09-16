@@ -5,14 +5,34 @@ It is an optional controller adapter hosted alongside the relay. The owner
 approves a short-lived delegation in the existing wanctl portal; device trust,
 rules, mode and per-request approvals still decide what runs.
 
+The same protocol serves URL readers, Python/JavaScript HTTP clients and future
+SDK or MCP adapters. No permission logic depends on the AI provider or the
+client's implementation language. A client must be able to fetch a specified
+HTTPS URL and read its response; searching an index alone is not sufficient.
+
 ## Owner workflow
 
-1. Ask the AI to open `https://RELAY/webfetch`, then open its `start_url`.
-2. The AI returns an `approval_url`. Open it yourself, sign in to wanctl,
+For a web chat, start in the authenticated portal at **Settings → Connect web
+AI** (`/webfetch/connect`). Each copy generates a fresh connection prompt with a
+complete URL using cryptographic randomness; the AI need not invent a nonce or
+remember a hidden tool result. Opening or copying the page grants no access.
+Use a new prompt for every conversation. SDK clients can perform discovery and
+generate their own secure random nonce as follows.
+
+1. Ask the AI to open `https://RELAY/webfetch/v1`. This static discovery page
+   contains no ticket. The client generates a fresh `client_nonce` (24 cryptographically random
+   bytes encoded as 48 lowercase hex characters), substitutes it into
+   `start_url_template`, and GETs that unique URL. Verify the returned
+   `client_nonce` matches: a mismatch means the fetcher served another request.
+2. The AI returns an `approval_url` and `continuation_prompt`. Open the approval
+   link yourself, sign in to wanctl,
    verify the controller and selected device identities, choose your devices
    and a duration, and approve. Fetching this URL cannot approve a request.
-3. Ask the AI to reread its `status_url`. The approved response contains the
-   exact allowed device targets and tool parameters.
+3. Send `continuation_prompt` back to the AI after approval. It includes the
+   complete `status_url`: some web chats do not retain previous tool results or
+   enable URL reading when a later message only says "approved". The status
+   document contains exact `devices[].target` values, tool input schemas and
+   URL templates. The AI must copy a target rather than infer its format.
 4. On first use, the selected device may require ordinary controller pairing.
    The AI must show that owner link, not approve it. Pairing does not change
    the device's operation rules or enable bypass.
@@ -76,13 +96,47 @@ end-to-end encryption from the web model through an unreadable adapter.
 Default responses are static HTML with visible structured data. Add
 `format=json` for JSON. There is no JavaScript or streaming requirement.
 
+Every document identifies `protocol: "wanctl.webfetch.v1"`, a workflow `status`,
+and `http_status`. For normal HTML GETs, client errors are readable HTTP 200
+documents with `status: "error"` and the actual `http_status` (400, 403, 409 or
+429). Many URL extractors otherwise discard the error body. **Loading a page
+successfully is not authorization or tool success.** JSON preserves normal
+HTTP error codes. HEAD, unsupported methods and cross-origin browser requests
+also retain their HTTP errors. All authorization checks still run before any
+operation or result is exposed.
+
+### Discovery and independent requests
+
+`GET /webfetch/v1` (also `/webfetch`) is public, static and credential-free.
+It also advertises `owner_start_url` for clients without a secure random generator.
+It returns `start_url_template: https://RELAY/webfetch/new/{client_nonce}`.
+`GET /webfetch/new/CLIENT_NONCE` creates a pending request and returns its
+`approval_url`, `status_url` and `continuation_prompt`. Templates must be filled
+before fetching; literal placeholders are rejected without creating requests.
+
+A shared public entry must not mint a reusable session URL: third-party
+extractors can replay their cached content despite `no-store`. Each conversation
+therefore chooses its own fresh fetch URL first. The server generates the actual
+secret ticket independently; repeating a nonce at the origin cannot retrieve
+an existing approved ticket. Never reuse another conversation's nonce, approval
+link or status URL. Clients must not search for session URLs in public indexes.
+
+Pending requests are approved only through the authenticated owner portal.
+Approval binds the request to that owner; another account cannot take it over.
+Existing `/webfetch/s/TICKET` sessions continue to work until expiry or revocation.
+
 The approved manifest returns a `call_endpoint`; construct:
 
 ```text
 GET CALL_ENDPOINT?rid=UNIQUE_REQUEST&tool=TOOL&target=CANONICAL_TARGET&...
 ```
 
-URL-encode every parameter. The available tools are:
+`CANONICAL_TARGET` is the complete `namespace/device_id` string supplied in
+`devices[].target`, not a bare namespace, bare ID or `namespace:ID`. URL-encode
+each value once; the slash in a target becomes `%2F`. Each tool includes
+`input_schema` and `call_url_template` for clients to discover required fields,
+types, limits and allowed target values. Templates contain non-executable
+placeholders rather than runnable sample commands. The available tools are:
 
 | Tool | Parameters | Result |
 | --- | --- | --- |
@@ -95,6 +149,16 @@ return a fresh `next_url`; read that URL until `done`, `failed` or `unknown`.
 Execution is asynchronous in the adapter but uses normal synchronous, one-shot
 wanctl operations; it does not expose device-side persistent shells or detached
 async jobs to delegated clients.
+
+A failed job can contain `result.pairing_url`; approval of device access does
+not imply the new controller has paired. Give that link and the current
+`continuation_prompt` to the owner, then stop. Validation errors explain the
+rejected input and point to the authorized manifest, without creating a job.
+Do not enumerate guessed target formats or convert GET to POST. A file write
+requires `content`, including an explicit `content=` when writing an empty file.
+The `pairing_required` result confirms `execution_started: false`. After the
+owner pairs, use a **new rid** for a new attempt; the completed failure remains
+immutable and reusing its rid will not execute the operation.
 
 `rid` is scoped to the grant. Reusing it with identical parameters returns the
 same job; changing parameters returns 409. The durable ledger records the job
@@ -113,6 +177,13 @@ stdout and stderr and cancels on overflow. `HEAD` cannot create or execute tasks
 Browser tickets have an immutable 70-minute envelope. Inactive grants and their
 task contents are removed after at least 24 hours; old browser URLs cannot
 recreate deleted grants. Existing account/device audit is retained separately.
+
+Session/status URLs are short-lived bearer credentials. Do not publish an
+active conversation containing them; revoke the grant before sharing a transcript.
+Operational logs record server-generated grant/job IDs and fixed rejection
+categories, never browser tickets, full URLs, commands, file contents or client
+request IDs. Combine those logs with the existing task ledger to distinguish
+missing requests, input rejection, missing pairing and actual device failures.
 
 ## Authorization and cancellation boundaries
 

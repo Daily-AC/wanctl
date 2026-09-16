@@ -21,12 +21,16 @@ import (
 //
 // All three share /assets/app.css and /assets/auth.js with the app. That is
 // what handleAsset's deliberate lack of authentication is for.
-var pages = template.Must(template.ParseFS(assets, "web/login.html", "web/pending.html", "web/enroll.html", "web/delegation.html"))
+var pages = template.Must(template.ParseFS(assets, "web/login.html", "web/pending.html", "web/enroll.html", "web/delegation.html", "web/delegation-error.html", "web/webfetch-connect.html"))
 
 // render writes one of those pages. It buffers first: a template that fails
 // halfway would otherwise have already sent 200 plus half a page, which reads
 // to the visitor as a broken product rather than as a server error.
 func (s *Server) render(w http.ResponseWriter, name string, data map[string]any) {
+	s.renderStatus(w, http.StatusOK, name, data)
+}
+
+func (s *Server) renderStatus(w http.ResponseWriter, status int, name string, data map[string]any) {
 	if data == nil {
 		data = map[string]any{}
 	}
@@ -37,6 +41,7 @@ func (s *Server) render(w http.ResponseWriter, name string, data map[string]any)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
 	w.Write(buf.Bytes())
 }
 

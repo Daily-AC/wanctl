@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Web AI access · wanctl</title>
+<link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css?v={{.V}}">
+</head>
+<body class="auth delegation">
+<header class="top">
+  <a class="brand" href="/">wanctl</a>
+  <div class="tools"><button class="chip" id="lang">中文</button></div>
+</header>
+<main>
+  <h1 data-en="This request is unavailable" data-zh="无法使用这份申请">This request is unavailable</h1>
+  {{if eq .Status 403}}
+  <p class="lead" data-en="This request cannot be used by your signed-in account. It may already belong to another account."
+     data-zh="这份申请不能用于当前登录的账号，可能已经绑定了其他账号。">This request cannot be used by your signed-in account. It may already belong to another account.</p>
+  <p data-en="Check your account. If this link came from another conversation or a cached page, ask your AI to create its own fresh request from the WebFetch entry. Do not reuse someone else's approval link."
+     data-zh="请确认登录账号。如果链接来自其他对话或缓存页面，请让 AI 从 WebFetch 入口创建独立的新申请，不要复用其他人的授权链接。">Check your account. If this link came from another conversation or a cached page, ask your AI to create its own fresh request from the WebFetch entry. Do not reuse someone else's approval link.</p>
+  {{else if eq .Status 404}}
+  <p class="lead" data-en="This request was not found or has been removed. Ask your AI to create a fresh request."
+     data-zh="申请不存在或已被清理，请让 AI 创建新的申请。">This request was not found or has been removed. Ask your AI to create a fresh request.</p>
+  {{else if eq .Status 400}}
+  <p class="lead" data-en="The approval link is incomplete or invalid. Copy the complete approval link from your AI's own new request."
+     data-zh="授权链接不完整或格式不正确，请复制 AI 新申请返回的完整授权链接。">The approval link is incomplete or invalid. Copy the complete approval link from your AI's own new request.</p>
+  {{else}}
+  <p class="lead" data-en="The request service is temporarily unavailable. Please refresh this page later."
+     data-zh="暂时无法读取申请，请稍后刷新重试。">The request service is temporarily unavailable. Please refresh this page later.</p>
+  {{end}}
+  {{if .NS}}<p class="fine"><span data-en="Signed in as: " data-zh="当前账号：">Signed in as: </span><b class="mono">{{.NS}}</b></p>{{end}}
+  <p><a class="btn" href="/webfetch/connect" data-en="Create your own connection" data-zh="创建自己的连接">Create your own connection</a></p>
+  <p class="fine"><a href="/" data-en="Return to devices" data-zh="返回设备页">Return to devices</a></p>
+  {{if .NS}}<p class="fine"><span data-en="Wrong account?" data-zh="登错账号了？">Wrong account?</span> <button class="act" id="out" data-en="Sign out" data-zh="退出登录">Sign out</button></p>{{end}}
+</main>
+<script src="/assets/auth.js?v={{.V}}"></script>
+</body>
+</html>

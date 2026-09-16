@@ -40,6 +40,7 @@
         : (days === 1 ? '明天可以再申请。' : days + ' 天后可以再申请。');
     }
     try { localStorage.setItem('wanctl.lang', l); } catch (_) {}
+    updateWebFetchPrompt();
   }
   $('#lang').onclick = function () { applyLang(lang === 'en' ? 'zh' : 'en'); };
 
@@ -58,6 +59,33 @@
       headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
       body: JSON.stringify(body || {})
     });
+  }
+
+  function updateWebFetchPrompt() {
+    var prompt = $('#webfetchPrompt'), start = $('#webfetchStart');
+    if (!prompt || !start) return;
+    prompt.value = lang === 'zh'
+      ? '请使用联网工具实际读取这个独立申请的完整 URL：\n' + start.dataset.url + '\n按真实响应返回 approval_url 和完整 continuation_prompt，等待我在 wanctl 中批准。不要模拟响应、不要代替我审批，也不要执行设备命令。'
+      : 'Use your URL-reading tool to GET this complete URL for a new request:\n' + start.dataset.url + '\nReturn the real approval_url and complete continuation_prompt, then wait for my approval in wanctl. Do not simulate a response, approve on my behalf, or execute device commands.';
+  }
+  var webfetchCopy = $('#webfetchCopy');
+  if (webfetchCopy) {
+    webfetchCopy.onclick = function () {
+      var bytes = new Uint8Array(24);
+      crypto.getRandomValues(bytes);
+      var nonce = Array.prototype.map.call(bytes, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+      var start = $('#webfetchStart'), prompt = $('#webfetchPrompt');
+      start.dataset.url = start.dataset.relay + '/webfetch/new/' + nonce;
+      updateWebFetchPrompt();
+      var hint = $('#webfetchCopyHint');
+      if (!navigator.clipboard) { prompt.focus(); prompt.select(); return; }
+      navigator.clipboard.writeText(prompt.value).then(function () {
+        hint.textContent = lang === 'zh' ? '已复制新的接入提示词。' : 'Copied a fresh connection prompt.';
+      }).catch(function () {
+        prompt.focus(); prompt.select();
+        hint.textContent = lang === 'zh' ? '已生成，请复制上方文字。' : 'A fresh prompt is ready; copy the selected text.';
+      });
+    };
   }
 
   /* WebFetch uses the same authenticated approval surface as other clients.
@@ -145,10 +173,12 @@
       });
     };
 
-    $('#out').onclick = function () {
-      post('/auth/logout').then(function () { location.href = '/'; });
-    };
   }
+
+  var signOut = $('#out');
+  if (signOut) signOut.onclick = function () {
+    post('/auth/logout').then(function () { location.href = '/'; });
+  };
 
   /* ── 等待邀请页：申请访问 ───────────────────────────────────────────
      交完之后不在这里自己画「已提交」——重新加载，让服务端说它现在是什么

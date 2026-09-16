@@ -39,6 +39,7 @@ const (
 )
 
 var ticketPattern = regexp.MustCompile(`^[0-9]{10}-[a-f0-9]{48}$`)
+var clientNoncePattern = regexp.MustCompile(`^[a-f0-9]{48}$`)
 var ridPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
 type Config struct {
@@ -192,15 +193,39 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.respond(w, r, 403, map[string]any{"error": "cross-origin browser requests are not supported"})
 		return
 	}
-	if r.URL.Path == "/webfetch" || r.URL.Path == "/webfetch/" {
+	if r.URL.Path == "/webfetch" || r.URL.Path == "/webfetch/" || r.URL.Path == "/webfetch/v1" {
+		h.respond(w, r, 200, map[string]any{
+			"title": "wanctl WebFetch", "status": "start", "entry_url": h.cfg.PublicOrigin + "/webfetch/v1",
+			"owner_start_url":     h.cfg.PortalOrigin + "/webfetch/connect",
+			"start_url_template":  h.cfg.PublicOrigin + "/webfetch/new/{client_nonce}",
+			"client_nonce_format": "48 lowercase hexadecimal characters from 24 cryptographically random bytes; never reuse a sample, guess randomness, or copy another conversation's value",
+			"instruction":         "This is a GET-only API, not a web form. If you have a secure random generator, create client_nonce, substitute it into start_url_template and read that complete URL with the same URL-reading tool. Otherwise give owner_start_url to the owner: that page generates a fresh connection prompt to paste here. Never fetch the literal template or invent approval/status URLs. Verify the returned client_nonce equals yours; a mismatch indicates another request's cached response. Give the real approval_url and continuation_prompt to the owner and wait. Only the owner may approve in wanctl. A URL-reading tool can read subsequent GET URLs too; no browser cookies, POST, Python, MCP or special headers are required.",
+			"authorization":       "wanctl device scope, expiry, revocation, identity trust and device-local policy apply",
+		})
+		return
+	}
+	// A public, commonly fetched discovery URL must never carry a live ticket:
+	// extractors may reuse responses despite Cache-Control: no-store. The caller
+	// creates a unique fetch URL first; the server still generates the actual
+	// secret ticket independently. Repeating a nonce at the origin cannot recover
+	// an existing ticket or approved grant.
+	clientNonce := ""
+	if strings.HasPrefix(r.URL.Path, "/webfetch/new/") {
+		clientNonce = strings.TrimPrefix(r.URL.Path, "/webfetch/new/")
+		if !clientNoncePattern.MatchString(clientNonce) {
+			h.respond(w, r, 400, map[string]any{"error": "client_nonce must be 48 fresh random lowercase hexadecimal characters; do not use the literal URL template", "entry_url": h.cfg.PublicOrigin + "/webfetch/v1"})
+			return
+		}
 		var random [24]byte
 		if _, err := rand.Read(random[:]); err != nil {
 			h.fail(w, r, err)
 			return
 		}
 		ticket := strconv.FormatInt(time.Now().Unix(), 10) + "-" + hex.EncodeToString(random[:])
-		h.respond(w, r, 200, map[string]any{"title": "wanctl WebFetch", "status": "start", "instruction": "Open start_url to request temporary device access. Give approval_url to the device owner. Only the owner may approve in the wanctl portal. Do not fetch an approval link as a way to approve it.", "start_url": h.sessionURL(ticket), "authorization": "wanctl device scope, expiry, revocation, identity trust and device-local policy apply"})
-		return
+		clonedURL := *r.URL
+		clonedURL.Path, clonedURL.RawPath = "/webfetch/s/"+ticket, ""
+		r = r.Clone(r.Context())
+		r.URL = &clonedURL
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(parts) < 3 || parts[0] != "webfetch" || parts[1] != "s" || !ticketPattern.MatchString(parts[2]) {
@@ -254,31 +279,48 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		request, err = h.cfg.Store.CreateDelegation(r.Context(), delegation.NewRequest{ID: id, TicketHash: digest([]byte(ticket)), TokenHash: digest([]byte(token)), Label: label, ControllerFingerprint: identity.Fingerprint, RequestExpiresAt: issued.Add(10 * time.Minute)})
+		if err == nil {
+			log.Printf("webfetch: request created grant=%s", request.ID)
+		}
 	}
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
 	if len(parts) == 3 && request.Status == "pending" {
-		h.respond(w, r, 200, map[string]any{"title": "Device access requested", "status": "pending", "request_id": id, "request_expires_at": request.RequestExpiresAt, "controller_fingerprint": identity.Fingerprint, "approval_url": h.cfg.PortalOrigin + "/webfetch/approve?request=" + url.QueryEscape(id), "status_url": h.sessionURL(ticket) + "?check=" + strconv.FormatInt(time.Now().UnixNano(), 10), "instruction": "Ask the owner to open approval_url, verify identities, choose devices and approve a duration. Stop and report this link while approval is pending. This GET does not grant access."})
+		statusURL := h.statusURL(ticket)
+		pending := map[string]any{
+			"title": "Device access requested", "status": "pending", "request_id": id,
+			"request_expires_at": request.RequestExpiresAt, "controller_fingerprint": identity.Fingerprint,
+			"approval_url": h.cfg.PortalOrigin + "/webfetch/approve?request=" + url.QueryEscape(id),
+			"status_url":   statusURL, "continuation_prompt": continuationPrompt(statusURL),
+			"instruction": "Give the owner BOTH approval_url and continuation_prompt, including its complete URL. The owner verifies identities, selects devices and approves a duration in wanctl. Stop while approval is pending. After approval, GET the SAME status_url to discover devices and tools; do not open start_url or create another request. This GET does not grant access.",
+		}
+		if clientNonce != "" {
+			pending["client_nonce"] = clientNonce
+		}
+		h.respond(w, r, 200, pending)
 		return
 	}
 	access, ok := h.cfg.Store.ResolveAccess(token)
 	if !ok || !access.Delegated || access.GrantID != id || request.Status != "approved" || access.ControllerFingerprint != identity.Fingerprint {
-		h.respond(w, r, 403, map[string]any{"error": "delegation is not approved, has expired, or was revoked", "status": request.Status})
+		log.Printf("webfetch: request rejected grant=%s reason=access_denied", id)
+		h.respond(w, r, 403, map[string]any{"error": "delegation is not approved, has expired, or was revoked", "error_code": "access_denied", "grant_status": request.Status})
 		return
 	}
 	switch {
 	case len(parts) == 3:
-		h.respond(w, r, 200, map[string]any{"title": "wanctl tools", "status": "approved", "request_id": id, "owner": access.Namespace, "expires_at": access.ExpiresAt, "devices": access.Devices, "call_endpoint": h.sessionURL(ticket) + "/call", "instruction": "Construct GET call_endpoint?rid=UNIQUE_ID&tool=TOOL&target=CANONICAL_TARGET plus the tool parameters. URL-encode all values. Reuse exactly the same rid and arguments for retries. Poll result_url/next_url until done; at most 8 polls. Pairing or device-policy approval must be performed by the owner in wanctl, never by the AI.", "tools": []map[string]any{{"name": "exec", "parameters": []string{"command", "cwd (optional)", "timeout_seconds (1..60, default30)"}, "description": "One-shot command through wanctl; device policy applies; bounded stdout/stderr."}, {"name": "write_text", "parameters": []string{"path", "content"}, "description": "Write up to 2048 UTF-8 bytes through wanctl file-put; device write rules apply."}, {"name": "read_text", "parameters": []string{"path"}, "description": "Read a UTF-8 file up to 32768 bytes through wanctl file-get; device read rules apply."}}, "limits": map[string]any{"jobs_per_grant": 64, "url_bytes": MaxURLBytes, "output_bytes": MaxOutputBytes}, "notice": "Commands and results are visible to this adapter and the web chat provider. Do not send secrets. A lost/ambiguous job is never automatically rerun."})
+		h.respond(w, r, 200, h.manifest(ticket, access))
 	case len(parts) == 4 && parts[3] == "call":
 		op, err := parseOperation(query)
 		if err != nil {
-			h.respond(w, r, 400, map[string]any{"error": err.Error()})
+			log.Printf("webfetch: call rejected grant=%s reason=invalid_parameters", id)
+			h.respond(w, r, 400, map[string]any{"error": err.Error(), "error_code": "invalid_parameters", "status_url": h.statusURL(ticket), "instruction": "No job was created. Read status_url and correct the reported parameter. Copy a devices[].target exactly; do not guess device names or enumerate target formats."})
 			return
 		}
 		if !access.Allows(op.Target) {
-			h.fail(w, r, delegation.ErrForbidden)
+			log.Printf("webfetch: call rejected grant=%s reason=target_not_allowed", id)
+			h.respond(w, r, 403, map[string]any{"error": "target is not in this delegation's allowed devices", "error_code": "target_not_allowed", "status_url": h.statusURL(ticket), "instruction": "No job was created. Only exact devices[].target values in status_url are allowed. Do not guess targets or try other devices."})
 			return
 		}
 		payload, _ := json.Marshal(op)
@@ -288,6 +330,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if fresh {
+			log.Printf("webfetch: job created grant=%s job=%s", id, job.ID)
 			select {
 			case h.queue <- work{job: job, request: request, token: token, operation: op}:
 			default:
@@ -322,8 +365,8 @@ func parseOperation(q url.Values) (Operation, error) {
 	if !ridPattern.MatchString(q.Get("rid")) {
 		return op, fmt.Errorf("rid must contain 1..64 ASCII letters, digits, hyphens or underscores")
 	}
-	if op.Target == "" || len(op.Target) > 200 || strings.ContainsAny(op.Target, "\r\n\x00") {
-		return op, fmt.Errorf("canonical target required")
+	if len(op.Target) > 200 || strings.ContainsAny(op.Target, "\r\n\x00") || strings.Count(op.Target, "/") != 1 || strings.HasPrefix(op.Target, "/") || strings.HasSuffix(op.Target, "/") {
+		return op, fmt.Errorf("target must equal a devices[].target value in namespace/device_id format; a bare namespace, bare ID or namespace:ID is invalid")
 	}
 	allowed := map[string]bool{"rid": true, "tool": true, "target": true, "format": true, "timeout_seconds": true}
 	if value := q.Get("timeout_seconds"); value != "" {
@@ -349,8 +392,8 @@ func parseOperation(q url.Values) (Operation, error) {
 		if op.Tool == "write_text" {
 			allowed["content"] = true
 			op.Content = q.Get("content")
-			if len(op.Content) > MaxWriteBytes || !utf8.ValidString(op.Content) {
-				return op, fmt.Errorf("content must be UTF-8 and at most 2048 bytes")
+			if !q.Has("content") || len(op.Content) > MaxWriteBytes || !utf8.ValidString(op.Content) {
+				return op, fmt.Errorf("content is required, must be UTF-8 and at most 2048 bytes; use content= explicitly to write an empty file")
 			}
 		}
 	default:
@@ -370,7 +413,8 @@ func (h *Handler) jobResponse(w http.ResponseWriter, r *http.Request, ticket str
 	if (state == "running" || state == "queued") && time.Since(job.CreatedAt) > 90*time.Second {
 		state = "unknown"
 	}
-	data := map[string]any{"title": "wanctl job", "job_id": job.ID, "request_id": job.RequestID, "status": state, "duplicate_request": duplicate, "result_url": resultURL, "result": job.Result}
+	statusURL := h.statusURL(ticket)
+	data := map[string]any{"title": "wanctl job", "job_id": job.ID, "request_id": job.RequestID, "status": state, "duplicate_request": duplicate, "result_url": resultURL, "result": job.Result, "status_url": statusURL, "continuation_prompt": continuationPrompt(statusURL)}
 	if state == "running" || state == "queued" {
 		data["next_url"] = resultURL + "?check=" + strconv.FormatInt(time.Now().UnixNano(), 10)
 		data["instruction"] = "Read next_url for the result. Do not submit this operation under a new rid."
@@ -474,7 +518,9 @@ func (h *Handler) execute(task work) {
 			result["error"] = boundedText(rejected.Reason, 4096)
 			if len(rejected.PairingURL) <= 2048 && h.ownerLink(rejected.PairingURL) {
 				result["pairing_url"] = rejected.PairingURL
-				result["instruction"] = "The device owner must approve pairing in wanctl. Do not approve it by fetching the link."
+				result["error_code"] = "pairing_required"
+				result["execution_started"] = false
+				result["instruction"] = "The operation did not start. The owner must approve pairing in wanctl; do not approve it by fetching the link. After the owner confirms pairing, submit a NEW attempt with a NEW rid. Reusing this completed job's rid only returns the same failure."
 			}
 		}
 		return
@@ -544,6 +590,12 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 var responseTemplate = template.Must(template.New("response").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>wanctl WebFetch</title><style>body{font:16px/1.65 system-ui;max-width:800px;margin:64px auto;padding:0 24px;color:#222}a{color:#1268d3;overflow-wrap:anywhere}pre{background:#f5f5f7;padding:20px;border-radius:12px;white-space:pre-wrap;overflow-wrap:anywhere}h1{font-size:28px}</style><h1>wanctl WebFetch</h1>{{range .Links}}<p><strong>{{.Name}}</strong><br><a href="{{.URL}}">{{.URL}}</a></p>{{end}}<pre>{{.JSON}}</pre></html>`))
 
 func (h *Handler) respond(w http.ResponseWriter, r *http.Request, status int, data map[string]any) {
+	data["protocol"] = "wanctl.webfetch.v1"
+	data["http_status"] = status
+	if status >= 400 {
+		data["status"] = "error"
+		data["entry_url"] = h.cfg.PublicOrigin + "/webfetch/v1"
+	}
 	encoded, _ := json.MarshalIndent(data, "", "  ")
 	if r.URL.Query().Get("format") == "json" {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -552,7 +604,7 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, status int, da
 		return
 	}
 	var links []struct{ Name, URL string }
-	for _, key := range []string{"start_url", "approval_url", "status_url", "next_url", "result_url"} {
+	for _, key := range []string{"entry_url", "owner_start_url", "approval_url", "status_url", "next_url", "result_url"} {
 		if value, ok := data[key].(string); ok {
 			links = append(links, struct{ Name, URL string }{key, value})
 		}
@@ -566,6 +618,14 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, status int, da
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
+	// URL extractors often discard every non-2xx response body. A GET error
+	// document must remain readable, while its envelope carries the actual
+	// outcome. JSON clients retain normal HTTP status codes. This changes only
+	// presentation: authorization and validation returned before any dispatch.
+	pageStatus := status
+	if r.Method == http.MethodGet && r.Header.Get("Origin") == "" && status >= 400 && status < 500 {
+		pageStatus = http.StatusOK
+	}
+	w.WriteHeader(pageStatus)
 	_, _ = io.Copy(w, &body)
 }
