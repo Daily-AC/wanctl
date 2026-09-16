@@ -26,11 +26,17 @@ type Event struct {
 	Type     string    `json:"type"`              // connect | trust | exec | file | logs
 	PeerFP   string    `json:"peer_fp,omitempty"` // peer fingerprint
 	PeerName string    `json:"peer_name,omitempty"`
-	Detail   string    `json:"detail,omitempty"` // command line or file path
-	Cwd      string    `json:"cwd,omitempty"`
-	Decision string    `json:"decision,omitempty"` // bypass | pre-approved | approved | remembered:* | denied; for trust: auto-trust | console
-	Exit     *int      `json:"exit,omitempty"`     // exec exit code
-	Bytes    int64     `json:"bytes,omitempty"`
+	// Delegation attribution comes from relay-authenticated session metadata,
+	// never the controller's self-reported name or label. These are record IDs,
+	// not bearer credentials; SessionID correlates individual device operations.
+	GrantID      string `json:"grant_id,omitempty"`
+	CredentialID string `json:"credential_id,omitempty"`
+	SessionID    string `json:"session_id,omitempty"`
+	Detail       string `json:"detail,omitempty"` // command line or file path
+	Cwd          string `json:"cwd,omitempty"`
+	Decision     string `json:"decision,omitempty"` // bypass | pre-approved | approved | remembered:* | denied; for trust: auto-trust | console
+	Exit         *int   `json:"exit,omitempty"`     // exec exit code
+	Bytes        int64  `json:"bytes,omitempty"`
 	// Via names the elevation channel that ran an elevated command (su,
 	// adb). Present only on elevated execs, which is what makes
 	// "what has run as root on this phone" a greppable question.

@@ -312,10 +312,10 @@ const capabilityReadEventLog dataCapability = "read-event-log"
 // gateDataCapability keeps data-session capabilities distinct from exec and
 // file requests. A later identity/capability layer can deny here before the
 // existing interactive policy gate without changing the wire handlers.
-func (a *Agent) gateDataCapability(cap dataCapability, peerFP string) (bool, string) {
+func (a *Agent) gateDataCapability(cap dataCapability, peerFP string, checks ...func() bool) (bool, string) {
 	switch cap {
 	case capabilityReadEventLog:
-		return a.gate(policy.Request{Kind: policy.KindLogs, Peer: peerFP})
+		return a.gate(policy.Request{Kind: policy.KindLogs, Peer: peerFP}, checks...)
 	default:
 		return false, "unsupported-capability"
 	}
@@ -324,7 +324,7 @@ func (a *Agent) gateDataCapability(cap dataCapability, peerFP string) (bool, str
 // gate authorizes a request: bypass/pre-approved pass; otherwise ask the
 // approver and optionally remember a rule. Returns whether the op may proceed
 // and a short decision string for the audit log.
-func (a *Agent) gate(req policy.Request) (bool, string) {
+func (a *Agent) gate(req policy.Request, checks ...func() bool) (bool, string) {
 	// Bypasses, not Mode()==bypass: elevated commands are excluded from the
 	// blanket allow on purpose (policy.KindExecElevated).
 	if a.engine.Bypasses(req.Kind) {
@@ -337,6 +337,9 @@ func (a *Agent) gate(req policy.Request) (bool, string) {
 	appr := a.appr
 	a.apprMu.Unlock()
 	d := appr.Ask(req)
+	if !checksPass(checks) {
+		return false, "delegation inactive"
+	}
 	if !d.Allow {
 		return false, "denied"
 	}
@@ -350,7 +353,7 @@ func (a *Agent) gate(req policy.Request) (bool, string) {
 // gateFile returns the policy root that must constrain the actual filesystem
 // open. A one-shot approval is restricted to the requested file's parent;
 // global and bypass decisions use an empty root, meaning the filesystem volume.
-func (a *Agent) gateFile(req policy.Request) (bool, string, string) {
+func (a *Agent) gateFile(req policy.Request, checks ...func() bool) (bool, string, string) {
 	if a.engine.Mode() == policy.ModeBypass {
 		return true, "bypass", ""
 	}
@@ -361,6 +364,9 @@ func (a *Agent) gateFile(req policy.Request) (bool, string, string) {
 	appr := a.appr
 	a.apprMu.Unlock()
 	d := appr.Ask(req)
+	if !checksPass(checks) {
+		return false, "delegation inactive", ""
+	}
 	if !d.Allow {
 		return false, "denied", ""
 	}
@@ -401,7 +407,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// cancellation (SIGTERM, `wanctl stop`) is never observed.
 	defer wsconn.CloseOnCancel(ctx, nc)()
 	enc := json.NewEncoder(nc)
-	if err := enc.Encode(map[string]string{"op": "register", "device": a.DeviceID(), "device_id": a.DeviceID(), "name": a.opts.Name, "fingerprint": a.id.Fingerprint, "inst": a.inst}); err != nil {
+	if err := enc.Encode(map[string]string{"op": "register", "device": a.DeviceID(), "device_id": a.DeviceID(), "name": a.opts.Name, "fingerprint": a.id.Fingerprint, "inst": a.inst, "delegation": "1"}); err != nil {
 		return err
 	}
 	fmt.Printf("wanctl agent %q online via %s\n  fingerprint: %s\n", a.opts.Name, a.opts.RelayURL, a.id.Fingerprint)
@@ -475,14 +481,21 @@ func rejectHandshake(conn net.Conn, msg protocol.Message) {
 // non-admin asking for the console, an anonymous pairing attempt — left the
 // device with no trace at all. Denials are the half worth keeping: they are what
 // you read when something cannot connect, and what would show someone probing.
-func (a *Agent) refuse(conn net.Conn, fp, name, decision string, msg protocol.Message) {
+func (a *Agent) refuse(conn net.Conn, fp, name, decision string, msg protocol.Message, scopes ...sessionAudit) {
 	if a.log != nil {
-		a.log.Append(eventlog.Event{Type: "connect", PeerFP: fp, PeerName: name, Decision: decision, Detail: msg.Reason})
+		a.logSessionEvent(firstAudit(scopes), eventlog.Event{Type: "connect", PeerFP: fp, PeerName: name, Decision: decision, Detail: msg.Reason})
 	}
 	rejectHandshake(conn, msg)
 }
 
 func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth.Open) {
+	audit := auditSession(auth)
+	if auth.GrantID != "" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, auth.ExpiresAt)
+		defer cancel()
+		defer wsconn.CloseOnCancel(ctx, nc)()
+	}
 	conn, fp, err := transport.ServerHandshake(ctx, nc, a.id)
 	if err != nil {
 		return
@@ -501,7 +514,11 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 		return
 	}
 	if !auth.ValidFor(a.DeviceID()) {
-		a.refuse(conn, fp, hello.Name, "rejected:session", protocol.Message{Kind: protocol.KindReject, Reason: "invalid relay session capabilities"})
+		a.refuse(conn, fp, hello.Name, "rejected:session", protocol.Message{Kind: protocol.KindReject, Reason: "invalid relay session capabilities"}, audit)
+		return
+	}
+	if auth.GrantID != "" && (auth.ControllerFingerprint != fp || !a.delegationActive(ctx, auth, fp)) {
+		a.refuse(conn, fp, hello.Name, "rejected:delegation", protocol.Message{Kind: protocol.KindReject, Reason: "delegation is inactive or controller fingerprint does not match"}, audit)
 		return
 	}
 	// Pairing grants a controller permission to submit device operations; it
@@ -511,25 +528,25 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	// the console capability. An empty administrator set therefore fails closed.
 	if hello.Kind == protocol.KindConsoleHello {
 		if !auth.Capabilities.Has(sessionauth.Console) {
-			a.refuse(conn, fp, hello.Name, "rejected:capability", protocol.Message{Kind: protocol.KindReject, Reason: "session capability denied: console"})
+			a.refuse(conn, fp, hello.Name, "rejected:capability", protocol.Message{Kind: protocol.KindReject, Reason: "session capability denied: console"}, audit)
 			return
 		}
 		if a.portalAdmins == nil || !a.portalAdmins.Contains(fp) {
 			a.refuse(conn, fp, hello.Name, "rejected:not-console-admin", protocol.Message{
 				Kind:   protocol.KindReject,
 				Reason: "controller is not authorized as this device's console administrator",
-			})
+			}, audit)
 			return
 		}
 	}
 	if a.mustIdentify(hello.Kind, fp, hello.Label) {
-		a.refuse(conn, fp, hello.Name, "rejected:unlabeled", protocol.Message{Kind: protocol.KindReject, Reason: unlabeledReason})
+		a.refuse(conn, fp, hello.Name, "rejected:unlabeled", protocol.Message{Kind: protocol.KindReject, Reason: unlabeledReason}, audit)
 		return
 	}
 	// Authorize (TOFU / pre-trusted portal key) and reply OK for BOTH exec and
 	// console sessions BEFORE serving — the controller/portal blocks on this OK,
 	// and a console session must be gated by the same trust check as an exec one.
-	if !a.authorize(fp, hello.Name, hello.Label) {
+	if !a.authorize(fp, hello.Name, hello.Label, audit) {
 		pairingURL := a.pairingURL(fp, hello.Name, hello.Label)
 		reason := "device has not paired this controller — ask the user to approve"
 		if pairingURL == "" {
@@ -539,16 +556,20 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 			Kind:       protocol.KindReject,
 			Reason:     reason,
 			PairingURL: pairingURL,
-		})
+		}, audit)
 		return
 	}
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindOK, Name: a.opts.Name})
-	a.log.Append(eventlog.Event{Type: "connect", PeerFP: fp, PeerName: hello.Name, Decision: "accepted"})
+	a.logSessionEvent(audit, eventlog.Event{Type: "connect", PeerFP: fp, PeerName: hello.Name, Decision: "accepted"})
 	if hello.Kind == protocol.KindConsoleHello {
 		a.serveConsole(ctx, conn)
 		return
 	}
-	a.serve(conn, fp, hello.Name, auth.Capabilities)
+	var check func() bool
+	if auth.GrantID != "" {
+		check = func() bool { return a.delegationActive(ctx, auth, fp) }
+	}
+	a.serveAuthorized(conn, fp, hello.Name, auth.Capabilities, check, audit)
 }
 
 // unlabeledReason tells the controller how to become answerable, because the
@@ -577,7 +598,7 @@ func (a *Agent) mustIdentify(helloKind, fp, label string) bool {
 	return a.unlabeledPairing(fp, label)
 }
 
-func (a *Agent) authorize(fp, name, label string) bool {
+func (a *Agent) authorize(fp, name, label string, scopes ...sessionAudit) bool {
 	if a.known.Has(fp) {
 		a.known.Touch(fp)
 		return true
@@ -589,7 +610,7 @@ func (a *Agent) authorize(fp, name, label string) bool {
 		// (known_clients.json) and the owner who opted in still gets to ask
 		// "who has been admitted, and when" through `wanctl logs --type trust`
 		// instead of a stdout line nobody reads.
-		a.log.Append(eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "auto-trust"})
+		a.logSessionEvent(firstAudit(scopes), eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "auto-trust"})
 		a.notifyTrustChanged(fp, name, "granted")
 		return true
 	}
@@ -599,7 +620,7 @@ func (a *Agent) authorize(fp, name, label string) bool {
 	if a.console.AskPair(fp, name, label) {
 		a.known.AddLabeled(fp, name, label)
 		fmt.Printf("[paired] controller %q trusted via console: %s\n", name, fp)
-		a.log.Append(eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "console"})
+		a.logSessionEvent(firstAudit(scopes), eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "console"})
 		a.notifyTrustChanged(fp, name, "granted")
 		return true
 	}
@@ -667,6 +688,11 @@ func watchPeer(conn io.Reader, cancel context.CancelFunc) <-chan peerRead {
 }
 
 func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capabilities) {
+	a.serveAuthorized(conn, fp, peerName, caps, nil)
+}
+
+func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessionauth.Capabilities, check func() bool, scopes ...sessionAudit) {
+	audit := firstAudit(scopes)
 	// Set while a read started by doExec is still in flight; the next request
 	// comes from it (see watchPeer).
 	var pending <-chan peerRead
@@ -682,13 +708,24 @@ func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capa
 		if err != nil {
 			return
 		}
+		if check != nil && !check() {
+			a.logSessionEvent(audit, rejectedRequestEvent(fp, peerName, m, "delegation inactive"))
+			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "delegation inactive"})
+			return
+		}
+		if check != nil && (m.Kind == protocol.KindExecAsync || m.Kind == protocol.KindExecPoll || (m.Kind == protocol.KindExec && !m.OneShot)) {
+			a.logSessionEvent(audit, rejectedRequestEvent(fp, peerName, m, "delegated execution requires a synchronous one-shot command"))
+			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "delegated execution requires a synchronous one-shot command"})
+			continue
+		}
 		if required := requiredCapability(m.Kind); required != 0 && !caps.Has(required) {
+			a.logSessionEvent(audit, rejectedRequestEvent(fp, peerName, m, "session capability denied: "+required.String()))
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "session capability denied: " + required.String()})
 			continue
 		}
 		switch m.Kind {
 		case protocol.KindExec:
-			pending = a.doExec(conn, fp, peerName, m)
+			pending = a.doExecAuthorized(conn, fp, peerName, m, audit, check)
 		case protocol.KindCancel:
 			// Nothing is running on this stream: a cancel that lost the race
 			// with its own command finishing is not a protocol error.
@@ -697,8 +734,11 @@ func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capa
 		case protocol.KindExecPoll:
 			a.doExecPoll(conn, m)
 		case protocol.KindLogs:
-			ok, decision := a.gateDataCapability(capabilityReadEventLog, fp)
-			a.log.Append(eventlog.Event{
+			ok, decision := a.gateDataCapability(capabilityReadEventLog, fp, check)
+			if ok && check != nil && !check() {
+				ok, decision = false, "delegation inactive"
+			}
+			a.logSessionEvent(audit, eventlog.Event{
 				Type: "logs", PeerFP: fp, PeerName: peerName,
 				Detail: "read event log", Decision: decision,
 			})
@@ -710,18 +750,27 @@ func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capa
 			}
 			a.doLogs(conn, m)
 		case protocol.KindStatus:
+			if audit.grantID != "" {
+				a.logSessionEvent(audit, eventlog.Event{Type: "status", PeerFP: fp, PeerName: peerName, Decision: "accepted"})
+			}
 			protocol.WriteMessage(conn, a.status())
 		case protocol.KindFilePut:
-			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp})
-			a.log.Append(eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "PUT " + m.Path, Decision: decision})
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp}, check)
+			if ok && check != nil && !check() {
+				ok, decision = false, "delegation inactive"
+			}
+			a.logSessionEvent(audit, eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "PUT " + m.Path, Decision: decision})
 			if !ok {
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "write denied by device policy: " + m.Path})
 				continue
 			}
 			server.HandleFilePut(conn, m, root)
 		case protocol.KindFileGet:
-			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp})
-			a.log.Append(eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "GET " + m.Path, Decision: decision})
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp}, check)
+			if ok && check != nil && !check() {
+				ok, decision = false, "delegation inactive"
+			}
+			a.logSessionEvent(audit, eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "GET " + m.Path, Decision: decision})
 			if !ok {
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "read denied by device policy: " + m.Path})
 				continue
@@ -758,7 +807,11 @@ func requiredCapability(kind string) sessionauth.Capabilities {
 // doExec runs one command for a controller. It returns the in-flight read that
 // watched for the controller leaving, so the request loop can take its next
 // message from there; nil means the loop owns the connection again.
-func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) <-chan peerRead {
+func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message, checks ...func() bool) <-chan peerRead {
+	return a.doExecAuthorized(conn, fp, peerName, m, sessionAudit{}, checks...)
+}
+
+func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol.Message, audit sessionAudit, checks ...func() bool) <-chan peerRead {
 	kind := policy.KindExec
 	if m.Elevate {
 		kind = policy.KindExecElevated
@@ -775,9 +828,12 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 		via = parsed
 	}
 
-	ok, decision := a.gate(policy.Request{Kind: kind, Cmd: m.Command, Cwd: m.Cwd, Peer: fp, Via: string(via)})
+	ok, decision := a.gate(policy.Request{Kind: kind, Cmd: m.Command, Cwd: m.Cwd, Peer: fp, Via: string(via)}, checks...)
+	if ok && !checksPass(checks) {
+		ok, decision = false, "delegation inactive"
+	}
 	if !ok {
-		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
+		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
 		reason := "command denied by device policy: " + m.Command
 		if m.Elevate {
 			reason = "elevated command denied by device policy: " + m.Command +
@@ -814,7 +870,7 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 			// A channel that could not be selected has not run anything, so
 			// this is a refusal to act rather than a failed command. Say which
 			// it is: the caller must not read it as "ran, and failed".
-			a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
+			a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 			return pending
 		}
@@ -842,7 +898,7 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 			// listening must not read this as the command itself failing.
 			err = fmt.Errorf("command cancelled by the controller")
 		}
-		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(ranVia)})
+		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(ranVia)})
 		if code == 0 {
 			code = -1
 		}
@@ -850,7 +906,7 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message) 
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return pending
 	}
-	a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code, Via: string(ranVia)})
+	a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code, Via: string(ranVia)})
 	a.notifyExecFinished(m.Command, m.Cwd, peerName, code)
 	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExit, Code: code, ElevatedVia: string(ranVia)})
 	return pending
@@ -956,7 +1012,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 	base := httpBase(a.opts.RelayURL)
 	fmt.Printf("wanctl agent %q online via %s (http transport)\n  fingerprint: %s\n", a.opts.Name, base, a.id.Fingerprint)
 	hc := &http.Client{Timeout: 35 * time.Second}
-	q := url.Values{"device": {a.DeviceID()}, "device_id": {a.DeviceID()}, "name": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}}.Encode()
+	q := url.Values{"device": {a.DeviceID()}, "device_id": {a.DeviceID()}, "name": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}, "delegation": {"1"}}.Encode()
 	pollURL := base + "/h/poll?" + q
 	// Registration lives or dies by this loop: the relay keeps a device listed
 	// only while its polls keep arriving. Until 2026-08-07 every failure here

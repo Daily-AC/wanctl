@@ -38,6 +38,7 @@ func (r *Relay) secretOK(req *http.Request) bool {
 }
 
 func (r *Relay) registerAdmin(mux *http.ServeMux) {
+	r.registerDelegationAdmin(mux)
 	mux.HandleFunc("/admin/resolve-user", r.adminResolveUser)
 	mux.HandleFunc("/admin/invites", r.adminInvites)
 	mux.HandleFunc("/admin/invites/revoke", r.adminInviteRevoke)
@@ -1024,8 +1025,10 @@ func (p *PGStore) IssueToken(namespace, label string, days int) (string, error) 
 
 func (p *PGStore) ListTokens(namespace string) ([]map[string]any, error) {
 	rows, err := p.db.Query(
-		`SELECT id, COALESCE(label,''), created_at, expires_at, revoked_at
-		   FROM tokens WHERE namespace = $1 ORDER BY id DESC`, namespace)
+		`SELECT t.id, COALESCE(t.label,''), t.created_at, t.expires_at, t.revoked_at,
+ t.kind,COALESCE(r.id,''),COALESCE((SELECT json_agg(json_build_object('namespace',d.namespace,'id',d.device_id,'fingerprint',d.fingerprint) ORDER BY d.device_id)
+ FROM delegation_devices d WHERE d.grant_id=r.id),'[]'::json)
+ FROM tokens t LEFT JOIN delegation_requests r ON r.token_id=t.id WHERE t.namespace = $1 ORDER BY t.id DESC`, namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -1033,13 +1036,21 @@ func (p *PGStore) ListTokens(namespace string) ([]map[string]any, error) {
 	out := []map[string]any{}
 	for rows.Next() {
 		var id int
-		var label string
+		var label, kind, grantID string
+		var devicesJSON []byte
+		var devices []map[string]string
 		var created time.Time
 		var expires, revoked sql.NullTime
-		rows.Scan(&id, &label, &created, &expires, &revoked)
+		if err := rows.Scan(&id, &label, &created, &expires, &revoked, &kind, &grantID, &devicesJSON); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(devicesJSON, &devices); err != nil {
+			return nil, err
+		}
 		out = append(out, map[string]any{
 			"id": id, "label": label, "created_at": created,
 			"expires_at": nullTime(expires), "revoked_at": nullTime(revoked),
+			"kind": kind, "grant_id": grantID, "devices": devices,
 		})
 	}
 	return out, rows.Err()

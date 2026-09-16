@@ -13,6 +13,7 @@ relay, while each device keeps final authority through a local approval policy.
 - One Go binary for relay, portal, agent, controller, and MCP roles.
 - Proxy-agnostic HTTP long-poll transport that works through ordinary reverse proxies; WebSocket remains optional.
 - CLI and MCP surfaces designed for scripted and AI-agent-driven control.
+- Optional [WebFetch access](docs/webfetch.md) for URL-reading web AIs, with owner-approved, short-lived device delegation and existing device policy.
 
 ## Quick start
 
@@ -85,6 +86,10 @@ pipe, then devices independently enforce local policy. The portal has no
 database of its own; it authenticates users and scopes calls to the relay's
 Postgres-backed admin API. See [Architecture](docs/architecture.md) for the
 trust model, transports, sharing rules, and component map.
+
+When enabled, the WebFetch component is itself a trusted controller endpoint
+and sees its own commands/results. The broker's other controller-to-device
+sessions remain opaque; see the [adapter trust boundary](docs/webfetch.md).
 
 ## Build
 

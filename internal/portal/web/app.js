@@ -89,7 +89,8 @@
       friendYes: 'friend', friendIn: 'wants to add you', friendOut: 'waiting for them',
       accept: 'Accept', decline: 'Decline', withdraw: 'Withdraw',
       shareDevice: 'Share a device', shareGrantee: 'Grant to', sharePerms: 'Permissions', share: 'Share',
-      never2: 'never', revoked: 'revoked', active: 'active',
+      never2: 'never', revoked: 'revoked', active: 'active', expired: 'expired',
+      delegated: 'Temporary device use', allDevices: 'Account access',
       copied: 'Copied', copy: 'Copy',
       saved: 'Saved', cleared: 'Cleared', sent: 'Test delivered',
       aliasNone: 'no alias',
@@ -204,7 +205,8 @@
       friendYes: '好友', friendIn: '想加你为好友', friendOut: '等待对方接受',
       accept: '接受', decline: '拒绝', withdraw: '撤回',
       shareDevice: '共享一台设备', shareGrantee: '授权给', sharePerms: '权限', share: '授权',
-      never2: '永不', revoked: '已吊销', active: '有效',
+      never2: '永不', revoked: '已吊销', active: '有效', expired: '已过期',
+      delegated: '临时设备使用权', allDevices: '账号访问权限',
       copied: '已复制', copy: '复制',
       saved: '已保存', cleared: '已清除', sent: '测试通知已送达',
       aliasNone: '未设置',
@@ -1251,11 +1253,18 @@
       var xs = d.tokens || [];
       $('#tokens').innerHTML = xs.length ? xs.map(function (x) {
         var rev = !!x.revoked_at;
-        return '<tr' + (rev ? ' class="dim"' : '') + '><td>' + esc(x.label || '—') + '</td>' +
+        var expired = !!x.expires_at && new Date(x.expires_at).getTime() <= Date.now();
+        var scope = (x.devices || []).map(function (device) {
+          return typeof device === 'string' ? device : ((device.namespace ? device.namespace + '/' : '') + device.id);
+        }).join(', ');
+        var delegated = x.kind === 'delegated' || !!x.grant_id;
+        var scopeLine = delegated ? t().delegated + (scope ? ' · ' + scope : '') : t().allDevices;
+        return '<tr' + (rev || expired ? ' class="dim"' : '') + '><td>' + esc(x.label || '—') +
+          '<span class="token-scope">' + esc(scopeLine) + '</span></td>' +
           '<td>' + esc(fmt(x.created_at)) + '</td>' +
           '<td>' + (x.expires_at ? esc(fmt(x.expires_at)) : esc(t().never2)) + '</td>' +
-          '<td>' + esc(rev ? t().revoked : t().active) + '</td>' +
-          '<td>' + (rev ? '' : '<button class="act danger" data-i="' + x.id + '">' + esc(t().revoke) + '</button>') + '</td></tr>';
+          '<td>' + esc(rev ? t().revoked : expired ? t().expired : t().active) + '</td>' +
+          '<td>' + (rev || expired ? '' : '<button class="act danger" data-i="' + x.id + '">' + esc(t().revoke) + '</button>') + '</td></tr>';
       }).join('') : '<tr><td colspan="5" class="tempty">' + esc(t().noTokens) + '</td></tr>';
       relabel();
       $$('#tokens .act').forEach(function (b) {
