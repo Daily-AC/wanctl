@@ -17,7 +17,7 @@ Variables marked "conditional" are required only for the feature described.
 | `WANCTL_PORTAL_NS` | relay | No | none | Namespace allowed to open privileged portal console sessions. Conventionally `portal`. |
 | `WANCTL_DIST_DIR` | relay | No | `/dist` | Directory containing signed release artifacts and installers. |
 | `WANCTL_PUBLIC_ORIGIN` | relay | Conditional | none | Canonical relay origin substituted into `/skills` and into the installers served from `/install.sh` and `/install.ps1`, so a script fetched from this relay installs from this relay. Never derived from request Host: `/skills` returns 503 when unset, and the installers are served with their built-in base untouched. |
-| `WANCTL_MCP_SEED` | relay, MCP | Conditional | none | Hex seed enabling `/wanctl-mcp` on relay; required and at least 32 decoded bytes for standalone `mcp --http`. |
+| `WANCTL_MCP_SEED` | relay, MCP | Conditional | none | Hex seed enabling `/mcp` (alias `/wanctl-mcp`) on relay; required and at least 32 decoded bytes for standalone `mcp --http`. |
 | `WANCTL_MCP_LOCAL_ROOT` | MCP stdio | No | process working directory | Only local tree `wanctl_push` and `wanctl_pull` may access. The wanctl config directory is always excluded. |
 | `WANCTL_MCP_ALLOWED_ORIGINS` | MCP HTTP | No | none | Comma-separated browser Origin allowlist. Requests with an Origin are denied unless listed; programmatic clients normally send none. |
 | `WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER` | MCP | No | `0` | Set to `1` only to restore model-callable device TOFU pinning. Default is fail-closed because the model cannot distinguish an independently verified fingerprint from one supplied by a hostile relay. |

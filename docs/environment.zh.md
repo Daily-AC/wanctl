@@ -16,7 +16,7 @@
 | `WANCTL_PORTAL_NS` | relay | 否 | 无 | 允许开启特权门户控制台会话的命名空间。惯例是 `portal`。 |
 | `WANCTL_DIST_DIR` | relay | 否 | `/dist` | 存放签名过的发布产物和安装器的目录。 |
 | `WANCTL_PUBLIC_ORIGIN` | relay | 视情况 | 无 | relay 的规范 origin，会被替换进 `/skills`，以及从 `/install.sh` 和 `/install.ps1` 提供的安装器里，这样从这台 relay 取到的脚本就从这台 relay 安装。绝不从请求的 Host 推导：没设时 `/skills` 返回 503，安装器则原样带着它内置的 base 提供。 |
-| `WANCTL_MCP_SEED` | relay、MCP | 视情况 | 无 | 十六进制种子，在 relay 上启用 `/wanctl-mcp`；独立跑 `mcp --http` 时必需，且解码后至少 32 字节。 |
+| `WANCTL_MCP_SEED` | relay、MCP | 视情况 | 无 | 十六进制种子，在 relay 上启用 `/mcp`（别名 `/wanctl-mcp`）；独立跑 `mcp --http` 时必需，且解码后至少 32 字节。 |
 | `WANCTL_MCP_LOCAL_ROOT` | MCP stdio | 否 | 进程工作目录 | `wanctl_push` 和 `wanctl_pull` 唯一可以访问的本地目录树。wanctl 配置目录永远被排除在外。 |
 | `WANCTL_MCP_ALLOWED_ORIGINS` | MCP HTTP | 否 | 无 | 逗号分隔的浏览器 Origin 白名单。带 Origin 的请求不在名单里就拒绝；程序化的客户端通常一个都不带。 |
 | `WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER` | MCP | 否 | `0` | 只有想恢复「模型可调用的设备 TOFU 钉扎」时才设成 `1`。默认是失败即关闭，因为模型分不清一个独立验证过的指纹和一个由敌意 relay 递过来的指纹。 |

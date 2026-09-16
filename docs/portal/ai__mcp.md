@@ -25,13 +25,13 @@ args = ["mcp"]
 
 ## 公网接法（HTTP）
 
-端点是 `https://relay.example.com/wanctl-mcp`。Claude Code 里这样加：
+端点是 `https://relay.example.com/mcp`。Claude Code 里这样加：
 
 ```sh
-claude mcp add --transport http wanctl https://relay.example.com/wanctl-mcp
+claude mcp add --transport http wanctl https://relay.example.com/mcp
 ```
 
-别的宿主就把这个 URL 填进它的「MCP server / HTTP」那一栏。它不需要你机器上的任何文件，也不需要你把令牌复制给它。
+别的宿主就把这个 URL 填进它的「MCP server / HTTP」那一栏。它不需要你机器上的任何文件，也不需要你把令牌复制给它。有些 relay 答在 `/wanctl-mcp` 上，因为它前面的代理占掉了 `/mcp` 前缀；用哪个问部署方一句。
 
 > 这个端点是公开的，谁都能连上去握手——但握完手它什么设备都看不见。能看见什么，完全由下面那次登录决定。
 
