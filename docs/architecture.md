@@ -46,7 +46,7 @@ transport + pgstore + admin + dist), `agent`, `client`, `server` (shell+files),
 `policy` (rules+approver), `console` (transport-neutral approval queue),
 `portal`, `eventlog`, `sessionauth` (relay-issued capability grants).
 
-The opt-in [WebFetch adapter](webfetch.md) adds URL-only AI clients. Its owner
+The opt-in [WebFetch adapter](https://github.com/Daily-AC/wanctl/blob/main/docs/webfetch.md) adds URL-only AI clients. Its owner
 approval and short-lived device scopes live in the existing portal/token store;
 the adapter is an ordinary E2E controller with a distinct identity per grant.
 Unlike the opaque broker, this explicitly enabled controller component sees
