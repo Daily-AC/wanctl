@@ -506,7 +506,7 @@ func configuredValue(value string) string {
 
 func registerMCPTools(s *server.MCPServer) {
 	s.AddTool(mcpapi.NewTool("wanctl_login",
-		mcpapi.WithDescription("Authenticate THIS MCP session to a wanctl namespace via the team portal. Two-step OAuth flow: (1) call with NO argument first → returns a portal URL + a one-time code prompt the user needs to complete in their browser. (2) call again with the `code` the user pastes back → exchanges it for a namespace token bound ONLY to this MCP session (in HTTP mode) or this machine's wanctl config (in stdio mode). Multiple AI users sharing the same MCP server each log in independently — credentials are never shared across sessions.\n\nFAST RE-BIND: a successful login also returns a `rebind` credential. HTTP-MCP sessions are in-memory, so a relay restart or a dropped/re-initialized connection can surface 'LOGIN REQUIRED' mid-task even though the user is still authorized. When that happens, call wanctl_login(rebind=\"…\") with the credential you saved — it restores access INSTANTLY with no Feishu round-trip. Only fall back to the OAuth flow if you have no saved rebind credential."),
+		mcpapi.WithDescription("Authenticate THIS MCP session to a wanctl namespace via the team portal. Two-step OAuth flow: (1) call with NO argument first → returns a portal URL + a one-time code prompt the user needs to complete in their browser. (2) call again with the `code` the user pastes back → exchanges it for a namespace token bound ONLY to this MCP session (in HTTP mode) or this machine's wanctl config (in stdio mode). Multiple AI users sharing the same MCP server each log in independently — credentials are never shared across sessions.\n\nFAST RE-BIND: a successful login also returns a `rebind` credential. HTTP-MCP sessions are in-memory, so a relay restart or a dropped/re-initialized connection can surface 'LOGIN REQUIRED' mid-task even though the user is still authorized. When that happens, call wanctl_login(rebind=\"…\") with the credential you saved — it restores access INSTANTLY with no portal round-trip. Only fall back to the OAuth flow if you have no saved rebind credential."),
 		mcpapi.WithString("code", mcpapi.Description("The one-time code the user copied from the portal /enroll page. Omit on the first call.")),
 		mcpapi.WithString("rebind", mcpapi.Description("A rebind credential returned by an earlier successful login in this conversation. Pass it to restore a lost session instantly without re-doing OAuth. Mutually exclusive with code.")),
 	), mcpLogin)
@@ -660,7 +660,7 @@ func loginRequired() *mcpapi.CallToolResult {
 	return mcpapi.NewToolResultError(
 		"LOGIN REQUIRED. This MCP session has no wanctl credentials right now.\n" +
 			"FIRST: if earlier in THIS conversation a wanctl_login succeeded and returned a `rebind` credential, the user is almost certainly still authorized — the in-memory session was just lost (relay restart / reconnect). Call wanctl_login(rebind=\"…\") with that saved credential to restore access INSTANTLY; do NOT bother the user. " +
-			"ONLY if you have no saved rebind credential: call wanctl_login() (no args) — it returns a URL + instructions to show the user, who signs in via Feishu and pastes back a one-time code for wanctl_login(code=\"…\"). Then retry your previous tool call.",
+			"ONLY if you have no saved rebind credential: call wanctl_login() (no args) — it returns a URL + instructions to show the user, who signs in to the portal and pastes back a one-time code for wanctl_login(code=\"…\"). Then retry your previous tool call.",
 	)
 }
 
@@ -705,9 +705,9 @@ func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 	}
 	if code == "" {
 		return mcpapi.NewToolResultText(fmt.Sprintf(
-			"OK — drive the user through Feishu SSO to mint a session token. Show them these instructions VERBATIM:\n\n"+
+			"OK — drive the user through the portal sign-in to mint a session token. Show them these instructions VERBATIM:\n\n"+
 				"  1. Open: %s/enroll\n"+
-				"  2. Sign in via Feishu (likely already logged in for the team portal).\n"+
+				"  2. Sign in to the portal (they are likely signed in already).\n"+
 				"  3. Copy the big one-time code shown on that page (e.g. ABCD-1234).\n"+
 				"  4. Paste it back to me.\n\n"+
 				"When they paste the code, call wanctl_login again with code=\"…\" to complete the login.",

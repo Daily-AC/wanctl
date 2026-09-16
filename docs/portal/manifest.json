@@ -51,6 +51,13 @@
       "file": "ai__ai-skill.md"
     },
     {
+      "slug": "mcp",
+      "title": "让 AI 通过 MCP 连上来",
+      "group": "ai",
+      "position": 20,
+      "file": "ai__mcp.md"
+    },
+    {
       "slug": "approval-and-trust",
       "title": "审批、信任与管理",
       "group": "advanced",
