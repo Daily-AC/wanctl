@@ -34,6 +34,17 @@ func TestIndexFitsItsBudget(t *testing.T) {
 	}
 }
 
+// The index header and the contract intro are the same claim. They render from
+// Headline so that changing what wanctl is cannot leave one of them behind.
+func TestIndexHeaderRendersFromProduct(t *testing.T) {
+	if !strings.Contains(Index("", ""), Headline) {
+		t.Errorf("the index header does not render from Headline:\n%s", Index("", ""))
+	}
+	if !strings.HasPrefix(Product, "wanctl is "+Headline) {
+		t.Errorf("Product does not open with Headline: %q", Product)
+	}
+}
+
 // A long self-hosted URL must wrap rather than overflow.
 func TestDefaultsWrapRatherThanOverflow(t *testing.T) {
 	long := "https://" + strings.Repeat("a", 60) + ".example.com"
@@ -75,8 +86,10 @@ func TestIndexNamesEveryCLICommand(t *testing.T) {
 // what the list is a list of. The brain/hands framing is the owner's, and it is
 // what tells a reader why the primitives stop where they do.
 func TestMarkdownCarriesTheProductDefinition(t *testing.T) {
-	md := Markdown()
-	for _, want := range []string{"external harness for a web AI", "Together they form one agent", "wanctl help --markdown"} {
+	// The intro is wrapped for the page, so a phrase can straddle two lines.
+	// Compare against the unwrapped text.
+	md := strings.Join(strings.Fields(Markdown()), " ")
+	for _, want := range []string{Headline, "Together they form one agent", "no browser driver", "wanctl help --markdown"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the Markdown contract does not say %q", want)
 		}

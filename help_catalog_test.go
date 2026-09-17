@@ -129,6 +129,19 @@ func TestHelpForUnknownCommandFails(t *testing.T) {
 	}
 }
 
+// The README makes the same claim as the index header and the contract intro.
+// It is hand-written, so the most a test can do is refuse to let it drift away
+// from the one sentence the other two render.
+func TestReadmeCarriesTheHeadline(t *testing.T) {
+	b, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), catalog.Headline) {
+		t.Errorf("README.md no longer says %q; the index header and docs/contract.md do", catalog.Headline)
+	}
+}
+
 // docs/contract.md is the catalog, committed. It is what a reader outside a
 // terminal gets, and a stale copy is a contract that lies.
 func TestContractDocIsInSync(t *testing.T) {

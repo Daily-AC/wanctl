@@ -14,13 +14,22 @@
 // restatement of the flag name in a sentence.
 package catalog
 
-// Product is what wanctl is, in the owner's words. It heads the Markdown
-// contract, because a reader meeting the command list for the first time needs
-// to know what the list is a list of.
-const Product = `wanctl is the external harness for a web AI. ` +
+// Headline is the short answer to "what is wanctl". The index header, the
+// contract's opening sentence and the README all render from it, so the claim
+// cannot be updated in one place and go stale in the other two.
+const Headline = "the external harness for a web AI"
+
+// Product is what wanctl is, in the owner's words: the harness framing first,
+// then what the harness is made of and what it deliberately leaves out. It
+// heads the Markdown contract, because a reader meeting the command list for
+// the first time needs to know what the list is a list of.
+const Product = `wanctl is ` + Headline + `. ` +
 	`The AI in a chat window is the brain; wanctl gives it hands (exec, background jobs, read, edit, push/pull), ` +
 	`eyes (command output, read, logs, screenshot), memory across turns (session rebind, job ledger) ` +
-	`and safety rails (pairing, device identity, policy rules). Together they form one agent.`
+	`and safety rails (pairing, device identity, policy rules). Together they form one agent.` + "\n\n" +
+	`A trust layer — relay, pairing, pinned device identity, device-side policy rules — decides who may drive which machine, ` +
+	`and on top of it sits a deliberately small set of primitives: run a command, run a background job, read a file, patch a file, move bytes, read the log. ` +
+	`There is no IDE, no browser driver and no second way to do any of these; anything richer is built out of them by the agent.`
 
 // Type names for Param.Type. They are the JSON Schema types the MCP tools
 // register, so changing one changes the wire schema.

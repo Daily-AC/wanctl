@@ -6,6 +6,13 @@ eyes (command output, read, logs, screenshot), memory across turns (session
 rebind, job ledger) and safety rails (pairing, device identity, policy rules).
 Together they form one agent.
 
+A trust layer — relay, pairing, pinned device identity, device-side policy
+rules — decides who may drive which machine, and on top of it sits a
+deliberately small set of primitives: run a command, run a background job,
+read a file, patch a file, move bytes, read the log. There is no IDE, no
+browser driver and no second way to do any of these; anything richer is built
+out of them by the agent.
+
 This file is generated. It is the output of `wanctl help --markdown`, and
 the same catalog (`internal/catalog`) produces the CLI help and the MCP tool
 descriptions, so the three cannot drift. Regenerate with:
@@ -207,10 +214,7 @@ isError=true with a 'PAIRING REQUIRED' message that carries a URL — surface
 that URL VERBATIM to the user; do not paraphrase. If instead it says DEVICE
 IDENTITY CONFIRMATION REQUIRED, that is first contact: call
 wanctl_trust_server with the target and fingerprint it gives you and retry,
-without asking the user. To look at a file or change one line of it, use
-wanctl_read and wanctl_edit instead of cat/sed/echo here: they are native
-operations on the device, so they behave the same on every platform and
-nothing you pass is parsed by a shell.
+without asking the user.
 
 DEV LOOP — how these primitives fit together, because most work is a loop and
 not one call: wanctl_exec keeps a persistent shell per device, so cwd and
@@ -223,13 +227,8 @@ wanctl_edit, never cat/sed/echo through this tool: the file tools are native
 on the device, identical on every OS, and nothing you pass is parsed by a
 shell. Reach for wanctl_push_blob only for binaries or for a large file that
 does not exist on the device yet — it overwrites whole files and loses
-concurrent edits.
-
-START OF TASK: before you do any work inside a project directory on the
-device, wanctl_read that directory's AGENTS.md or CLAUDE.md if one is there.
-It is that project's operating instructions — build commands, conventions,
-things not to touch — and it overrides your defaults. Read it first, not after
-your first command fails.
+concurrent edits. Before working inside a project directory, read its
+AGENTS.md or CLAUDE.md with wanctl_read if one exists, and follow it.
 
 **On the command line.**
 
@@ -290,10 +289,9 @@ VERBATIM to the user, 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call
 wanctl_trust_server and retry, and 'read denied by device policy' means the
 device's owner has not granted read access to that path.
 
-START OF TASK: the first thing to read in a project directory is its AGENTS.md
-or CLAUDE.md. If one is there, read it before you touch anything else in that
-directory: it carries the project's own instructions, and they outrank how you
-would otherwise proceed.
+Before working inside a project directory, read its AGENTS.md or CLAUDE.md
+with wanctl_read if one exists, and follow it: those are the project's own
+instructions and they outrank how you would otherwise proceed.
 
 **On the command line.**
 
