@@ -782,6 +782,33 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 				continue
 			}
 			server.HandleFileGet(conn, m, root)
+		case protocol.KindFileRead:
+			// Gated exactly like file_get: a read is a read, whether the
+			// controller wants the whole file or twenty lines of it.
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp}, check)
+			if ok && check != nil && !check() {
+				ok, decision = false, "delegation inactive"
+			}
+			a.logSessionEvent(audit, eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "READ " + m.Path, Decision: decision})
+			if !ok {
+				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "read denied by device policy: " + m.Path})
+				continue
+			}
+			server.HandleFileRead(conn, m, root)
+		case protocol.KindFileEdit:
+			// Gated exactly like file_put. An edit rewrites the file, so the
+			// grant it needs is the write grant, not a lesser one for touching
+			// only part of the contents.
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp}, check)
+			if ok && check != nil && !check() {
+				ok, decision = false, "delegation inactive"
+			}
+			a.logSessionEvent(audit, eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "EDIT " + m.Path, Decision: decision})
+			if !ok {
+				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "write denied by device policy: " + m.Path})
+				continue
+			}
+			server.HandleFileEdit(conn, m, root)
 		default:
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "unknown request: " + m.Kind})
 			return
@@ -799,9 +826,9 @@ func requiredCapability(kind string) sessionauth.Capabilities {
 	switch kind {
 	case protocol.KindExec, protocol.KindExecAsync, protocol.KindExecPoll:
 		return sessionauth.Exec
-	case protocol.KindFileGet:
+	case protocol.KindFileGet, protocol.KindFileRead:
 		return sessionauth.Read
-	case protocol.KindFilePut:
+	case protocol.KindFilePut, protocol.KindFileEdit:
 		return sessionauth.Write
 	case protocol.KindLogs:
 		return sessionauth.Logs

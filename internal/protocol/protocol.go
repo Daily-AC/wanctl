@@ -49,9 +49,19 @@ const (
 	KindFilePut   = "file_put"   // client -> server, begin upload
 	KindFileGet   = "file_get"   // client -> server, request download
 	KindFileMeta  = "file_meta"  // server -> client, download metadata
-	KindEOF       = "eof"        // end of a FrameData stream
-	KindLogs      = "logs"       // client -> server, request event-log lines
-	KindStatus    = "status"     // client -> server, request read-only agent status
+
+	// Native file inspection and patching. file_get/file_put move whole files
+	// and file_read/file_edit address their contents: a line range out, a
+	// string replacement in. Both are implemented in Go on the device, so they
+	// behave the same on Linux, macOS, Windows and Android instead of inheriting
+	// whatever cat/sed/echo do in that device's shell.
+	KindFileRead   = "file_read"   // client -> server, read a line range
+	KindFileEdit   = "file_edit"   // client -> server, replace a string in place
+	KindFileResult = "file_result" // server -> client, result of a read or an edit
+
+	KindEOF    = "eof"    // end of a FrameData stream
+	KindLogs   = "logs"   // client -> server, request event-log lines
+	KindStatus = "status" // client -> server, request read-only agent status
 
 	// console session (portal <-> device control plane)
 	KindConsoleHello  = "console_hello"  // portal -> device, opens a control-plane session
@@ -121,6 +131,19 @@ type Message struct {
 	Size int64  `json:"size,omitempty"`
 	Mode uint32 `json:"mode,omitempty"` // file permission bits
 
+	// file_read reuses Path, Offset (1-based first line) and Limit (max lines).
+	// file_edit reuses Path and adds the replacement itself.
+	Old         string `json:"old,omitempty"`             // edit: the string to find; never empty
+	New         string `json:"new,omitempty"`             // edit: what to put there; empty means delete
+	All         bool   `json:"all,omitempty"`             // edit: replace every occurrence instead of refusing on >1
+	ExpectedSHA string `json:"expected_sha256,omitempty"` // edit: refuse unless the file still hashes to this
+
+	// File carries the outcome of a file_read or file_edit. It rides on a
+	// file_result message and also on the error that refuses one, because the
+	// numbers a caller needs to recover — the file's current hash, how many
+	// occurrences were actually found — are exactly what the refusal is about.
+	File *FileResult `json:"file,omitempty"`
+
 	// logs
 	LogType string `json:"log_type,omitempty"`
 	Grep    string `json:"grep,omitempty"`
@@ -142,6 +165,35 @@ type Message struct {
 	PairCode    string          `json:"pair_code,omitempty"`
 	FP          string          `json:"fp,omitempty"`   // pair_decide: controller fingerprint
 	Data        json.RawMessage `json:"data,omitempty"` // console_state / approval_notif payload
+}
+
+// File operation limits. MaxReadBytes bounds what one file_read returns, so a
+// caller that asks for a line range inside a huge file gets a bounded reply
+// rather than a 16 MiB frame; MaxEditBytes bounds the file a file_edit will
+// rewrite, matching the inline push cap. DefaultReadLines is the line budget a
+// caller that names none gets.
+const (
+	MaxReadBytes     = 256 << 10 // 256 KiB of returned content
+	MaxEditBytes     = 8 << 20   // 8 MiB, the largest file an edit will rewrite
+	DefaultReadLines = 2000
+)
+
+// FileResult is what a device reports after a file_read or a file_edit.
+type FileResult struct {
+	// read
+	Content    string `json:"content,omitempty"`     // the requested lines, line endings as stored
+	TotalLines int    `json:"total_lines,omitempty"` // lines in the whole file
+	FirstLine  int    `json:"first_line,omitempty"`  // 1-based number of the first returned line
+	LastLine   int    `json:"last_line,omitempty"`   // 1-based number of the last returned line
+	Truncated  bool   `json:"truncated,omitempty"`   // the byte cap cut the requested range short
+
+	// edit
+	Replaced    int `json:"replaced,omitempty"`    // occurrences actually replaced
+	Occurrences int `json:"occurrences,omitempty"` // occurrences found (populated on a refusal)
+
+	// both
+	SizeBytes int64  `json:"size_bytes"`       // the whole file's size, after an edit
+	SHA256    string `json:"sha256,omitempty"` // the whole file's hash, after an edit
 }
 
 // WriteFrame writes a single framed payload.
