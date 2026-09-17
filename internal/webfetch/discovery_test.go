@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"html"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"wanctl/internal/client"
 	"wanctl/internal/delegation"
 	"wanctl/internal/protocol"
 )
@@ -556,10 +558,12 @@ func TestOmittedFileParametersAreNotPartOfTheReplayIdentity(t *testing.T) {
 			t.Fatalf("an omitted %s entered the identity: %s", key, plain)
 		}
 	}
-	// all=false is the same operation as no all at all, so it must hash alike.
+	// An explicit all=false is a different URL, so it has to be a different
+	// identity: a caller that spells the default out must still be able to tell
+	// a replay of its own call from a fresh operation.
 	edit.Set("all", "false")
-	if canonical(t, edit) != plain {
-		t.Fatalf("all=false is not the default: %s", canonical(t, edit))
+	if spelled := canonical(t, edit); spelled == plain || !strings.Contains(spelled, `"all":false`) {
+		t.Fatalf("an explicit all=false vanished into the default: %s", spelled)
 	}
 	edit.Set("all", "true")
 	if every := canonical(t, edit); every == plain || !strings.Contains(every, `"all":true`) {
@@ -580,5 +584,82 @@ func TestOmittedFileParametersAreNotPartOfTheReplayIdentity(t *testing.T) {
 	empty.Del("new")
 	if _, err := parseOperation(empty); err == nil {
 		t.Fatal("an omitted replacement was accepted as an empty one")
+	}
+}
+
+// internal/client raises one error for two different things: a device that has
+// never heard of file_edit, and a session that ended after the request went out.
+// The second can mean the edit was committed and only its answer was lost, so an
+// edit must not be told that nothing ran.
+func TestAnEditWhoseAnswerNeverArrivedStaysUnknown(t *testing.T) {
+	h := staticHandler(t)
+	lost := &client.UnsupportedError{Target: "alice/dev-1", Kind: protocol.KindFileEdit, Version: "0.6.1"}
+	result := map[string]any{}
+	if state := h.recordFailure("edit_text", lost, result); state != "unknown" {
+		t.Fatalf("a lost edit answer = %q, want unknown", state)
+	}
+	if _, present := result["execution_started"]; present {
+		t.Fatalf("a lost edit claimed something about execution: %v", result)
+	}
+	if result["error_code"] != nil {
+		t.Fatalf("a lost edit was given a cause it cannot know: %v", result["error_code"])
+	}
+	if result["instruction"] != unknownInstruction {
+		t.Fatalf("a lost edit does not send the human to the device: %v", result["instruction"])
+	}
+	text := strings.ToLower(fmt.Sprint(result["error"]) + " " + fmt.Sprint(result["instruction"]))
+	for _, forbidden := range []string{"write_text", "wanctl update", "nothing ran", "does not support"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("a lost edit told the caller %q: %v", forbidden, result)
+		}
+	}
+
+	// A read wrote nothing whichever cause it was, so it keeps the actionable
+	// answer: the device's agent is too old and the human can fix that.
+	result = map[string]any{}
+	if state := h.recordFailure("read_text", &client.UnsupportedError{Kind: protocol.KindFileRead}, result); state != "failed" {
+		t.Fatalf("an unsupported read = %q, want failed", state)
+	}
+	if result["error_code"] != "device_agent_too_old" || result["execution_started"] != false {
+		t.Fatalf("an unsupported read lost its way out: %v", result)
+	}
+}
+
+// The outer response cap cuts a window the device already filled with whole
+// lines. The cut has to land on a line boundary and name the line after it, or
+// a caller paging through a file loses one or reads one twice.
+func TestFitReadCutsManyLinesAtTheResponseCapWithoutLosingOne(t *testing.T) {
+	var file strings.Builder
+	for i := 1; file.Len() <= MaxOutputBytes*2; i++ {
+		fmt.Fprintf(&file, "%d %s\n", i, strings.Repeat("x", 100))
+	}
+	text := file.String()
+	total := strings.Count(text, "\n")
+	out := map[string]any{}
+	fitRead(&client.ReadResult{
+		Content: text, TotalLines: total, FirstLine: 1, LastLine: total,
+		SizeBytes: int64(len(text)), SHA256: digest([]byte(text)),
+	}, out)
+
+	content := out["content"].(string)
+	switch {
+	case len(content) > MaxOutputBytes:
+		t.Fatalf("content = %d bytes, cap is %d", len(content), MaxOutputBytes)
+	case !strings.HasSuffix(content, "\n"):
+		t.Fatal("the cut did not land on a line boundary")
+	case out["truncated"] != true || out["long_line"] != nil:
+		t.Fatalf("a window of whole lines was misreported: %v", out)
+	case out["first_line"] != 1 || out["total_lines"] != total:
+		t.Fatalf("the window misdescribes the file: %v", out)
+	}
+	kept := strings.Count(content, "\n")
+	if out["last_line"] != kept || out["next_offset"] != kept+1 {
+		t.Fatalf("%d lines returned, last_line %v, next_offset %v", kept, out["last_line"], out["next_offset"])
+	}
+	// The continuation must start on the very next line: each line here names
+	// its own number, so the first line of the remainder settles it.
+	number, _, _ := strings.Cut(text[len(content):], " ")
+	if number != strconv.Itoa(out["next_offset"].(int)) {
+		t.Fatalf("the rest of the file starts at line %s, next_offset says %v", number, out["next_offset"])
 	}
 }
