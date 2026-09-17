@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"sort"
@@ -124,6 +125,8 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 	mustKeep := map[string][]string{
 		"wanctl_exec": {
 			"PAIRING REQUIRED",
+			// What to do with an output too long to return whole.
+			"LONG OUTPUT", "LAST 48 KiB", "grep that file",
 			"VERBATIM",
 			"DEVICE IDENTITY CONFIRMATION REQUIRED",
 			"wanctl_trust_server",
@@ -154,6 +157,27 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 		"wanctl_edit": {
 			"expected_sha256", "old string not found", "occurs N times",
 			"atomic", "changed since it was read",
+			// The batch form, and the four rules that make it worth using:
+			// one call instead of several, minimal `old`, no padding, and
+			// every entry read against the original text.
+			"SEVERAL EDITS AT ONCE",
+			"ONE call with several entries rather than several calls",
+			"as SMALL as it can be",
+			"do not pad it with unchanged lines",
+			"not the result of the entry before it",
+			"checked before anything is written",
+		},
+		"wanctl_write": {
+			// Which of the two writing tools to reach for, in pi's words.
+			"only for NEW files or COMPLETE rewrites",
+			"wanctl_edit", "wanctl_push_blob",
+			"8 MiB", "atomic", "Missing parent directories are created",
+		},
+		"wanctl_screenshot": {
+			// A capture is gated harder than a command, and a caller has to
+			// know what it is looking at when the image was shrunk.
+			"ELEVATED", "downscaled", "screencapture", "grim",
+			"PAIRING REQUIRED",
 		},
 		"wanctl_exec_async": {"job_id", "wanctl_exec_poll", "30 minutes"},
 		"wanctl_exec_poll":  {"next_offset"},
@@ -163,6 +187,9 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 	}
 	// Rules that live in a parameter description rather than the tool's own.
 	mustKeepParam := map[string]map[string][]string{
+		"wanctl_edit": {
+			"edits": {"ORIGINAL", "exactly once", "may not overlap", "Mutually exclusive"},
+		},
 		"wanctl_exec": {
 			"script":  {"Requires 'interp'", "encoded"},
 			"command": {"parsed TWICE", "is not recognized"},
@@ -201,5 +228,38 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The instructions ride on the initialize response, which is the one moment a
+// host reads anything before deciding how to use the tools. Asserted through a
+// real round trip rather than a field read: what matters is that a client sees
+// it, not that the struct holds it.
+func TestInitializeCarriesTheInstructions(t *testing.T) {
+	s := newMCPServer()
+	raw := s.HandleMessage(context.Background(), []byte(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`))
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp struct {
+		Result struct {
+			Instructions string `json:"instructions"`
+		} `json:"result"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(encoded, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Error) > 0 {
+		t.Fatalf("initialize failed: %s", resp.Error)
+	}
+	if resp.Result.Instructions != catalog.Instructions() {
+		t.Errorf("initialize instructions are not the catalog's:\n%s", resp.Result.Instructions)
+	}
+	// The one rule no tool description can carry on its own.
+	if !strings.Contains(resp.Result.Instructions, "AGENTS.md") {
+		t.Error("the instructions a host receives do not mention AGENTS.md")
 	}
 }

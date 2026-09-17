@@ -20,14 +20,33 @@ type ReadRequest struct {
 	Limit  int    // max lines; 0 means protocol.DefaultReadLines
 }
 
-// EditRequest asks a device to replace Old with New inside one text file.
+// EditRequest asks a device to replace text inside one file. It takes either a
+// single Old/New pair or a batch of Edits, never both.
 type EditRequest struct {
 	Target      string
 	Path        string // absolute on the device
-	Old         string // non-empty
+	Old         string // non-empty, unless Edits is used instead
 	New         string // may be empty, which deletes Old
 	All         bool   // replace every occurrence instead of refusing on more than one
 	ExpectedSHA string // optional: refuse unless the file still hashes to this
+	// Edits is the batch form: several replacements, each matching the file as
+	// it was before any of them ran, applied in one atomic rewrite or refused
+	// together.
+	Edits []protocol.FileEdit
+}
+
+// WriteRequest asks a device to create or completely replace one text file.
+type WriteRequest struct {
+	Target  string
+	Path    string // absolute on the device; missing parent directories are created
+	Content string // the whole new text of the file, UTF-8
+}
+
+// WriteResult is what a device reports after a write.
+type WriteResult struct {
+	Created   bool // the file did not exist before
+	SizeBytes int64
+	SHA256    string
 }
 
 // ReadResult is what a device reports for a read.
@@ -66,7 +85,19 @@ func (e *UnsupportedError) Error() string {
 	if e.Version != "" {
 		agent = "device agent " + e.Version
 	}
-	return fmt.Sprintf("%s does not support read/edit; run `wanctl update` on the device", agent)
+	return fmt.Sprintf("%s does not support %s; run `wanctl update` on the device", agent, unsupportedWhat(e.Kind))
+}
+
+// unsupportedWhat names the missing capability the way a caller would ask for
+// it, so the sentence is about what they tried to do rather than about a frame
+// kind they never chose.
+func unsupportedWhat(kind string) string {
+	switch kind {
+	case protocol.KindFileWrite:
+		return "write"
+	default:
+		return "read/edit"
+	}
 }
 
 // ReadFile returns a line range of a file on the target device.
@@ -96,8 +127,11 @@ func (c *Client) ReadFile(ctx context.Context, req ReadRequest) (*ReadResult, er
 // the string was not found, it was found more than once, the file changed since
 // it was read — comes back as an error and leaves the file untouched.
 func (c *Client) EditFile(ctx context.Context, req EditRequest) (*EditResult, error) {
-	if req.Old == "" {
-		return nil, errors.New("edit needs a non-empty 'old' string to find")
+	switch {
+	case len(req.Edits) > 0 && (req.Old != "" || req.New != ""):
+		return nil, errors.New("pass either 'old'/'new' or 'edits', not both")
+	case len(req.Edits) == 0 && req.Old == "":
+		return nil, errors.New("edit needs a non-empty 'old' string to find, or an 'edits' array")
 	}
 	res, err := c.fileOp(ctx, req.Target, protocol.Message{
 		Kind:        protocol.KindFileEdit,
@@ -106,11 +140,28 @@ func (c *Client) EditFile(ctx context.Context, req EditRequest) (*EditResult, er
 		New:         req.New,
 		All:         req.All,
 		ExpectedSHA: req.ExpectedSHA,
+		Edits:       req.Edits,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &EditResult{Replaced: res.Replaced, SizeBytes: res.SizeBytes, SHA256: res.SHA256}, nil
+}
+
+// WriteFile creates or completely replaces a text file on the target device,
+// making any missing parent directories. It is the whole-file counterpart of
+// EditFile: reach for it when the file is new or is being rewritten end to end,
+// and for anything else edit the part that changes.
+func (c *Client) WriteFile(ctx context.Context, req WriteRequest) (*WriteResult, error) {
+	res, err := c.fileOp(ctx, req.Target, protocol.Message{
+		Kind:    protocol.KindFileWrite,
+		Path:    req.Path,
+		Content: req.Content,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &WriteResult{Created: res.Created, SizeBytes: res.SizeBytes, SHA256: res.SHA256}, nil
 }
 
 // fileOp dials the target, sends one file_read/file_edit request and returns the

@@ -809,6 +809,20 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 				continue
 			}
 			server.HandleFileEdit(conn, m, root)
+		case protocol.KindFileWrite:
+			// Gated exactly like file_put, for the same reason as file_edit:
+			// what comes out of it is a whole file with the controller's
+			// content in it, which is a write however small the content was.
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp}, check)
+			if ok && check != nil && !check() {
+				ok, decision = false, "delegation inactive"
+			}
+			a.logSessionEvent(audit, eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "WRITE " + m.Path, Decision: decision})
+			if !ok {
+				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "write denied by device policy: " + m.Path})
+				continue
+			}
+			server.HandleFileWrite(conn, m, root)
 		default:
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "unknown request: " + m.Kind})
 			return
@@ -828,7 +842,7 @@ func requiredCapability(kind string) sessionauth.Capabilities {
 		return sessionauth.Exec
 	case protocol.KindFileGet, protocol.KindFileRead:
 		return sessionauth.Read
-	case protocol.KindFilePut, protocol.KindFileEdit:
+	case protocol.KindFilePut, protocol.KindFileEdit, protocol.KindFileWrite:
 		return sessionauth.Write
 	case protocol.KindLogs:
 		return sessionauth.Logs
@@ -884,12 +898,25 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 	defer cancel()
 	pending := watchPeer(conn, cancel)
 
-	out := server.FrameWriter(conn, protocol.FrameStdout)
+	// The output goes to the controller and, past the size it asked about, into
+	// a file here as well, so a truncated answer can still say where the rest
+	// is. A controller that names no threshold gets exactly today's behaviour
+	// and no file.
+	spill := server.NewSpill(server.FrameWriter(conn, protocol.FrameStdout), m.SpillAfter)
+	out := io.Writer(spill)
 	var code int
 	var err error
 	var ranVia elevate.Kind
 	switch {
 	case m.Elevate:
+		// A desktop capture is the same verb through the same gate, with no
+		// elevation channel to run it through — there is none on a laptop, and
+		// none is needed. Checked before the Android verbs so that a device
+		// which is not Android never reaches the elevator at all.
+		if handled, sCode, sErr := server.RunScreenshot(ctx, m.Command, out); handled {
+			code, err = sCode, sErr
+			break
+		}
 		// Structured verbs first: they are elevated commands with a nicer
 		// spelling, so they go through the same channel and the same gate that
 		// already ran above.
@@ -904,6 +931,7 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 			// this is a refusal to act rather than a failed command. Say which
 			// it is: the caller must not read it as "ran, and failed".
 			a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
+			spill.Close()
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 			return pending
 		}
@@ -919,6 +947,7 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 		} else {
 			sess, serr := a.session(fp)
 			if serr != nil {
+				spill.Close()
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: serr.Error()})
 				return pending
 			}
@@ -936,12 +965,17 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 			code = -1
 		}
 		a.notifyExecFinished(m.Command, m.Cwd, peerName, code)
-		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
+		spillPath, spilled := spill.Close()
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error(), Path: spillPath, Size: spilled})
 		return pending
 	}
 	a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code, Via: string(ranVia)})
 	a.notifyExecFinished(m.Command, m.Cwd, peerName, code)
-	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExit, Code: code, ElevatedVia: string(ranVia)})
+	spillPath, spilled := spill.Close()
+	protocol.WriteMessage(conn, protocol.Message{
+		Kind: protocol.KindExit, Code: code, ElevatedVia: string(ranVia),
+		Path: spillPath, Size: spilled,
+	})
 	return pending
 }
 

@@ -103,6 +103,8 @@ func TestHelpRendersEntriesForBothSpellings(t *testing.T) {
 		{[]string{"help", "wanctl_read"}, []string{"wanctl read —", "wanctl_read"}},
 		{[]string{"help", "trust", "server"}, []string{"wanctl trust server —", "--fingerprint"}},
 		{[]string{"help", "start"}, []string{"wanctl start —", "CLI only"}},
+		{[]string{"help", "write"}, []string{"wanctl write —", "wanctl_write", "--content-file F"}},
+		{[]string{"help", "wanctl_screenshot"}, []string{"wanctl screenshot —", "wanctl_screenshot"}},
 	} {
 		out, code := runWanctl(t, bin, tc.args...)
 		if code != 0 {
@@ -152,5 +154,29 @@ func TestContractDocIsInSync(t *testing.T) {
 	}
 	if string(onDisk) != catalog.Markdown() {
 		t.Errorf("%s is out of date. Regenerate it:\n\n    go run . help --markdown > %s\n", path, path)
+	}
+}
+
+// `wanctl help --instructions` prints what an MCP host is handed before it calls
+// anything. It exists so the same words can be read by something that is not an
+// MCP client — a discovery page, or a person deciding what this will do to their
+// machine — without a second copy of them existing anywhere.
+func TestHelpPrintsTheInstructions(t *testing.T) {
+	bin := buildWanctl(t)
+	out, code := runWanctl(t, bin, "help", "--instructions")
+	if code != 0 {
+		t.Fatalf("help --instructions exited %d\n%s", code, out)
+	}
+	if out != catalog.Instructions() {
+		t.Errorf("printed instructions differ from the catalog's:\n%s", out)
+	}
+	if n := len(strings.Split(strings.TrimRight(out, "\n"), "\n")); n > 40 {
+		t.Errorf("instructions are %d lines, budget is 40", n)
+	}
+	for _, want := range append([]string{catalog.Headline, "AGENTS.md", "wanctl_write", "wanctl_screenshot"},
+		catalog.CriticalErrors()...) {
+		if !strings.Contains(out, want) {
+			t.Errorf("instructions do not mention %q", want)
+		}
 	}
 }
