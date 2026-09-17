@@ -666,10 +666,22 @@ func (r *remoteSession) info() string {
 			out += "controller fingerprint: " + r.identity.Fingerprint + "\n"
 		}
 	}
-	out += "relay:                 " + configuredValue(settingValue("relay")) + "\n"
+	out += "relay:                 " + configuredValue(hostedRelayDisplay()) + "\n"
 	out += "portal:                " + configuredValue(settingValue("portal")) + "\n"
 	out += "note:                  identity is derived per-namespace, so the same person reconnecting keeps the same fingerprint (no re-pairing).\n"
 	return out
+}
+
+// hostedRelayDisplay is the relay address to show in HTTP mode. A hosted relay
+// runs the MCP server in-process and dials itself over loopback, so the
+// configured WANCTL_RELAY is an address no caller of this tool could ever
+// reach. WANCTL_PUBLIC_ORIGIN is that same relay's public name. Display only —
+// relayURL() still returns the address that gets dialed.
+func hostedRelayDisplay() string {
+	if origin := strings.TrimRight(os.Getenv("WANCTL_PUBLIC_ORIGIN"), "/"); origin != "" {
+		return origin
+	}
+	return settingValue("relay")
 }
 
 // settingValue is config.Setting without the source, for display lines.
