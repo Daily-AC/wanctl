@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"wanctl/internal/delegation"
+	"wanctl/internal/protocol"
 )
 
 // The discovery document is public and credential-free, so it can be read
@@ -371,4 +372,213 @@ func TestASlotSurvivesALedgerThatPanics(t *testing.T) {
 		t.Fatal("the grant cannot start work again")
 	}
 	h.release(grant)
+}
+
+// The file tools are the ones a model has to be taught, so their contract is
+// what the manifest has to carry: a schema it can fill and a description that
+// says when to reach for them and what each refusal means.
+func TestManifestPublishesBothFileToolContracts(t *testing.T) {
+	h := staticHandler(t)
+	doc := h.manifest("1700000000-"+strings.Repeat("a", 48), delegation.Access{
+		Namespace: "alice", GrantID: "d_test", Delegated: true,
+		ExpiresAt: time.Now().Add(30 * time.Minute),
+		Devices:   []delegation.Device{{Namespace: "alice", ID: "dev-1", Fingerprint: "SHA256:x"}},
+	})
+	tools := map[string]map[string]any{}
+	for _, tool := range doc["tools"].([]map[string]any) {
+		tools[tool["name"].(string)] = tool
+	}
+	for _, name := range []string{"exec", "read_text", "edit_text", "write_text"} {
+		if tools[name] == nil {
+			t.Fatalf("the manifest does not publish %s", name)
+		}
+	}
+
+	schema := func(name string) (map[string]any, []string) {
+		s := tools[name]["input_schema"].(map[string]any)
+		var required []string
+		for _, value := range s["required"].([]string) {
+			required = append(required, value)
+		}
+		return s["properties"].(map[string]any), required
+	}
+
+	// read_text: paging is optional, so it must not be required, and both
+	// parameters have to advertise the default the caller gets without them.
+	props, required := schema("read_text")
+	offset, limit := props["offset"].(map[string]any), props["limit"].(map[string]any)
+	if offset["default"] != 1 || limit["default"] != protocol.DefaultReadLines {
+		t.Fatalf("read_text does not publish its defaults: %v %v", offset, limit)
+	}
+	if offset["minimum"] != 1 || limit["maximum"] != maxReadLines {
+		t.Fatalf("read_text does not publish its bounds: %v %v", offset, limit)
+	}
+	if strings.Join(required, ",") != "rid,target,path" {
+		t.Fatalf("read_text required = %v", required)
+	}
+
+	// edit_text: old and new are required, the other two are not, and the
+	// template has to carry the two the caller cannot guess.
+	props, required = schema("edit_text")
+	for _, key := range []string{"old", "new", "all", "expected_sha256"} {
+		if props[key] == nil {
+			t.Fatalf("edit_text schema omits %s", key)
+		}
+	}
+	if strings.Join(required, ",") != "rid,target,path,old,new" {
+		t.Fatalf("edit_text required = %v", required)
+	}
+	if props["expected_sha256"].(map[string]any)["pattern"] != sha256Pattern.String() {
+		t.Fatalf("edit_text does not say what a sha256 looks like: %v", props["expected_sha256"])
+	}
+	template := tools["edit_text"]["call_url_template"].(string)
+	for _, placeholder := range []string{"tool=edit_text", "{path}", "{old}", "{new}"} {
+		if !strings.Contains(template, placeholder) {
+			t.Fatalf("edit_text template lacks %s: %s", placeholder, template)
+		}
+	}
+	if strings.Contains(tools["read_text"]["call_url_template"].(string), "{offset}") {
+		t.Fatal("read_text puts an optional parameter in its template")
+	}
+
+	// The descriptions are operating instructions, not feature lists.
+	for tool, phrases := range map[string][]string{
+		"read_text":  {"offset=last_line+1", "long_line", "expected_sha256", "not exec"},
+		"edit_text":  {"expected_sha256", "NEW rid", "occurs N times", "all=true", strconv.Itoa(MaxURLBytes)},
+		"write_text": {"edit_text"},
+		"exec":       {"read_text and edit_text"},
+	} {
+		description := tools[tool]["description"].(string)
+		for _, phrase := range phrases {
+			if !strings.Contains(description, phrase) {
+				t.Fatalf("%s description does not tell a model about %q", tool, phrase)
+			}
+		}
+	}
+
+	limits := doc["limits"].(map[string]any)
+	if limits["read_lines_default"] != protocol.DefaultReadLines || limits["output_bytes"] != MaxOutputBytes {
+		t.Fatalf("limits = %v", limits)
+	}
+	// A refused file operation is the third case where nothing ran, and a model
+	// that does not learn that has no way to send a corrected edit.
+	fresh := doc["security"].(map[string]any)["new_rid_only_when_nothing_ran"].(string)
+	for _, code := range []string{"pairing_required", "adapter_busy", "file_refused"} {
+		if !strings.Contains(fresh, code) {
+			t.Fatalf("the new-rid rule does not name %s: %q", code, fresh)
+		}
+	}
+
+	// Two more tools must not cost the reader the documents themselves.
+	latin, han := countWords(getDiscovery(t, h, "").Body.String())
+	t.Logf("rendered /webfetch/v1: %d latin words, %d han characters", latin, han)
+	if latin >= 2500 || han >= 2500 {
+		t.Fatalf("discovery page grew past the budget: %d latin words, %d han characters", latin, han)
+	}
+	latin, han = countWords(approvedPage(t).Body.String())
+	t.Logf("rendered approved manifest: %d latin words, %d han characters", latin, han)
+	if latin >= 3000 || han >= 2500 {
+		t.Fatalf("the approved manifest grew past the budget: %d latin words, %d han characters", latin, han)
+	}
+}
+
+// approvedPage renders the document a client reads after approval, through the
+// same handler and template a web chat fetches.
+func approvedPage(t *testing.T) *httptest.ResponseRecorder {
+	t.Helper()
+	store := &approvedStore{}
+	h, err := New(Config{
+		Store: store, Jobs: store, Seed: bytes.Repeat([]byte{7}, 32),
+		RelayURL: "https://relay.example", PublicOrigin: "https://relay.example", PortalOrigin: "https://portal.example",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(h.Close)
+	ticket := strconv.FormatInt(time.Now().Unix(), 10) + "-" + strings.Repeat("c", 48)
+	grant, _, identity, err := h.credentials(ticket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.grant, store.fingerprint = grant, identity.Fingerprint
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/webfetch/s/"+ticket, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("approved page = %d", w.Code)
+	}
+	return w
+}
+
+// The canonical payload is the replay identity. A parameter the caller never
+// sent must stay out of it, or an identical URL becomes a 409 the day a default
+// moves — the same rule that already governs timeout_seconds.
+func TestOmittedFileParametersAreNotPartOfTheReplayIdentity(t *testing.T) {
+	canonical := func(t *testing.T, q url.Values) string {
+		t.Helper()
+		op, err := parseOperation(q)
+		if err != nil {
+			t.Fatalf("%v: %v", q, err)
+		}
+		payload, _ := json.Marshal(op)
+		return string(payload)
+	}
+	read := url.Values{"rid": {"r1"}, "tool": {"read_text"}, "target": {"alice/dev-1"}, "path": {"/tmp/a.txt"}}
+	bare := canonical(t, read)
+	for _, key := range []string{"offset", "limit"} {
+		if strings.Contains(bare, key) {
+			t.Fatalf("an omitted %s entered the identity: %s", key, bare)
+		}
+	}
+	op, _ := parseOperation(read)
+	if op.Offset != nil || op.Limit != nil {
+		t.Fatalf("an omitted line range was materialized: %v %v", op.Offset, op.Limit)
+	}
+
+	paged := url.Values{}
+	for key, value := range read {
+		paged[key] = value
+	}
+	paged.Set("offset", "41")
+	paged.Set("limit", "10")
+	windowed := canonical(t, paged)
+	if !strings.Contains(windowed, `"offset":41`) || !strings.Contains(windowed, `"limit":10`) {
+		t.Fatalf("an explicit window left the identity: %s", windowed)
+	}
+	paged.Set("offset", "51")
+	if canonical(t, paged) == windowed {
+		t.Fatal("two different windows hash alike")
+	}
+
+	edit := url.Values{"rid": {"e1"}, "tool": {"edit_text"}, "target": {"alice/dev-1"}, "path": {"/tmp/a.txt"}, "old": {"x"}, "new": {"y"}}
+	plain := canonical(t, edit)
+	for _, key := range []string{"all", "expected_sha256"} {
+		if strings.Contains(plain, key) {
+			t.Fatalf("an omitted %s entered the identity: %s", key, plain)
+		}
+	}
+	// all=false is the same operation as no all at all, so it must hash alike.
+	edit.Set("all", "false")
+	if canonical(t, edit) != plain {
+		t.Fatalf("all=false is not the default: %s", canonical(t, edit))
+	}
+	edit.Set("all", "true")
+	if every := canonical(t, edit); every == plain || !strings.Contains(every, `"all":true`) {
+		t.Fatalf("all=true did not enter the identity: %s", every)
+	}
+	edit.Del("all")
+	edit.Set("expected_sha256", strings.Repeat("a", 64))
+	if guarded := canonical(t, edit); guarded == plain || !strings.Contains(guarded, `"expected_sha256"`) {
+		t.Fatalf("expected_sha256 did not enter the identity: %s", guarded)
+	}
+	// An empty replacement is a real operation, not an omission, so it must be
+	// sent explicitly and must keep one canonical form.
+	empty := url.Values{"rid": {"e2"}, "tool": {"edit_text"}, "target": {"alice/dev-1"}, "path": {"/tmp/a.txt"}, "old": {"x"}, "new": {""}}
+	deleting := canonical(t, empty)
+	if strings.Contains(deleting, `"new"`) {
+		t.Fatalf("an empty replacement was written into the identity: %s", deleting)
+	}
+	empty.Del("new")
+	if _, err := parseOperation(empty); err == nil {
+		t.Fatal("an omitted replacement was accepted as an empty one")
+	}
 }
