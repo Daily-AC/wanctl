@@ -262,7 +262,7 @@ func cmdStatus(ctx context.Context, args []string) error {
 }
 
 func parseStatusArgs(args []string) (string, error) {
-	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs := withHelp(flag.NewFlagSet("status", flag.ContinueOnError))
 	fs.SetOutput(io.Discard)
 	target := fs.String("target", "", "device (NS/DEV or DEV)")
 	if err := fs.Parse(args); err != nil {

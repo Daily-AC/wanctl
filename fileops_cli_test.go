@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"wanctl/internal/catalog"
 )
 
 // --old and --old-file are two ways to say the same thing, and they disagree
@@ -40,9 +42,16 @@ func TestEditTextSources(t *testing.T) {
 // help is a command nobody finds, and one absent from relayCommands fails deep
 // inside a dial instead of asking where the relay is (issue #11).
 func TestReadAndEditAreDocumentedAndGated(t *testing.T) {
-	for _, line := range []string{"wanctl read", "wanctl edit"} {
+	// The index lists commands one per line rather than spelling out
+	// "wanctl read ..." with its flags; the flags live in the catalog entry
+	// that `wanctl help read` renders.
+	for _, line := range []string{"  read ", "  edit "} {
 		if !strings.Contains(usage, line) {
-			t.Errorf("usage does not mention %q", line)
+			t.Errorf("the command index does not list %q", line)
+		}
+		name := strings.TrimSpace(line)
+		if _, ok := catalog.Lookup(name); !ok {
+			t.Errorf("%q has no catalog entry, so `wanctl help %s` says nothing", name, name)
 		}
 	}
 	for _, cmd := range []string{"read", "edit"} {
