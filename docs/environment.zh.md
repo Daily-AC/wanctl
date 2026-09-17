@@ -15,8 +15,8 @@
 | `WANCTL_UPSTREAM_RELAY` | relay | 视情况 | 无 | 本 relay 没有数据库时，拿去解析令牌的上游 relay URL。需要 `WANCTL_ADMIN_SECRET`。 |
 | `WANCTL_PORTAL_NS` | relay | 否 | 无 | 允许开启特权门户控制台会话的命名空间。惯例是 `portal`。 |
 | `WANCTL_DIST_DIR` | relay | 否 | `/dist` | 存放签名过的发布产物和安装器的目录。 |
-| `WANCTL_PUBLIC_ORIGIN` | relay | 视情况 | 无 | relay 的规范 origin，会被替换进 `/skills`，以及从 `/install.sh` 和 `/install.ps1` 提供的安装器里，这样从这台 relay 取到的脚本就从这台 relay 安装。绝不从请求的 Host 推导：没设时 `/skills` 返回 503，安装器则原样带着它内置的 base 提供。 |
-| `WANCTL_MCP_SEED` | relay、MCP | 视情况 | 无 | 十六进制种子，在 relay 上启用 `/mcp`（别名 `/wanctl-mcp`）；独立跑 `mcp --http` 时必需，且解码后至少 32 字节。 |
+| `WANCTL_PUBLIC_ORIGIN` | relay | 视情况 | 无 | relay 的规范 origin，会被替换进 `/skills`，以及从 `/install.sh` 和 `/install.ps1` 提供的安装器里，这样从这台 relay 取到的脚本就从这台 relay 安装。它同时也是 MCP OAuth 对外公布的 issuer 和资源标识。绝不从请求的 Host 推导：没设时 `/skills` 返回 503，安装器原样带着它内置的 base 提供，OAuth 则保持关闭。 |
+| `WANCTL_MCP_SEED` | relay、MCP | 视情况 | 无 | 十六进制种子，在 relay 上启用 `/mcp`（别名 `/wanctl-mcp`）；独立跑 `mcp --http` 时必需，且解码后至少 32 字节。它同时密封 rebind 凭证和 OAuth 访问令牌，所以换掉它等于让所有托管会话立刻登出。 |
 | `WANCTL_MCP_LOCAL_ROOT` | MCP stdio | 否 | 进程工作目录 | `wanctl_push` 和 `wanctl_pull` 唯一可以访问的本地目录树。wanctl 配置目录永远被排除在外。 |
 | `WANCTL_MCP_ALLOWED_ORIGINS` | MCP HTTP | 否 | 无 | 逗号分隔的浏览器 Origin 白名单。带 Origin 的请求不在名单里就拒绝；程序化的客户端通常一个都不带。 |
 | `WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER` | MCP | 否 | `0` | 只有想恢复「模型可调用的设备 TOFU 钉扎」时才设成 `1`。默认是失败即关闭，因为模型分不清一个独立验证过的指纹和一个由敌意 relay 递过来的指纹。 |
@@ -44,7 +44,7 @@
 
 | 变量 | 角色 | 必需 | 默认值 | 用途 |
 |---|---|---:|---|---|
-| `WANCTL_PORTAL` | agent、控制端 | 视情况 | 持久化配置，其次构建时默认值 | 登录/接入和配对链接所用的门户 URL。用 `wanctl config set portal=…` 持久化。 |
+| `WANCTL_PORTAL` | relay、agent、控制端 | 视情况 | 持久化配置，其次构建时默认值 | 登录/接入和配对链接所用的门户 URL，同时由 relay 作为 MCP OAuth 的授权端点对外公布。用 `wanctl config set portal=…` 持久化。 |
 | `WANCTL_RELEASE_BASE` | agent、控制端、安装器 | 否 | `wanctl config set release_base=…`，其次构建时默认值 | 签名过的发布产物平铺存放的基址（官方构建烤进的是项目的 GitHub releases）。`wanctl update` 和安装器都从这里拉；为空则退回 relay 的 `/dl` 镜像。二进制运行的地方够不到那个烤进去的发布页时，用 `wanctl config set release_base=https://relay.example.com/dl` 把它持久化。 |
 | `WANCTL_AUTO_UPDATE` | agent | 否 | `on` | 设成 `off`，正在跑的 agent 就不再把自己的二进制换成更新的签名发布。每次检查都会重读，所以不用重启就生效；用 `wanctl config set auto_update=off` 持久化。开发构建、安卓 APK 里的那份、以及所在目录 agent 写不了的二进制，无论如何都不会被替换。 |
 | `WANCTL_DIST_BASE` | 安装器 | 否 | 无 | 仅安装器可用的产物来源覆盖项；优先级高于 `WANCTL_RELAY` 和烤进去的发布基址。 |

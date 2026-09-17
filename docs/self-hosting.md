@@ -196,6 +196,30 @@ and the endpoint stays read-only:
 WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1
 ```
 
+### Optional: let web AIs sign in with OAuth
+
+A connector that opens a new MCP session per tool call — ChatGPT's does —
+can never hold a session-keyed login. Such clients authenticate with an OAuth
+2.1 bearer instead, and the relay turns that on by itself once it has all
+three of a database, a public origin and a portal:
+
+```ini
+# selfhost/.env, then: docker compose up -d --no-deps relay
+WANCTL_PUBLIC_ORIGIN=https://relay.example.com
+WANCTL_PORTAL=https://portal.example.com
+```
+
+The relay logs `MCP OAuth enabled` and publishes
+`/.well-known/oauth-protected-resource` and
+`/.well-known/oauth-authorization-server`; the consent page a person actually
+sees is served by the portal at `/oauth/authorize`. Clients register
+themselves, which grants nothing on its own — access begins when a signed-in
+person approves the request, and each approval appears in their token list
+labelled with the client's name, revocable there. Nothing changes for clients
+that send no bearer: they keep the per-session login. Migration 010 adds the
+two tables this needs, so back up the database before the first start on this
+version, as with any other schema change.
+
 ### Optional: serve signed releases to devices
 
 With release distribution enabled, devices install with one line and later
