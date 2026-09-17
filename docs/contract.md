@@ -1035,14 +1035,14 @@ Works on Android (screencap through the elevation channel), macOS
 one installed; if none is, the error names them so you can install one).
 Captures the whole screen: there is no window picker and no region.
 
-Policy: a capture is gated as an ELEVATED command on every platform, the same
-class Android needs it in. That means it needs its own device rule and a
-device in bypass mode still refuses it until a human approves — looking at
-someone's screen is not covered by permission to run commands. Expect an
-approval wait on the first capture of a device. Same pairing and identity
-rules as wanctl_exec: 'PAIRING REQUIRED' carries a URL to relay VERBATIM to
-the user, and 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call
-wanctl_trust_server with the target and fingerprint it gives you, then retry.
+Policy: a desktop capture is gated exactly like any other command, because it
+is one — a controller allowed to run commands could run the capture tool
+itself. Android is gated as an ELEVATED command, because there a capture
+really does need su or the device's own adb, and elevated commands need their
+own rule that bypass mode does not cover. Same pairing and identity rules as
+wanctl_exec: 'PAIRING REQUIRED' carries a URL to relay VERBATIM to the user,
+and 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call wanctl_trust_server
+with the target and fingerprint it gives you, then retry.
 
 **On the command line.**
 
@@ -1076,7 +1076,7 @@ wanctl_screenshot{"target":"home-pc"}
 |---|---|
 | `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
-| `elevated command denied by device policy` | A capture needs its own rule on the device, and bypass mode does not cover it. Ask the owner to approve the pending request, then retry. |
+| `command denied by device policy` | The device has not allowed this controller to capture its screen. Ask the owner to approve the pending request, then retry. On Android the refusal names an ELEVATED command, which needs its own rule that bypass mode does not cover. |
 | `no screen capture tool on this device` | A Linux device with none of grim / gnome-screenshot / import installed. Install one (the message names them) — retrying will not help. |
 | `did not return a PNG` | The device answered with something else, usually an agent too old for desktop capture. Run `wanctl update` on it, then retry. |
 

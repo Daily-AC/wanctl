@@ -31,13 +31,26 @@ import (
 // screenshotVerb is the command a controller sends for a capture.
 const screenshotVerb = "screenshot"
 
+// IsDesktopCapture reports whether this command is a screen capture that needs
+// no elevation channel — the verb, on a device that is not Android.
+//
+// The agent asks before it gates, not after. A capture is requested elevated on
+// every platform, because Android cannot do it any other way and the controller
+// cannot know which kind of device it is talking to; but on a laptop nothing is
+// elevated, and gating it as though something were would put a capture behind a
+// stricter rule than the `screencapture` a controller with exec permission can
+// already run for itself. Same capability, so the same gate.
+func IsDesktopCapture(command string) bool {
+	return strings.TrimSpace(command) == screenshotVerb && runtime.GOOS != "android"
+}
+
 // RunScreenshot captures the device's screen and writes a PNG to out.
 //
 // handled is false when command is not the screenshot verb, or when this is an
 // Android agent, where the verb belongs to the elevated path instead. The
 // caller treats that exactly as it treats any other command.
 func RunScreenshot(ctx context.Context, command string, out io.Writer) (handled bool, code int, err error) {
-	if strings.TrimSpace(command) != screenshotVerb || runtime.GOOS == "android" {
+	if !IsDesktopCapture(command) {
 		return false, 0, nil
 	}
 	png, err := captureScreen(ctx)

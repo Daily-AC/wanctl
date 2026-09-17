@@ -860,7 +860,13 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message, 
 
 func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol.Message, audit sessionAudit, checks ...func() bool) <-chan peerRead {
 	kind := policy.KindExec
-	if m.Elevate {
+	// A desktop capture asks for elevation it will not use: the controller has
+	// to request it so an Android device can honour it, and no laptop has a
+	// channel to run it through. Gating it as elevated would make looking at a
+	// screen harder than running the capture tool by hand through exec, which
+	// is the same capability by a longer road. Android keeps the elevated gate,
+	// because there it really does need su or adb.
+	if m.Elevate && !server.IsDesktopCapture(m.Command) {
 		kind = policy.KindExecElevated
 	}
 	// An unparseable --via is rejected before the approval prompt, not after:
@@ -882,7 +888,7 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 	if !ok {
 		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
 		reason := "command denied by device policy: " + m.Command
-		if m.Elevate {
+		if kind == policy.KindExecElevated {
 			reason = "elevated command denied by device policy: " + m.Command +
 				" (elevated commands need their own rule; bypass mode does not cover them)"
 		}

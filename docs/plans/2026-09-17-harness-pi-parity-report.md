@@ -148,14 +148,17 @@ clause is about being forced into a breaking redesign; an optional JSON field on
 kind is not one, so this was implemented rather than reported as blocked. Flagging it because
 the call was mine.
 
-**A desktop screenshot is gated as an ELEVATED command.** The brief said to pick the gate the
-Android path already uses, which is `policy.KindExecElevated`. Kept on every platform, and it
-has teeth: bypass mode deliberately does not cover elevated, so a device in bypass still
-refuses a capture until its owner grants the rule — which is the right answer for looking at
-someone's screen, but it is stricter than `exec` and the tool description says so. Because
-nothing is actually elevated on a laptop, the controller carries an `ElevateOptional` flag so
-the "the device did not elevate this command" check does not fire on a reply that names no
-channel. This is controller-local; the wire is unchanged.
+**A desktop screenshot is gated exactly like a command; Android stays elevated.** The first
+version of this branch gated every capture as `policy.KindExecElevated`, the class the Android
+path uses. Reviewed and changed: on a laptop a capture needs no privilege the exec gate does
+not already grant — a controller allowed to run commands can run `screencapture` itself — so
+the stricter gate only added friction to the see-the-screen loop and created a second, harder
+path to the same capability. The device decides, because only the device knows which kind it
+is: `server.IsDesktopCapture` in `internal/agent/agent.go` picks `KindExec` for the verb on a
+non-Android device and leaves Android on `KindExecElevated`, where su or adb is genuinely
+required. The wire is unchanged — a capture is still requested elevated, since the controller
+cannot know what will answer — and `ElevateOptional` keeps the "the device did not elevate
+this command" check from firing on a laptop's reply that names no channel.
 
 **One index line was spent.** `wanctl` bare prints a 30-line budget and `write` needed a row,
 so `agent` (the foreground spelling of `start`, next to `start`/`stop`/`status`/`service`) moved

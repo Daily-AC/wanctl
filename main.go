@@ -748,10 +748,10 @@ func cmdScreenshot(ctx context.Context, args []string) error {
 	var png bytes.Buffer
 	code, err := c.ExecTo(ctx, client.ExecRequest{
 		Target: *target, Command: "screenshot", OneShot: true,
-		// Asked for elevated on every platform: Android cannot capture without
-		// it, and a desktop capture deserves the same policy class rather than
-		// riding on permission to run ordinary commands. ElevateOptional is
-		// what lets a laptop answer without naming a channel it does not have.
+		// Asked for elevated because Android cannot capture without it and this
+		// side cannot know what kind of device answers; a desktop gates it as
+		// an ordinary command. ElevateOptional is what lets a laptop answer
+		// without naming a channel it does not have.
 		Elevate: true, ElevateOptional: true, Via: *via,
 	}, &png, os.Stderr)
 	if err != nil {

@@ -176,7 +176,9 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 		"wanctl_screenshot": {
 			// A capture is gated harder than a command, and a caller has to
 			// know what it is looking at when the image was shrunk.
-			"ELEVATED", "downscaled", "screencapture", "grim",
+			// Which gate applies where, and what the image may have become.
+			"gated exactly like any other command", "Android is gated as an ELEVATED command",
+			"downscaled", "screencapture", "grim",
 			"PAIRING REQUIRED",
 		},
 		"wanctl_exec_async": {"job_id", "wanctl_exec_poll", "30 minutes"},
