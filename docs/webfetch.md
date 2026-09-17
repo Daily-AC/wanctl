@@ -147,15 +147,19 @@ placeholders rather than runnable sample commands. The available tools are:
 
 | Tool | Parameters | Result |
 | --- | --- | --- |
-| `exec` | `command`, optional `cwd`, optional `timeout_seconds` | One-shot execution, exit code, bounded stdout/stderr |
+| `exec` | `command`, optional `cwd`, optional `timeout_seconds` (1–1800, default 300) | One-shot execution, exit code, bounded stdout/stderr |
 | `write_text` | `path`, `content` | wanctl file upload, byte count and SHA-256 |
 | `read_text` | `path` | wanctl file download, UTF-8 contents, byte count and SHA-256 |
 
 The response contains a `job_id` and `result_url`. Running jobs additionally
-return a fresh `next_url`; read that URL until `done`, `failed` or `unknown`.
+return a fresh `next_url`, a `poll_after_seconds` hint and the job's own
+`deadline_at`; read that URL until `done`, `failed` or `unknown`. A job is only
+reported `unknown` once its own deadline has passed without an outcome, so a
+build or render that legitimately runs for minutes stays `running`.
 Execution is asynchronous in the adapter but uses normal synchronous, one-shot
 wanctl operations; it does not expose device-side persistent shells or detached
-async jobs to delegated clients.
+async jobs to delegated clients (the device refuses `exec_async`/`exec_poll` on a
+delegated session — see `docs/adr/0009-webfetch-long-jobs.md`).
 
 A failed job can contain `result.pairing_url`; approval of device access does
 not imply the new controller has paired. Give that link and the current
@@ -176,10 +180,17 @@ deciding whether to try a new request. This is not a claim of exactly-once
 execution of arbitrary external effects.
 
 Limits: pending requests expire after 10 minutes; approved grants last 1–60
-minutes on up to 16 devices; each grant allows 64 jobs; calls allow 1–60 seconds including queue
-time (default 30); four operations run concurrently; URLs are capped at 8 KiB;
-writes at 2 KiB UTF-8; reads at 32 KiB; exec captures at most 16 KiB each of
-stdout and stderr and cancels on overflow. `HEAD` cannot create or execute tasks.
+minutes on up to 16 devices; each grant allows 64 jobs. `exec` allows
+`timeout_seconds` of 1–1800 including queue time (default 300), so a build,
+install or render finishes instead of expiring; `read_text` and `write_text`
+allow 1–60 (default 30), because a transfer of at most 32 KiB that is slow is
+stuck. A job's deadline is also clamped to the grant's remaining time, so the
+owner must approve a duration longer than the task. Four operations run
+concurrently per grant and 64 across the adapter; a call beyond that fails
+immediately with `error_code: "adapter_busy"` and `execution_started: false`.
+URLs are capped at 8 KiB; writes at 2 KiB UTF-8; reads at 32 KiB; exec captures
+at most 16 KiB each of stdout and stderr and cancels on overflow. `HEAD` cannot
+create or execute tasks.
 
 Browser tickets have an immutable 70-minute envelope. Inactive grants and their
 task contents are removed after at least 24 hours; old browser URLs cannot
