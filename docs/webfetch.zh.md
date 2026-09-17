@@ -114,8 +114,28 @@ namespace、只填 ID 或使用 `namespace:ID`。每个参数值只编码一次�
 | 工具 | 参数 | 结果 |
 | --- | --- | --- |
 | `exec` | `command`，可选 `cwd`、`timeout_seconds`（1–1800，默认 300） | 一次性执行、退出码和有限长度的 stdout/stderr |
+| `read_text` | `path`，可选 `offset`（从 1 开始的行号，默认 1）、`limit`（行数，默认 2000） | `content`、`total_lines`、`first_line`、`last_line`、`size_bytes`、整份文件的 `sha256`、`truncated`，以及 `next_offset` 或 `long_line` |
+| `edit_text` | `path`、`old`、`new`，可选 `all`、`expected_sha256` | `replaced`、`sha256`、`size_bytes` |
 | `write_text` | `path`、`content` | wanctl 文件上传、字节数和 SHA-256 |
-| `read_text` | `path` | wanctl 文件下载、UTF-8 文本、字节数和 SHA-256 |
+
+`read_text` 和 `edit_text` 是设备上的原生文件操作，不经过 shell：和 wanctl 命令行、MCP
+服务端用的是同一套读取行区间与原地替换，只是换成用 GET 调用。调用方传的文本不会被任何
+shell 解析；结果准确说明返回了哪几行；编辑保留文件其余部分的每一个字节——CRLF 行尾、文件
+权限都不变——并通过临时文件改名原子写入。
+
+翻页由调用方负责：只要 `last_line` 小于 `total_lines`，就用 `offset = last_line + 1` 继续读。
+`truncated: true` 表示 32 KiB 的响应上限在行边界上截断了这次读取，此时 `next_offset` 指出
+从哪一行继续，既不丢行也不重复。`long_line` 指出某一行本身就大到无法完整返回；再读一次
+只会拿回同样的前缀，这一行要改用 `exec` 读。读取返回的 `sha256` 是整份文件的哈希，把它作为
+编辑的 `expected_sha256` 传回，就能证明改的正是刚才读到的那份文本。
+
+改动已存在的文件要用 `edit_text` 而不是 `write_text`：后者整份覆盖，会悄悄丢掉你上次读取之后
+别人写进去的内容。编辑的 `old` 和 `new` 走在 URL 里，因此限制它的是 8 KiB 的 URL 上限而不是
+另设的阈值，一次改一段。被拒绝的编辑（`old` 找不到、`old` 出现多次而没有 `all=true`、
+`expected_sha256` 已经对不上）不会替换目标文件，返回 `error_code: "file_refused"` 和
+`execution_started: false`，并带上出现次数或文件当前的 `sha256`；修正后用**新的 rid** 重新提交。
+读取受设备的读权限约束，编辑受写权限约束，与 `read_text`、`write_text` 完全一致；两者都会以
+`READ`／`EDIT` 加路径的形式记入设备事件日志。
 
 响应包含 `job_id` 和 `result_url`。运行中的任务还返回新的 `next_url`、建议的轮询间隔
 `poll_after_seconds` 和该任务自己的 `deadline_at`，读取它直到状态变成 `done`、`failed`
@@ -135,19 +155,25 @@ namespace、只填 ID 或使用 `namespace:ID`。每个参数值只编码一次�
 `rid` 在一份授权内唯一。同一 rid 和参数返回同一任务，换参数则返回 409。
 持久账本先于执行落库，所以重复抓取或重启适配器不会自动重放操作。
 响应丢失时，请用同一个 `rid` 和同样的参数重新读取完全相同的网址：这会返回已经记录下来的
-那个任务，而不会重复执行。只有在结果明确表示「什么都没执行」时才换新的 rid
-（`pairing_required` 或 `adapter_busy`，两者都带 `execution_started: false`），
-`failed` 和 `unknown` 之后都不可以。中断的请求即使没有结果也可能已经产生副作用；
+那个任务，而不会重复执行；返回的是这个任务**已经记录下来的**结果而不是重新执行一次，
+所以文件改动之后重放同一次读取，拿到的仍是第一次读到的文本。`edit_text` 的会话在没有收到
+回复时记为 `unknown` 而不是拒绝：从控制端看，「已经写入但回复丢了」和「设备太旧不认识这个动作」
+是同一种现象。只有在结果明确表示「什么都没执行」时才换新的 rid
+（`pairing_required`、`adapter_busy`，或被拒绝的读取／编辑 `file_refused`——设备已经做出
+判断且没有替换目标文件，三者都带 `execution_started: false`），
+不带这个标记的 `failed` 和 `unknown` 之后都不可以。中断的请求即使没有结果也可能已经产生副作用；
 `unknown` 意味着主人应先检查设备记录，再决定是否创建新请求。
 这不是对任意外部副作用的“恰好执行一次”保证。
 
 限制：待审批申请 10 分钟过期；批准后有效期 1–60 分钟、最多 16 台设备；每份授权 64 个任务。
 `exec` 的 `timeout_seconds` 含排队为 1–1800 秒、默认 300 秒，编译、安装和渲染因此能跑完而不是
-被判超时；`read_text` 和 `write_text` 仍是 1–60 秒、默认 30 秒——最多 32 KiB 的传输如果慢，
-那就是卡住了。任务截止时间还会被授权的剩余时长截断，所以主人批准的时长要长过任务本身。
+被判超时；`read_text`、`edit_text` 和 `write_text` 仍是 1–60 秒、默认 30 秒——输出不超过 32 KiB、
+URL 不超过 8 KiB 的文件操作如果慢，那就是卡住了。任务截止时间还会被授权的剩余时长截断，
+所以主人批准的时长要长过任务本身。
 并发上限是每份授权 4 个操作、整个适配器 64 个；超出时调用立即失败，返回
-`error_code: "adapter_busy"` 和 `execution_started: false`。URL 最长 8 KiB；写入最多 2 KiB UTF-8；
-读取最多 32 KiB；stdout 和 stderr 分别最多 16 KiB，超限会取消任务。HEAD 不创建或执行任务。
+`error_code: "adapter_busy"` 和 `execution_started: false`。URL 最长 8 KiB，编辑的 `old` 和 `new`
+也由它兜底；写入最多 2 KiB UTF-8；一次读取最多返回 32 KiB，无论 `limit` 要了多少行都在行边界
+截断；stdout 和 stderr 分别最多 16 KiB，超限会取消任务。HEAD 不创建或执行任务。
 
 浏览器票据有不可延长的 70 分钟上限。失效授权与任务内容在至少 24 小时后清理，
 旧票据不能重新创建已删除申请。原有账号与设备审计另行保留。
