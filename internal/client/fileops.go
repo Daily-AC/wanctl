@@ -112,22 +112,31 @@ type ResultLostError struct {
 	Target string
 	Kind   string // the frame kind whose result was lost
 	Path   string // the file it named
+	Cause  error  // what ended the exchange, kept so the diagnosis is not lost
 }
+
+func (e *ResultLostError) Unwrap() error { return e.Cause }
 
 func (e *ResultLostError) Error() string {
 	where := ""
 	if e.Path != "" {
 		where = " " + e.Path
 	}
+	because := ""
+	if e.Cause != nil && !errors.Is(e.Cause, io.EOF) && !errors.Is(e.Cause, io.ErrUnexpectedEOF) {
+		// A reset or a timeout is worth naming: it is the difference between a
+		// device that went away and a network that is failing under the caller.
+		because = " (" + e.Cause.Error() + ")"
+	}
 	if e.Kind == protocol.KindFileRead {
 		// A read changes nothing, so there is nothing to inspect and retrying
 		// is free. Saying so keeps the caller from an anxious hash check it
 		// does not need.
-		return fmt.Sprintf("result unknown: the connection dropped after the request was sent; nothing was changed by reading%s, so retry", where)
+		return fmt.Sprintf("result unknown: the connection dropped after the request was sent%s; nothing was changed by reading%s, so retry", because, where)
 	}
 	return fmt.Sprintf(
-		"result unknown: the connection dropped after the request was sent; read the file and compare sha256 before retrying — the change to%s may or may not have been applied",
-		where)
+		"result unknown: the connection dropped after the request was sent%s; read the file and compare sha256 before retrying — the change to%s may or may not have been applied",
+		because, where)
 }
 
 // ReadFile returns a line range of a file on the target device.
@@ -232,17 +241,16 @@ func fileOpOver(rw io.ReadWriter, req protocol.Message) (*protocol.FileResult, e
 	}
 	reply, err := protocol.ReadMessage(rw)
 	if err != nil {
-		// A connection that ends after the request was sent says nothing about
-		// whether the device ran it. This used to be read as "an agent too old
-		// to have a default branch dropped the session", which is one thing it
-		// can be — and telling a caller whose edit HAD been applied that
-		// nothing ran and to update the agent is the worst answer available:
+		// Anything that goes wrong AFTER the request frame was sent says
+		// nothing about whether the device ran it — a clean EOF, a reset, a
+		// timeout, a half-read frame. This used to read an EOF as "an agent too
+		// old to have a default branch dropped the session", which is one thing
+		// it can be; telling a caller whose edit HAD been applied that nothing
+		// ran and to update the agent is the worst answer available, because
 		// the fix it names is useless and the claim it makes is false. Only an
-		// explicit `unknown request` reply proves the device did not run this.
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, &ResultLostError{Kind: req.Kind, Path: req.Path}
-		}
-		return nil, err
+		// explicit `unknown request` reply proves the device did not run this,
+		// and every other ending is an unknown result carrying its own cause.
+		return nil, &ResultLostError{Kind: req.Kind, Path: req.Path, Cause: err}
 	}
 	switch reply.Kind {
 	case protocol.KindFileResult:

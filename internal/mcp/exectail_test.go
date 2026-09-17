@@ -137,3 +137,23 @@ func TestTruncationSaysWhichSilenceThisIs(t *testing.T) {
 		})
 	}
 }
+
+// The byte count in the truncation line is the device's, not this buffer's.
+// They differ whenever output reached the controller on more than one stream,
+// and the number a caller reasons about has to be the whole of it.
+func TestTruncationReportsTheDeviceByteCount(t *testing.T) {
+	local := bytes.Repeat([]byte("x"), 2*maxExecStream)
+	head, _, _ := strings.Cut(tailStream(local, client.ExecOutcome{
+		SpillPath: "/tmp/wanctl-exec-abc.log", SpillBytes: 9_000_000, SpillKept: 9_000_000,
+	}), "\n")
+
+	if !strings.Contains(head, "of 9000000 bytes") {
+		t.Errorf("line = %q, want the device's own count", head)
+	}
+	if strings.Contains(head, fmt.Sprintf("of %d bytes", len(local))) {
+		t.Errorf("line = %q, which reports only what this buffer held", head)
+	}
+	if !strings.Contains(head, fmt.Sprintf("last %d", maxExecStream)) {
+		t.Errorf("line = %q, want the returned length to stay the cap", head)
+	}
+}

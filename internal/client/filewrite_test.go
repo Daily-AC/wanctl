@@ -2,6 +2,7 @@ package client
 
 import (
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -208,5 +209,67 @@ func TestExplicitUnknownRequestIsStillAnUnsupportedAgent(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "wanctl update") {
 		t.Errorf("message = %q, want the update instruction", err.Error())
+	}
+}
+
+// deadAfterSend takes the request and then fails the read with whatever the
+// transport would have said. net.Pipe can only end cleanly, and a clean end is
+// the one case this is NOT about.
+type deadAfterSend struct {
+	sent bool
+	err  error
+}
+
+func (d *deadAfterSend) Write(p []byte) (int, error) { d.sent = true; return len(p), nil }
+
+func (d *deadAfterSend) Read([]byte) (int, error) {
+	if !d.sent {
+		return 0, errors.New("read before the request was sent")
+	}
+	return 0, d.err
+}
+
+// A connection that is reset or times out after the request was sent is exactly
+// as unknown as one that ends cleanly, and must not come back as a bare
+// transport error the caller reads as "it failed, so retry".
+func TestAnyPostSendFailureIsALostResult(t *testing.T) {
+	reset := &deadAfterSend{err: errors.New("connection reset by peer")}
+	_, err := fileOpOver(reset, protocol.Message{
+		Kind: protocol.KindFileWrite, Path: "/etc/app.conf", Content: "x\n",
+	})
+	var lost *ResultLostError
+	if !errors.As(err, &lost) {
+		t.Fatalf("error = %v (%T), want a ResultLostError", err, err)
+	}
+	if !strings.Contains(err.Error(), "result unknown") || !strings.Contains(err.Error(), "compare sha256") {
+		t.Errorf("message = %q", err.Error())
+	}
+	// The cause is named, because a reset and a device that went away call for
+	// different next steps even though both leave the result unknown.
+	if !strings.Contains(err.Error(), "connection reset by peer") {
+		t.Errorf("message drops the cause: %q", err.Error())
+	}
+	if lost.Cause == nil || !errors.Is(err, lost.Cause) {
+		t.Errorf("cause = %v, want it kept and unwrappable", lost.Cause)
+	}
+
+	// A timeout is the same answer: nothing about the device's state is known.
+	timeout := &deadAfterSend{err: os.ErrDeadlineExceeded}
+	_, err = fileOpOver(timeout, protocol.Message{Kind: protocol.KindFileEdit, Path: "/etc/app.conf", Old: "a", New: "b"})
+	if !errors.As(err, &lost) {
+		t.Fatalf("a timed-out edit came back as %v (%T)", err, err)
+	}
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Error("the timeout is no longer detectable through errors.Is")
+	}
+
+	// A clean end says nothing extra: there is no cause worth naming.
+	clean := &deadAfterSend{err: io.EOF}
+	_, err = fileOpOver(clean, protocol.Message{Kind: protocol.KindFileEdit, Path: "/etc/app.conf", Old: "a", New: "b"})
+	if !errors.As(err, &lost) {
+		t.Fatalf("error = %v, want a ResultLostError", err)
+	}
+	if strings.Contains(err.Error(), "EOF") {
+		t.Errorf("a clean end was reported with its plumbing showing: %q", err.Error())
 	}
 }

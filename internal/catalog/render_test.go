@@ -95,3 +95,52 @@ func TestMarkdownCarriesTheProductDefinition(t *testing.T) {
 		}
 	}
 }
+
+// An array parameter's element shape is read from the schema the tool actually
+// registers. Hardcoding "{old, new}" was true only while `edits` was the only
+// array in the catalog, and would have quietly mislabelled the next one.
+func TestArrayParameterRendersItsDeclaredItemShape(t *testing.T) {
+	objects := Param{Name: "edits", Type: TypeArray, Items: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"new": map[string]any{"type": "string"},
+			"old": map[string]any{"type": "string"},
+		},
+		"required": []string{"old", "new"},
+	}}
+	if got := typeLabel(objects); got != "array of {old, new}" {
+		t.Errorf("label = %q, want the fields in their declared order", got)
+	}
+
+	// Another shape must not come out claiming to be pairs of old and new.
+	for _, tc := range []struct {
+		name string
+		p    Param
+		want string
+	}{
+		{"strings", Param{Type: TypeArray, Items: map[string]any{"type": "string"}}, "array of string values"},
+		{"unspecified", Param{Type: TypeArray}, "array of values"},
+		{"an object described in JSON", Param{Type: TypeArray, Items: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"path": map[string]any{}, "mode": map[string]any{}},
+			"required":   []any{"path"},
+		}}, "array of {path, mode}"},
+		{"not an array", Param{Type: TypeString}, "string"},
+	} {
+		if got := typeLabel(tc.p); got != tc.want {
+			t.Errorf("%s: label = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// And the rendering the contract prints comes from the same function.
+	edit, ok := Lookup("wanctl_edit")
+	if !ok {
+		t.Fatal("wanctl_edit is not in the catalog")
+	}
+	md := Markdown()
+	for _, p := range edit.Params {
+		if p.Type == TypeArray && !strings.Contains(md, typeLabel(p)) {
+			t.Errorf("the contract does not print %q for %s", typeLabel(p), p.Name)
+		}
+	}
+}
