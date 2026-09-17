@@ -128,7 +128,7 @@ func relayPOST(ctx context.Context, path string, body any) error {
 // --- article subcommands ---
 
 func docsList(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("docs ls", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("docs ls", flag.ExitOnError))
 	group := fs.String("group", "", "filter by group slug")
 	fs.Parse(args)
 	var tree struct{ Groups []relay.DocGroup }
@@ -168,7 +168,7 @@ func docsGet(ctx context.Context, args []string) error {
 }
 
 func docsNew(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("docs new", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("docs new", flag.ExitOnError))
 	slug := fs.String("slug", "", "URL slug (unique)")
 	title := fs.String("title", "", "human title")
 	group := fs.String("group", "", "group slug")
@@ -189,7 +189,7 @@ func docsNew(ctx context.Context, args []string) error {
 }
 
 func docsEdit(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("docs edit", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("docs edit", flag.ExitOnError))
 	file := fs.String("file", "", "read body from this file")
 	editor := fs.Bool("editor", false, "open $EDITOR to edit the body")
 	title := fs.String("title", "", "new title (default: keep existing)")
@@ -255,7 +255,7 @@ func docsGroupSub(ctx context.Context, args []string) error {
 	}
 	switch args[0] {
 	case "new":
-		fs := flag.NewFlagSet("docs group new", flag.ExitOnError)
+		fs := withHelp(flag.NewFlagSet("docs group new", flag.ExitOnError))
 		slug := fs.String("slug", "", "URL slug (unique)")
 		title := fs.String("title", "", "human title")
 		pos := fs.Int("position", 0, "sort order")

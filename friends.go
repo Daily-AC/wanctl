@@ -210,7 +210,7 @@ func cmdShare(ctx context.Context, args []string) error {
 }
 
 func shareGrant(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("share grant", flag.ContinueOnError)
+	fs := withHelp(flag.NewFlagSet("share grant", flag.ContinueOnError))
 	device := fs.String("device", "", "device name")
 	to := fs.String("to", "", "friend namespace")
 	manage := fs.Bool("manage", false, "also let them administer the device (approvals, rules, mode)")
@@ -263,7 +263,7 @@ func shareManage(ctx context.Context, args []string) error {
 // and `--no-manage` would be two ways to say one thing.
 func parseShareManage(args []string) (device, to string, manage bool, err error) {
 	usage := fmt.Errorf("usage: wanctl share manage --device DEV --to NS on|off")
-	fs := flag.NewFlagSet("share manage", flag.ContinueOnError)
+	fs := withHelp(flag.NewFlagSet("share manage", flag.ContinueOnError))
 	fs.SetOutput(io.Discard)
 	dev := fs.String("device", "", "device name")
 	grantee := fs.String("to", "", "friend namespace")
@@ -300,7 +300,7 @@ func manageSuffix(manage bool) string {
 }
 
 func shareRevoke(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("share revoke", flag.ContinueOnError)
+	fs := withHelp(flag.NewFlagSet("share revoke", flag.ContinueOnError))
 	device := fs.String("device", "", "device name")
 	to := fs.String("to", "", "friend namespace")
 	if err := fs.Parse(args); err != nil {

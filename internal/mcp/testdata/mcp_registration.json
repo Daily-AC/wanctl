@@ -1,0 +1,337 @@
+[
+  {
+    "name": "wanctl_edit",
+    "params": [
+      {
+        "name": "all",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "expected_sha256",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "new",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "old",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "path",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
+    "name": "wanctl_exec",
+    "params": [
+      {
+        "name": "command",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "cwd",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "elevate",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "interp",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "oneshot",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "script",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "via",
+        "type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "wanctl_exec_async",
+    "params": [
+      {
+        "name": "command",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "cwd",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
+    "name": "wanctl_exec_poll",
+    "params": [
+      {
+        "name": "job_id",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "offset",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
+    "name": "wanctl_id",
+    "params": []
+  },
+  {
+    "name": "wanctl_login",
+    "params": [
+      {
+        "name": "code",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "rebind",
+        "type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "wanctl_logout",
+    "params": []
+  },
+  {
+    "name": "wanctl_logs",
+    "params": [
+      {
+        "name": "grep",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "limit",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "since",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "type",
+        "type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "wanctl_pair",
+    "params": [
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
+    "name": "wanctl_peers",
+    "params": []
+  },
+  {
+    "name": "wanctl_pull",
+    "params": [
+      {
+        "name": "local",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "remote",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
+    "name": "wanctl_push",
+    "params": [
+      {
+        "name": "local",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "remote",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
+    "name": "wanctl_push_blob",
+    "params": [
+      {
+        "name": "content_b64",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "mode",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "remote",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
+    "name": "wanctl_read",
+    "params": [
+      {
+        "name": "limit",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "offset",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "path",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
+    "name": "wanctl_rules",
+    "params": []
+  },
+  {
+    "name": "wanctl_server_logs",
+    "params": [
+      {
+        "name": "grep",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "limit",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "service",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "since",
+        "type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "wanctl_status",
+    "params": []
+  },
+  {
+    "name": "wanctl_trust",
+    "params": [
+      {
+        "name": "which",
+        "type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "wanctl_trust_server",
+    "params": [
+      {
+        "name": "fingerprint",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      }
+    ]
+  }
+]

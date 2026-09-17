@@ -35,7 +35,11 @@ func TestBareInvocationPrintsHelpAndTouchesNothing(t *testing.T) {
 		t.Fatalf("bare wanctl exited %v\n%s", err, out)
 	}
 	text := string(out)
-	for _, want := range []string{"USAGE", "wanctl start", "wanctl login", "本机:"} {
+	// The wall of "wanctl <command> <every flag>" lines is gone; the index
+	// names each command in one line and points at `wanctl help <command>`.
+	// What has to survive is that the entry point still lists the two commands
+	// a newcomer picks between, and still answers "what is this machine".
+	for _, want := range []string{"USAGE", "wanctl help <command>", "  start ", "  login ", "本机:"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("bare output is missing %q:\n%s", want, text)
 		}
