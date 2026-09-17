@@ -17,6 +17,33 @@ import (
 
 const testDelegationID = "request_test_1234"
 
+func TestWebFetchHelpIsPublicAndDoesNotContactRelay(t *testing.T) {
+	s := newOAuthPortal(t, func(_ map[string]string, _ http.ResponseWriter) {
+		t.Fatal("public help must not resolve an account")
+	})
+	s.relayPublic = "https://public-relay.test"
+	s.hc = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("public help must not contact the relay")
+		return nil, nil
+	})}
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/webfetch/help", nil))
+	body := w.Body.String()
+	if w.Code != http.StatusOK || w.Header().Get("Location") != "" {
+		t.Fatalf("anonymous help = %d %s", w.Code, w.Header().Get("Location"))
+	}
+	for _, want := range []string{"CALL_ENDPOINT?rid={rid}", "tool=exec", "call_url_template", "result_url", "pairing_required", "NEW rid", "https://public-relay.test/webfetch/v1"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("server-rendered help missing %q", want)
+		}
+	}
+	for _, secret := range []string{"/webfetch/s/", "wfd_", "client123", "secret456"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("public help contains session or operator data: %s", secret)
+		}
+	}
+}
+
 func TestWebFetchConnectUsesIndependentBootstrapURLsWithoutGrantingAccess(t *testing.T) {
 	s := newTestPortal(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -41,6 +68,9 @@ func TestWebFetchConnectUsesIndependentBootstrapURLsWithoutGrantingAccess(t *tes
 		}
 		if strings.Contains(w.Body.String(), "/webfetch/s/") || strings.Contains(w.Body.String(), "wfd_") || !strings.Contains(w.Body.String(), `id="webfetchCopy"`) {
 			t.Fatal("starter page exposed a credential or omitted its copy action")
+		}
+		if !strings.Contains(w.Body.String(), "http://example.com/webfetch/help") || !strings.Contains(w.Body.String(), "exec call_url_template") {
+			t.Fatal("starter prompt lost its help URL or cross-turn call instructions")
 		}
 		previous = start
 	}

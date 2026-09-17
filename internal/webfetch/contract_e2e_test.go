@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -33,6 +34,9 @@ func fetchPage(t *testing.T, raw string) (int, map[string]any) {
 	}
 	if data["protocol"] != "wanctl.webfetch.v1" || !strings.Contains(resp.Header.Get("Cache-Control"), "no-store") {
 		t.Fatal("missing protocol identity or cache protection")
+	}
+	if data["help_url"] != "http://127.0.0.1:9999/webfetch/help" {
+		t.Fatal("client cannot discover public calling instructions")
 	}
 	return resp.StatusCode, data
 }
@@ -101,6 +105,26 @@ func TestDiscoveredTargetExecutesAndHTMLDenialsRemainEnforced(t *testing.T) {
 		t.Fatalf("discovered target = %q", target)
 	}
 	endpoint := manifest["call_endpoint"].(string)
+	// A reader can learn how to execute from the opening HTML alone, without
+	// paging through the JSON schemas or guessing endpoints from prior turns.
+	response, err := http.Get(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opening, _, _ := strings.Cut(string(body), "<h2>Protocol response</h2>")
+	match := regexp.MustCompile(`<strong>exec — GET call_url_template</strong><br><code>([^<]+)</code>`).FindStringSubmatch(opening)
+	if len(match) != 2 || !strings.Contains(opening, target) || !strings.Contains(opening, endpoint) {
+		t.Fatal("opening HTML omits the executable contract")
+	}
+	execTemplate := html.UnescapeString(match[1])
+	if !strings.Contains(manifest["continuation_prompt"].(string), "call_url_template") {
+		t.Fatal("continuation prompt drops the calling contract")
+	}
 	for _, entry := range manifest["tools"].([]any) {
 		tool := entry.(map[string]any)
 		schema := tool["input_schema"].(map[string]any)
@@ -137,9 +161,11 @@ func TestDiscoveredTargetExecutesAndHTMLDenialsRemainEnforced(t *testing.T) {
 		t.Fatal("readable errors created executable jobs")
 	}
 
-	// Use only the target and endpoint discovered from the server's document.
+	// Fill the visible template with the requested operation; no JSON schema or
+	// hard-coded endpoint path is needed to complete the first successful call.
 	q.Set("target", target)
-	_, job := fetchPage(t, endpoint+"?"+q.Encode())
+	callURL := strings.NewReplacer("{rid}", url.QueryEscape(q.Get("rid")), "{target}", url.QueryEscape(target), "{command}", url.QueryEscape(q.Get("command"))).Replace(execTemplate)
+	_, job := fetchPage(t, callURL)
 	job = awaitJob(t, job)
 	if job["status"] != "done" || job["result"].(map[string]any)["stdout"] != "webfetch-ok" {
 		t.Fatalf("discovered call failed: %v", job)

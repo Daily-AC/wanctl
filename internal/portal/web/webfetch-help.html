@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WebFetch quick reference · wanctl</title>
+<link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css?v={{.V}}">
+<style>code{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:#f5f5f7;border-radius:10px}h2{margin-top:32px}li{margin:12px 0}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #ddd}</style>
+</head>
+<body class="auth delegation">
+<header class="top"><a class="brand" href="/">wanctl</a><div class="tools"><button class="chip" id="lang">中文</button></div></header>
+<main>
+  <h1 data-en="WebFetch quick reference" data-zh="WebFetch 快速用法">WebFetch quick reference</h1>
+  <p class="lead" data-en="Use your URL-reading tool for every step: authorization status, tool calls and results are all GET requests. exec is a query parameter, not a separate connector."
+     data-zh="全程使用同一个网页读取工具：查询授权、调用工具、读取结果都是 GET。exec 是请求参数，不需要额外的连接器。">Use your URL-reading tool for every step: authorization status, tool calls and results are all GET requests. exec is a query parameter, not a separate connector.</p>
+
+  <h2 data-en="Already authorized? Call a tool" data-zh="已经授权？直接调用工具">Already authorized? Call a tool</h2>
+  <ol>
+    <li data-en="GET the full status_url from your current conversation. If status is approved, copy call_endpoint, the selected tools[].call_url_template and a devices[].target value exactly. Keep these full URLs in your reply for later turns."
+        data-zh="读取本次对话的完整 status_url。status 为 approved 时，照抄 call_endpoint、所选工具的 call_url_template 和 devices[].target。回复中保留完整网址，方便后续对话继续使用。">GET the full status_url from your current conversation. If status is approved, copy call_endpoint, the selected tools[].call_url_template and a devices[].target value exactly. Keep these full URLs in your reply for later turns.</li>
+    <li data-en="Fill the template with the task the user requested. URL-encode each parameter value once. target must be the full namespace/device_id, with its slash encoded as %2F. rid is a new operation ID: 1–64 letters, digits, hyphens or underscores."
+        data-zh="按用户请求填写模板。每个参数值只做一次 URL 编码；target 必须是完整的 namespace/device_id，斜杠编码为 %2F。rid 是新操作的唯一编号，由 1–64 位英文字母、数字、横线或下划线组成。">Fill the template with the task the user requested. URL-encode each parameter value once. target must be the full namespace/device_id, with its slash encoded as %2F. rid is a new operation ID: 1–64 letters, digits, hyphens or underscores.</li>
+    <li data-en="GET the completed URL using the same URL-reading tool. No POST, browser login cookie, Authorization header, Python or MCP is required. Reuse the same rid and arguments if that request must be retried."
+        data-zh="使用同一个网页读取工具 GET 填好的完整 URL。无需 POST、浏览器登录 Cookie、Authorization 请求头、Python 或 MCP。同一次请求需要重试时，复用相同的 rid 和参数。">GET the completed URL using the same URL-reading tool. No POST, browser login cookie, Authorization header, Python or MCP is required. Reuse the same rid and arguments if that request must be retried.</li>
+  </ol>
+  <p data-en="Syntax only — CALL_ENDPOINT comes from the approved status response. Replace all placeholders before fetching; never invent a ticket or execute an example automatically."
+     data-zh="以下仅为语法：CALL_ENDPOINT 来自已批准的状态响应。访问前替换所有占位符，不要编造票据或自动执行示例。">Syntax only — CALL_ENDPOINT comes from the approved status response. Replace all placeholders before fetching; never invent a ticket or execute an example automatically.</p>
+  <pre>GET CALL_ENDPOINT?rid={rid}&amp;tool=exec&amp;target={target}&amp;command={command}</pre>
+  <p data-en="Encoding example: the command ls -la becomes command=ls%20-la. Optional exec parameters: cwd and timeout_seconds (1–60, default 30)."
+     data-zh="编码示例：命令 ls -la 对应 command=ls%20-la。exec 可选参数为 cwd 和 timeout_seconds（1–60，默认 30）。">Encoding example: the command ls -la becomes command=ls%20-la. Optional exec parameters: cwd and timeout_seconds (1–60, default 30).</p>
+  <table><thead><tr><th>tool</th><th data-en="Required values besides rid and target" data-zh="除 rid 和 target 外的必填参数">Required values besides rid and target</th></tr></thead><tbody>
+    <tr><td><code>exec</code></td><td><code>command</code></td></tr>
+    <tr><td><code>read_text</code></td><td><code>path</code></td></tr>
+    <tr><td><code>write_text</code></td><td><code>path</code>, <code>content</code> <span data-en="(content= explicitly writes an empty file)" data-zh="（content= 表示写入空文件）">(content= explicitly writes an empty file)</span></td></tr>
+  </tbody></table>
+
+  <h2 data-en="Read the actual result" data-zh="读取真实结果">Read the actual result</h2>
+  <p data-en="The call returns job_id and result_url. GET result_url, then follow next_url while running (at most 8 polls). done includes result; for exec report stdout, stderr and exit_code. failed is an error; unknown must not be retried automatically because the operation may have run. A loaded HTML page is not proof of success: always check status and http_status. Add format=json for programmatic clients."
+     data-zh="调用返回 job_id 和 result_url。读取 result_url，运行中继续读取 next_url（最多 8 次）。done 时读取 result；exec 应报告 stdout、stderr 和 exit_code。failed 表示失败；unknown 时操作可能已经发生，不能自动重试。HTML 页面能打开不代表操作成功，始终检查 status 和 http_status。程序客户端可加 format=json。">The call returns job_id and result_url. GET result_url, then follow next_url while running (at most 8 polls). done includes result; for exec report stdout, stderr and exit_code. failed is an error; unknown must not be retried automatically because the operation may have run. A loaded HTML page is not proof of success: always check status and http_status. Add format=json for programmatic clients.</p>
+  <p data-en="If result.error_code is pairing_required and execution_started is false, give pairing_url and continuation_prompt to the owner. After the owner confirms device pairing, retry the requested operation with a NEW rid; the previous failed job stays failed. Device permission rules still apply. If authorization expires or is revoked, stop and report it."
+     data-zh="若 result.error_code 为 pairing_required 且 execution_started 为 false，将 pairing_url 和 continuation_prompt 交给主人。主人完成设备配对后，用新的 rid 重试原任务；旧的失败任务不会自动重跑。设备原有权限规则继续生效。授权过期或被吊销时，停止并报告。">If result.error_code is pairing_required and execution_started is false, give pairing_url and continuation_prompt to the owner. After the owner confirms device pairing, retry the requested operation with a NEW rid; the previous failed job stays failed. Device permission rules still apply. If authorization expires or is revoked, stop and report it.</p>
+
+  <h2 data-en="Start a new conversation" data-zh="接入新的对话">Start a new conversation</h2>
+  <p data-en="The owner copies a fresh prompt from Connect web AI. GET that URL, return approval_url and the complete continuation_prompt, then wait for the owner to approve. Read status_url after approval. Keep the current session for later tasks; do not create a new authorization for each command. Only the owner approves access and pairing."
+     data-zh="主人从“连接网页 AI”复制新提示词。AI 读取其中网址，返回 approval_url 和完整 continuation_prompt，等待主人批准。批准后读取 status_url。后续任务继续使用本次会话，不要每条命令都重新申请授权。访问授权和配对只能由主人批准。">The owner copies a fresh prompt from Connect web AI. GET that URL, return approval_url and the complete continuation_prompt, then wait for the owner to approve. Read status_url after approval. Keep the current session for later tasks; do not create a new authorization for each command. Only the owner approves access and pairing.</p>
+  <p><a href="/webfetch/connect" data-en="Connect web AI" data-zh="连接网页 AI">Connect web AI</a>{{if .Relay}} · <a href="{{.Relay}}/webfetch/v1" data-en="Protocol discovery" data-zh="协议发现入口">Protocol discovery</a>{{end}}</p>
+</main>
+<script src="/assets/auth.js?v={{.V}}"></script>
+</body>
+</html>

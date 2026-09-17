@@ -18,8 +18,8 @@ func (h *Handler) statusURL(ticket string) string {
 	return h.sessionURL(ticket) + "?check=" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
-func continuationPrompt(statusURL string) string {
-	return "Use your URL-reading tool to GET " + statusURL + ". Read the current authorization status and devices[].target values. Continue only my requested task after approval; do not create another authorization request or change device permissions. If expired or revoked, stop and report it."
+func (h *Handler) continuationPrompt(statusURL string) string {
+	return "Use your URL-reading tool to GET " + statusURL + ". Read status, devices[].target, call_endpoint and tools[].call_url_template. After approval, use the SAME URL-reading tool to GET a completed call URL for my requested task; exec is tool=exec on that URL, not a separate connector or POST endpoint. Keep the full status_url and exec call_url_template in your reply for later turns. Help: " + h.cfg.PortalOrigin + "/webfetch/help. Do not create another authorization request or change device permissions. If expired or revoked, stop and report it."
 }
 
 func (h *Handler) manifest(ticket string, access delegation.Access) map[string]any {
@@ -34,7 +34,7 @@ func (h *Handler) manifest(ticket string, access delegation.Access) map[string]a
 	return map[string]any{
 		"title": "wanctl tools", "status": "approved", "request_id": access.GrantID,
 		"owner": access.Namespace, "expires_at": access.ExpiresAt, "devices": devices,
-		"status_url": statusURL, "continuation_prompt": continuationPrompt(statusURL),
+		"status_url": statusURL, "continuation_prompt": h.continuationPrompt(statusURL),
 		"call_endpoint": endpoint, "method": "GET",
 		"required_call_parameters": []string{"rid", "tool", "target"},
 		"target_format":            "namespace/device_id; copy a devices[].target value verbatim, then URL-encode it",
