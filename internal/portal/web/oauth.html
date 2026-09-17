@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Authorize · wanctl</title>
+<link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css?v={{.V}}">
+</head>
+<body class="auth delegation">
+<header class="top">
+  <a class="brand" href="/"><svg class="mk" viewBox="0 0 32 32" aria-hidden="true"><path d="M5.6 12.4 10.2 21.8 15.2 14.6 19.6 21.8 26.4 7.6" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"/></svg>wanctl</a>
+  <div class="tools"><button class="chip" id="lang">中文</button></div>
+</header>
+<main>
+{{if .Error}}
+  <h1 data-en="Authorization request refused" data-zh="授权请求被拒绝">Authorization request refused</h1>
+  <p class="lead" data-en="wanctl did not accept this request, so nothing was authorized. Nothing was sent back to the client either — that is deliberate, because a request this malformed is also the shape an attack takes."
+     data-zh="wanctl 没有接受这次请求，什么都没有授权，也没有把你送回那个客户端——这是故意的：一个这么不对劲的请求，正好也是攻击长的样子。">wanctl did not accept this request, so nothing was authorized.</p>
+  <p class="err" role="alert">{{.Error}}</p>
+  <p class="fine" data-en="Ask the AI product to start the connection again. If it keeps failing, its connector is misconfigured."
+     data-zh="让那个 AI 产品重新发起一次连接。如果一直失败，说明它的连接器配错了。">Ask the AI product to start the connection again.</p>
+{{else}}
+  <h1 data-en="Authorize this AI client" data-zh="授权这个 AI 客户端">Authorize this AI client</h1>
+  <p class="lead" data-en="It is asking to use wanctl as you: list your devices and run what your devices allow. Your devices keep deciding which operations to approve."
+     data-zh="它请求以你的身份使用 wanctl：看见你名下的设备，并在设备允许的范围内操作。每次操作仍由设备自己的规则和审批决定。">It is asking to use wanctl as you.</p>
+  <dl class="delegate-details">
+    <dt data-en="Your account" data-zh="你的账号">Your account</dt><dd>{{.NS}}</dd>
+    <dt data-en="Client name (self-reported)" data-zh="客户端名称（自行填写）">Client name (self-reported)</dt><dd>{{.ClientName}}</dd>
+    <dt data-en="Sends you back to" data-zh="授权后跳回">Sends you back to</dt><dd class="mono">{{.ClientHost}}</dd>
+  </dl>
+  <form id="oauthConsent" data-request="{{.RequestID}}">
+    <p class="fine" data-en="The client name is whatever the client called itself when it registered; wanctl does not verify it. The host above is where your authorization will be delivered — recognize it before you continue."
+       data-zh="客户端名称是它注册时自己填的，wanctl 不核实。上面那个域名才是授权真正被送去的地方，认得它再继续。">The client name is whatever the client called itself when it registered.</p>
+    <div class="delegate-actions">
+      <button type="submit" class="btn" id="oauthAllow" data-en="Allow" data-zh="允许">Allow</button>
+      <button type="button" class="btn soft" id="oauthDeny" data-en="Deny" data-zh="拒绝">Deny</button>
+    </div>
+    <p class="err" id="oauthError" role="alert"></p>
+  </form>
+  <p class="fine" data-en="This grants device use only: it cannot change trust, rules or mode. Revoke it any time in Access tokens."
+     data-zh="只授予设备使用权，改不了信任、规则和模式。随时可以在访问令牌页吊销。">This grants device use only.</p>
+  <p class="fine"><a href="/#settings/tokens" data-en="Manage access tokens" data-zh="管理访问令牌">Manage access tokens</a></p>
+{{end}}
+</main>
+<script src="/assets/auth.js?v={{.V}}"></script>
+</body>
+</html>

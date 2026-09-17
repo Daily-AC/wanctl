@@ -171,6 +171,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/delegations/request", s.handleDelegationRequest)
 	mux.HandleFunc("/api/delegations/approve", s.handleDelegationApprove)
 	mux.HandleFunc("/api/delegations/reject", s.handleDelegationReject)
+	mux.HandleFunc("/oauth/authorize", s.handleOAuthAuthorize)
+	mux.HandleFunc("/api/oauth/decide", s.handleOAuthDecide)
 	mux.HandleFunc("/auth/login", s.handleAuthLogin)
 	mux.HandleFunc("/auth/github", s.handleAuthStart)
 	mux.HandleFunc("/auth/callback", s.handleAuthCallback)
@@ -268,6 +270,7 @@ func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 var mutationPaths = map[string]bool{
 	"/api/delegations/approve":     true,
 	"/api/delegations/reject":      true,
+	"/api/oauth/decide":            true,
 	"/api/tokens":                  true,
 	"/api/tokens/revoke":           true,
 	"/api/acl":                     true,

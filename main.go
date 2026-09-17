@@ -353,7 +353,29 @@ func cmdRelay(args []string) error {
 		if err != nil {
 			return fmt.Errorf("WANCTL_MCP_SEED must be hex-encoded: %w", err)
 		}
-		h, err := mcppkg.Handler(seed, "/mcp")
+		opts := mcppkg.Options{Seed: seed, EndpointPath: "/mcp"}
+		// OAuth needs three things the session path does not: somewhere durable
+		// to keep clients and refresh tokens, a public origin to publish as the
+		// issuer, and a portal to host the consent page. Without all three the
+		// endpoint keeps working exactly as before, on Mcp-Session-Id.
+		switch {
+		case pgStore == nil:
+			log.Print("wanctl relay: MCP OAuth off (needs DATABASE_URL for clients and refresh tokens)")
+		case os.Getenv("WANCTL_PUBLIC_ORIGIN") == "":
+			log.Print("wanctl relay: MCP OAuth off (needs WANCTL_PUBLIC_ORIGIN as the issuer)")
+		case os.Getenv("WANCTL_PORTAL") == "":
+			log.Print("wanctl relay: MCP OAuth off (needs WANCTL_PORTAL to host the consent page)")
+		default:
+			r.SetMCPOAuth(seed, pgStore)
+			opts.OAuth = &mcppkg.OAuthConfig{
+				ResourceMetadataURL: strings.TrimRight(os.Getenv("WANCTL_PUBLIC_ORIGIN"), "/") +
+					"/.well-known/oauth-protected-resource",
+				Live:   r.ResolveOAuthToken,
+				Revoke: r.RevokeOAuthRelayToken,
+			}
+			log.Print("wanctl relay: MCP OAuth enabled (authorize on the portal, tokens at /oauth/token)")
+		}
+		h, err := mcppkg.HandlerWithOptions(opts)
 		if err != nil {
 			return fmt.Errorf("mcp handler: %w", err)
 		}
