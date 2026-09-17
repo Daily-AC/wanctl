@@ -584,6 +584,37 @@ type ExecRequest struct {
 	// (Android: root, or its own adbd). Via optionally pins one.
 	Elevate bool
 	Via     string
+	// ElevateOptional says the command is one the device may legitimately run
+	// without an elevation channel, so a reply that names none is not the
+	// silent failure elevationHonoured otherwise catches. Exactly one command
+	// is like this: a screenshot, which needs root on Android and needs nothing
+	// on a laptop. It is asked for elevated either way so that both get the
+	// same policy class, and only the device knows which it is.
+	ElevateOptional bool
+	// SpillAfter asks the device to keep the whole output in a file of its own
+	// once it grows past this many bytes, and to name that file on exit. A
+	// caller that will have to truncate what it shows sets it to the size it
+	// can show; zero asks for nothing and leaves no file.
+	SpillAfter int64
+}
+
+// ExecOutcome is everything one exec reports beyond its output bytes.
+type ExecOutcome struct {
+	Code int
+	// SpillPath is where the device kept the whole output, empty when nothing
+	// was spilled — either because the output was small, because the caller
+	// asked for no spill, or because the device is running an agent from before
+	// spilling existed.
+	SpillPath string
+	// SpillBytes is the output's true length in bytes, which is what the tail a
+	// caller shows is a tail of. It is reported even when SpillPath is empty,
+	// and that is how a device that tried and could not keep the output is told
+	// apart from an agent too old to have been asked: the first counted, the
+	// second reports nothing at all.
+	SpillBytes int64
+	// SpillKept is how much of the output the device's copy actually holds. Less
+	// than SpillBytes means the file is a prefix and the middle is gone.
+	SpillKept int64
 }
 
 // elevationHonoured checks that a device which reported an exit actually ran
@@ -601,7 +632,7 @@ type ExecRequest struct {
 // happened, and a caller who then re-ran the command elsewhere would be acting
 // on a false belief about what this device just did.
 func elevationHonoured(req ExecRequest, m protocol.Message) error {
-	if !req.Elevate || m.ElevatedVia != "" {
+	if !req.Elevate || req.ElevateOptional || m.ElevatedVia != "" {
 		return nil
 	}
 	target := req.Target
@@ -623,17 +654,25 @@ func (c *Client) Exec(ctx context.Context, req ExecRequest) (int, error) {
 // ExecTo is the same as Exec but lets callers (the MCP server) supply their own
 // writers to capture stdout/stderr into buffers.
 func (c *Client) ExecTo(ctx context.Context, req ExecRequest, stdout, stderr io.Writer) (int, error) {
+	out, err := c.ExecOut(ctx, req, stdout, stderr)
+	return out.Code, err
+}
+
+// ExecOut is ExecTo with the rest of what the device reports: where it kept the
+// whole output when the caller asked for a spill, and how long that output was.
+func (c *Client) ExecOut(ctx context.Context, req ExecRequest, stdout, stderr io.Writer) (ExecOutcome, error) {
+	failed := ExecOutcome{Code: -1}
 	conn, err := c.connect(ctx, req.Target)
 	if err != nil {
-		return -1, err
+		return failed, err
 	}
 	defer conn.Close()
 	msg := protocol.Message{
 		Kind: protocol.KindExec, Command: req.Command, OneShot: req.OneShot, Cwd: req.Cwd,
-		Elevate: req.Elevate, Via: req.Via,
+		Elevate: req.Elevate, Via: req.Via, SpillAfter: req.SpillAfter,
 	}
 	if err := protocol.WriteMessage(conn, msg); err != nil {
-		return -1, err
+		return failed, err
 	}
 	// A cancelled context (Ctrl-C at the terminal, an MCP host abandoning the
 	// call) has to reach the device, or the command runs to completion there
@@ -651,13 +690,27 @@ func (c *Client) ExecTo(ctx context.Context, req ExecRequest, stdout, stderr io.
 		time.AfterFunc(cancelGrace, func() { conn.Close() })
 	})
 	defer stopCancel()
+	return execOver(ctx, conn, req, stdout, stderr)
+}
+
+// execOver reads one command's frames to their end on an already-open session.
+// It is separate from the dial for the same reason fileOpOver is: the wire
+// behaviour — including what a session that ends mid-command looks like — can
+// then be tested against a stand-in device.
+//
+// Note what it does NOT do with a connection that ends after the request was
+// sent: claim the device could not run the command. That inference is only
+// sound when the device says so, and a command that was already running when
+// the link dropped is the commoner case.
+func execOver(ctx context.Context, rw io.ReadWriter, req ExecRequest, stdout, stderr io.Writer) (ExecOutcome, error) {
+	failed := ExecOutcome{Code: -1}
 	for {
-		ft, payload, err := protocol.ReadFrame(conn)
+		ft, payload, err := protocol.ReadFrame(rw)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return -1, ctxErr
+				return failed, ctxErr
 			}
-			return -1, err
+			return failed, err
 		}
 		switch ft {
 		case protocol.FrameStdout:
@@ -667,21 +720,29 @@ func (c *Client) ExecTo(ctx context.Context, req ExecRequest, stdout, stderr io.
 		case protocol.FrameJSON:
 			m, perr := protocol.DecodeMessage(payload)
 			if perr != nil {
-				return -1, perr
+				return failed, perr
 			}
 			switch m.Kind {
 			case protocol.KindExit:
-				return m.Code, elevationHonoured(req, m)
+				return ExecOutcome{
+					Code: m.Code, SpillPath: m.Path, SpillBytes: m.Size, SpillKept: m.SpillKept,
+				}, elevationHonoured(req, m)
 			case protocol.KindError:
+				// The spill rides on the error frame too, and is carried out
+				// with it: a command that failed after emitting megabytes is
+				// exactly when the caller most needs to know where the rest of
+				// the output is, and dropping the path here would have thrown
+				// that away at the last step.
+				lost := ExecOutcome{Code: -1, SpillPath: m.Path, SpillBytes: m.Size, SpillKept: m.SpillKept}
 				// A device that honoured our cancel reports the killed command
 				// as an error. The caller asked for that, so it reads as
 				// cancellation rather than as a device-side failure.
 				if ctxErr := ctx.Err(); ctxErr != nil {
-					return -1, ctxErr
+					return lost, ctxErr
 				}
-				return -1, fmt.Errorf("remote error: %s", m.Reason)
+				return lost, fmt.Errorf("remote error: %s", m.Reason)
 			case protocol.KindReject:
-				return -1, rejectError(m)
+				return failed, rejectError(m)
 			}
 		}
 	}

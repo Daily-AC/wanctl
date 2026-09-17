@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -22,11 +23,29 @@ import (
 // same fixture the exec/push/pull round trip uses.
 func startDevice(t *testing.T, mode policy.Mode) (*Client, context.Context) {
 	t.Helper()
+	return startDeviceWithRules(t, mode)
+}
+
+// startDeviceWithRules is startDevice with the device's rule file seeded before
+// the agent reads it, for the cases where what is under test is a request the
+// device would otherwise have to ask a human about.
+func startDeviceWithRules(t *testing.T, mode policy.Mode, rules ...policy.Rule) (*Client, context.Context) {
+	t.Helper()
 	srv := httptest.NewServer(relay.New(relay.EnvTokenStore("tok:alice")).Handler())
 	t.Cleanup(srv.Close)
 	base := "ws" + strings.TrimPrefix(srv.URL, "http")
 
-	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	deviceConfig := t.TempDir()
+	t.Setenv("WANCTL_CONFIG_DIR", deviceConfig)
+	if len(rules) > 0 {
+		encoded, err := json.Marshal(rules)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(deviceConfig, "rules.json"), encoded, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ag, err := agent.New(agent.Options{
 		RelayURL: base, Token: "tok", Name: "home-pc", AutoYes: true, Mode: mode, Version: "v0.9.4-test",
 	})

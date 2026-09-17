@@ -94,6 +94,17 @@ type pendingUpload struct {
 }
 
 func newPendingUpload(policyRoot, path string, perm os.FileMode) (*pendingUpload, error) {
+	return newPendingUploadIn(policyRoot, path, perm, false)
+}
+
+// newPendingUploadIn is newPendingUpload with a say in whether a missing parent
+// directory is an error. An upload writes where the caller pointed and nowhere
+// else, so file_put keeps failing on a path whose directory does not exist —
+// that is almost always a typo. file_write is the one operation that means
+// "make this file exist", and creating `logs/` on the way to `logs/app.conf` is
+// part of that. The directories are made under the same os.Root as the file, so
+// the policy decision still constrains every component.
+func newPendingUploadIn(policyRoot, path string, perm os.FileMode, mkdirParents bool) (*pendingUpload, error) {
 	rootPath, name, err := rootedName(policyRoot, path)
 	if err != nil {
 		return nil, err
@@ -101,6 +112,12 @@ func newPendingUpload(policyRoot, path string, perm os.FileMode) (*pendingUpload
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		return nil, err
+	}
+	if mkdirParents {
+		if err := root.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			root.Close()
+			return nil, err
+		}
 	}
 	parent, err := root.OpenRoot(filepath.Dir(name))
 	root.Close()
