@@ -25,7 +25,7 @@ func cmdAdmin(args []string) error {
 	}
 	switch args[0] {
 	case "invite":
-		fs := flag.NewFlagSet("admin invite", flag.ExitOnError)
+		fs := withHelp(flag.NewFlagSet("admin invite", flag.ExitOnError))
 		github := fs.String("github", "", "pre-approve this GitHub login instead of minting a code")
 		fs.Parse(args[1:])
 		body := map[string]string{}

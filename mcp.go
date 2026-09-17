@@ -21,7 +21,7 @@ import (
 // the same handler at /mcp (see internal/relay/mux wire-up), so users just
 // register https://relay.example/mcp with their AI host.
 func cmdMCP(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("mcp", flag.ExitOnError))
 	httpAddr := fs.String("http", "", "if set, serve HTTP/Streamable MCP on this addr (e.g. :8080) instead of stdio")
 	fs.Parse(args)
 

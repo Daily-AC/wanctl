@@ -99,7 +99,7 @@ func seedPortalAdmin(fp string) {
 // to drive other devices from this machine. Bare `wanctl` (no args) is still
 // the device path (enroll → save → daemon).
 func cmdLogin(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("login", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("login", flag.ExitOnError))
 	code := fs.String("code", "", "exchange this enrollment code instead of prompting for one;\n"+
 		"\tfor front-ends that ran the browser step themselves (the Android app)")
 	fs.Parse(args)

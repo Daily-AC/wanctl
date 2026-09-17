@@ -38,7 +38,7 @@ var buildVersion = "dev"
 // process starts the daemon again — so the daemon process keeps running as the
 // original user, not as root.
 func cmdUpdate(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("update", flag.ExitOnError))
 	noRestart := fs.Bool("no-restart", false, "internal: skip daemon stop/start (used by the sudo-elevated phase)")
 	fetchAPK := fs.String("fetch-apk", "", "download and verify the Android APK into this directory, print its path, and exit;\n"+
 		"\tused by the Android app, which installs it through the system package installer")

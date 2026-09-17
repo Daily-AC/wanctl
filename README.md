@@ -12,7 +12,7 @@ relay, while each device keeps final authority through a local approval policy.
 - GitHub OAuth login with first-user administration and invite-based admission.
 - One Go binary for relay, portal, agent, controller, and MCP roles.
 - Proxy-agnostic HTTP long-poll transport that works through ordinary reverse proxies; WebSocket remains optional.
-- CLI and MCP surfaces designed for scripted and AI-agent-driven control.
+- CLI and MCP surfaces designed for scripted and AI-agent-driven control, described by [one command catalog](docs/contract.md) that `wanctl help` and the MCP tool descriptions are both generated from.
 - Optional [WebFetch access](docs/webfetch.md) for URL-reading web AIs, with owner-approved, short-lived device delegation and existing device policy.
 
 ## Quick start
@@ -112,6 +112,7 @@ wanctl exec --target DEVICE "uname -a"
 
 ## Documentation
 
+- [Command contract](docs/contract.md) — every CLI command and MCP tool, generated from one catalog
 - [Self-hosting](docs/self-hosting.md)
 - [Environment variables](docs/environment.md)
 - [Architecture and security model](docs/architecture.md)
