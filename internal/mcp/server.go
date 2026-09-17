@@ -1858,8 +1858,16 @@ func tailStream(b []byte, res client.ExecOutcome) string {
 		return string(b)
 	}
 	tail := b[len(b)-maxExecStream:]
+	// The device counted every byte it produced; this buffer holds only what
+	// arrived on one stream. When the two disagree the device's number is the
+	// true one, and it is the number a caller reasons about when deciding
+	// whether the tail is worth reading at all.
+	total := int64(len(b))
+	if res.SpillBytes > total {
+		total = res.SpillBytes
+	}
 	return fmt.Sprintf("[output truncated: showing last %d of %d bytes; %s]\n",
-		len(tail), len(b), spillNote(res)) + string(tail)
+		len(tail), total, spillNote(res)) + string(tail)
 }
 
 // spillNote says what became of the rest of the output. There are three

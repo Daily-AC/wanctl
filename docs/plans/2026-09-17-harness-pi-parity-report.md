@@ -166,6 +166,26 @@ Seven findings. One accepted as an owner decision, six fixed.
 | 6 | `TestALostReadIsNotToldToCheckTheFile` |
 | 7 | `TestSpillSurvivesAnErrorFrame`, `TestTruncationSaysWhichSilenceThisIs` |
 
+Addendum, four more:
+
+8. **"Run wanctl update" was printed for any empty spill path.** Already fixed with item 4 and
+   kept: the device reports the byte count whether or not it could keep the output, so a
+   current agent that failed says "could not keep the full output" and only an agent that
+   reported nothing at all is told to update. `TestTruncationSaysWhichSilenceThisIs` covers
+   both renderings.
+9. **The truncation line counted the local buffer.** The device counted every byte it
+   produced; this side holds only what arrived on one stream. The device's number is used when
+   it is the larger. `TestTruncationReportsTheDeviceByteCount`.
+10. **Only an EOF became a lost result.** A reset or a timeout after the request frame is
+    exactly as unknown, and came back as a bare transport error a caller reads as "it failed,
+    so retry". Every post-send failure is now a `ResultLostError`, carrying its cause so
+    `errors.Is` still finds the timeout and the message names the reset.
+    `TestAnyPostSendFailureIsALostResult`.
+12. **The contract hardcoded "array of {old, new}".** True only while `edits` was the only
+    array in the catalog. The label is rendered from the parameter's own item schema, in the
+    order the schema declares the fields required.
+    `TestArrayParameterRendersItsDeclaredItemShape`.
+
 ## Contradictions and judgment calls
 
 **`wanctl_edit`'s `old` and `new` are no longer `required` in the MCP schema.** The brief said
