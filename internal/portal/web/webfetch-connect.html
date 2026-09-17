@@ -14,14 +14,41 @@
 </header>
 <main id="webfetchStart" data-relay="{{.Relay}}" data-url="{{.StartURL}}" data-help="{{.HelpURL}}">
   <h1 data-en="Connect web AI" data-zh="连接网页 AI">Connect web AI</h1>
-  {{if .StartURL}}
-  <p class="lead" data-en="Copy a fresh prompt into your AI chat with URL reading enabled. Open the approval link it returns to choose devices and a duration."
-     data-zh="复制新的接入提示词，发给能读取网址的 AI。再打开它返回的授权链接，选择设备和有效期。">Copy a fresh prompt into your AI chat with URL reading enabled. Open the approval link it returns to choose devices and a duration.</p>
-  <textarea id="webfetchPrompt" readonly rows="8" aria-label="Connection prompt" data-lbl-en="Connection prompt" data-lbl-zh="接入提示词" style="width:100%;box-sizing:border-box;resize:vertical">Use your URL-reading tool to GET {{.StartURL}}. Return the real approval_url and complete continuation_prompt, then wait for my approval. After approval, use the same URL-reading tool to GET the call URLs for tasks I request. Keep the full status_url and exec call_url_template in your reply for later turns. Help: {{.HelpURL}}. Do not simulate responses or approve on my behalf. Do not run device commands before approval.</textarea>
-  <p><button type="button" class="btn" id="webfetchCopy" data-en="Copy a new connection prompt" data-zh="复制新的接入提示词">Copy a new connection prompt</button></p>
+  {{if .Relay}}
+  <p class="lead" data-en="Send one line to an AI chat that can read URLs. It reads the rest from wanctl and tells you when to approve."
+     data-zh="给能读取网址的 AI 发一行话。剩下的它自己从 wanctl 读，需要你批准时会告诉你。">Send one line to an AI chat that can read URLs. It reads the rest from wanctl and tells you when to approve.</p>
+
+  <div class="say">
+    <p class="say-lang" lang="zh-CN">中文</p>
+    <p class="say-text" id="sayZh" lang="zh-CN">请打开 {{.Relay}}/webfetch 并按它说的做，帮我操作我的设备。</p>
+    <button type="button" class="btn soft say-copy" data-copy="sayZh" data-en="Copy" data-zh="复制">Copy</button>
+  </div>
+  <div class="say">
+    <p class="say-lang">English</p>
+    <p class="say-text" id="sayEn">Open {{.Relay}}/webfetch and follow what it says, so you can operate my device for me.</p>
+    <button type="button" class="btn soft say-copy" data-copy="sayEn" data-en="Copy" data-zh="复制">Copy</button>
+  </div>
   <p class="fine" id="webfetchCopyHint" role="status"></p>
-  <p class="fine" data-en="Copy again for each new conversation. Share the general WebFetch entry with other people, not your personal connection prompt. Nothing is authorized by opening or copying this page."
-     data-zh="每个新对话请重新复制。给其他人分享统一的 WebFetch 入口，不要转发自己的接入提示词。打开或复制此页面不会授予任何设备权限。">Copy again for each new conversation. Share the general WebFetch entry with other people, not your personal connection prompt. Nothing is authorized by opening or copying this page.</p>
+
+  <h2 data-en="What happens next" data-zh="接下来会发生什么">What happens next</h2>
+  <ol class="say-steps">
+    <li data-en="The AI opens the link and asks wanctl for access to your devices."
+        data-zh="AI 打开链接，替你向 wanctl 申请设备访问。">The AI opens the link and asks wanctl for access to your devices.</li>
+    <li data-en="It gives you an approval link. You pick the devices and how long, and approve."
+        data-zh="它给你一个授权链接。你选择设备和时长，然后批准。">It gives you an approval link. You pick the devices and how long, and approve.</li>
+    <li data-en="On its first command you approve pairing once. After that it just works."
+        data-zh="它第一次执行命令时，你再批准一次配对。之后就可以直接用了。">On its first command you approve pairing once. After that it just works.</li>
+  </ol>
+  <p class="fine" data-en="Nothing is authorized by opening or copying this page. Device rules, the approved duration and revocation all still apply, and you can share this line with anyone who has their own wanctl account."
+     data-zh="打开或复制此页面不会授予任何权限。设备原有规则、批准的时长和吊销都继续生效；这行话可以分享给任何有自己 wanctl 账号的人。">Nothing is authorized by opening or copying this page. Device rules, the approved duration and revocation all still apply, and you can share this line with anyone who has their own wanctl account.</p>
+
+  {{if .StartURL}}
+  <h2 data-en="If the AI cannot generate randomness" data-zh="如果 AI 无法自己生成随机数">If the AI cannot generate randomness</h2>
+  <p class="fine" data-en="Some chat models cannot create the random value each conversation needs. Copy this longer prompt instead; it already contains one. Copy it again for every new conversation, and do not forward it to other people."
+     data-zh="有些模型无法生成每个对话所需的随机值。这时改用下面这段较长的提示词，它已经带好了随机值。每个新对话都要重新复制，也不要转发给其他人。">Some chat models cannot create the random value each conversation needs. Copy this longer prompt instead; it already contains one. Copy it again for every new conversation, and do not forward it to other people.</p>
+  <textarea id="webfetchPrompt" readonly rows="6" aria-label="Connection prompt" data-lbl-en="Connection prompt" data-lbl-zh="接入提示词" style="width:100%;box-sizing:border-box;resize:vertical">Use your URL-reading tool to GET {{.StartURL}}. Return the real approval_url and complete continuation_prompt, then wait for my approval. After approval, use the same URL-reading tool to GET the call URLs for tasks I request. Keep the full status_url and exec call_url_template in your reply for later turns. Help: {{.HelpURL}}. Do not simulate responses or approve on my behalf. Do not run device commands before approval.</textarea>
+  <p><button type="button" class="btn soft" id="webfetchCopy" data-en="Copy a new connection prompt" data-zh="复制新的接入提示词">Copy a new connection prompt</button></p>
+  {{end}}
   {{else}}
   <p class="lead" data-en="Web AI access is unavailable on this relay. Ask the instance administrator to enable or update WebFetch, then try again."
      data-zh="当前中继尚无法提供网页 AI 接入，请联系管理员启用或升级 WebFetch 后重试。">Web AI access is unavailable on this relay. Ask the instance administrator to enable or update WebFetch, then try again.</p>

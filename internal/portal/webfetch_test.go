@@ -72,6 +72,21 @@ func TestWebFetchConnectUsesIndependentBootstrapURLsWithoutGrantingAccess(t *tes
 		if !strings.Contains(w.Body.String(), "http://example.com/webfetch/help") || !strings.Contains(w.Body.String(), "exec call_url_template") {
 			t.Fatal("starter prompt lost its help URL or cross-turn call instructions")
 		}
+		// The page's first job is the one line a person pastes into a chat. It
+		// points at the public entry, in both languages, with no personal URL.
+		body := w.Body.String()
+		for _, want := range []string{
+			`id="sayZh"`, `id="sayEn"`,
+			"请打开 https://relay.test/webfetch 并按它说的做",
+			"Open https://relay.test/webfetch and follow what it says",
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("the one-line prompt is missing %q", want)
+			}
+		}
+		if strings.Index(body, `id="sayZh"`) > strings.Index(body, `id="webfetchPrompt"`) {
+			t.Fatal("the fallback prompt sits above the one people actually copy")
+		}
 		previous = start
 	}
 }
