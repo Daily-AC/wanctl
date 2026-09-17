@@ -122,7 +122,6 @@ func (h *Handler) manifest(ticket string, access delegation.Access) map[string]a
 			"jobs_per_grant": 64, "url_bytes": MaxURLBytes, "output_bytes": MaxOutputBytes,
 			"exec_timeout_seconds_max": MaxExecSeconds, "file_timeout_seconds_max": MaxFileSeconds,
 			"concurrent_operations_per_grant": maxOperationsPerGrant,
-			"concurrent_operations_per_owner": maxOperationsPerOwner,
 			"grant_minutes_max":               60,
 		},
 		"notice": "Commands and results are visible to this adapter and to the web chat provider. Do not send secrets. A lost or ambiguous job is never rerun automatically.",

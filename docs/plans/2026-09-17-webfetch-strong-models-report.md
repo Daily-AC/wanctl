@@ -178,7 +178,7 @@ existing details to stay below the new first screen.
 
 | Finding | Change | Test |
 | --- | --- | --- |
-| F1 Owner-level concurrency isolation missing; `adapter_busy` also spent the victim's ledger allowance | Third counter: 4 per grant, **8 per owner namespace**, 64 per adapter. The slot is reserved **before** `BeginJob`, so a refusal writes nothing and returns 429 with `adapter_busy` and no `job_id`. Release is a `defer` around `execute` in the dispatch goroutine, covering a result, transport failure, store-write failure and recovered panic; the request path releases on a duplicate rid and on a `BeginJob` error | `TestOperationSlotsAreBudgetedPerOwnerAndAlwaysReleased`, `TestWebFetchBusyAdapterRefusesWithoutTouchingTheLedger` |
+| F1 Owner-level concurrency isolation — **withdrawn by the owner**, the relay is moving to a single-owner deployment | The per-owner budget was written, then reverted: the limits are 4 per grant and 64 per adapter, exactly as before the review. The ledger half of the finding was already written and tested, so it stays: the slot is reserved **before** `BeginJob`, and a refusal writes nothing and returns 429 with `adapter_busy` and no `job_id`. Release is a `defer` around `execute` in the dispatch goroutine, covering a result, transport failure, store-write failure and recovered panic; the request path releases on a duplicate rid and on a `BeginJob` error | `TestOperationSlotsAreBoundedAndAlwaysReleased`, `TestWebFetchBusyAdapterRefusesWithoutTouchingTheLedger` |
 | F2 Identical-URL replay changed identity across the deploy | `Operation.Timeout` is `*int` with `omitempty`. An omitted `timeout_seconds` never enters the canonical payload; the default is applied at dispatch through `Operation.timeout()`. An explicit value stays in the hash and still 409s when changed | `TestOmittedTimeoutIsNotPartOfTheReplayIdentity`, `TestWebFetchIdenticalURLReplaysTheSameJobAcrossDefaultChanges` |
 | F3 Approved JSON manifest lost the same-rid retry rule | `security` (all ten rules) is now in the approved manifest, not only discovery. `rid_unique_per_operation` split into `retry_a_lost_response_on_the_same_url` and `new_rid_only_when_nothing_ran`. The manifest `instruction` and both continuation prompts say it too | `TestApprovedManifestCarriesTheRetryRules` |
 | F4 `deadline_at` ignored the grant clamp | One `effectiveDeadline(created, timeout, grantExpiry)` drives execution, `deadline_at` and `jobState` | `TestWebFetchDeadlineIsClampedToTheGrant`, plus the grant-clamp row in `TestLongJobIsNotReportedUnknownBeforeItsOwnDeadline` |
@@ -192,7 +192,7 @@ alongside the existing `staleGrace`. Nothing outside the package assigns them.
 fails (`internal/webfetch/handler.go`, the deferred writer logs and drops it).
 Pre-existing, unchanged by this branch.
 
-**Per-owner budget lives in the adapter, not the grant store.** The relay still
-lets one account hold any number of approved grants
-(`internal/relay/delegation_store.go`); capping that is a separate decision about
-what an owner may approve, and `internal/relay` was not in scope for this wave.
+**Cross-account starvation is knowingly unaddressed.** Sixteen grants of four
+long operations each can still occupy all 64 adapter slots. That is acceptable
+because the relay is going single-owner; on a shared relay it would be a
+starvation channel, and the ADR records where to reopen it.

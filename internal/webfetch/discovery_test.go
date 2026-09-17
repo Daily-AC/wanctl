@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"html"
 	"net/http"
 	"net/http/httptest"
@@ -227,46 +226,35 @@ func TestOmittedTimeoutIsNotPartOfTheReplayIdentity(t *testing.T) {
 	}
 }
 
-// One owner cannot own the adapter by holding several grants at once, and every
-// terminal path has to give the slot back.
-func TestOperationSlotsAreBudgetedPerOwnerAndAlwaysReleased(t *testing.T) {
+// A long job holds a slot, so the caps have to hold and every terminal path has
+// to give the slot back.
+func TestOperationSlotsAreBoundedAndAlwaysReleased(t *testing.T) {
 	h := staticHandler(t)
-	var held [][2]string
-	for i := 0; i < maxOperationsPerOwner; i++ {
-		grant := fmt.Sprintf("d_alice_%d", i/maxOperationsPerGrant)
-		if !h.reserve("alice", grant) {
-			t.Fatalf("alice was refused slot %d inside her own budget", i)
+	for i := 0; i < maxOperationsPerGrant; i++ {
+		if !h.reserve("d_alice") {
+			t.Fatalf("refused slot %d inside the per-grant limit", i)
 		}
-		held = append(held, [2]string{"alice", grant})
 	}
-	if h.reserve("alice", "d_alice_spare") {
-		t.Fatal("a fresh grant let one owner past the per-account budget")
+	if h.reserve("d_alice") {
+		t.Fatal("one grant went past its own limit")
 	}
-	if !h.reserve("bob", "d_bob_0") {
-		t.Fatal("one busy owner starved another owner")
+	if !h.reserve("d_bob") {
+		t.Fatal("a busy grant blocked an unrelated one")
 	}
-	// Freeing one of alice's slots lets the previously refused fresh grant in,
-	// so the refusal came from her account budget and not from a grant limit.
-	h.release(held[0][0], held[0][1])
-	if !h.reserve("alice", "d_alice_spare") {
-		t.Fatal("releasing a slot did not free the owner budget")
+	h.release("d_alice")
+	if !h.reserve("d_alice") {
+		t.Fatal("releasing a slot did not free the grant's budget")
 	}
-	h.release("alice", "d_alice_spare")
-	held = held[1:]
-	for _, slot := range held {
-		h.release(slot[0], slot[1])
+	for i := 0; i < maxOperationsPerGrant; i++ {
+		h.release("d_alice")
 	}
-	h.release("bob", "d_bob_0")
+	h.release("d_bob")
 	h.mu.Lock()
-	total, grants, owners := h.total, len(h.running), len(h.owned)
+	total, grants := h.total, len(h.running)
 	h.mu.Unlock()
-	if total != 0 || grants != 0 || owners != 0 {
-		t.Fatalf("released slots leaked: total=%d grants=%d owners=%d", total, grants, owners)
+	if total != 0 || grants != 0 {
+		t.Fatalf("released slots leaked: total=%d grants=%d", total, grants)
 	}
-	if !h.reserve("alice", "d_alice_0") {
-		t.Fatal("the budget never recovered")
-	}
-	h.release("alice", "d_alice_0")
 }
 
 // The adapter records unknown for four different causes. The sentence a model
