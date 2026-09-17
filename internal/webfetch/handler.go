@@ -293,7 +293,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"title": "Device access requested", "status": "pending", "request_id": id,
 			"request_expires_at": request.RequestExpiresAt, "controller_fingerprint": identity.Fingerprint,
 			"approval_url": h.cfg.PortalOrigin + "/webfetch/approve?request=" + url.QueryEscape(id),
-			"status_url":   statusURL, "continuation_prompt": continuationPrompt(statusURL),
+			"status_url":   statusURL, "continuation_prompt": h.continuationPrompt(statusURL),
 			"instruction": "Give the owner BOTH approval_url and continuation_prompt, including its complete URL. The owner verifies identities, selects devices and approves a duration in wanctl. Stop while approval is pending. After approval, GET the SAME status_url to discover devices and tools; do not open start_url or create another request. This GET does not grant access.",
 		}
 		if clientNonce != "" {
@@ -414,7 +414,7 @@ func (h *Handler) jobResponse(w http.ResponseWriter, r *http.Request, ticket str
 		state = "unknown"
 	}
 	statusURL := h.statusURL(ticket)
-	data := map[string]any{"title": "wanctl job", "job_id": job.ID, "request_id": job.RequestID, "status": state, "duplicate_request": duplicate, "result_url": resultURL, "result": job.Result, "status_url": statusURL, "continuation_prompt": continuationPrompt(statusURL)}
+	data := map[string]any{"title": "wanctl job", "job_id": job.ID, "request_id": job.RequestID, "status": state, "duplicate_request": duplicate, "result_url": resultURL, "result": job.Result, "status_url": statusURL, "continuation_prompt": h.continuationPrompt(statusURL)}
 	if state == "running" || state == "queued" {
 		data["next_url"] = resultURL + "?check=" + strconv.FormatInt(time.Now().UnixNano(), 10)
 		data["instruction"] = "Read next_url for the result. Do not submit this operation under a new rid."
@@ -587,10 +587,25 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	h.respond(w, r, status, map[string]any{"error": message})
 }
 
-var responseTemplate = template.Must(template.New("response").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>wanctl WebFetch</title><style>body{font:16px/1.65 system-ui;max-width:800px;margin:64px auto;padding:0 24px;color:#222}a{color:#1268d3;overflow-wrap:anywhere}pre{background:#f5f5f7;padding:20px;border-radius:12px;white-space:pre-wrap;overflow-wrap:anywhere}h1{font-size:28px}</style><h1>wanctl WebFetch</h1>{{range .Links}}<p><strong>{{.Name}}</strong><br><a href="{{.URL}}">{{.URL}}</a></p>{{end}}<pre>{{.JSON}}</pre></html>`))
+var responseTemplate = template.Must(template.New("response").Parse(`<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>wanctl WebFetch</title>
+<style>body{font:16px/1.65 system-ui;max-width:800px;margin:64px auto;padding:0 24px;color:#222}a,code{overflow-wrap:anywhere}a{color:#1268d3}pre{background:#f5f5f7;padding:20px;border-radius:12px;white-space:pre-wrap;overflow-wrap:anywhere}h1{font-size:28px}h2{font-size:22px}</style>
+<h1>wanctl WebFetch</h1>
+{{if .Document.call_endpoint}}
+<h2>Authorized: call tools with GET</h2>
+<p>Use the same URL-reading tool that opened this page. Fill a template below with URL-encoded values and GET the complete URL. No separate exec connector, POST, cookies or special headers are needed.</p>
+<p><strong>call_endpoint</strong><br><code>{{.Document.call_endpoint}}</code></p>
+<p><strong>Allowed target values</strong>{{range .Document.devices}}<br><code>{{.Target}}</code>{{end}}</p>
+{{range .Document.tools}}<p><strong>{{.name}} — GET call_url_template</strong><br><code>{{.call_url_template}}</code><br>{{.description}}</p>{{end}}
+<p>Replace every {placeholder}; never fetch an unfilled template. Use a new rid for each new operation and the same rid and arguments when retrying it. GET result_url / next_url until done, failed or unknown (at most 8 polls). Return only the actual result. Keep the full status_url and exec template in your reply so later turns can continue.</p>
+{{end}}
+{{range .Links}}<p><strong>{{.Name}}</strong><br><a href="{{.URL}}">{{.URL}}</a></p>{{end}}
+<h2>Protocol response</h2><pre>{{.JSON}}</pre></html>`))
 
 func (h *Handler) respond(w http.ResponseWriter, r *http.Request, status int, data map[string]any) {
 	data["protocol"] = "wanctl.webfetch.v1"
+	data["help_url"] = h.cfg.PortalOrigin + "/webfetch/help"
 	data["http_status"] = status
 	if status >= 400 {
 		data["status"] = "error"
@@ -604,16 +619,17 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, status int, da
 		return
 	}
 	var links []struct{ Name, URL string }
-	for _, key := range []string{"entry_url", "owner_start_url", "approval_url", "status_url", "next_url", "result_url"} {
+	for _, key := range []string{"help_url", "entry_url", "owner_start_url", "approval_url", "status_url", "next_url", "result_url"} {
 		if value, ok := data[key].(string); ok {
 			links = append(links, struct{ Name, URL string }{key, value})
 		}
 	}
 	var body bytes.Buffer
 	if responseTemplate.Execute(&body, struct {
-		Links []struct{ Name, URL string }
-		JSON  string
-	}{links, string(encoded)}) != nil {
+		Links    []struct{ Name, URL string }
+		Document map[string]any
+		JSON     string
+	}{links, data, string(encoded)}) != nil {
 		http.Error(w, "render failed", 500)
 		return
 	}

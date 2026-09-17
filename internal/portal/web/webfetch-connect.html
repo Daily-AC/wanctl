@@ -12,12 +12,12 @@
   <a class="brand" href="/">wanctl</a>
   <div class="tools"><button class="chip" id="lang">中文</button></div>
 </header>
-<main id="webfetchStart" data-relay="{{.Relay}}" data-url="{{.StartURL}}">
+<main id="webfetchStart" data-relay="{{.Relay}}" data-url="{{.StartURL}}" data-help="{{.HelpURL}}">
   <h1 data-en="Connect web AI" data-zh="连接网页 AI">Connect web AI</h1>
   {{if .StartURL}}
   <p class="lead" data-en="Copy a fresh prompt into your AI chat with URL reading enabled. Open the approval link it returns to choose devices and a duration."
      data-zh="复制新的接入提示词，发给能读取网址的 AI。再打开它返回的授权链接，选择设备和有效期。">Copy a fresh prompt into your AI chat with URL reading enabled. Open the approval link it returns to choose devices and a duration.</p>
-  <textarea id="webfetchPrompt" readonly rows="8" aria-label="Connection prompt" data-lbl-en="Connection prompt" data-lbl-zh="接入提示词" style="width:100%;box-sizing:border-box;resize:vertical">Use your URL-reading tool to GET {{.StartURL}}. Return the real approval_url and complete continuation_prompt, then wait for my approval. Do not simulate responses, approve on my behalf or execute device commands.</textarea>
+  <textarea id="webfetchPrompt" readonly rows="8" aria-label="Connection prompt" data-lbl-en="Connection prompt" data-lbl-zh="接入提示词" style="width:100%;box-sizing:border-box;resize:vertical">Use your URL-reading tool to GET {{.StartURL}}. Return the real approval_url and complete continuation_prompt, then wait for my approval. After approval, use the same URL-reading tool to GET the call URLs for tasks I request. Keep the full status_url and exec call_url_template in your reply for later turns. Help: {{.HelpURL}}. Do not simulate responses or approve on my behalf. Do not run device commands before approval.</textarea>
   <p><button type="button" class="btn" id="webfetchCopy" data-en="Copy a new connection prompt" data-zh="复制新的接入提示词">Copy a new connection prompt</button></p>
   <p class="fine" id="webfetchCopyHint" role="status"></p>
   <p class="fine" data-en="Copy again for each new conversation. Share the general WebFetch entry with other people, not your personal connection prompt. Nothing is authorized by opening or copying this page."
@@ -26,6 +26,7 @@
   <p class="lead" data-en="Web AI access is unavailable on this relay. Ask the instance administrator to enable or update WebFetch, then try again."
      data-zh="当前中继尚无法提供网页 AI 接入，请联系管理员启用或升级 WebFetch 后重试。">Web AI access is unavailable on this relay. Ask the instance administrator to enable or update WebFetch, then try again.</p>
   {{end}}
+  <p class="fine"><a href="/webfetch/help" data-en="WebFetch quick reference" data-zh="WebFetch 快速用法">WebFetch quick reference</a></p>
   <p class="fine"><span data-en="Your account: " data-zh="当前账号：">Your account: </span><b>{{.NS}}</b></p>
   <p class="fine"><a href="/" data-en="Return to devices" data-zh="返回设备页">Return to devices</a></p>
 </main>

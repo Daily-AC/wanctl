@@ -15,6 +15,17 @@ import (
 	"wanctl/internal/transport"
 )
 
+// Public, credential-free instructions must be readable by the AI's HTTP client,
+// without the owner's portal session or a live relay request.
+func (s *Server) handleWebFetchHelp(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	s.render(w, "webfetch-help.html", map[string]any{"Relay": s.relayPublic})
+}
+
 func (s *Server) handleWebFetchConnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
@@ -55,7 +66,7 @@ func (s *Server) handleWebFetchConnect(w http.ResponseWriter, r *http.Request) {
 	// The authenticated owner gets a unique bootstrap URL, not a grant. The AI
 	// still creates its request and waits for the owner's separate approval.
 	startURL := origin + "/webfetch/new/" + hex.EncodeToString(nonce[:])
-	s.render(w, "webfetch-connect.html", map[string]any{"NS": ns, "Relay": origin, "StartURL": startURL})
+	s.render(w, "webfetch-connect.html", map[string]any{"NS": ns, "Relay": origin, "StartURL": startURL, "HelpURL": s.requestOrigin(r) + "/webfetch/help"})
 }
 
 type delegationDevice struct {

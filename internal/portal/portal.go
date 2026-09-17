@@ -167,6 +167,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/enroll", s.handleEnroll)
 	mux.HandleFunc("/webfetch/approve", s.handleDelegationPage)
 	mux.HandleFunc("/webfetch/connect", s.handleWebFetchConnect)
+	mux.HandleFunc("/webfetch/help", s.handleWebFetchHelp)
 	mux.HandleFunc("/api/delegations/request", s.handleDelegationRequest)
 	mux.HandleFunc("/api/delegations/approve", s.handleDelegationApprove)
 	mux.HandleFunc("/api/delegations/reject", s.handleDelegationReject)
