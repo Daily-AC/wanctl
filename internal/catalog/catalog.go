@@ -6,18 +6,21 @@
 // it (internal/mcp), the CLI renders `wanctl help` from it (main), and
 // docs/contract.md is its Markdown rendering, checked for drift by a test.
 //
-// The text is written for whoever is driving wanctl, which in practice is an AI
-// agent. That is why descriptions say when to reach for a command and what an
-// error means, instead of restating the flag name in a sentence.
+// The descriptions are not reference prose. wanctl is the external harness for
+// a web AI, so what an MCP host loads from this catalog is that agent's system
+// prompt: it is read once, before any work, by the thing about to act. Write
+// entries as operating instructions — when to reach for this and not that, what
+// an error obliges you to do next, what to do before you start — and not as a
+// restatement of the flag name in a sentence.
 package catalog
 
-// Product is the three-sentence definition of what wanctl is. It heads the
-// Markdown contract so a reader meeting the command list for the first time
-// knows which primitives exist and which deliberately do not.
-const Product = `wanctl is a remote computer for AI agents. ` +
-	`A trust layer — relay, pairing, pinned device identity, device-side policy rules — decides who may drive which machine, ` +
-	`and on top of it sits a deliberately small set of primitives: run a command, run a background job, read a file, patch a file, move bytes, read the log. ` +
-	`There is no IDE, no browser driver and no second way to do any of these; anything richer is built out of them by the agent.`
+// Product is what wanctl is, in the owner's words. It heads the Markdown
+// contract, because a reader meeting the command list for the first time needs
+// to know what the list is a list of.
+const Product = `wanctl is the external harness for a web AI. ` +
+	`The AI in a chat window is the brain; wanctl gives it hands (exec, background jobs, read, edit, push/pull), ` +
+	`eyes (command output, read, logs, screenshot), memory across turns (session rebind, job ledger) ` +
+	`and safety rails (pairing, device identity, policy rules). Together they form one agent.`
 
 // Type names for Param.Type. They are the JSON Schema types the MCP tools
 // register, so changing one changes the wire schema.

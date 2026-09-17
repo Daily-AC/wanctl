@@ -24,6 +24,23 @@ Bare `wanctl` now prints a short index instead of the wall: one line per
 command, grouped, under thirty lines and eighty columns, plus the local status
 line it always had, plus a pointer to `wanctl help`.
 
+## What these descriptions are
+
+The owner's framing, which heads the contract and the package doc: wanctl is the
+external harness for a web AI. The AI in the chat window is the brain; wanctl
+gives it hands, eyes, memory across turns and safety rails, and together they
+form one agent.
+
+That has a consequence for how entries are written. What an MCP host loads from
+this catalog is that agent's system prompt — read once, before any work, by the
+thing about to act. So entries are operating instructions, not reference prose:
+when to reach for this and not that, what an error obliges you to do next, what
+to do before you start. The last of those is now explicit. `wanctl_exec` and
+`wanctl_read` both carry a START OF TASK rule: before working in a project
+directory on the device, read its AGENTS.md or CLAUDE.md if one is there,
+because it outranks how the agent would otherwise proceed. A test pins the rule
+so it cannot be dropped silently.
+
 ## Files changed
 
 | File | What |
@@ -31,7 +48,7 @@ line it always had, plus a pointer to `wanctl help`.
 | `internal/catalog/catalog.go` | types, `Product`, `Lookup`, per-surface accessors |
 | `internal/catalog/commands.go` | the catalog: 37 entries |
 | `internal/catalog/render.go` | index, terminal entry, Markdown contract |
-| `internal/catalog/render_test.go` | width budgets, lookup, index coverage |
+| `internal/catalog/render_test.go` | width budgets, lookup, index coverage, product framing |
 | `internal/mcp/server.go` | `registerMCPTools` builds from the catalog |
 | `internal/mcp/catalog_registration_test.go` | schema snapshot + must-keep phrases |
 | `internal/mcp/testdata/mcp_registration.json` | the pre-change registration, captured from `main` first |
@@ -40,14 +57,14 @@ line it always had, plus a pointer to `wanctl help`.
 | `help_catalog_test.go` | index budget, both spellings, unknown command, doc drift |
 | `entrypoint_test.go`, `fileops_cli_test.go` | updated for the new index |
 | `docs/contract.md` | generated |
-| `README.md` | one link, one feature line |
+| `README.md` | one link, one product line |
 
 ## Criteria
 
 | # | Criterion | Result |
 |---|---|---|
 | 1 | Every MCP tool still registered with identical name, parameter names, types, required flags | pass — snapshot captured from `main` before any change, asserted in `TestRegistrationMatchesSnapshot` |
-| 2 | Must-keep phrases present in generated descriptions | pass — `TestDescriptionsKeepTheRules`, tool and parameter level |
+| 2 | Must-keep phrases present in generated descriptions | pass — `TestDescriptionsKeepTheRules`, tool and parameter level, including START OF TASK |
 | 3 | Bare `wanctl` ≤ 30 lines, ≤ 80 columns | pass — 29 lines, 77 columns (`TestIndexFitsTheBudget`) |
 | 4 | `help exec`, `exec -h`, `help read`, `help wanctl_read` render; `help nosuch` exits non-zero with the index | pass — `TestHelpRendersEntriesForBothSpellings`, `TestHelpForUnknownCommandFails` |
 | 5 | `docs/contract.md` in sync | pass — `TestContractDocIsInSync` |
@@ -121,6 +138,12 @@ MCP tool: wanctl_exec
   shell. Reach for wanctl_push_blob only for binaries or for a large file that
   does not exist on the device yet — it overwrites whole files and loses
   concurrent edits.
+
+  START OF TASK: before you do any work inside a project directory on the
+  device, wanctl_read that directory's AGENTS.md or CLAUDE.md if one is there.
+  It is that project's operating instructions — build commands, conventions,
+  things not to touch — and it overrides your defaults. Read it first, not after
+  your first command fails.
 
   On the command line --target may be omitted when the first argument names a
   device, or when exactly one device is online. --script takes a path to a local
@@ -202,6 +225,11 @@ ERRORS the caller must react to
 - **`wanctl exec help` is still a command, not a request for help.** Only `-h`,
   `-help` and `--help` are intercepted before the relay gate; `help` is a
   plausible thing to run on a device.
+- **The other seventeen descriptions were not rewritten as instructions.** The
+  framing above says how the next entry gets written and it shaped the new text
+  (the dev loop, the START OF TASK rule, the error tables). Rewriting the
+  inherited prose tool by tool is a separate pass; the must-keep test exists so
+  that pass cannot quietly drop a rule.
 - **The 256 KiB read cap, the 8 MiB edit cap and the 30-minute job ceiling are
   described, not enforced here.** The catalog quotes the limits the handlers
   already apply; nothing about behaviour moved.
