@@ -365,30 +365,56 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.respond(w, r, 403, map[string]any{"error": "target is not in this delegation's allowed devices", "error_code": "target_not_allowed", "status_url": h.statusURL(ticket), "instruction": "No job was created. Only exact devices[].target values in status_url are allowed. Do not guess targets or try other devices."})
 			return
 		}
-		// The slot is taken before anything is written down. A refusal that had
-		// already inserted a job would spend the caller's 64-job ledger
-		// allowance on an operation that never ran.
+		payload, _ := json.Marshal(op)
+		rid, hash := query.Get("rid"), digest(payload)
+		// Look the rid up before deciding anything about capacity. A client
+		// recovering a lost response replays the identical URL, and telling it
+		// "nothing ran, use a new rid" because the adapter happens to be full
+		// would run the same operation a second time.
+		switch existing, err := h.cfg.Jobs.FindJob(r.Context(), id, rid); {
+		case err == nil && existing.PayloadHash != hash:
+			h.conflict(w, r, ticket, id)
+			return
+		case err == nil:
+			h.jobResponse(w, r, ticket, existing, true, op, access.ExpiresAt)
+			return
+		case !errors.Is(err, delegation.ErrNotFound):
+			h.fail(w, r, err)
+			return
+		}
+		// Only a genuinely new operation can be refused for capacity, and that
+		// refusal writes nothing: a job row spent on something that never ran
+		// would eat the caller's 64-job ledger allowance.
 		if !h.reserve(id) {
 			log.Printf("webfetch: call rejected grant=%s reason=adapter_busy", id)
 			h.respond(w, r, 429, map[string]any{
 				"error": "too many operations are already running; this one did not start", "error_code": "adapter_busy",
 				"execution_started": false, "status_url": h.statusURL(ticket),
-				"instruction": "No job was created and nothing ran. Read your running jobs' next_url until one finishes, then submit this operation again. Because nothing ran, a NEW rid is correct here.",
+				"instruction": "No job was created and nothing ran under this rid. Read your running jobs' next_url until one finishes, then send this same URL again.",
 			})
 			return
 		}
-		payload, _ := json.Marshal(op)
-		job, fresh, err := h.cfg.Jobs.BeginJob(r.Context(), id, query.Get("rid"), digest(payload), payload)
+		// Held until the dispatch goroutine takes ownership, so that an error or
+		// a panic anywhere between here and there still returns the slot.
+		held := true
+		defer func() {
+			if held {
+				h.release(id)
+			}
+		}()
+		job, fresh, err := h.cfg.Jobs.BeginJob(r.Context(), id, rid, hash, payload)
+		if errors.Is(err, delegation.ErrConflict) {
+			h.conflict(w, r, ticket, id)
+			return
+		}
 		if err != nil {
-			h.release(id)
 			h.fail(w, r, err)
 			return
 		}
 		if fresh {
 			log.Printf("webfetch: job created grant=%s job=%s", id, job.ID)
+			held = false
 			h.dispatch(work{job: job, request: request, token: token, operation: op})
-		} else {
-			h.release(id)
 		}
 		h.jobResponse(w, r, ticket, job, !fresh, op, access.ExpiresAt)
 	case len(parts) == 5 && parts[3] == "jobs":
@@ -675,6 +701,19 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 		return n, nil
 	}
 	return b.Buffer.Write(p)
+}
+
+// conflict answers a rid that already names a different operation. It carries
+// no execution_started and no invitation to pick a new rid: the earlier
+// operation under this rid may well have run, and a model that reads "nothing
+// ran" here will happily run the work twice.
+func (h *Handler) conflict(w http.ResponseWriter, r *http.Request, ticket, grant string) {
+	log.Printf("webfetch: call rejected grant=%s reason=rid_conflict", grant)
+	h.respond(w, r, 409, map[string]any{
+		"error":      "this rid already names a different operation; its arguments do not match the ones recorded",
+		"error_code": "rid_conflict", "status_url": h.statusURL(ticket),
+		"instruction": "Stop here. Nothing ran just now, but the earlier operation recorded under this rid may have. Read status_url and find out what it did before you decide anything else. Do not resend this URL, and do not move the same work to another rid until you know.",
+	})
 }
 
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {

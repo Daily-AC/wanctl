@@ -195,3 +195,26 @@ Pre-existing, unchanged by this branch.
 **Cross-account isolation is out of scope.** The relay is going single-owner, so
 there is no second account to protect and a per-owner budget would only have
 capped the one owner below the 64 slots already available to them.
+
+
+## Fix round 2 — Codex verification of the kept ledger change
+
+| Finding | Change | Test |
+| --- | --- | --- |
+| P1 `adapter_busy` answered before the rid lookup, so replaying a running job's URL on a full adapter was told nothing ran, inviting a new rid and a second execution | `delegation.JobStore` gains `FindJob(ctx, grant, rid)`, a read-only lookup implemented by `relay.PGStore` with the query `BeginJob` already runs under its advisory lock. The call path looks the rid up first: same payload hash returns that job whatever the adapter is busy with, a different hash is a 409, and only a genuinely new operation reaches the capacity check — which still writes nothing | `TestWebFetchBusyAdapterRefusesOnlyGenuinelyNewOperations` |
+| Slot leak between `reserve` and the dispatch goroutine | A `held` flag with a deferred release covers everything from the reservation to the hand-off, including a panic inside `BeginJob`; `held` is cleared immediately before `dispatch`, whose own defer takes over | `TestASlotSurvivesALedgerThatPanics` |
+| 409 must not read as "nothing ran" | New `h.conflict` helper: `error_code: "rid_conflict"`, no `execution_started`, and an instruction to stop and read the earlier job rather than move the work to another rid. Used by both the `FindJob` mismatch and the concurrent-`BeginJob` race | `TestWebFetchRidConflictTellsTheCallerToStop` |
+
+**F2 legacy ledger rows: no compatibility shim, owner-accepted.** A rid created
+before this deploy recorded the old default in its payload, so replaying its
+identical URL with no `timeout_seconds` returns `rid_conflict` once. Grants live
+at most 60 minutes, so the window closes by itself, and the response tells the
+caller to stop and read the earlier job rather than re-run it. Stated in
+`docs/adr/0009-webfetch-long-jobs.md`.
+
+**Footprint widened.** This round touches `internal/delegation/delegation.go`
+(one interface method) and `internal/relay/delegation_store.go` (its
+implementation). `relay.PGStore` is the only implementer, so the alternative —
+an optional interface upcast — would have left the P1 alive behind a type
+assertion. Neither file is in the wave's exclusion list. `internal/relay` tests
+were run and pass.

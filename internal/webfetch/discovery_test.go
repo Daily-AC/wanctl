@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,9 @@ func (emptyStore) RejectDelegation(context.Context, string, string) error {
 	return delegation.ErrNotFound
 }
 func (emptyStore) ResolveAccess(string) (delegation.Access, bool) { return delegation.Access{}, false }
+func (emptyStore) FindJob(context.Context, string, string) (delegation.Job, error) {
+	return delegation.Job{}, delegation.ErrNotFound
+}
 func (emptyStore) BeginJob(context.Context, string, string, string, json.RawMessage) (delegation.Job, bool, error) {
 	return delegation.Job{}, false, delegation.ErrNotFound
 }
@@ -298,4 +302,73 @@ func TestLongJobIsNotReportedUnknownBeforeItsOwnDeadline(t *testing.T) {
 			t.Fatalf("%s: state = %q, want %q", tc.name, got, tc.want)
 		}
 	}
+}
+
+// approvedStore is the smallest store that gets a request as far as the call
+// path, so the slot accounting around the ledger write can be exercised without
+// a database. Its BeginJob panics: that is the failure a plain error return
+// would not catch.
+type approvedStore struct {
+	emptyStore
+	grant       string
+	fingerprint string
+	begins      int
+}
+
+func (s *approvedStore) GetDelegationByTicket(context.Context, string, string) (delegation.Request, error) {
+	return delegation.Request{ID: s.grant, Status: "approved", ControllerFingerprint: s.fingerprint}, nil
+}
+
+func (s *approvedStore) ResolveAccess(string) (delegation.Access, bool) {
+	return delegation.Access{
+		Namespace: "alice", GrantID: s.grant, Delegated: true, ExpiresAt: time.Now().Add(time.Hour),
+		ControllerFingerprint: s.fingerprint,
+		Devices:               []delegation.Device{{Namespace: "alice", ID: "dev-1", Fingerprint: "SHA256:x"}},
+	}, true
+}
+
+func (s *approvedStore) BeginJob(context.Context, string, string, string, json.RawMessage) (delegation.Job, bool, error) {
+	s.begins++
+	panic("ledger exploded")
+}
+
+func TestASlotSurvivesALedgerThatPanics(t *testing.T) {
+	store := &approvedStore{}
+	h, err := New(Config{
+		Store: store, Jobs: store, Seed: bytes.Repeat([]byte{7}, 32),
+		RelayURL: "https://relay.example", PublicOrigin: "https://relay.example", PortalOrigin: "https://portal.example",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(h.Close)
+	ticket := strconv.FormatInt(time.Now().Unix(), 10) + "-" + strings.Repeat("a", 48)
+	grant, _, identity, err := h.credentials(ticket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.grant, store.fingerprint = grant, identity.Fingerprint
+
+	call := "/webfetch/s/" + ticket + "/call?" + url.Values{
+		"rid": {"boom"}, "tool": {"exec"}, "target": {"alice/dev-1"}, "command": {"true"},
+	}.Encode()
+	func() {
+		// net/http recovers a handler panic per connection; a direct call does
+		// not, so the test stands in for the server.
+		defer func() { recover() }()
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, call, nil))
+	}()
+	if store.begins != 1 {
+		t.Fatalf("the request never reached the ledger: %d writes", store.begins)
+	}
+	h.mu.Lock()
+	total, grants := h.total, len(h.running)
+	h.mu.Unlock()
+	if total != 0 || grants != 0 {
+		t.Fatalf("a panicking ledger leaked a slot: total=%d grants=%d", total, grants)
+	}
+	if !h.reserve(grant) {
+		t.Fatal("the grant cannot start work again")
+	}
+	h.release(grant)
 }

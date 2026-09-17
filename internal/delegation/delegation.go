@@ -108,6 +108,10 @@ type Job struct {
 }
 
 type JobStore interface {
+	// FindJob reads the job a (grant, rid) pair already names, without creating
+	// one. A client recovering a lost response has to be able to find its job
+	// even when the adapter cannot start anything new.
+	FindJob(ctx context.Context, grant, rid string) (Job, error)
 	// BeginJob atomically records an operation before execution. Existing IDs
 	// return new=false and cannot be executed again, including after restart.
 	BeginJob(context.Context, string, string, string, json.RawMessage) (Job, bool, error)
