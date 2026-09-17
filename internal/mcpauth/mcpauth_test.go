@@ -45,7 +45,11 @@ func TestAccessTokenFailsClosed(t *testing.T) {
 	if _, err := OpenAccess(seed, strings.TrimPrefix(token, AccessPrefix), now); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a token with no prefix opened: %v", err)
 	}
-	flipped := token[:len(token)-1] + string(rune(token[len(token)-1]^1))
+	// Flip a character in the middle of the ciphertext, not the last one: the
+	// low bits of a trailing base64 character are padding, so flipping them can
+	// decode to the very same bytes and the "tampered" token opens (issue #90).
+	mid := len(AccessPrefix) + (len(token)-len(AccessPrefix))/2
+	flipped := token[:mid] + string(rune(token[mid]^1)) + token[mid+1:]
 	if _, err := OpenAccess(seed, flipped, now); err == nil {
 		t.Error("a tampered token opened")
 	}
