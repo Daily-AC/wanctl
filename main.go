@@ -87,6 +87,14 @@ func cmdHelp(args []string) error {
 		fmt.Print(catalog.Markdown())
 		return nil
 	}
+	// The same text an MCP host is handed in its initialize response. Printing
+	// it here is how anything that is not an MCP client — the discovery page, a
+	// person deciding what this thing will do to their machine — reads the
+	// instructions the agent is working from, without a second copy existing.
+	if len(args) > 0 && (args[0] == "--instructions" || args[0] == "-instructions") {
+		fmt.Print(catalog.Instructions())
+		return nil
+	}
 	if len(args) == 0 {
 		fmt.Print(usage)
 		return nil
@@ -174,6 +182,8 @@ func main() {
 		err = cmdRead(ctx, os.Args[2:])
 	case "edit":
 		err = cmdEdit(ctx, os.Args[2:])
+	case "write":
+		err = cmdWrite(ctx, os.Args[2:])
 	case "peers":
 		err = cmdPeers(ctx)
 	case "id":
@@ -245,7 +255,7 @@ func main() {
 var relayCommands = map[string]bool{
 	"start": true, "login": true,
 	"exec": true, "screenshot": true, "push": true, "pull": true,
-	"read": true, "edit": true,
+	"read": true, "edit": true, "write": true,
 	"peers": true, "pair": true, "friends": true, "share": true,
 	"docs": true, "admin": true,
 }
@@ -737,21 +747,27 @@ func cmdScreenshot(ctx context.Context, args []string) error {
 	// policy rejection travel on separate frames, so they still reach the user.
 	var png bytes.Buffer
 	code, err := c.ExecTo(ctx, client.ExecRequest{
-		Target: *target, Command: "screenshot", OneShot: true, Elevate: true, Via: *via,
+		Target: *target, Command: "screenshot", OneShot: true,
+		// Asked for elevated because Android cannot capture without it and this
+		// side cannot know what kind of device answers; a desktop gates it as
+		// an ordinary command. ElevateOptional is what lets a laptop answer
+		// without naming a channel it does not have.
+		Elevate: true, ElevateOptional: true, Via: *via,
 	}, &png, os.Stderr)
 	if err != nil {
 		return err
 	}
 	if code != 0 {
-		return fmt.Errorf("screencap failed on the device (exit %d)", code)
+		return fmt.Errorf("the capture failed on the device (exit %d)", code)
 	}
 	if png.Len() == 0 {
 		return fmt.Errorf("device returned an empty screenshot")
 	}
-	// `screencap -p` emits a PNG; anything else means the verb did not run
-	// (an older agent, say) and the bytes are some tool's error text.
+	// A capture emits a PNG; anything else means the verb did not run and the
+	// bytes are some tool's error text. On a device that is not Android, an
+	// agent from before desktop capture is the usual reason.
 	if !bytes.HasPrefix(png.Bytes(), []byte("\x89PNG\r\n\x1a\n")) {
-		return fmt.Errorf("device did not return a PNG (%d bytes, starting %q)",
+		return fmt.Errorf("device did not return a PNG (%d bytes, starting %q); if it is not Android, run `wanctl update` on it",
 			png.Len(), firstBytes(png.Bytes(), 40))
 	}
 
@@ -944,6 +960,38 @@ func cmdEdit(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("replaced %d occurrence(s), sha256 %s\n", res.Replaced, res.SHA256)
+	return nil
+}
+
+// cmdWrite creates a remote file or replaces one end to end. --content takes
+// the text directly; --content-file reads it from a local file, which is how a
+// whole config or script gets through without the shell touching it.
+func cmdWrite(ctx context.Context, args []string) error {
+	fs := withHelp(flag.NewFlagSet("write", flag.ExitOnError))
+	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
+	content := fs.String("content", "", "the whole new text of the file")
+	contentFile := fs.String("content-file", "", "read the content from this local file instead of -content")
+	rest := parseAroundPositionals(fs, args)
+	if len(rest) != 1 {
+		return fmt.Errorf("usage: wanctl write [--target NS/DEV] <path> (--content STR | --content-file F)")
+	}
+	text, err := editText("content", *content, *contentFile)
+	if err != nil {
+		return err
+	}
+	c, err := client.New()
+	if err != nil {
+		return err
+	}
+	res, err := c.WriteFile(ctx, client.WriteRequest{Target: *target, Path: rest[0], Content: text})
+	if err != nil {
+		return err
+	}
+	verb := "overwrote"
+	if res.Created {
+		verb = "created"
+	}
+	fmt.Printf("%s %s (%d bytes, sha256 %s)\n", verb, rest[0], res.SizeBytes, res.SHA256)
 	return nil
 }
 

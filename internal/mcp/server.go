@@ -31,6 +31,7 @@ import (
 	"wanctl/internal/limits"
 	"wanctl/internal/mcpauth"
 	"wanctl/internal/policy"
+	"wanctl/internal/protocol"
 	"wanctl/internal/script"
 	"wanctl/internal/serverlog"
 	"wanctl/internal/transport"
@@ -44,8 +45,7 @@ import (
 // wanctl config dir. Intended for AI hosts that spawn `wanctl mcp` as a child.
 func ServeStdio() error {
 	sessions = &sessionStore{stdio: &localFsSession{}}
-	s := server.NewMCPServer("wanctl", "1.0.0")
-	registerMCPTools(s)
+	s := newMCPServer()
 	return server.ServeStdio(s)
 }
 
@@ -106,8 +106,7 @@ func HandlerWithOptions(o Options) (http.Handler, error) {
 		oauth:   o.OAuth,
 	}
 	go sessions.gcLoop()
-	s := server.NewMCPServer("wanctl", "1.0.0")
-	registerMCPTools(s)
+	s := newMCPServer()
 	opts := []server.StreamableHTTPOption{}
 	if o.EndpointPath != "" {
 		opts = append(opts, server.WithEndpointPath(o.EndpointPath))
@@ -751,6 +750,19 @@ func configuredValue(value string) string {
 // source `wanctl help` renders and docs/contract.md is generated from — so an
 // AI reading a tool description and a human reading the help see one text, not
 // two that drifted. What stays here is the handler behind each name.
+// newMCPServer builds the server both transports serve: the same tools, and the
+// same instructions.
+//
+// The instructions are the catalog's — what wanctl is, every primitive in one
+// list, the loop they compose into, the refusals to recognise. A host reads
+// them once, before any tool call, which is the only moment at which "read the
+// project's AGENTS.md first" can still change what happens.
+func newMCPServer() *server.MCPServer {
+	s := server.NewMCPServer("wanctl", "1.0.0", server.WithInstructions(catalog.Instructions()))
+	registerMCPTools(s)
+	return s
+}
+
 func registerMCPTools(s *server.MCPServer) {
 	handlers := map[string]server.ToolHandlerFunc{
 		"mcpLogin":       mcpLogin,
@@ -761,6 +773,8 @@ func registerMCPTools(s *server.MCPServer) {
 		"mcpExec":        mcpExec,
 		"mcpRead":        mcpRead,
 		"mcpEdit":        mcpEdit,
+		"mcpWrite":       mcpWrite,
+		"mcpScreenshot":  mcpScreenshot,
 		"mcpExecAsync":   mcpExecAsync,
 		"mcpExecPoll":    mcpExecPoll,
 		"mcpPush":        mcpPush,
@@ -801,6 +815,14 @@ func toolOptions(c catalog.Command) []mcpapi.ToolOption {
 			opts = append(opts, mcpapi.WithBoolean(p.Name, props...))
 		case catalog.TypeNumber:
 			opts = append(opts, mcpapi.WithNumber(p.Name, props...))
+		case catalog.TypeArray:
+			// The item schema is what tells a caller the shape of the objects
+			// it may put in the list. Without it the argument is "an array of
+			// something" and a model has to infer {old,new} from the prose.
+			if p.Items != nil {
+				props = append(props, mcpapi.Items(p.Items))
+			}
+			opts = append(opts, mcpapi.WithArray(p.Name, props...))
 		default:
 			panic("mcp: catalog parameter " + c.MCPName + "." + p.Name + " has unknown type " + p.Type)
 		}
@@ -1224,20 +1246,31 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return hint, nil
 	}
 	var stdout, stderr bytes.Buffer
-	code, err := c.ExecTo(ctx, client.ExecRequest{
+	res, err := c.ExecOut(ctx, client.ExecRequest{
 		Target:  target,
 		Command: command,
 		OneShot: reqBool(req, "oneshot"),
 		Cwd:     reqStr(req, "cwd", ""),
 		Elevate: reqBool(req, "elevate"),
 		Via:     reqStr(req, "via", ""),
+		// Ask the device to keep the whole output once it passes what can be
+		// returned here. It costs a file on the device and nothing on the wire,
+		// and it is the difference between "the error was in the middle of 3 MB
+		// you cannot see" and one grep.
+		SpillAfter: maxExecStream,
 	}, &stdout, &stderr)
 	if err != nil {
-		return dialErrorResult(sess, err), nil
+		hint := dialErrorResult(sess, err)
+		if res.SpillPath != "" {
+			// The command ran and failed; its output is still on the device.
+			hint = mcpapi.NewToolResultError(errorTextOf(hint) + "\n" + spillNote(res))
+		}
+		return hint, nil
 	}
+	code := res.Code
 	out := fmt.Sprintf("exit: %d\n", code)
 	if stdout.Len() > 0 {
-		s := clampStream(stdout.Bytes())
+		s := tailStream(stdout.Bytes(), res)
 		out += "\n--- stdout ---\n" + s
 		if !strings.HasSuffix(s, "\n") {
 			out += "\n"
@@ -1254,6 +1287,18 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		out += "(no output)\n"
 	}
 	return mcpapi.NewToolResultText(out), nil
+}
+
+// errorTextOf pulls the message back out of a tool result so a caller can add
+// to it. mcp-go has no accessor, and rebuilding the result from its parts would
+// drop whatever the shared dial-error wording decided to say.
+func errorTextOf(res *mcpapi.CallToolResult) string {
+	for _, c := range res.Content {
+		if t, ok := c.(mcpapi.TextContent); ok {
+			return t.Text
+		}
+	}
+	return ""
 }
 
 // mcpRead and mcpEdit are available over the hosted HTTP endpoint as well as
@@ -1301,22 +1346,34 @@ func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
 	path := reqStr(req, "path", "")
 	old := reqStr(req, "old", "")
-	if path == "" || old == "" {
-		return mcpapi.NewToolResultError("path and old are required ('old' must be non-empty)"), nil
+	edits, errRes := reqEdits(req)
+	if errRes != nil {
+		return errRes, nil
+	}
+	switch {
+	case path == "":
+		return mcpapi.NewToolResultError("path is required"), nil
+	case len(edits) > 0 && old != "":
+		return mcpapi.NewToolResultError("pass either 'old'/'new' or 'edits', not both"), nil
+	case len(edits) == 0 && old == "":
+		return mcpapi.NewToolResultError("pass 'old' (non-empty) with 'new', or an 'edits' array of {old,new}"), nil
 	}
 	sess := sessions.get(ctx)
 	c, hint := sess.client()
 	if hint != nil {
 		return hint, nil
 	}
-	res, err := c.EditFile(ctx, client.EditRequest{
+	request := client.EditRequest{
 		Target:      reqStr(req, "target", ""),
 		Path:        path,
-		Old:         old,
-		New:         reqStr(req, "new", ""),
 		All:         reqBool(req, "all"),
 		ExpectedSHA: reqStr(req, "expected_sha256", ""),
-	})
+		Edits:       edits,
+	}
+	if len(edits) == 0 {
+		request.Old, request.New = old, reqStr(req, "new", "")
+	}
+	res, err := c.EditFile(ctx, request)
 	if err != nil {
 		return fileOpErrorResult(sess, err), nil
 	}
@@ -1324,14 +1381,148 @@ func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		"replaced %d occurrence(s) in %s\nnew sha256 %s, %d bytes\n", res.Replaced, path, res.SHA256, res.SizeBytes)), nil
 }
 
-// fileOpErrorResult adds the one failure read/edit have that no other tool does
-// — the device is running an agent too old to know these operations — and
+// reqEdits reads the batch form of the edit argument. A malformed entry is
+// refused by position, because "edits is invalid" tells a caller holding six of
+// them nothing about which one to fix.
+func reqEdits(req mcpapi.CallToolRequest) ([]protocol.FileEdit, *mcpapi.CallToolResult) {
+	raw, ok := req.GetArguments()["edits"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, mcpapi.NewToolResultError("'edits' must be an array of {old, new} objects")
+	}
+	out := make([]protocol.FileEdit, 0, len(list))
+	for i, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, mcpapi.NewToolResultErrorf("edits[%d] must be an object with 'old' and 'new'", i)
+		}
+		oldText, _ := m["old"].(string)
+		newText, _ := m["new"].(string)
+		if oldText == "" {
+			return nil, mcpapi.NewToolResultErrorf("edits[%d]: 'old' must be a non-empty string", i)
+		}
+		out = append(out, protocol.FileEdit{Old: oldText, New: newText})
+	}
+	if len(out) == 0 {
+		return nil, mcpapi.NewToolResultError("'edits' is empty; pass at least one {old, new}")
+	}
+	return out, nil
+}
+
+// mcpWrite creates a file on the device or replaces one end to end. It is the
+// third file primitive and the one that makes the other two enough: read to
+// look, edit to change, write to put a whole file there — with no base64, no
+// local temp file and no heredoc through a shell.
+func mcpWrite(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	path := reqStr(req, "path", "")
+	content, given := req.GetArguments()["content"].(string)
+	if path == "" {
+		return mcpapi.NewToolResultError("path is required"), nil
+	}
+	if !given {
+		// An empty string is a legitimate write — it truncates the file — so
+		// "missing" and "empty" must not be the same thing here.
+		return mcpapi.NewToolResultError("content is required (pass an empty string to write an empty file)"), nil
+	}
+	sess := sessions.get(ctx)
+	c, hint := sess.client()
+	if hint != nil {
+		return hint, nil
+	}
+	res, err := c.WriteFile(ctx, client.WriteRequest{
+		Target:  reqStr(req, "target", ""),
+		Path:    path,
+		Content: content,
+	})
+	if err != nil {
+		return fileOpErrorResult(sess, err), nil
+	}
+	verb := "overwrote"
+	if res.Created {
+		verb = "created"
+	}
+	return mcpapi.NewToolResultText(fmt.Sprintf(
+		"%s %s\nsha256 %s, %d bytes\n", verb, path, res.SHA256, res.SizeBytes)), nil
+}
+
+// mcpScreenshot returns what is on the device's screen as image content, which
+// is the only form of it a model can actually look at. The CLI writes a file
+// instead; both ask the device the same thing.
+func mcpScreenshot(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	sess := sessions.get(ctx)
+	c, hint := sess.client()
+	if hint != nil {
+		return hint, nil
+	}
+	var png, stderr bytes.Buffer
+	res, err := c.ExecOut(ctx, client.ExecRequest{
+		Target: reqStr(req, "target", ""), Command: "screenshot", OneShot: true,
+		// Asked for elevated because Android cannot capture any other way and
+		// only the device knows which kind it is; a desktop gates it as the
+		// ordinary command it is. Optional because a desktop agent honours the
+		// request with no channel to report back.
+		Elevate: true, ElevateOptional: true, Via: reqStr(req, "via", ""),
+	}, &png, &stderr)
+	if err != nil {
+		return dialErrorResult(sess, err), nil
+	}
+	if res.Code != 0 || png.Len() == 0 {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = fmt.Sprintf("the capture exited %d with no output", res.Code)
+		}
+		return mcpapi.NewToolResultError("screenshot failed on the device: " + msg), nil
+	}
+	return screenshotResult(png.Bytes()), nil
+}
+
+// screenshotResult turns the captured bytes into what the caller sees: image
+// content it can actually look at, and one line of text saying what it is
+// looking at. Separate from the call so the shaping is testable without a
+// device on the other end.
+func screenshotResult(raw []byte) *mcpapi.CallToolResult {
+	data, mime, w, h, note, err := fitImage(raw, maxImageBytes)
+	if err != nil {
+		// Bytes that are not a PNG mean the verb did not run — the likeliest
+		// cause by far is an agent from before desktop capture existed.
+		return mcpapi.NewToolResultError(err.Error() +
+			". If this device is not Android, its agent may predate desktop screenshots; run `wanctl update` on it")
+	}
+	line := fmt.Sprintf("%dx%d, %d bytes, %s", w, h, len(data), mime)
+	if note != "" {
+		line += " (" + note + ")"
+	}
+	return mcpapi.NewToolResultImage(line, base64.StdEncoding.EncodeToString(data), mime)
+}
+
+// fileOpErrorResult adds the two failures the file tools have that no other
+// tool does — the device is running an agent too old to know these operations,
+// and the answer to a request that did reach the device never came back — and
 // otherwise defers to the shared dial-error wording.
 func fileOpErrorResult(sess sessionAPI, err error) *mcpapi.CallToolResult {
 	var unsupported *client.UnsupportedError
 	if errors.As(err, &unsupported) {
 		return mcpapi.NewToolResultError(err.Error() +
 			". Until then, read the file with wanctl_exec (cat / Get-Content) and patch it with wanctl_push_blob.")
+	}
+	// The one outcome that is neither success nor failure: the request reached
+	// the device and the answer did not come back. A model told "it failed"
+	// would redo an edit that may already be applied, so this says what is
+	// actually known and what to do about it — look first.
+	var lost *client.ResultLostError
+	if errors.As(err, &lost) {
+		// A lost READ left nothing behind to inspect, and the error already
+		// says to retry. Appending "do not simply retry, read the file first"
+		// there would contradict it and send the caller after a hash of
+		// something it never changed.
+		if lost.Kind == protocol.KindFileRead {
+			return mcpapi.NewToolResultError(err.Error())
+		}
+		return mcpapi.NewToolResultError(err.Error() +
+			". Do NOT simply retry: call wanctl_read first and compare the sha256 against what you expected.")
 	}
 	return dialErrorResult(sess, err)
 }
@@ -1652,6 +1843,54 @@ func mcpRules(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolRe
 // any truncation EXPLICIT, keeping the head plus a larger tail (the tail usually
 // holds the result/error the caller is after).
 const maxExecStream = 48 * 1024
+
+// tailStream is what a synchronous exec returns when its output does not fit.
+//
+// It keeps the END of the output, not the beginning and the end. A command's
+// result is at the end: the compiler's error summary, the test run's failures,
+// the last line of a log. The head was only ever worth keeping when it was the
+// only copy of anything; now that the device holds the whole output in a file,
+// the head is one grep away and the tail is what the caller needs in front of
+// it. deviceCopy names that file, so the next call is `grep` and not the same
+// command again with a filter guessed blind.
+func tailStream(b []byte, res client.ExecOutcome) string {
+	if len(b) <= maxExecStream {
+		return string(b)
+	}
+	tail := b[len(b)-maxExecStream:]
+	// The device counted every byte it produced; this buffer holds only what
+	// arrived on one stream. When the two disagree the device's number is the
+	// true one, and it is the number a caller reasons about when deciding
+	// whether the tail is worth reading at all.
+	total := int64(len(b))
+	if res.SpillBytes > total {
+		total = res.SpillBytes
+	}
+	return fmt.Sprintf("[output truncated: showing last %d of %d bytes; %s]\n",
+		len(tail), total, spillNote(res)) + string(tail)
+}
+
+// spillNote says what became of the rest of the output. There are three
+// answers, and a caller acts differently on each: the device has it, the device
+// tried and could not, or the device was never asked because its agent is too
+// old to know how. The middle case is why the device reports the byte count
+// even when it reports no path — silence alone cannot tell the last two apart.
+func spillNote(res client.ExecOutcome) string {
+	switch {
+	case res.SpillPath != "" && res.SpillKept > 0 && res.SpillKept < res.SpillBytes:
+		return fmt.Sprintf(
+			"the device kept the FIRST %d bytes at %s (its copy is capped, so the middle is gone) — read it with wanctl_read or grep it with wanctl_exec",
+			res.SpillKept, res.SpillPath)
+	case res.SpillPath != "":
+		return "full output at " + res.SpillPath +
+			" on the device, kept for 1h — read it with wanctl_read or grep it with wanctl_exec"
+	case res.SpillBytes > 0:
+		// It counted, so it understood the request and the file is what failed.
+		return "the device could not keep the full output (no writable temp space); narrow the command with a filter instead"
+	default:
+		return "the device did not keep the full output (its agent predates this; run `wanctl update` there)"
+	}
+}
 
 func clampStream(b []byte) string {
 	if len(b) <= maxExecStream {

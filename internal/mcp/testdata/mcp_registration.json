@@ -8,6 +8,11 @@
         "required": false
       },
       {
+        "name": "edits",
+        "type": "array",
+        "required": false
+      },
+      {
         "name": "expected_sha256",
         "type": "string",
         "required": false
@@ -15,12 +20,12 @@
       {
         "name": "new",
         "type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "old",
         "type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "path",
@@ -281,6 +286,21 @@
     "params": []
   },
   {
+    "name": "wanctl_screenshot",
+    "params": [
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "via",
+        "type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "wanctl_server_logs",
     "params": [
       {
@@ -324,6 +344,26 @@
     "params": [
       {
         "name": "fingerprint",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
+    "name": "wanctl_write",
+    "params": [
+      {
+        "name": "content",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "path",
         "type": "string",
         "required": true
       },

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"runtime"
 	"wanctl/internal/elevate"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/policy"
@@ -263,5 +264,34 @@ func TestElevatedRunIsAudited(t *testing.T) {
 	}
 	if plain == 0 {
 		t.Fatal("event log lost the ordinary exec")
+	}
+}
+
+// A desktop capture is gated as an ordinary command, not as an elevated one.
+//
+// The controller has to ask for elevation — an Android device cannot capture
+// without it, and the controller cannot know which kind of device will answer.
+// A laptop must not turn that request into a stricter rule than the one it
+// already applies to `screencapture` run through exec: same capability, same
+// gate. Android keeps the elevated gate, which the test above pins.
+func TestDesktopCaptureIsGatedAsAnOrdinaryCommand(t *testing.T) {
+	if runtime.GOOS == "android" {
+		t.Skip("on Android a capture really does need the elevation channel")
+	}
+	base := relayBase(t)
+	ap := requestKindApprover{kinds: make(chan policy.Kind, 1)}
+	startAgent(t, base, ap, policy.ModeNormal)
+	dr := connectController(t, base)
+	defer dr.Conn.Close()
+
+	execElevated(t, dr, "screenshot", "")
+	select {
+	case kind := <-ap.kinds:
+		if kind != policy.KindExec {
+			t.Fatalf("desktop capture gated as %q, want %q — it needs no privilege "+
+				"that permission to run commands does not already grant", kind, policy.KindExec)
+		}
+	default:
+		t.Fatal("the capture did not enter the policy gate at all")
 	}
 }

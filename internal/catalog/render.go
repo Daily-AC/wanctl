@@ -148,7 +148,7 @@ func Entry(c Command) string {
 // kind is the parameter's type line: what the MCP schema calls it, and whether
 // the tool refuses without it.
 func kind(p Param) string {
-	s := p.Type
+	s := typeLabel(p)
 	if p.Required {
 		s += ", required"
 	}
@@ -156,6 +156,65 @@ func kind(p Param) string {
 		s += ", CLI only"
 	}
 	return s
+}
+
+// typeLabel names a parameter's type the way a reader needs it. For an array
+// that means saying what one element looks like, read from the item schema the
+// tool actually registers rather than from a sentence kept in step by hand:
+// "array of {old, new}" is only true while `edits` is the only array there is.
+func typeLabel(p Param) string {
+	if p.Type != TypeArray {
+		return p.Type
+	}
+	return "array of " + itemLabel(p.Items)
+}
+
+// itemLabel describes one element of an array parameter.
+func itemLabel(items map[string]any) string {
+	if items == nil {
+		return "values"
+	}
+	typ, _ := items["type"].(string)
+	props, _ := items["properties"].(map[string]any)
+	if typ != "object" || len(props) == 0 {
+		if typ == "" {
+			return "values"
+		}
+		return typ + " values"
+	}
+	return "{" + strings.Join(fieldOrder(items, props), ", ") + "}"
+}
+
+// fieldOrder lists an object's fields in the order the schema declares them
+// required, which is the order a caller writes them, falling back to a sorted
+// listing so the output is at least stable.
+func fieldOrder(items map[string]any, props map[string]any) []string {
+	var named []string
+	switch req := items["required"].(type) {
+	case []string:
+		named = append(named, req...)
+	case []any:
+		for _, r := range req {
+			if name, ok := r.(string); ok {
+				named = append(named, name)
+			}
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, name := range named {
+		if _, ok := props[name]; ok && !seen[name] {
+			seen[name], out = true, append(out, name)
+		}
+	}
+	rest := make([]string, 0, len(props))
+	for name := range props {
+		if !seen[name] {
+			rest = append(rest, name)
+		}
+	}
+	sort.Strings(rest)
+	return append(out, rest...)
 }
 
 // Markdown renders the whole catalog. docs/contract.md is this output, and a
@@ -168,6 +227,12 @@ func Markdown() string {
 	b.WriteString("the same catalog (`internal/catalog`) produces the CLI help and the MCP tool\n")
 	b.WriteString("descriptions, so the three cannot drift. Regenerate with:\n\n")
 	b.WriteString("```\ngo run . help --markdown > docs/contract.md\n```\n\n")
+
+	b.WriteString("## Instructions\n\n")
+	b.WriteString("This is what an MCP host is handed before it calls anything — the\n")
+	b.WriteString("`instructions` field of the initialize response, and the output of\n")
+	b.WriteString("`wanctl help --instructions`. It is the harness's system prompt.\n\n")
+	b.WriteString("```\n" + Instructions() + "```\n\n")
 
 	b.WriteString("## Commands\n\n")
 	b.WriteString("| Command | MCP tool | Summary |\n|---|---|---|\n")
@@ -201,13 +266,14 @@ func Markdown() string {
 				if p.Required {
 					req = "**yes**"
 				}
+				typ := typeLabel(p)
 				meaning := escapePipes(p.Desc)
 				if p.CLIDesc != "" {
 					// The two surfaces genuinely disagree about this argument,
 					// so the contract has to print both rather than pick one.
 					meaning += " **On the CLI:** " + escapePipes(p.CLIDesc)
 				}
-				b.WriteString("| " + mcpName + " | " + cli + " | " + p.Type + " | " + req + " | " + meaning + " |\n")
+				b.WriteString("| " + mcpName + " | " + cli + " | " + typ + " | " + req + " | " + meaning + " |\n")
 			}
 		}
 		if c.CLIExample != "" {
