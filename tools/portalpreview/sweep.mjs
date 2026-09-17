@@ -122,7 +122,12 @@ const STATES = [
   { id: 'form-friend', q: '&view=settings/friends', open: `document.querySelector('#fAdd').click()` },
   { id: 'form-share', q: '&view=settings/acl', open: `document.querySelector('#aAdd').click()` },
   { id: 'sheet-changelog', q: '', open: `document.querySelector('#ver').click()`, settle: 1200 },
+  // 同一条深链的三种下场。链接本身看不出配对是死是活，所以 showPair 一打开
+  // 就去设备状态里认：还在等的两个按钮，已经信过的和已经没了的各剩一句话加
+  // 一个「知道了」。后两种在窄屏上是最长的那两句，得跟着每个视口量。
   { id: 'pair', q: `#pair?device=atlas&fp=SHA256:2lvJifeK%2B%2F%2FVCxE0zMA9YVdw76clBF0bGk6n7zbyoaz%3D&name=kestrel&label=claude-code%20on%20kestrel`, hash: true },
+  { id: 'pair-trusted', q: `#pair?device=bench-02&fp=SHA256:a5yGk562ILhUW%2FD%2B1nJJZB4lDht0IAe9AW6nXf%2FY7x%2F%3D&name=studio&label=studio%20(my%20laptop)`, hash: true },
+  { id: 'pair-gone', q: `#pair?device=atlas&fp=SHA256:Zq4XnR8vTk2LmJd7CbWaE5YuPi3OsHf1GgNlDxVzQeT%3D&name=kestrel&label=claude-code%20on%20kestrel`, hash: true },
 
   // C. 一次性凭据与 toast
   { id: 'slip-token', q: '&view=settings/tokens',
