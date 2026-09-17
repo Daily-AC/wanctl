@@ -456,20 +456,33 @@ func TestWebFetchTimeoutCeilingIsPerTool(t *testing.T) {
 	}
 }
 
-// A refusal must not be written down. Spending a ledger slot on an operation
-// that never ran would let a busy adapter burn the caller's 64-job allowance.
-func TestWebFetchBusyAdapterRefusesWithoutTouchingTheLedger(t *testing.T) {
+// A refusal must not be written down, and it must never reach a call that is
+// only replaying a job the adapter already has.
+func TestWebFetchBusyAdapterRefusesOnlyGenuinelyNewOperations(t *testing.T) {
 	f := liveWebFetch(t)
 	previous := maxOperationsPerGrant
 	maxOperationsPerGrant = 1
 	t.Cleanup(func() { maxOperationsPerGrant = previous })
 
 	session, _ := f.approve(t, testTicket("7"), true)
-	long := url.Values{"rid": {"holds-the-slot"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"sleep 2"}, "timeout_seconds": {"900"}}
-	_, held := fetchDoc(t, session+"/call?"+long.Encode())
+	long := session + "/call?" + url.Values{"rid": {"holds-the-slot"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"sleep 2"}, "timeout_seconds": {"900"}}.Encode()
+	_, held := fetchDoc(t, long)
 	if held["status"] != "running" && held["status"] != "queued" {
 		t.Fatalf("the first job did not take the slot: %v", held)
 	}
+	// The response to that call could have been lost. Replaying its URL while
+	// the adapter is full must return the job, not "nothing ran".
+	status, replay := fetchDoc(t, long)
+	if status != 200 || replay["job_id"] != held["job_id"] {
+		t.Fatalf("a replay on a full adapter lost its job: %d %v", status, replay)
+	}
+	if replay["error_code"] != nil || replay["execution_started"] != nil {
+		t.Fatalf("a replay was answered as a refusal: %v", replay)
+	}
+	if replay["status"] != "running" && replay["status"] != "queued" {
+		t.Fatalf("the replayed job is not still running: %v", replay)
+	}
+	// A genuinely new operation is the only thing capacity may refuse.
 	busy := url.Values{"rid": {"refused"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"printf webfetch-ok"}}
 	status, refused := fetchDoc(t, session+"/call?"+busy.Encode())
 	if status != 429 || refused["error_code"] != "adapter_busy" || refused["execution_started"] != false {
@@ -487,9 +500,41 @@ func TestWebFetchBusyAdapterRefusesWithoutTouchingTheLedger(t *testing.T) {
 	if finished := awaitJob(t, held); finished["status"] != "done" {
 		t.Fatalf("the long job did not finish: %v", finished)
 	}
-	_, retried := fetchDoc(t, session+"/call?"+busy.Encode())
-	if retried = awaitJob(t, retried); retried["status"] != "done" {
+	retried := map[string]any{}
+	if _, retried = fetchDoc(t, session+"/call?"+busy.Encode()); awaitJob(t, retried)["status"] != "done" {
 		t.Fatalf("the slot was not released after a terminal state: %v", retried)
+	}
+}
+
+// A rid that already names a different operation is a stop sign, not a licence
+// to run the same work somewhere else.
+func TestWebFetchRidConflictTellsTheCallerToStop(t *testing.T) {
+	f := liveWebFetch(t)
+	session, _ := f.approve(t, testTicket("3"), true)
+	first := url.Values{"rid": {"taken"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"printf webfetch-ok"}}
+	_, job := fetchDoc(t, session+"/call?"+first.Encode())
+	if awaitJob(t, job)["status"] != "done" {
+		t.Fatalf("first attempt=%v", job)
+	}
+	first.Set("command", "echo different")
+	status, clash := fetchDoc(t, session+"/call?"+first.Encode())
+	if status != 409 || clash["error_code"] != "rid_conflict" {
+		t.Fatalf("a reused rid with new arguments = %d %v", status, clash)
+	}
+	// execution_started: false is the signal a model reads as "safe to use a
+	// new rid". The earlier operation under this rid may have run, so neither
+	// that flag nor a new-rid suggestion belongs here.
+	if _, present := clash["execution_started"]; present {
+		t.Fatalf("a conflict claimed something about execution: %v", clash)
+	}
+	text := strings.ToLower(fmt.Sprint(clash["error"]) + " " + fmt.Sprint(clash["instruction"]))
+	for _, forbidden := range []string{"new rid", "another rid", "different rid"} {
+		if strings.Contains(text, forbidden) && !strings.Contains(text, "do not move the same work to another rid") {
+			t.Fatalf("a conflict invited a new rid: %v", clash["instruction"])
+		}
+	}
+	if !strings.Contains(text, "already names a different operation") || !strings.Contains(text, "stop") {
+		t.Fatalf("a conflict does not say what happened or to stop: %v", clash)
 	}
 }
 

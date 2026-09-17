@@ -46,8 +46,12 @@ moving it from 30 to 300 would change that hash and turn a legitimate transport
 retry into a 409. The default is applied at dispatch only; an explicitly supplied
 value stays in the hash and still conflicts when it changes. Jobs created before
 this deploy did record the old default, so a pre-deploy rid replayed with no
-`timeout_seconds` will 409 once. Grants live at most 60 minutes, so that window
-closes by itself.
+`timeout_seconds` will 409 once. No compatibility shim was written for it:
+grants live at most 60 minutes, so the window closes by itself, and the 409 is
+the safe answer anyway. `rid_conflict` tells the caller to stop and read the
+earlier job's result; it deliberately carries no `execution_started` and never
+suggests moving the work to a new rid, because the operation recorded under that
+rid may well have run.
 
 **`unknown` is now derived from the job's effective deadline** — the earlier of
 the requested timeout and the end of the grant, one value shared by execution,
