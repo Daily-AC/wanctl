@@ -332,3 +332,127 @@ func TestWebFetchEditIsGatedAsAWriteNotAsARead(t *testing.T) {
 		t.Fatalf("the approved edit did not apply: %q", data)
 	}
 }
+
+// A file bigger than one response is the ordinary case for a log. The cap has to
+// cut it on a line boundary and the caller has to be able to walk the rest.
+func TestWebFetchReadTextCutsAtTheResponseCapAndPagesOn(t *testing.T) {
+	f := liveWebFetch(t)
+	session, _ := f.approve(t, testTicket("a"), true)
+	path := filepath.Join(f.root, "big.log")
+	var file strings.Builder
+	for i := 1; file.Len() <= MaxOutputBytes*2; i++ {
+		fmt.Fprintf(&file, "%d %s\n", i, strings.Repeat("x", 120))
+	}
+	whole := file.String()
+	write(t, path, whole)
+	total := strings.Count(whole, "\n")
+	target := f.device.Target()
+
+	values := url.Values{"rid": {"cap-1"}, "tool": {"read_text"}, "target": {target}, "path": {path}}
+	var rebuilt strings.Builder
+	line, pages := 1, 0
+	for line <= total {
+		pages++
+		values.Set("rid", fmt.Sprintf("cap-%d", pages))
+		if line > 1 {
+			values.Set("offset", fmt.Sprint(line))
+		}
+		job := f.call(t, session, values)
+		if job["status"] != "done" {
+			t.Fatalf("page %d failed: %v", pages, job)
+		}
+		res := result(t, job)
+		content := res["content"].(string)
+		if len(content) > MaxOutputBytes {
+			t.Fatalf("page %d returned %d bytes, cap is %d", pages, len(content), MaxOutputBytes)
+		}
+		if res["first_line"] != float64(line) || res["total_lines"] != float64(total) {
+			t.Fatalf("page %d = %v", pages, res)
+		}
+		last := int(res["last_line"].(float64))
+		if res["truncated"] == true {
+			if !strings.HasSuffix(content, "\n") {
+				t.Fatalf("page %d was cut mid-line", pages)
+			}
+			if res["next_offset"] != float64(last+1) {
+				t.Fatalf("page %d says continue at %v, last line was %d", pages, res["next_offset"], last)
+			}
+		}
+		rebuilt.WriteString(content)
+		line = last + 1
+	}
+	if pages < 2 {
+		t.Fatalf("a %d-byte file came back in one page", len(whole))
+	}
+	if rebuilt.String() != whole {
+		t.Fatalf("paging a capped file lost or repeated something: %d bytes of %d", rebuilt.Len(), len(whole))
+	}
+}
+
+// A replay is the recovery for a lost response, so it has to hand back the job
+// that was recorded — not look at the file again, which would quietly answer a
+// question the caller never asked.
+func TestWebFetchReplayReturnsTheStoredReadNotAFreshOne(t *testing.T) {
+	f := liveWebFetch(t)
+	session, _ := f.approve(t, testTicket("d"), true)
+	path := filepath.Join(f.root, "moving.txt")
+	write(t, path, "before\n")
+	values := url.Values{"rid": {"stored"}, "tool": {"read_text"}, "target": {f.device.Target()}, "path": {path}}
+	first := f.call(t, session, values)
+	if result(t, first)["content"] != "before\n" {
+		t.Fatalf("first read = %v", result(t, first))
+	}
+
+	write(t, path, "after\n")
+	_, again := fetchDoc(t, session+"/call?"+values.Encode())
+	if again["job_id"] != first["job_id"] || again["duplicate_request"] != true {
+		t.Fatalf("a replay did not return the recorded job: %v", again)
+	}
+	if got := result(t, again)["content"]; got != "before\n" {
+		t.Fatalf("a replay read the file again: content = %q", got)
+	}
+	// A new rid is how a caller sees the file as it is now.
+	values.Set("rid", "stored-2")
+	if got := result(t, f.call(t, session, values))["content"]; got != "after\n" {
+		t.Fatalf("a new rid did not see the current file: content = %q", got)
+	}
+}
+
+// Everything an edit carries travels in a query string. A literal plus, a
+// percent and a multi-line replacement have to arrive as themselves.
+func TestWebFetchEditCarriesAwkwardCharactersThroughTheQuery(t *testing.T) {
+	f := liveWebFetch(t)
+	session, _ := f.approve(t, testTicket("c"), true)
+	path := filepath.Join(f.root, "awkward.conf")
+	write(t, path, "rate = 50% + 1\nkeep me\n")
+	target := f.device.Target()
+
+	replacement := "rate = 100% + 2\n# 100%+ headroom, c:\\temp\n# 第二行"
+	job := f.call(t, session, url.Values{
+		"rid": {"awkward-1"}, "tool": {"edit_text"}, "target": {target}, "path": {path},
+		"old": {"rate = 50% + 1"}, "new": {replacement},
+	})
+	if job["status"] != "done" || result(t, job)["replaced"] != float64(1) {
+		t.Fatalf("an edit with +, %% and newlines failed: %v", job)
+	}
+	want := replacement + "\nkeep me\n"
+	data, _ := os.ReadFile(path)
+	if string(data) != want {
+		t.Fatalf("the query mangled the replacement:\n got %q\nwant %q", data, want)
+	}
+	if result(t, job)["sha256"] != fileSHA(t, path) {
+		t.Fatalf("edit hash = %v", result(t, job)["sha256"])
+	}
+
+	// An explicit all=false is a different URL from no all at all, so reusing
+	// the rid with it is a conflict rather than a replay.
+	base := url.Values{"rid": {"all-identity"}, "tool": {"edit_text"}, "target": {target}, "path": {path}, "old": {"keep me"}, "new": {"kept"}}
+	if applied := f.call(t, session, base); applied["status"] != "done" {
+		t.Fatalf("the plain edit failed: %v", applied)
+	}
+	base.Set("all", "false")
+	status, clash := fetchDoc(t, session+"/call?"+base.Encode())
+	if status != 409 || clash["error_code"] != "rid_conflict" {
+		t.Fatalf("an explicit all=false replayed a call that omitted it: %d %v", status, clash)
+	}
+}

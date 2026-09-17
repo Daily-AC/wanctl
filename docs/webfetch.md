@@ -172,11 +172,11 @@ Use `edit_text`, not `write_text`, to change a file that already exists:
 `write_text` replaces the whole file and discards anything written to it since
 the last read. An edit's `old` and `new` travel inside the URL, so the 8 KiB URL
 limit — not a separate cap — is what bounds one edit; edit a span at a time.
-Refusals (`old` not found, `old` found more than once without `all=true`, a
-`expected_sha256` that no longer matches) leave the file untouched and return
-`error_code: "file_refused"` with `execution_started: false`, the occurrence
-count or the file's current `sha256`, and are corrected and resubmitted under a
-**new rid**. A read is gated by the device's read permission and an edit by its
+Refusals (`old` not found, `old` found more than once without `all=true`, an
+`expected_sha256` that no longer matches) do not replace the target file and
+return `error_code: "file_refused"` with `execution_started: false`, the
+occurrence count or the file's current `sha256`, and are corrected and
+resubmitted under a **new rid**. A read is gated by the device's read permission and an edit by its
 write permission, exactly like `read_text` and `write_text`; both appear in the
 device's event log as `READ`/`EDIT` on the path.
 
@@ -209,11 +209,15 @@ same job; changing parameters returns 409. The durable ledger records the job
 before dispatch, so repeated fetches and an adapter restart never automatically
 repeat an operation. If a response is lost, fetch the identical URL
 again under the same `rid` and arguments: that returns the job already recorded
-rather than running it twice. A **new** rid is correct only after a result that
+rather than running it twice — the STORED result of that job, not a fresh one,
+so a read replayed after the file changed still shows what the first read
+returned. An `edit_text` whose session ended without an answer is recorded as
+`unknown`, not as a refusal: a committed edit whose reply was lost and a device
+too old to know the verb are indistinguishable from the controller's side. A **new** rid is correct only after a result that
 says nothing ran (`pairing_required` or `adapter_busy`, both with
 `execution_started: false`), or after a `file_refused` read or edit, which also
-carries `execution_started: false` because the device decided and changed
-nothing; never after a plain `failed` or after `unknown`. An interrupted
+carries `execution_started: false` because the device decided and did not
+replace the target file; never after a plain `failed` or after `unknown`. An interrupted
 call may have produced a side effect even without a result: `unknown` means the
 owner must inspect the device before deciding whether to try a new request. This
 is not a claim of exactly-once execution of arbitrary external effects.

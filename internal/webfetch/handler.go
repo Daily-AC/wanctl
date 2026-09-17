@@ -122,9 +122,12 @@ type Operation struct {
 	Limit  *int `json:"limit,omitempty"`
 	// edit_text. New is required but may be empty, which deletes Old, so an
 	// empty replacement has one canonical form rather than being an omission.
-	Old         string `json:"old,omitempty"`
-	New         string `json:"new,omitempty"`
-	All         bool   `json:"all,omitempty"`
+	Old string `json:"old,omitempty"`
+	New string `json:"new,omitempty"`
+	// Nil when the caller did not send all. An explicit all=false is a
+	// different URL from no all at all and has to stay one, or a caller that
+	// spells the default out cannot tell a replay from a fresh operation.
+	All         *bool  `json:"all,omitempty"`
 	ExpectedSHA string `json:"expected_sha256,omitempty"`
 	// Nil when the caller did not send timeout_seconds. The default is applied
 	// at dispatch and never written into the canonical payload: a replay of an
@@ -528,13 +531,11 @@ func parseOperation(q url.Values) (Operation, error) {
 				return op, fmt.Errorf("new is required and must be UTF-8; use new= explicitly to delete old")
 			}
 			if q.Has("all") {
-				switch q.Get("all") {
-				case "true":
-					op.All = true
-				case "false":
-				default:
+				every := q.Get("all") == "true"
+				if !every && q.Get("all") != "false" {
 					return op, fmt.Errorf(`all must be "true" or "false"`)
 				}
+				op.All = &every
 			}
 			if q.Has("expected_sha256") {
 				op.ExpectedSHA = q.Get("expected_sha256")
@@ -713,64 +714,90 @@ func (h *Handler) execute(task work) {
 		edit, err = c.EditFile(ctx, client.EditRequest{
 			Target: task.operation.Target, Path: task.operation.Path,
 			Old: task.operation.Old, New: task.operation.New,
-			All: task.operation.All, ExpectedSHA: task.operation.ExpectedSHA,
+			All: flag(task.operation.All), ExpectedSHA: task.operation.ExpectedSHA,
 		})
 		if err == nil {
 			result["replaced"], result["sha256"], result["size_bytes"] = edit.Replaced, edit.SHA256, edit.SizeBytes
 		}
 	}
 	if err != nil {
-		result["error"] = boundedText(err.Error(), 4096)
-		var rejected *client.RejectError
-		var untrusted *client.TrustRequiredError
-		var refused *client.FileOpError
-		var unsupported *client.UnsupportedError
-		// The device answered and said what it did. Anything else is a lost
-		// outcome, and for a tool that can change the device that is unknown.
-		decided := errors.As(err, &rejected) || errors.As(err, &untrusted) ||
-			errors.As(err, &refused) || errors.As(err, &unsupported)
-		if !decided && task.operation.Tool != "read_text" {
-			state = "unknown"
-			result["instruction"] = unknownInstruction
-		}
-		if errors.As(err, &refused) {
-			// A refused read or edit wrote nothing, and the caller's way out is
-			// a corrected operation — which is a different operation, so it
-			// needs a new rid. Saying only "failed" would strand it: the rules
-			// forbid reusing a rid with new arguments and forbid a new rid
-			// after a failure whose effect is unknown. This one is not unknown.
-			result["error_code"], result["execution_started"] = "file_refused", false
-			if r := refused.Result; r != nil {
-				if r.SHA256 != "" {
-					result["sha256"] = r.SHA256
-				}
-				if r.SizeBytes != 0 {
-					result["size_bytes"] = r.SizeBytes
-				}
-				if r.Occurrences != 0 {
-					result["occurrences"] = r.Occurrences
-				}
-			}
-			result["instruction"] = refusalInstruction(task.operation.Tool)
-		}
-		if errors.As(err, &unsupported) {
-			result["error_code"], result["execution_started"] = "device_agent_too_old", false
-			result["instruction"] = "Nothing ran. This device's wanctl agent predates read_text and edit_text. Ask the human to run `wanctl update` on the device; until they have, read files with exec and write them with write_text."
-		}
-		if errors.As(err, &rejected) {
-			result["error"] = boundedText(rejected.Reason, 4096)
-			if len(rejected.PairingURL) <= 2048 && h.ownerLink(rejected.PairingURL) {
-				result["pairing_url"] = rejected.PairingURL
-				result["error_code"] = "pairing_required"
-				result["execution_started"] = false
-				result["human_checkpoint"] = humanCheckpoints()[1]
-				result["instruction"] = "Step 2 of 2: pairing. Nothing ran. Show the human pairing_url with human_checkpoint.summary (summary_zh in Chinese), and wait until they say they approved it — never fetch that link yourself. Then submit the same operation again under a NEW rid. This job stays failed, and reusing its rid only returns this same failure."
-			}
-		}
+		state = h.recordFailure(task.operation.Tool, err, result)
 		return
 	}
 	result["ok"] = true
 	state = "done"
+}
+
+// recordFailure turns one operation's error into the result a model reads and
+// the state the ledger keeps. It is a method of its own so that each
+// classification can be tested without a device on the other end, which is the
+// only way to exercise the ones a healthy device never produces.
+func (h *Handler) recordFailure(tool string, err error, result map[string]any) string {
+	result["error"] = boundedText(err.Error(), 4096)
+	var rejected *client.RejectError
+	var untrusted *client.TrustRequiredError
+	var refused *client.FileOpError
+	var unsupported *client.UnsupportedError
+
+	// An UnsupportedError is not only a device saying it has never heard of this
+	// verb. internal/client raises the same error when the session simply ends
+	// after the request went out, and an edit committed a moment before the
+	// connection dropped is then indistinguishable from one that never started.
+	// A read pays nothing for that confusion — neither case wrote anything — but
+	// for an edit it is the difference between "send it again" and "a file may
+	// already have changed", so an edit keeps the cause-neutral unknown until
+	// the client can tell the two apart.
+	tooOld := errors.As(err, &unsupported) && tool != "edit_text"
+	// The device answered and said what it did. Anything else is a lost outcome,
+	// and for a tool that can change the device that is unknown.
+	decided := errors.As(err, &rejected) || errors.As(err, &untrusted) ||
+		errors.As(err, &refused) || tooOld
+
+	state := "failed"
+	if !decided && tool != "read_text" {
+		state = "unknown"
+		result["instruction"] = unknownInstruction
+	}
+	if errors.As(err, &unsupported) && !tooOld {
+		// The client's own sentence names a cause it cannot know. Replace it
+		// rather than let a model read "run wanctl update" as "nothing ran".
+		result["error"] = "the device session ended without an answer to this edit. An agent too old to know edit_text ends it that way, and so does an edit that was applied just before its reply was lost; the adapter cannot tell those apart."
+	}
+	if errors.As(err, &refused) {
+		// A refused read or edit did not replace the target file, and the
+		// caller's way out is a corrected operation — which is a different
+		// operation, so it needs a new rid. Saying only "failed" would strand
+		// it: the rules forbid reusing a rid with new arguments and forbid a new
+		// rid after a failure whose effect is unknown. This one is not unknown.
+		result["error_code"], result["execution_started"] = "file_refused", false
+		if r := refused.Result; r != nil {
+			if r.SHA256 != "" {
+				result["sha256"] = r.SHA256
+			}
+			if r.SizeBytes != 0 {
+				result["size_bytes"] = r.SizeBytes
+			}
+			if r.Occurrences != 0 {
+				result["occurrences"] = r.Occurrences
+			}
+		}
+		result["instruction"] = refusalInstruction(tool)
+	}
+	if tooOld {
+		result["error_code"], result["execution_started"] = "device_agent_too_old", false
+		result["instruction"] = "Nothing ran. This device's wanctl agent predates read_text. Ask the human to run `wanctl update` on the device; until they have, read the file with exec instead."
+	}
+	if errors.As(err, &rejected) {
+		result["error"] = boundedText(rejected.Reason, 4096)
+		if len(rejected.PairingURL) <= 2048 && h.ownerLink(rejected.PairingURL) {
+			result["pairing_url"] = rejected.PairingURL
+			result["error_code"] = "pairing_required"
+			result["execution_started"] = false
+			result["human_checkpoint"] = humanCheckpoints()[1]
+			result["instruction"] = "Step 2 of 2: pairing. Nothing ran. Show the human pairing_url with human_checkpoint.summary (summary_zh in Chinese), and wait until they say they approved it — never fetch that link yourself. Then submit the same operation again under a NEW rid. This job stays failed, and reusing its rid only returns this same failure."
+		}
+	}
+	return state
 }
 
 func value(n *int) int {
@@ -780,14 +807,16 @@ func value(n *int) int {
 	return *n
 }
 
+func flag(b *bool) bool { return b != nil && *b }
+
 // refusalInstruction tells the caller what a device-side refusal leaves behind
 // and how to get out of it. Both tools left the file alone; only an edit has a
 // correction to make.
 func refusalInstruction(tool string) string {
 	if tool == "edit_text" {
-		return "The device refused this edit and wrote nothing; the file is exactly as it was. Read the error: 'not found' means your old text does not appear, so read the file again rather than guessing at whitespace; 'occurs N times' means add surrounding lines to old, or pass all=true if you really mean every occurrence; 'changed since it was read' carries the file's current sha256, so read it again and redo the edit against that text. Then send the corrected edit under a NEW rid. Do not fall back to exec or write_text."
+		return "The device refused this edit; the target file was not replaced and still holds exactly the text it had. Read the error: 'not found' means your old text does not appear, so read the file again rather than guessing at whitespace; 'occurs N times' means add surrounding lines to old, or pass all=true if you really mean every occurrence; 'changed since it was read' carries the file's current sha256, so read it again and redo the edit against that text. Then send the corrected edit under a NEW rid. Do not fall back to exec or write_text."
 	}
-	return "The device refused this read and nothing changed. A file that is not UTF-8 text cannot be read with this tool at all — do not retry it here. Correct the path or the line range and read again under a NEW rid."
+	return "The device refused this read; no file was touched. A file that is not UTF-8 text cannot be read with this tool at all — do not retry it here. Correct the path or the line range and read again under a NEW rid."
 }
 
 // fitRead cuts a device read down to what one WebFetch response may carry. The

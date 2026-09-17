@@ -39,6 +39,22 @@ whole downloaded file, which was the same as the content. Now content is a
 window and the file's size has its own field, so `byte_count` would have been a
 third number meaning neither. `write_text` keeps it.
 
+**A lost answer to an edit is `unknown`, not "the agent is too old".**
+`internal/client` raises one `UnsupportedError` for two different things: a
+device replying `unknown request`, and a session that simply ended after the
+request went out. The second is what a committed edit looks like when its reply
+is lost. Reporting that as `device_agent_too_old` with
+`execution_started: false` would send a model round the loop *edit applied →
+"nothing ran" → new rid → "old not found" → correct it → apply again*, a double
+edit. The two carry no field that tells them apart, so `edit_text` treats every
+`UnsupportedError` as `unknown` with the cause-neutral instruction, and replaces
+the client's sentence, which names a cause it cannot know. `read_text` keeps the
+actionable answer because neither cause wrote anything. **The client-side
+classification fix is in flight on another branch**; once an
+`UnsupportedError` can be told apart from a lost session, the explicit
+`unknown request` case should go back to `device_agent_too_old` — the check is
+the `tooOld` line in `recordFailure`.
+
 **A refused read or edit says `execution_started: false`.** Before this change
 the only results carrying that flag were `pairing_required` and `adapter_busy`,
 and the security rules say a new rid is correct only after one of them. An edit
@@ -198,3 +214,23 @@ And a refusal, with the sha the caller needs to recover:
   insensitively, but the canonical payload keeps what was sent, so the same rid
   with a differently-cased sha is a 409. Every sha a caller has comes from a
   `read_text` result, which is lowercase.
+
+
+## Fix round 1
+
+Cross-vendor review of PR #94 blocked on one P1 and raised three more. All four
+are in, on the same branch. PostgreSQL 16 was started in Docker again exactly as
+above and `go test -count=1 ./...` run against it; `internal/webfetch` is now 32
+tests, 0 skipped.
+
+| Finding | Change | Test |
+| --- | --- | --- |
+| P1 — every `UnsupportedError` became `device_agent_too_old` + `execution_started: false`, but `internal/client` raises it for a bare EOF too, so an edit committed just before the connection dropped was reported as "nothing ran" and a retry would apply it twice | The error block moved out of `execute` into `Handler.recordFailure`. `tooOld` is now `errors.As(…) && tool != "edit_text"`, so an edit falls through to `unknown` with `unknownInstruction`; its `error` text is replaced with a sentence that names both possible causes instead of the client's single one. `read_text` is unchanged | `TestAnEditWhoseAnswerNeverArrivedStaysUnknown` — edit → `unknown`, no `execution_started`, no `error_code`, and none of `write_text` / `wanctl update` / `nothing ran` / `does not support` in the text; read → `failed` + `device_agent_too_old` |
+| P2 — explicit `all=false` hashed the same as an omitted `all` | `Operation.All` is `*bool`; `parseOperation` stores a pointer for either spelling and `flag()` applies the default at dispatch | `TestOmittedFileParametersAreNotPartOfTheReplayIdentity` now asserts `"all":false` enters the identity and differs from omitted; `TestWebFetchEditCarriesAwkwardCharactersThroughTheQuery` replays the same rid with `all=false` added and gets 409 `rid_conflict` |
+| 3 — `file_refused` claimed nothing was written, but a failed rename can leave a temp file behind | The guarantee is narrowed to "the target file was not replaced" in `refusalInstruction`, the `new_rid_only_when_nothing_ran` security rule, both docs and the portal help page | Existing refusal assertions still pass; the wording is prose, not asserted on |
+| 4 — missing tests | Three added, plus one unit test | `TestFitReadCutsManyLinesAtTheResponseCapWithoutLosingOne` (cut lands on a newline, `next_offset` equals the number of the next line in the remainder); `TestWebFetchReadTextCutsAtTheResponseCapAndPagesOn` (a ~66 KiB file paged end to end through a real device and reassembled byte for byte, at least two pages); `TestWebFetchReplayReturnsTheStoredReadNotAFreshOne` (file changed between the call and the replay; the replay still returns the old content, a new rid sees the new); `TestWebFetchEditCarriesAwkwardCharactersThroughTheQuery` (literal `+`, `%`, a backslash and a three-line non-ASCII `new`, compared byte for byte on disk) |
+
+The manifest now states that a replay is a stored result rather than a fresh
+read, in both `read_text`'s description and the
+`retry_a_lost_response_on_the_same_url` security rule, and both docs say the
+same.
