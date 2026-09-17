@@ -224,9 +224,13 @@ func TestPeersAndSharedCarriesGrantedDevices(t *testing.T) {
 	}
 	c := respond(`{"namespace":"waerjili123","devices":["mine"],"aliases":{},
 	  "shared":[{"owner":"daily-ac","device":"8e894048","label":"bms-20558674","target":"daily-ac/8e894048","online":true}]}`)
-	devices, _, shared, err := c.PeersAndShared(context.Background())
+	view, err := c.PeersAndShared(context.Background())
+	devices, shared := view.Devices, view.Shared
 	if err != nil || len(devices) != 1 || len(shared) != 1 {
 		t.Fatalf("peers = %v, shared = %+v, err = %v", devices, shared, err)
+	}
+	if view.Namespace != "waerjili123" {
+		t.Fatalf("namespace = %q; callers need it to build the canonical ns/device target", view.Namespace)
 	}
 	if shared[0].Target != "daily-ac/8e894048" || shared[0].Label != "bms-20558674" || !shared[0].Online {
 		t.Fatalf("shared device = %+v", shared[0])
@@ -237,8 +241,8 @@ func TestPeersAndSharedCarriesGrantedDevices(t *testing.T) {
 	}
 
 	old := respond(`{"namespace":"alice","devices":["legion"],"aliases":{}}`)
-	if _, _, shared, err := old.PeersAndShared(context.Background()); err != nil || len(shared) != 0 {
-		t.Fatalf("relay without shared support = %+v, %v", shared, err)
+	if legacy, err := old.PeersAndShared(context.Background()); err != nil || len(legacy.Shared) != 0 {
+		t.Fatalf("relay without shared support = %+v, %v", legacy.Shared, err)
 	}
 }
 

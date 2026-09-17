@@ -380,6 +380,10 @@ func cmdRelay(args []string) error {
 			return fmt.Errorf("mcp handler: %w", err)
 		}
 		r.SetMCPHandler(h)
+		// The MCP server keeps its pinned device identities in this process's
+		// memory. Unbinding a device has to reach them, the same way it reaches
+		// the portal's own store (ADR 0002).
+		r.SetPinForgetter(mcppkg.ForgetPinnedDevice)
 		log.Print("wanctl relay: MCP server enabled at /mcp (alias /wanctl-mcp, Streamable HTTP)")
 	}
 	if seedHex := os.Getenv("WANCTL_WEBFETCH_SEED"); seedHex != "" {
@@ -913,10 +917,11 @@ func cmdPeers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	devs, aliases, shared, err := c.PeersAndShared(ctx)
+	view, err := c.PeersAndShared(ctx)
 	if err != nil {
 		return err
 	}
+	devs, aliases, shared := view.Devices, view.Aliases, view.Shared
 	if len(devs) == 0 && len(shared) == 0 {
 		fmt.Println("no devices online for this token")
 		return nil

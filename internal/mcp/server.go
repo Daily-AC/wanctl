@@ -322,6 +322,52 @@ func (s *sessionStore) trustForLocked(namespace string) *transport.Store {
 	return store
 }
 
+// forgetPin drops whatever identity is pinned under one namespace/device,
+// across every hosted session that namespace has open.
+//
+// Without it the hosted pin is the dead end ADR 0002 describes: a reinstalled
+// device presents a new certificate, every call fails with an identity
+// mismatch, and nothing short of restarting the relay clears it — the store is
+// process memory, so there is no file an operator could delete either. The
+// portal answers this by forgetting its pin when the owner unbinds the device
+// (Server.forgetPin), and unbinding is the owner saying over SSO that this
+// name no longer refers to that machine. This is the same rule for the same
+// reason; the relay calls it through ForgetPinnedDevice.
+func (s *sessionStore) forgetPin(namespace, device string) {
+	if s == nil || namespace == "" || device == "" {
+		return
+	}
+	name := namespace + "/" + device
+	// Two places hold pins: the per-namespace store OAuth sessions share, and
+	// the private store a session-keyed login gets. Both have to forget, or a
+	// client that never took the OAuth path keeps the stale pin.
+	var stores []*transport.Store
+	s.mu.Lock()
+	if store := s.trust[namespace]; store != nil {
+		stores = append(stores, store)
+	}
+	for _, r := range s.m {
+		r.mu.Lock()
+		if r.namespace == namespace && r.known != nil {
+			stores = append(stores, r.known)
+		}
+		r.mu.Unlock()
+	}
+	s.mu.Unlock()
+	for _, store := range stores {
+		_ = store.RemoveName(name)
+	}
+}
+
+// ForgetPinnedDevice is the hook the relay calls when an owner unbinds a
+// device, so the hosted MCP store forgets it the way the portal's does.
+// Deliberately not called on re-registration: a device that came back with a
+// new certificate clearing its own alarm is the alternative ADR 0002 rejected.
+// Safe before any handler exists, and a no-op over stdio.
+func ForgetPinnedDevice(namespace, device string) {
+	sessions.forgetPin(namespace, device)
+}
+
 // gcLoop prunes idle HTTP sessions every minute (TTL 1h). Cheap because state
 // is small and re-login is just one user click.
 func (s *sessionStore) gcLoop() {
@@ -715,16 +761,16 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpLogout)
 
 	s.AddTool(mcpapi.NewTool("wanctl_peers",
-		mcpapi.WithDescription("List devices currently reachable by the active controller token. Returns each stable device ID with its display label; structured content contains backward-compatible devices and aliases fields. Use this FIRST when the user asks 'what devices are available' or before guessing a target."),
+		mcpapi.WithDescription("List devices currently reachable by the active controller token. Returns each stable device ID with its display label and whether this session has pinned its identity yet ('identity: pinned' / 'identity: unpinned'); structured content contains backward-compatible devices and aliases fields plus an identity map keyed by the canonical namespace/device. Purely a local lookup — it dials nothing. Use this FIRST when the user asks 'what devices are available' or before guessing a target."),
 	), mcpPeers)
 
 	s.AddTool(mcpapi.NewTool("wanctl_pair",
-		mcpapi.WithDescription("Check whether the target device already trusts this MCP session's controller identity, and if not, return the device-side pairing URL up front. On first contact this may instead return DEVICE IDENTITY CONFIRMATION REQUIRED; a human must independently verify its exact target and fingerprint, then call wanctl_trust_server before retrying. Once the server identity is pinned, returns '✓ already trusted' OR 'PAIRING REQUIRED' with a URL to relay VERBATIM to the user."),
+		mcpapi.WithDescription("Check whether the target device already trusts this MCP session's controller identity, and if not, return the device-side pairing URL up front. On first contact this may instead return DEVICE IDENTITY CONFIRMATION REQUIRED; answer it yourself by calling wanctl_trust_server with the target and fingerprint from that result, then retry — no need to ask the user first. Once the server identity is pinned, returns '✓ already trusted' OR 'PAIRING REQUIRED' with a URL to relay VERBATIM to the user."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS for shared devices.")),
 	), mcpPair)
 
 	s.AddTool(mcpapi.NewTool("wanctl_exec",
-		mcpapi.WithDescription("Run a shell command, or a whole script, on a remote wanctl-enrolled device over the encrypted relay. Returns the device's stdout, stderr, and exit code. Pass EITHER 'command' (a one-liner) OR 'script' (multi-line source) — prefer 'script' for anything with a $, a quote inside a quote, or more than one statement, because a script is transported encoded and is never parsed by the device's shell. If the device hasn't paired this controller yet, the result is isError=true with a 'PAIRING REQUIRED' message that carries a URL — surface that URL VERBATIM to the user; do not paraphrase."),
+		mcpapi.WithDescription("Run a shell command, or a whole script, on a remote wanctl-enrolled device over the encrypted relay. Returns the device's stdout, stderr, and exit code. Pass EITHER 'command' (a one-liner) OR 'script' (multi-line source) — prefer 'script' for anything with a $, a quote inside a quote, or more than one statement, because a script is transported encoded and is never parsed by the device's shell. If the device hasn't paired this controller yet, the result is isError=true with a 'PAIRING REQUIRED' message that carries a URL — surface that URL VERBATIM to the user; do not paraphrase. If instead it says DEVICE IDENTITY CONFIRMATION REQUIRED, that is first contact: call wanctl_trust_server with the target and fingerprint it gives you and retry, without asking the user."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS for shared devices. If exactly one device is online for this token, you may pass empty string.")),
 		mcpapi.WithString("command", mcpapi.Description("A one-liner for the device's default shell (sh on Unix, powershell on Windows). WARNING: this string is SOURCE CODE for that shell and is parsed there. On Windows that means writing `powershell -Command \"...$x...\"` gets parsed TWICE — the outer shell expands $x to nothing and the inner script fails with a misleading 'term is not recognized'. Use 'script' instead of nesting an interpreter here.")),
 		mcpapi.WithString("script", mcpapi.Description("Script SOURCE to run on the device (not a file path). Sent encoded, so quoting and character-set rules do not apply: $, backticks, nested quotes and non-ASCII text all arrive literally. Requires 'interp'. Use this for multi-statement work; it is the same single call as 'command'. Scripts over ~9KB must be pushed as a file and run by path instead.")),
@@ -798,9 +844,9 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpTrust)
 
 	s.AddTool(mcpapi.NewTool("wanctl_trust_server",
-		mcpapi.WithDescription("Device identity pinning is disabled on the MCP surface by default because a model can repeat the fingerprint supplied by a hostile relay. In stdio mode a human pins it outside the model with `wanctl trust server`; shared HTTP mode stays fail-closed on first contact. Operators accepting the weaker legacy flow may explicitly set WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Exact owner/device target from the confirmation error.")),
-		mcpapi.WithString("fingerprint", mcpapi.Required(), mcpapi.Description("Exact SHA256 fingerprint verified with the device owner.")),
+		mcpapi.WithDescription("Pin a device's identity for THIS session. Call it as soon as any tool returns DEVICE IDENTITY CONFIRMATION REQUIRED, passing the target and fingerprint copied VERBATIM from that result, then retry the call that failed — do not ask the user to confirm the fingerprint first, because your MCP client's own approval prompt is already the human checkpoint. This is a first-contact step only: it records what the device presented right now, so later calls can detect a change. If a call instead returns 'DEVICE IDENTITY MISMATCH', do NOT call this tool — report both the pinned and the presented fingerprint to the user and stop; re-pinning is a human's decision at a terminal. Note: the handler refuses unless the operator has set WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1 (the hosted endpoint does; a local stdio server usually does not, and there a human runs `wanctl trust server` instead)."),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("The owner/device target, copied verbatim from the DEVICE IDENTITY CONFIRMATION REQUIRED result.")),
+		mcpapi.WithString("fingerprint", mcpapi.Required(), mcpapi.Description("The SHA256:... fingerprint, copied verbatim from the same result.")),
 	), mcpTrustServer)
 
 	s.AddTool(mcpapi.NewTool("wanctl_rules",
@@ -848,6 +894,71 @@ func pairingResult(rej *client.RejectError) *mcpapi.CallToolResult {
 	return mcpapi.NewToolResultError(fmt.Sprintf(
 		"PAIRING REQUIRED. This controller is not yet trusted on the target device.\n\nGive this URL to the user VERBATIM (do not shorten, paraphrase, or wrap):\n\n%s\n\nAsk them to open it, click 「信任并继续」, then retry your previous tool call. URL is valid for 5 minutes. Reason: %s",
 		rej.PairingURL, rej.Reason,
+	))
+}
+
+// hostedSession reports whether the caller reached us over the shared HTTP
+// endpoint. That, not an env var, is what decides who an error is written for:
+// over stdio a human is at a terminal and can run the CLI, while over HTTP the
+// only reader is a model whose host already prompts its user before every tool
+// call.
+func hostedSession(sess sessionAPI) bool {
+	_, hosted := sess.(*remoteSession)
+	return hosted
+}
+
+// dialErrorResult turns a failed dial into the result the caller should act on.
+// Every tool that reaches a device goes through it, so the three things that
+// can block a first call -- the device does not trust this controller, this
+// session has not pinned the device, the device's identity changed -- read the
+// same way wherever they surface.
+func dialErrorResult(sess sessionAPI, err error) *mcpapi.CallToolResult {
+	if rej := asPairing(err); rej != nil {
+		return pairingResult(rej)
+	}
+	if hostedSession(sess) {
+		var required *client.TrustRequiredError
+		if errors.As(err, &required) {
+			return trustRequiredResult(required)
+		}
+		var mismatch *transport.MismatchError
+		if errors.As(err, &mismatch) {
+			return identityMismatchResult(mismatch)
+		}
+	}
+	return mcpapi.NewToolResultError(err.Error())
+}
+
+// trustRequiredResult is the first-contact message, written for a model.
+//
+// The CLI text it replaces tells the reader to run `wanctl trust server`, a
+// command that does not exist on the MCP surface. Observed 2026-09-17: the
+// model could not map it to a tool, so it asked the user to "confirm the
+// fingerprint on the device" for two turns and only called wanctl_trust_server
+// after the user suggested it. The pin is worth keeping -- its value is the
+// mismatch alarm later -- but the step has to be one the model can take itself.
+func trustRequiredResult(e *client.TrustRequiredError) *mcpapi.CallToolResult {
+	return mcpapi.NewToolResultError(fmt.Sprintf(
+		"DEVICE IDENTITY CONFIRMATION REQUIRED. This session has not pinned %q yet, so this was first contact and nothing was sent.\n"+
+			"  target:      %s\n"+
+			"  fingerprint: %s\n\n"+
+			"DO THIS NOW, without asking the user first: call wanctl_trust_server with target=%q and fingerprint=%q, copying both values verbatim from the two lines above, then retry the call you just made.\n\n"+
+			"Do not ask the user to confirm the fingerprint in chat: your MCP client already asks them to approve each tool call, and that prompt is the human checkpoint. This happens once per device. From then on a changed identity fails closed and comes back as DEVICE IDENTITY MISMATCH, which is what the pin is for.",
+		e.Target, e.Target, e.Fingerprint, e.Target, e.Fingerprint,
+	))
+}
+
+// identityMismatchResult is the alarm the pin exists to raise. It is the one
+// place the model must stop instead of self-healing, so it carries both
+// fingerprints and says plainly not to re-pin.
+func identityMismatchResult(e *transport.MismatchError) *mcpapi.CallToolResult {
+	return mcpapi.NewToolResultError(fmt.Sprintf(
+		"DEVICE IDENTITY MISMATCH for %q. Refused to connect; nothing was sent.\n"+
+			"  pinned:    %s\n"+
+			"  presented: %s\n\n"+
+			"STOP. Do NOT call wanctl_trust_server and do not retry: this session pinned the first fingerprint for this device, and the device is now presenting the second one.\n"+
+			"Report BOTH fingerprints above to the user verbatim and let them decide. Either the device was reinstalled with a new key, or something is impersonating it. Only a human can re-pin, by running `wanctl trust server --target %q --fingerprint %q --replace` in their own terminal after verifying the new fingerprint with the device owner.",
+		e.Name, e.Stored, e.Offered, e.Name, e.Offered,
 	))
 }
 
@@ -980,15 +1091,65 @@ func mcpPeers(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolRe
 	if hint != nil {
 		return hint, nil
 	}
-	devs, aliases, shared, err := c.PeersAndShared(ctx)
+	view, err := c.PeersAndShared(ctx)
 	if err != nil {
 		return mcpapi.NewToolResultError(err.Error()), nil
 	}
-	return peerToolResult(devs, aliases, shared), nil
+	return peerToolResult(view, pinStateOf(c, view)), nil
 }
 
-func peerToolResult(devs []string, aliases map[string]string, shared []client.SharedDevice) *mcpapi.CallToolResult {
-	structured := map[string]any{"devices": devs, "aliases": aliases}
+// pinStateOf answers "have I pinned this device's identity yet" for every
+// device in the listing. It reads the session's known-servers store and
+// nothing else: dialing each device to find out would turn a listing into a
+// fan-out of connections, and on first contact would fail anyway.
+//
+// The store is keyed by the canonical "namespace/device" — the same name the
+// pin is written under — so an own device has to be qualified with the
+// namespace the relay reported, and a shared device already carries it.
+func pinStateOf(c *client.Client, view client.Peers) map[string]bool {
+	pinned := map[string]bool{}
+	for _, d := range view.Devices {
+		name := canonicalTarget(view.Namespace, d)
+		_, ok := c.Pinned(name)
+		pinned[name] = ok
+	}
+	for _, sd := range view.Shared {
+		_, ok := c.Pinned(sd.Target)
+		pinned[sd.Target] = ok
+	}
+	return pinned
+}
+
+func canonicalTarget(namespace, device string) string {
+	if namespace == "" || strings.Contains(device, "/") {
+		return device
+	}
+	return namespace + "/" + device
+}
+
+// identityNote is the suffix that tells a model, before it dials anything,
+// which devices will stop it with DEVICE IDENTITY CONFIRMATION REQUIRED.
+func identityNote(pinned map[string]bool, name string) string {
+	if pinned[name] {
+		return "  [identity: pinned]"
+	}
+	return "  [identity: unpinned]"
+}
+
+func peerToolResult(view client.Peers, pinned map[string]bool) *mcpapi.CallToolResult {
+	devs, aliases, shared := view.Devices, view.Aliases, view.Shared
+	identity := map[string]string{}
+	for name, ok := range pinned {
+		if ok {
+			identity[name] = "pinned"
+		} else {
+			identity[name] = "unpinned"
+		}
+	}
+	structured := map[string]any{"devices": devs, "aliases": aliases, "identity": identity}
+	if view.Namespace != "" {
+		structured["namespace"] = view.Namespace
+	}
 	if len(shared) > 0 {
 		structured["shared"] = shared
 	}
@@ -998,14 +1159,17 @@ func peerToolResult(devs []string, aliases map[string]string, shared []client.Sh
 		return result
 	}
 	out := ""
+	anyUnpinned := false
 	if len(devs) > 0 {
 		out = "online devices:\n"
 		for _, d := range devs {
+			name := canonicalTarget(view.Namespace, d)
+			line := "  " + d
 			if alias := aliases[d]; alias != "" {
-				out += "  " + d + "  (" + alias + ")\n"
-			} else {
-				out += "  " + d + "\n"
+				line += "  (" + alias + ")"
 			}
+			out += line + identityNote(pinned, name) + "\n"
+			anyUnpinned = anyUnpinned || !pinned[name]
 		}
 	}
 	// A device someone shared with you is only reachable as owner/device; the
@@ -1020,8 +1184,14 @@ func peerToolResult(devs []string, aliases map[string]string, shared []client.Sh
 			if !s.Online {
 				line += "  [offline]"
 			}
-			out += line + "\n"
+			out += line + identityNote(pinned, s.Target) + "\n"
+			anyUnpinned = anyUnpinned || !pinned[s.Target]
 		}
+	}
+	if anyUnpinned {
+		out += "\nidentity: unpinned means this session has not confirmed that device's identity yet. " +
+			"The first call that dials it returns DEVICE IDENTITY CONFIRMATION REQUIRED; answer that by calling " +
+			"wanctl_trust_server with the target and fingerprint it hands you, then retry. No need to ask the user first.\n"
 	}
 	result := mcpapi.NewToolResultText(out)
 	result.StructuredContent = structured
@@ -1033,15 +1203,17 @@ func mcpPair(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	if target == "" {
 		return mcpapi.NewToolResultError("target is required"), nil
 	}
-	c, hint := sessions.get(ctx).client()
+	sess := sessions.get(ctx)
+	c, hint := sess.client()
 	if hint != nil {
 		return hint, nil
 	}
 	trusted, pairingURL, err := c.Pair(ctx, target)
 	if err != nil {
-		// Could be: target offline, relay 404, token bad. Surface as plain
-		// error — only the "pairing required" branch is special-cased.
-		return mcpapi.NewToolResultError(err.Error()), nil
+		// Could be: first contact, identity mismatch, target offline, relay
+		// 404, token bad. dialErrorResult picks the actionable wording for the
+		// first two and passes the rest through.
+		return dialErrorResult(sess, err), nil
 	}
 	if trusted {
 		return mcpapi.NewToolResultText(fmt.Sprintf("✓ %q 已经信任本 MCP session 的控制端身份, 无需手动配对. 可以直接调用 wanctl_exec / wanctl_push / wanctl_pull / wanctl_logs.", target)), nil
@@ -1092,7 +1264,8 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	if errRes != nil {
 		return errRes, nil
 	}
-	c, hint := sessions.get(ctx).client()
+	sess := sessions.get(ctx)
+	c, hint := sess.client()
 	if hint != nil {
 		return hint, nil
 	}
@@ -1105,11 +1278,8 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		Elevate: reqBool(req, "elevate"),
 		Via:     reqStr(req, "via", ""),
 	}, &stdout, &stderr)
-	if rej := asPairing(err); rej != nil {
-		return pairingResult(rej), nil
-	}
 	if err != nil {
-		return mcpapi.NewToolResultError(err.Error()), nil
+		return dialErrorResult(sess, err), nil
 	}
 	out := fmt.Sprintf("exit: %d\n", code)
 	if stdout.Len() > 0 {
@@ -1138,16 +1308,14 @@ func mcpExecAsync(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Call
 	if command == "" {
 		return mcpapi.NewToolResultError("command is required"), nil
 	}
-	c, hint := sessions.get(ctx).client()
+	sess := sessions.get(ctx)
+	c, hint := sess.client()
 	if hint != nil {
 		return hint, nil
 	}
 	id, err := c.ExecAsync(ctx, target, command, reqStr(req, "cwd", ""))
 	if err != nil {
-		if rej := asPairing(err); rej != nil {
-			return pairingResult(rej), nil
-		}
-		return mcpapi.NewToolResultError(err.Error()), nil
+		return dialErrorResult(sess, err), nil
 	}
 	return mcpapi.NewToolResultText(fmt.Sprintf(
 		"started background job %s on %q.\nPoll it with wanctl_exec_poll(target=%q, job_id=%q) until state is 'done'. The job runs for at most 30 minutes and retains at most 8 MiB output; finished results remain available for up to 1h subject to device-wide retention budgets.",
@@ -1160,17 +1328,15 @@ func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallT
 	if jobID == "" {
 		return mcpapi.NewToolResultError("job_id is required"), nil
 	}
-	c, hint := sessions.get(ctx).client()
+	sess := sessions.get(ctx)
+	c, hint := sess.client()
 	if hint != nil {
 		return hint, nil
 	}
 	var buf bytes.Buffer
 	newOffset, running, code, err := c.ExecPollTo(ctx, target, jobID, int64(reqInt(req, "offset")), &buf)
 	if err != nil {
-		if rej := asPairing(err); rej != nil {
-			return pairingResult(rej), nil
-		}
-		return mcpapi.NewToolResultError(err.Error()), nil
+		return dialErrorResult(sess, err), nil
 	}
 	head := fmt.Sprintf("state: running\nnext_offset: %d\n", newOffset)
 	if !running {
@@ -1202,10 +1368,7 @@ func mcpPush(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return hint, nil
 	}
 	if err := c.Push(ctx, target, local, remote); err != nil {
-		if rej := asPairing(err); rej != nil {
-			return pairingResult(rej), nil
-		}
-		return mcpapi.NewToolResultError(err.Error()), nil
+		return dialErrorResult(sess, err), nil
 	}
 	return mcpapi.NewToolResultText(fmt.Sprintf("uploaded %s -> %s:%s", local, target, remote)), nil
 }
@@ -1238,15 +1401,13 @@ func mcpPushBlob(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallT
 		}
 		mode = uint32(m)
 	}
-	c, hint := sessions.get(ctx).client()
+	sess := sessions.get(ctx)
+	c, hint := sess.client()
 	if hint != nil {
 		return hint, nil
 	}
 	if err := c.PushBytes(ctx, target, remote, data, mode); err != nil {
-		if rej := asPairing(err); rej != nil {
-			return pairingResult(rej), nil
-		}
-		return mcpapi.NewToolResultError(err.Error()), nil
+		return dialErrorResult(sess, err), nil
 	}
 	return mcpapi.NewToolResultText(fmt.Sprintf("wrote %d bytes -> %s:%s", len(data), target, remote)), nil
 }
@@ -1268,10 +1429,7 @@ func mcpPull(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return hint, nil
 	}
 	if err := c.Pull(ctx, target, remote, local); err != nil {
-		if rej := asPairing(err); rej != nil {
-			return pairingResult(rej), nil
-		}
-		return mcpapi.NewToolResultError(err.Error()), nil
+		return dialErrorResult(sess, err), nil
 	}
 	return mcpapi.NewToolResultText(fmt.Sprintf("downloaded %s:%s -> %s", target, remote, local)), nil
 }
@@ -1281,16 +1439,14 @@ func mcpLogs(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	if target == "" {
 		return mcpapi.NewToolResultError("target is required"), nil
 	}
-	c, hint := sessions.get(ctx).client()
+	sess := sessions.get(ctx)
+	c, hint := sess.client()
 	if hint != nil {
 		return hint, nil
 	}
 	var buf bytes.Buffer
 	if err := c.LogsTo(ctx, target, reqStr(req, "type", ""), reqStr(req, "grep", ""), reqStr(req, "since", ""), reqInt(req, "limit"), &buf); err != nil {
-		if rej := asPairing(err); rej != nil {
-			return pairingResult(rej), nil
-		}
-		return mcpapi.NewToolResultError(err.Error()), nil
+		return dialErrorResult(sess, err), nil
 	}
 	if buf.Len() == 0 {
 		return mcpapi.NewToolResultText("(no matching events)"), nil
@@ -1406,14 +1562,15 @@ func mcpTrust(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 
 func mcpTrustServer(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
 	if os.Getenv("WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER") != "1" {
-		return mcpapi.NewToolResultError("device identity confirmation is disabled in MCP: the model cannot prove it verified a fingerprint independently of the relay. In stdio mode, run `wanctl trust server --target OWNER/DEVICE --fingerprint SHA256:...` in a human-controlled terminal. A shared HTTP MCP session has no independent trust store and remains blocked on first contact; the weaker legacy flow requires the explicit unsafe opt-in WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1"), nil
+		return mcpapi.NewToolResultError("device identity pinning is not enabled on this MCP server: the operator has not set WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1, so this tool cannot pin anything and retrying will not help. A human has to do it from a terminal on this machine: verify the fingerprint with the device owner, then run `wanctl trust server --target OWNER/DEVICE --fingerprint SHA256:...`. Report that to the user, with the exact target and fingerprint from the confirmation result, and stop"), nil
 	}
 	target := reqStr(req, "target", "")
 	fingerprint := reqStr(req, "fingerprint", "")
 	if target == "" || fingerprint == "" {
 		return mcpapi.NewToolResultError("target and fingerprint are required"), nil
 	}
-	c, hint := sessions.get(ctx).client()
+	sess := sessions.get(ctx)
+	c, hint := sess.client()
 	if hint != nil {
 		return hint, nil
 	}
@@ -1423,7 +1580,7 @@ func mcpTrustServer(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Ca
 	// go through a human at a terminal (audit 2026-08-28, SEC-E-02).
 	canonical, err := c.PinServer(ctx, target, fingerprint, false)
 	if err != nil {
-		return mcpapi.NewToolResultError(err.Error()), nil
+		return dialErrorResult(sess, err), nil
 	}
 	return mcpapi.NewToolResultText(fmt.Sprintf("confirmed device identity: %s %s", canonical, fingerprint)), nil
 }

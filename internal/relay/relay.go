@@ -81,6 +81,7 @@ type Relay struct {
 	notifySend      webhookSender
 	docs            DocsStore
 	mcpHandler      http.Handler // optional: HTTP/Streamable MCP at /mcp
+	forgetPin       func(namespace, device string)
 	webfetchHandler http.Handler // optional: GET adapter for delegated controllers
 	adminSecret     string
 	portalNS        string
@@ -212,6 +213,13 @@ func bodyCapFor(path string) int64 {
 // at GET/POST /mcp, and at the /wanctl-mcp alias. Pass nil (or never call) to
 // disable the endpoint.
 func (r *Relay) SetMCPHandler(h http.Handler) { r.mcpHandler = h }
+
+// SetPinForgetter installs the hook called when an owner unbinds a device, so
+// an in-process trust store can forget the identity it pinned under that name.
+// The hosted MCP server keeps its pins in memory, where nothing else can reach
+// them; without this a reinstalled device stays unreachable from an AI until
+// the relay restarts (ADR 0002). Pass nil to skip it.
+func (r *Relay) SetPinForgetter(f func(namespace, device string)) { r.forgetPin = f }
 
 // SetWebFetchHandler installs the optional delegated GET adapter.
 func (r *Relay) SetWebFetchHandler(h http.Handler) { r.webfetchHandler = h }

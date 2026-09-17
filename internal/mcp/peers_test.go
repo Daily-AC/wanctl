@@ -10,7 +10,8 @@ import (
 func TestPeerToolResultIncludesAliasesWithoutRemovingDevices(t *testing.T) {
 	devices := []string{"legion", "plain"}
 	aliases := map[string]string{"legion": "desk"}
-	result := peerToolResult(devices, aliases, nil)
+	view := client.Peers{Namespace: "alice", Devices: devices, Aliases: aliases}
+	result := peerToolResult(view, map[string]bool{})
 	text := resultText(result)
 	if !strings.Contains(text, "legion  (desk)") || !strings.Contains(text, "plain") {
 		t.Fatalf("text result = %q", text)
@@ -37,7 +38,8 @@ func TestPeerToolResultListsSharedDevicesAsQualifiedTargets(t *testing.T) {
 		{Owner: "daily-ac", Device: "8e894048-1111-4222-8333-444455556666", Label: "bms-20558674", Target: "daily-ac/8e894048-1111-4222-8333-444455556666", Online: true},
 		{Owner: "daily-ac", Device: "aa11", Label: "spare", Target: "daily-ac/aa11"},
 	}
-	text := resultText(peerToolResult([]string{"mine"}, nil, shared))
+	view := client.Peers{Namespace: "alice", Devices: []string{"mine"}, Shared: shared}
+	text := resultText(peerToolResult(view, map[string]bool{}))
 	if !strings.Contains(text, "mine") {
 		t.Fatalf("own devices dropped: %q", text)
 	}
@@ -53,7 +55,7 @@ func TestPeerToolResultListsSharedDevicesAsQualifiedTargets(t *testing.T) {
 // told there is nothing to talk to.
 func TestPeerToolResultReportsSharedOnlyTokens(t *testing.T) {
 	shared := []client.SharedDevice{{Owner: "daily-ac", Device: "aa11", Label: "bms", Target: "daily-ac/aa11", Online: true}}
-	text := resultText(peerToolResult(nil, nil, shared))
+	text := resultText(peerToolResult(client.Peers{Namespace: "alice", Shared: shared}, map[string]bool{}))
 	if strings.Contains(text, "no devices online") || !strings.Contains(text, "daily-ac/aa11") {
 		t.Fatalf("shared-only result = %q", text)
 	}

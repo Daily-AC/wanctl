@@ -55,7 +55,7 @@ func TestMCPTrustServerIsDisabledByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.IsError || !strings.Contains(toolText(result), "disabled in MCP") {
+	if !result.IsError || !strings.Contains(toolText(result), "not enabled on this MCP server") {
 		t.Fatalf("trust tool result = %+v", result)
 	}
 	store, err := transport.OpenStore("known_servers.json")
