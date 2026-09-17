@@ -46,6 +46,7 @@
       scopeGlobal: 'every directory',
       pairing: 'wants to be trusted',
       pairMsg: 'This controller is connecting for the first time. Trust it and it can drive this device.',
+      pairAlready: 'This controller is already trusted; nothing to do.',
       trustIt: 'Trust it',
       idChanged: 'This device is not the one we saw before',
       idBody: 'The fingerprint it reports now does not match the one the portal pinned. Reinstalling it, or clearing its config, does this. If you did neither, treat it as an impersonation and investigate.',
@@ -163,6 +164,7 @@
       scopeGlobal: '全部目录',
       pairing: '想被信任',
       pairMsg: '这个控制端第一次连接。信任之后它就能控制这台设备。',
+      pairAlready: '这个控制端已经被信任了，不用再操作。',
       trustIt: '信任它',
       idChanged: '这台设备跟上次不是同一个了',
       idBody: '它现在报出的指纹，和门户上次记住的对不上。重装过它、或者清过它的配置目录，都会这样；如果你没做过这些，就要当成被冒充来查。',
@@ -1704,7 +1706,27 @@
   }
 
   /* ── 配对深链（从 AI 的拒绝消息里点进来） ─────────────────────────── */
+  // 链接里的四个参数够画出这张卡的内容，画不出它的状态。设备那边只有三种
+  // 可能：还在等人答（pending_pairings 里有这个指纹）、已经被信过了
+  // （trusted 里有）、或者这条已经不在了（过期、被拒、从来没有过）。以前
+  // 三种情况画的是同一张两个按钮的卡 —— 人按完「信任并继续」，回头再点一次
+  // 同一条链接，看见的还是那两个按钮，要等他再按一次、设备回 404，门户才肯
+  // 说这条已经没了。现在一打开就去设备状态里认一次，按认出来的那种画。
+  // （点下去才发现被别处答掉的那条路照旧留着，见 answer 里的 404 分支。）
+  // 同一个标签页里可以接连点开两条配对链接。那两趟状态查询谁先回来是网络说了
+  // 算，不加这个世代号，先开那条的答案就可能落在后开那条的浮层上 —— 把一条
+  // 还活着的请求画成「已经信任过了」，人就再也按不到那两个按钮了。
+  var pairGen = 0;
   function showPair(p) {
+    var gen = ++pairGen;
+    var yes = $('#pairYes'), no = $('#pairNo');
+    // 这张浮层是复用的，上一次可能已经把它收成了单个「知道了」。
+    yes.hidden = no.hidden = false;
+    yes.innerHTML = yes.getAttribute('data-' + lang);
+    no.innerHTML = no.getAttribute('data-' + lang);
+    // 状态还在路上的那几百毫秒里，按钮留在原地但按不下去。先画两个按钮、
+    // 再抽掉一个，那一下闪动读起来像门户自己拿不定主意。
+    yes.disabled = no.disabled = true;
     $('#pairM').textContent = t().pairMsg;
     $('#pairKV').innerHTML =
       '<dt>' + esc(t().kDevice) + '</dt><dd>' + esc(devName(p.device).label) + realHTML(devName(p.device)) + '</dd>' +
@@ -1712,36 +1734,66 @@
       '<dt>' + esc(t().kFP) + '</dt><dd>' + esc(p.fp) + '</dd>';
     $('#pair').classList.add('show');
     var answer = function (v) {
-      $('#pairYes').disabled = $('#pairNo').disabled = true;
+      yes.disabled = no.disabled = true;
       jpost('/api/devices/pair', { device: p.device, fp: p.fp, verdict: v }).then(function () {
         hidePair();
         toast(v === 'y' ? t().trustedNow : t().refusedPair, v === 'n');
         setTimeout(function () { try { window.close(); } catch (_) {} }, 1400);
       }).catch(function (e) {
-        // 这一屏整个是从链接里的参数画出来的，设备说了什么它不知道 —— 于是
-        // 五分钟之后它照旧摆在那儿，而且是个关不掉的浮层，盖住底下那份真的
-        // 待审批清单（issue #79）。设备回 404 就是「这条已经不在了」：收掉
-        // 浮层，剩下那一句话，而不是把两个按钮重新点亮再让人点一遍。
+        // 打开的时候还在等，按下去的时候已经被别处答掉了 —— 手机上答过、
+        // 或者另一个标签页答过。设备回 404 就是「这条已经不在了」：收掉
+        // 浮层，剩下那一句话，而不是把两个按钮重新点亮再让人点一遍
+        // （issue #79：那是一张关不掉的浮层，盖住底下真的待审批清单）。
         if (e && e.status === 404) { hidePair(); return oops(e); }
-        $('#pairYes').disabled = $('#pairNo').disabled = false;
+        yes.disabled = no.disabled = false;
         oops(e);
       });
     };
-    $('#pairYes').onclick = function () { answer('y'); };
-    $('#pairNo').onclick = function () { answer('n'); };
-    // 谁能发这把钥匙，是设备主人说了算（后端 requireOwnedConsole 同样强制）。
+    yes.onclick = function () { answer('y'); };
+    no.onclick = function () { answer('n'); };
+    // 没有可答的了：一句话加一个「知道了」。同一份键值块留着 —— 人是为了
+    // 核对指纹点进来的，「已经信过了」得指着那串指纹说，才算说清楚。
+    var settled = function (msg) {
+      $('#pairM').textContent = msg;
+      yes.hidden = true;
+      no.hidden = false;
+      no.disabled = false;
+      no.textContent = t().ok;
+      no.onclick = hidePair;
+    };
+    var askable = function () { yes.disabled = no.disabled = false; };
+    // 谁能发这把钥匙，是设备主人说了算（后端 requireDeviceConsole 同样强制）。
     // 被授予方拿到的是使用权，不是发钥匙的权力 —— 所以别先把按钮给他，
     // 等点下去才回一句 403：那读起来像门户坏了，而不像「这本来就不归你管」。
+    // 这一句在三种状态之前：转给设备主人这件事，不因为那条配对是死是活而变。
     var gate = function () {
       var m = devMeta[p.device];
-      if (!m || !m.shared) return;
-      $('#pairM').textContent = t().pairOwnerOnly(m.owner || '—');
-      $('#pairYes').remove();
-      $('#pairNo').textContent = t().ok;
-      $('#pairNo').onclick = hidePair;
+      if (!m || !m.shared) return false;
+      settled(t().pairOwnerOnly(m.owner || '—'));
+      return true;
     };
-    if (devMeta[p.device] !== undefined) gate();
-    else loadDevices().then(gate);
+    var resolve = function () {
+      if (gate()) return;
+      // 设备页那份快照里就有答案，不必新开一个接口：待答的配对在
+      // pending_pairings，已经信过的在 trusted，两处都没有就是没了。
+      jget('/api/devices/console?device=' + encodeURIComponent(p.device)).then(function (st) {
+        // 这一趟回来时浮层可能已经关了，或者换成了另一条链接的那张。
+        if (gen !== pairGen || !$('#pair').classList.contains('show')) return;
+        var holds = function (xs) {
+          return (xs || []).some(function (x) { return x && x.fp === p.fp; });
+        };
+        if (holds(st.pending_pairings)) return askable();
+        if (holds(st.trusted)) return settled(t().pairAlready);
+        settled(t().ePairGone);
+      }).catch(function () {
+        // 问不到设备（离线、掉线、身份变了）跟「这条配对没了」是两回事，
+        // 别拿前者当后者讲。把两个按钮还回去让人点：真没了，设备会回 404，
+        // 上面那一句照样会说出来。
+        if (gen === pairGen && $('#pair').classList.contains('show')) askable();
+      });
+    };
+    if (devMeta[p.device] !== undefined) resolve();
+    else loadDevices().then(resolve, resolve);
   }
   function hidePair() {
     $('#pair').classList.remove('show');
