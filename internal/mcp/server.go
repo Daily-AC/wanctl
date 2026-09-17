@@ -322,6 +322,52 @@ func (s *sessionStore) trustForLocked(namespace string) *transport.Store {
 	return store
 }
 
+// forgetPin drops whatever identity is pinned under one namespace/device,
+// across every hosted session that namespace has open.
+//
+// Without it the hosted pin is the dead end ADR 0002 describes: a reinstalled
+// device presents a new certificate, every call fails with an identity
+// mismatch, and nothing short of restarting the relay clears it — the store is
+// process memory, so there is no file an operator could delete either. The
+// portal answers this by forgetting its pin when the owner unbinds the device
+// (Server.forgetPin), and unbinding is the owner saying over SSO that this
+// name no longer refers to that machine. This is the same rule for the same
+// reason; the relay calls it through ForgetPinnedDevice.
+func (s *sessionStore) forgetPin(namespace, device string) {
+	if s == nil || namespace == "" || device == "" {
+		return
+	}
+	name := namespace + "/" + device
+	// Two places hold pins: the per-namespace store OAuth sessions share, and
+	// the private store a session-keyed login gets. Both have to forget, or a
+	// client that never took the OAuth path keeps the stale pin.
+	var stores []*transport.Store
+	s.mu.Lock()
+	if store := s.trust[namespace]; store != nil {
+		stores = append(stores, store)
+	}
+	for _, r := range s.m {
+		r.mu.Lock()
+		if r.namespace == namespace && r.known != nil {
+			stores = append(stores, r.known)
+		}
+		r.mu.Unlock()
+	}
+	s.mu.Unlock()
+	for _, store := range stores {
+		_ = store.RemoveName(name)
+	}
+}
+
+// ForgetPinnedDevice is the hook the relay calls when an owner unbinds a
+// device, so the hosted MCP store forgets it the way the portal's does.
+// Deliberately not called on re-registration: a device that came back with a
+// new certificate clearing its own alarm is the alternative ADR 0002 rejected.
+// Safe before any handler exists, and a no-op over stdio.
+func ForgetPinnedDevice(namespace, device string) {
+	sessions.forgetPin(namespace, device)
+}
+
 // gcLoop prunes idle HTTP sessions every minute (TTL 1h). Cheap because state
 // is small and re-login is just one user click.
 func (s *sessionStore) gcLoop() {

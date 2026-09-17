@@ -513,6 +513,13 @@ func (r *Relay) adminDeviceRemove(w http.ResponseWriter, req *http.Request) {
 	r.hmu.Lock()
 	delete(r.hagents, key)
 	r.hmu.Unlock()
+	// Unbinding is the owner stating, over SSO, that this name no longer refers
+	// to that machine — the out-of-band confirmation TOFU wants. So the pins
+	// held for it go too, or reinstalling under the same name is locked out
+	// with no UI able to clear it (ADR 0002).
+	if r.forgetPin != nil {
+		r.forgetPin(body.Namespace, body.Device)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
