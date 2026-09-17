@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +24,7 @@ func reply(t *testing.T, root string, m protocol.Message) protocol.Message {
 	case protocol.KindFileRead:
 		handleFileRead(&buf, m, root)
 	case protocol.KindFileEdit:
-		handleFileEdit(&buf, m, root)
+		handleFileEdit(&buf, m, root, protocol.MaxEditBytes)
 	default:
 		t.Fatalf("unsupported kind %q", m.Kind)
 	}
@@ -95,24 +96,199 @@ func TestReadReturnsTheRequestedLineRange(t *testing.T) {
 
 // The line budget is not the only budget. A file whose lines are enormous would
 // otherwise return megabytes for a request that named no limit at all, so the
-// byte cap cuts the range and the reply says it did.
-func TestReadStopsAtTheByteCap(t *testing.T) {
+// byte cap cuts the range -- and it cuts on a line boundary, because the caller
+// is told to continue from the line after the last one returned. A cut in the
+// middle of a line would lose that line's tail or hand it back twice, and a
+// model paging through a file could not tell which.
+func TestReadStopsAtTheByteCapOnALineBoundary(t *testing.T) {
 	root := t.TempDir()
-	line := strings.Repeat("x", 256<<10)
+	line := strings.Repeat("x", 100<<10) // three of these exceed the 256 KiB cap
 	path := writeFile(t, root, "wide.txt", line+"\n"+line+"\n"+line+"\n"+line+"\n", 0o644)
 
 	got := reply(t, root, protocol.Message{Kind: protocol.KindFileRead, Path: path})
 	if got.Kind != protocol.KindFileResult {
 		t.Fatalf("reply = %q %s", got.Kind, got.Reason)
 	}
-	if !got.File.Truncated {
-		t.Fatal("a 1 MiB read was not reported as truncated")
+	res := got.File
+	if !res.Truncated {
+		t.Fatal("a 400 KiB read was not reported as truncated")
 	}
-	if len(got.File.Content) > protocol.MaxReadBytes {
-		t.Fatalf("returned %d bytes, over the %d-byte cap", len(got.File.Content), protocol.MaxReadBytes)
+	if len(res.Content) > protocol.MaxReadBytes {
+		t.Fatalf("returned %d bytes, over the %d-byte cap", len(res.Content), protocol.MaxReadBytes)
 	}
-	if got.File.TotalLines != 4 {
-		t.Fatalf("total_lines = %d, want 4", got.File.TotalLines)
+	if res.LongLine != 0 {
+		t.Fatalf("long_line = %d, want 0: every line here fits on its own", res.LongLine)
+	}
+	// Two whole lines fit; the third does not, so it is not in the answer at all.
+	if res.FirstLine != 1 || res.LastLine != 2 {
+		t.Fatalf("returned lines %d-%d, want 1-2", res.FirstLine, res.LastLine)
+	}
+	if res.Content != line+"\n"+line+"\n" {
+		t.Fatalf("content is not exactly two whole lines (%d bytes)", len(res.Content))
+	}
+	if res.TotalLines != 4 {
+		t.Fatalf("total_lines = %d, want 4", res.TotalLines)
+	}
+
+	// Continuing where it said to continue returns the rest, with nothing lost
+	// and nothing repeated.
+	next := reply(t, root, protocol.Message{Kind: protocol.KindFileRead, Path: path, Offset: int64(res.LastLine + 1)})
+	if next.File.FirstLine != 3 || next.File.Content != line+"\n"+line+"\n" {
+		t.Fatalf("continuation returned lines %d-%d (%d bytes)", next.File.FirstLine, next.File.LastLine, len(next.File.Content))
+	}
+}
+
+// One line larger than the entire cap is the case paging cannot solve: continue
+// from the next line and you skip it, ask again and you get the same prefix
+// forever. Return the prefix, name the line, and let every surface tell the
+// caller to reach for a tool that can slice it.
+func TestReadNamesALineTooLargeToReturn(t *testing.T) {
+	root := t.TempDir()
+	huge := strings.Repeat("y", 300<<10)
+	path := writeFile(t, root, "onebigline.txt", "small\n"+huge+"\ntail\n", 0o644)
+
+	got := reply(t, root, protocol.Message{Kind: protocol.KindFileRead, Path: path, Offset: 2})
+	if got.Kind != protocol.KindFileResult {
+		t.Fatalf("reply = %q %s", got.Kind, got.Reason)
+	}
+	res := got.File
+	if res.LongLine != 2 {
+		t.Fatalf("long_line = %d, want 2", res.LongLine)
+	}
+	if !res.Truncated {
+		t.Fatal("an oversized line was not reported as truncated")
+	}
+	if len(res.Content) > protocol.MaxReadBytes || len(res.Content) == 0 {
+		t.Fatalf("returned %d bytes of the long line", len(res.Content))
+	}
+	if !strings.HasPrefix(huge, res.Content) {
+		t.Fatal("the returned prefix is not the start of that line")
+	}
+	if res.FirstLine != 2 || res.LastLine != 2 {
+		t.Fatalf("returned lines %d-%d, want 2-2", res.FirstLine, res.LastLine)
+	}
+}
+
+// The text sniff only ever sees the first 8 KiB, but what goes back is
+// marshalled as a JSON string -- and encoding/json rewrites invalid UTF-8 as
+// U+FFFD without saying so. A file that starts out ASCII and turns to bytes
+// later would come back quietly corrupted, which is worse than a refusal.
+func TestReadRefusesInvalidUTF8PastTheSniff(t *testing.T) {
+	root := t.TempDir()
+	content := strings.Repeat("ascii line\n", 1200) + "\xff\xfe not text\n"
+	if len(content) <= sniffLen {
+		t.Fatalf("test file is only %d bytes; the bad bytes must land past the %d-byte sniff", len(content), sniffLen)
+	}
+	path := writeFile(t, root, "turns-binary.txt", content, 0o644)
+
+	// The prefix on its own is perfectly good text, so the sniff is happy.
+	if !isText([]byte(content[:sniffLen]), int64(len(content))) {
+		t.Fatal("the first 8 KiB should look like text; the test proves nothing otherwise")
+	}
+	got := reply(t, root, protocol.Message{Kind: protocol.KindFileRead, Path: path, Limit: 5000})
+	if got.Kind != protocol.KindError || !strings.Contains(got.Reason, "not a UTF-8 text file") {
+		t.Fatalf("reply = %q %q, want the not-text refusal", got.Kind, got.Reason)
+	}
+}
+
+// A limit is a number the caller chooses, so MaxInt is a number the caller can
+// choose. Adding it to the offset must not wrap into a last-line number smaller
+// than the first.
+func TestReadClampsAnAbsurdLimit(t *testing.T) {
+	root := t.TempDir()
+	path := writeFile(t, root, "five.txt", "1\n2\n3\n4\n5\n", 0o644)
+
+	for _, limit := range []int{math.MaxInt, math.MaxInt - 1, 1 << 30} {
+		got := reply(t, root, protocol.Message{Kind: protocol.KindFileRead, Path: path, Offset: 2, Limit: limit})
+		if got.Kind != protocol.KindFileResult {
+			t.Fatalf("limit %d: reply = %q %s", limit, got.Kind, got.Reason)
+		}
+		if got.File.FirstLine != 2 || got.File.LastLine != 5 || got.File.Content != "2\n3\n4\n5\n" {
+			t.Fatalf("limit %d: returned lines %d-%d %q", limit, got.File.FirstLine, got.File.LastLine, got.File.Content)
+		}
+	}
+}
+
+// strings.Replace allocates its whole output in one go, so `all` with a
+// replacement longer than what it replaces is a way to ask the agent for
+// arbitrarily more memory than the file it was pointed at -- on a device whose
+// agent may be the only thing keeping it reachable. Size the result first.
+func TestEditRefusesAnEditThatWouldGrowPastTheLimit(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "wide-open.txt")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := bytes.Repeat([]byte("a"), 64<<10)
+	for range (8 << 20) / len(block) { // exactly the 8 MiB input limit
+		if _, err := f.Write(block); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.Close()
+
+	// 8 Mi occurrences, each growing by 1023 bytes: ~8 GiB of output.
+	got := reply(t, root, protocol.Message{
+		Kind: protocol.KindFileEdit, Path: path,
+		Old: "a", New: strings.Repeat("b", 1024), All: true,
+	})
+	if got.Kind != protocol.KindError {
+		t.Fatalf("an 8 GiB edit was accepted: %q", got.Kind)
+	}
+	if !strings.Contains(got.Reason, "would grow") || !strings.Contains(got.Reason, "nothing was written") {
+		t.Fatalf("reason = %q", got.Reason)
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() != 8<<20 {
+		t.Fatalf("size after refusal = %d (err=%v), want the original 8 MiB", info.Size(), err)
+	}
+}
+
+// The same rule at the boundary, cheaply: an edit that lands exactly on the cap
+// is allowed and one byte more is not.
+func TestEditGrowthLimitBoundary(t *testing.T) {
+	root := t.TempDir()
+	const editCap = 64
+	for _, tt := range []struct {
+		name    string
+		new     string
+		allowed bool
+	}{
+		{name: "lands on the cap", new: strings.Repeat("y", editCap), allowed: true},
+		{name: "one byte over", new: strings.Repeat("y", editCap+1), allowed: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeFile(t, root, "boundary-"+tt.name+".txt", "xxxx", 0o644)
+			var buf bytes.Buffer
+			handleFileEdit(&buf, protocol.Message{Kind: protocol.KindFileEdit, Path: path, Old: "xxxx", New: tt.new}, root, editCap)
+			got, err := protocol.ReadMessage(&buf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.allowed && got.Kind != protocol.KindFileResult {
+				t.Fatalf("an edit landing on the cap was refused: %s", got.Reason)
+			}
+			if !tt.allowed && got.Kind != protocol.KindError {
+				t.Fatalf("an edit one byte over the cap was applied")
+			}
+		})
+	}
+}
+
+// An edit says it works on text files, so it has to check that it is looking at
+// one. Replacing a string inside a binary corrupts it exactly as surely as
+// reading it back would mangle it.
+func TestEditRefusesBinaryFiles(t *testing.T) {
+	root := t.TempDir()
+	const content = "MZ\x00\x00binary\x00payload"
+	path := writeFile(t, root, "blob.bin", content, 0o644)
+
+	got := reply(t, root, protocol.Message{Kind: protocol.KindFileEdit, Path: path, Old: "binary", New: "text"})
+	if got.Kind != protocol.KindError || !strings.Contains(got.Reason, "not a UTF-8 text file") {
+		t.Fatalf("reply = %q %q, want the not-text refusal", got.Kind, got.Reason)
+	}
+	if b, _ := os.ReadFile(path); string(b) != content {
+		t.Fatalf("refused edit changed the file to %q", b)
 	}
 }
 

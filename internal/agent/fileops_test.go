@@ -175,3 +175,36 @@ func TestBypassModeCoversEdit(t *testing.T) {
 		t.Fatalf("file = %q", b)
 	}
 }
+
+// A request refused before it reaches the policy gate -- a session without the
+// capability, a grant that went inactive -- is logged by rejectedRequestEvent
+// rather than by the handler. Without an entry there, a denied read or edit
+// lands in the log as a bare "request" with no path, and whoever is auditing
+// the device cannot see which file was asked for. It has to read like the
+// refusal of the whole-file operation it mirrors.
+func TestRejectedFileRequestsAreLoggedWithTheirPath(t *testing.T) {
+	const path = "/etc/hosts"
+	tests := []struct {
+		kind       string
+		wantDetail string
+	}{
+		{protocol.KindFileGet, "GET " + path},
+		{protocol.KindFilePut, "PUT " + path},
+		{protocol.KindFileRead, "READ " + path},
+		{protocol.KindFileEdit, "EDIT " + path},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			e := rejectedRequestEvent("fp", "tester", protocol.Message{Kind: tt.kind, Path: path}, "session capability denied: read")
+			if e.Type != "file" {
+				t.Errorf("type = %q, want \"file\"", e.Type)
+			}
+			if e.Detail != tt.wantDetail {
+				t.Errorf("detail = %q, want %q", e.Detail, tt.wantDetail)
+			}
+			if !strings.HasPrefix(e.Decision, "denied: ") {
+				t.Errorf("decision = %q", e.Decision)
+			}
+		})
+	}
+}
