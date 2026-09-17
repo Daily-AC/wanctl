@@ -239,6 +239,10 @@ func New(opts Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Spilled command output from a previous life is not state this agent
+	// needs, and a device that was driven hard and then restarted should not
+	// carry the whole pile forward until each file ages out on its own.
+	server.SweepSpills()
 	// A PowerShell device needs prefix rules matched against PowerShell's own
 	// evaluation syntax, which the POSIX command parser cannot see
 	// (audit 2026-08-28, SEC-D1-02).
@@ -971,16 +975,22 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 			code = -1
 		}
 		a.notifyExecFinished(m.Command, m.Cwd, peerName, code)
-		spillPath, spilled := spill.Close()
-		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error(), Path: spillPath, Size: spilled})
+		// A command that failed with a huge output is exactly when knowing
+		// where the rest of it is matters most, so the error frame carries the
+		// spill too.
+		spillPath, spilled, kept := spill.Close()
+		protocol.WriteMessage(conn, protocol.Message{
+			Kind: protocol.KindError, Reason: err.Error(),
+			Path: spillPath, Size: spilled, SpillKept: kept,
+		})
 		return pending
 	}
 	a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code, Via: string(ranVia)})
 	a.notifyExecFinished(m.Command, m.Cwd, peerName, code)
-	spillPath, spilled := spill.Close()
+	spillPath, spilled, kept := spill.Close()
 	protocol.WriteMessage(conn, protocol.Message{
 		Kind: protocol.KindExit, Code: code, ElevatedVia: string(ranVia),
-		Path: spillPath, Size: spilled,
+		Path: spillPath, Size: spilled, SpillKept: kept,
 	})
 	return pending
 }

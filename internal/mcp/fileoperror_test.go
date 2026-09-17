@@ -51,3 +51,28 @@ func TestFileErrorsDistinguishLostResultsFromOldAgents(t *testing.T) {
 		t.Errorf("an unsupported agent was reported as an unknown result:\n%s", unsupported)
 	}
 }
+
+// A lost READ has nothing to inspect afterwards and nothing to undo, so it says
+// to retry. Appending "do not simply retry, read the file first" there would
+// contradict the sentence in front of it.
+func TestALostReadIsNotToldToCheckTheFile(t *testing.T) {
+	sess := &localFsSession{}
+
+	read := errorText(t, fileOpErrorResult(sess, &client.ResultLostError{
+		Kind: protocol.KindFileRead, Path: "/etc/hosts",
+	}))
+	if !strings.Contains(read, "nothing was changed") || !strings.Contains(read, "retry") {
+		t.Errorf("a lost read should say retrying is safe:\n%s", read)
+	}
+	if strings.Contains(read, "Do NOT simply retry") || strings.Contains(read, "compare the sha256") {
+		t.Errorf("a lost read was told to go hash a file it never changed:\n%s", read)
+	}
+
+	// The mutating kinds keep the clause, which is the whole point of it.
+	for _, kind := range []string{protocol.KindFileEdit, protocol.KindFileWrite} {
+		got := errorText(t, fileOpErrorResult(sess, &client.ResultLostError{Kind: kind, Path: "/etc/app.conf"}))
+		if !strings.Contains(got, "Do NOT simply retry") {
+			t.Errorf("%s lost its check-the-file instruction:\n%s", kind, got)
+		}
+	}
+}

@@ -283,7 +283,9 @@ LONG OUTPUT: what comes back is capped. Past the cap you get the LAST 48 KiB —
 the end, where a build's error and a script's result live — behind a line that
 says how many bytes there were in total and names a file ON THE DEVICE holding
 the whole thing, kept for an hour. Do not re-run the command with a filter you
-guessed: grep that file with another wanctl_exec.
+guessed: grep that file with another wanctl_exec. Read the line rather than
+assuming the file is there: it also says when the device could not keep the
+output, and when its copy holds only the first 8 MiB.
 
 **On the command line.**
 
@@ -406,7 +408,7 @@ changing. The whole batch is checked before anything is written — an entry
 that matches twice, an entry that matches nothing, or two entries claiming the
 same bytes refuses the call by index and leaves the file exactly as it was.
 `all` belongs to the single old/new form only; expected_sha256 works with
-both.
+both. At most 64 entries in one call — send a larger patch as several batches.
 
 REFUSALS (the file is left untouched every time — fix the input and retry, do
 not fall back to exec): 'old string not found' means your `old` does not
@@ -435,7 +437,7 @@ both --old and --old-file is an error rather than a precedence rule.
 | `path` | `<path>` | string | **yes** | Absolute path on the target device. `~` is NOT expanded. |
 | `old` | `--old STR \| --old-file F` | string | no | The exact text to find, copied from a wanctl_read of this file. Must be non-empty, and must match exactly once unless `all` is true. Required unless you pass `edits` instead; giving both forms is refused rather than resolved. |
 | `new` | `--new STR \| --new-file F` | string | no | The text to put in its place. May be an empty string, which deletes `old`. Belongs with `old`, not with `edits`. |
-| `edits` | — | array of {old, new} | no | Several replacements applied to this file in one atomic call, as [{"old":…,"new":…}, …]. Use this instead of repeating the tool: each `old` matches the ORIGINAL text you read, each must occur exactly once, and two entries may not overlap. Keep every `old` as small as it can be while unique — padding with unchanged context is what makes an entry collide with the next one. Mutually exclusive with old/new. |
+| `edits` | — | array of {old, new} | no | Several replacements applied to this file in one atomic call, as [{"old":…,"new":…}, …]. Use this instead of repeating the tool: each `old` matches the ORIGINAL text you read, each must occur exactly once, and two entries may not overlap. Keep every `old` as small as it can be while unique — padding with unchanged context is what makes an entry collide with the next one. At most 64 entries. Mutually exclusive with old/new. |
 | — | `--old-file F` | string | no | Read the text to find from this local file instead of --old. This is how a multi-line block gets through without fighting the shell over quoting. Giving both --old and --old-file is an error, not a precedence rule. |
 | — | `--new-file F` | string | no | Read the replacement from this local file instead of --new. |
 | `all` | `--all` | boolean | no | Replace every occurrence instead of refusing when `old` appears more than once. Default false. |
@@ -460,6 +462,7 @@ wanctl_edit{"target":"lab","path":"/a.conf","old":"80","new":"8080"}
 | `changed since it was read` | Someone else wrote to the file. The message carries the current sha256; re-read and redo the edit. |
 | `edits[N]: old string occurs M times` | That entry of the batch is ambiguous. Nothing was written; give entry N more surrounding text and send the whole batch again. |
 | `edits[N] overlaps edits[M]` | Two entries claim the same bytes. Nothing was written; merge them into one entry. |
+| `over the 64-entry limit` | Too many entries in one call. Nothing was written; split the patch into several batches. |
 | `pass either 'old'/'new' or 'edits', not both` | The call mixed the two forms. Pick one and resend. |
 | `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
@@ -1037,12 +1040,15 @@ Captures the whole screen: there is no window picker and no region.
 
 Policy: a desktop capture is gated exactly like any other command, because it
 is one — a controller allowed to run commands could run the capture tool
-itself. Android is gated as an ELEVATED command, because there a capture
-really does need su or the device's own adb, and elevated commands need their
-own rule that bypass mode does not cover. Same pairing and identity rules as
-wanctl_exec: 'PAIRING REQUIRED' carries a URL to relay VERBATIM to the user,
-and 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call wanctl_trust_server
-with the target and fingerprint it gives you, then retry.
+itself. On a desktop in BYPASS mode that means a capture is auto-approved like
+any other command, with no separate prompt — if the device's owner does not
+want that, the device should not be in bypass. Android is gated as an ELEVATED
+command, because there a capture really does need su or the device's own adb,
+and elevated commands need their own rule that bypass mode does not cover.
+Same pairing and identity rules as wanctl_exec: 'PAIRING REQUIRED' carries a
+URL to relay VERBATIM to the user, and 'DEVICE IDENTITY CONFIRMATION REQUIRED'
+means call wanctl_trust_server with the target and fingerprint it gives you,
+then retry.
 
 **On the command line.**
 

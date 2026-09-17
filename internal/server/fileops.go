@@ -280,6 +280,14 @@ func handleFileEdit(conn io.ReadWriter, m protocol.Message, policyRoot string, m
 	case len(m.Edits) > 0 && (m.Old != "" || m.New != ""):
 		writeFileError(conn, "pass either 'old'/'new' or 'edits', not both; nothing was written", nil)
 		return
+	case len(m.Edits) > protocol.MaxBatchEdits:
+		// Refused before the file is even opened. Every entry is searched for
+		// across the whole file, so an unbounded list is a way to spend a
+		// device's CPU with one small frame.
+		writeFileError(conn, fmt.Sprintf(
+			"'edits' has %d entries, over the %d-entry limit; nothing was written. Send them in smaller batches",
+			len(m.Edits), protocol.MaxBatchEdits), nil)
+		return
 	case len(m.Edits) > 0 && m.All:
 		writeFileError(conn, "'all' applies only to the single 'old'/'new' form; every entry of 'edits' must match exactly once. Nothing was written", nil)
 		return
@@ -333,16 +341,9 @@ func handleFileEdit(conn io.ReadWriter, m protocol.Message, policyRoot string, m
 
 	text := string(original)
 	if len(m.Edits) > 0 {
-		updated, err := applyEdits(text, m.Path, m.Edits)
+		updated, err := applyEdits(text, m.Path, m.Edits, maxSize)
 		if err != nil {
 			writeFileError(conn, err.Error(),
-				&protocol.FileResult{SHA256: current, SizeBytes: int64(len(original))})
-			return
-		}
-		if int64(len(updated)) > maxSize {
-			writeFileError(conn, fmt.Sprintf(
-				"those edits would grow %q to %d bytes, over the %d-byte edit limit; nothing was written",
-				m.Path, len(updated), maxSize),
 				&protocol.FileResult{SHA256: current, SizeBytes: int64(len(original))})
 			return
 		}
@@ -506,7 +507,7 @@ type span struct {
 // entry — is the other half of that contract. It means a caller can copy every
 // `old` out of one wanctl_read and expect each to mean what it read, which is
 // not true of edits applied one after another.
-func applyEdits(text, path string, edits []protocol.FileEdit) (string, error) {
+func applyEdits(text, path string, edits []protocol.FileEdit, maxSize int64) (string, error) {
 	spans := make([]span, 0, len(edits))
 	for i, e := range edits {
 		if e.Old == "" {
@@ -542,7 +543,22 @@ func applyEdits(text, path string, edits []protocol.FileEdit) (string, error) {
 		}
 	}
 
+	// Size the result before building it, the same way the single-edit path
+	// does and for the same reason: strings.Builder would otherwise allocate
+	// the whole oversized output on a device whose agent may be the only thing
+	// keeping it reachable, and only then be told it was too big.
+	projected := int64(len(text))
+	for _, s := range spans {
+		projected += int64(len(s.replace)) - int64(s.to-s.from)
+	}
+	if projected > maxSize {
+		return "", fmt.Errorf(
+			"those edits would grow %q to %d bytes, over the %d-byte edit limit; nothing was written",
+			path, projected, maxSize)
+	}
+
 	var sb strings.Builder
+	sb.Grow(int(projected))
 	at := 0
 	for _, s := range ordered {
 		sb.WriteString(text[at:s.from])

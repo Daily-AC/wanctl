@@ -165,7 +165,7 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 			"as SMALL as it can be",
 			"do not pad it with unchanged lines",
 			"not the result of the entry before it",
-			"checked before anything is written",
+			"checked before anything is written", "At most 64 entries",
 		},
 		"wanctl_write": {
 			// Which of the two writing tools to reach for, in pi's words.
@@ -178,6 +178,8 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 			// know what it is looking at when the image was shrunk.
 			// Which gate applies where, and what the image may have become.
 			"gated exactly like any other command", "Android is gated as an ELEVATED command",
+			// Bypass mode auto-approves a desktop capture; say so out loud.
+			"auto-approved like any other command",
 			"downscaled", "screencapture", "grim",
 			"PAIRING REQUIRED",
 		},

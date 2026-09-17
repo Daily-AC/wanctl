@@ -126,6 +126,46 @@ The exec path (which is how a screenshot travels) never had the bug: it returns 
 as itself. `execOver` was extracted from `ExecOut`, mirroring the `fileOpOver` seam, so that
 property is asserted rather than assumed.
 
+## Review round 2
+
+Seven findings. One accepted as an owner decision, six fixed.
+
+1. **A desktop capture is auto-approved under bypass.** Accepted: it is gated as an ordinary
+   command, and bypass auto-approves ordinary commands. Now said plainly in the tool
+   description rather than left to be discovered.
+2. **The batch built its result before checking the projected size.** The single-edit path has
+   always sized first, deliberately; the batch allocated the whole oversized string and only
+   then refused. `applyEdits` now sums `len(new)-len(old)` over the matched spans and refuses
+   above the cap before `strings.Builder` sees anything.
+3. **No cap on the number of edits.** Each entry scans the whole file, so one small frame could
+   spend a device's CPU. Capped at `protocol.MaxBatchEdits` = 64, refused before the file is
+   opened, and in the contract.
+4. **Spill write and open errors were discarded.** A full disk produced a truncated file
+   advertised as the complete output — the worst kind of wrong, because a caller greps it and
+   believes the absence of a match — and a failed open re-entered the branch, running a Glob
+   per chunk. The writer now latches the failure on the first error, removes the partial file,
+   and reports no path. The controller says "the device could not keep the full output", which
+   it can tell from "the agent is too old" because the byte count is reported either way.
+5. **Spill growth.** Each file is capped at 8 MiB (it keeps the FIRST 8 MiB; the controller is
+   already showing the last, so both ends are covered and the caller is told the middle is
+   gone) and the retained count at 32, oldest evicted first, swept on every open and once at
+   agent start.
+6. **A lost read was told to go hash a file it never changed.** The appended
+   "Do NOT simply retry" clause is now skipped for `file_read`, whose message already says
+   retrying is safe.
+7. **The spill path was dropped on an error frame.** A command that failed after emitting
+   megabytes is exactly when it matters. `ExecOutcome` now carries path, total and kept bytes
+   out of the error path too, and `mcpExec` appends the note to the failure.
+
+| Finding | Test |
+|---|---|
+| 2 | `TestMultiEditRefusesAGrowthOverTheLimitWithoutBuildingIt` |
+| 3 | `TestMultiEditRefusesMoreEntriesThanTheCap` (over, and exactly at, the cap) |
+| 4 | `TestSpillThatCannotBeWrittenReportsNoPath`, `TestFailedSpillDoesNotRetryPerChunk` |
+| 5 | `TestSpillStopsAtTheSizeCap`, `TestSweepCapsTheNumberOfRetainedSpills` |
+| 6 | `TestALostReadIsNotToldToCheckTheFile` |
+| 7 | `TestSpillSurvivesAnErrorFrame`, `TestTruncationSaysWhichSilenceThisIs` |
+
 ## Contradictions and judgment calls
 
 **`wanctl_edit`'s `old` and `new` are no longer `required` in the MCP schema.** The brief said

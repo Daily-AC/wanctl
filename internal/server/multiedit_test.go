@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -225,5 +227,90 @@ func TestSingleEditStillWorks(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(path); string(b) != "a = 2\na = 2\n" {
 		t.Errorf("file = %q", b)
+	}
+}
+
+// editCapped runs one file_edit against a scratch root with a small size cap, so
+// the projected-size refusal can be provoked without building an 8 MiB fixture.
+func editCapped(t *testing.T, root string, m protocol.Message, maxSize int64) protocol.Message {
+	t.Helper()
+	var buf bytes.Buffer
+	handleFileEdit(&buf, m, root, maxSize)
+	got, err := protocol.ReadMessage(&buf)
+	if err != nil {
+		t.Fatalf("decode reply: %v", err)
+	}
+	return got
+}
+
+// A batch that would grow the file past the limit is refused BEFORE the new
+// text is built. Building it first would allocate the whole oversized result on
+// a device whose agent may be the only thing keeping it reachable, and only then
+// discover it was too big — which is why the single-edit path has always sized
+// the result first, and why this one now does too.
+func TestMultiEditRefusesAGrowthOverTheLimitWithoutBuildingIt(t *testing.T) {
+	root := t.TempDir()
+	path := writeFile(t, root, "app.conf", "a = 1\nb = 2\n", 0o644)
+	before := fileSHA(t, path)
+
+	got := editCapped(t, root, protocol.Message{
+		Kind: protocol.KindFileEdit, Path: path,
+		Edits: []protocol.FileEdit{
+			{Old: "a = 1", New: "a = " + strings.Repeat("1", 200)},
+			{Old: "b = 2", New: "b = " + strings.Repeat("2", 200)},
+		},
+	}, 64)
+	if got.Kind != protocol.KindError {
+		t.Fatalf("reply = %q, want an error", got.Kind)
+	}
+	if !strings.Contains(got.Reason, "over the 64-byte edit limit") {
+		t.Errorf("refusal does not name the limit: %s", got.Reason)
+	}
+	// The projection counts every entry, not just the first.
+	// 12 bytes of file, plus 199 for each of the two entries.
+	if !strings.Contains(got.Reason, "to 410 bytes") {
+		t.Errorf("refusal does not report the projected size of the whole batch: %s", got.Reason)
+	}
+	if fileSHA(t, path) != before {
+		t.Error("the refused batch changed the file")
+	}
+}
+
+// Each entry is searched for across the whole file, so an unbounded list is a
+// way to spend a device's CPU with one small frame. The cap is refused before
+// the file is even opened.
+func TestMultiEditRefusesMoreEntriesThanTheCap(t *testing.T) {
+	root := t.TempDir()
+	path := writeFile(t, root, "app.conf", "a = 1\n", 0o644)
+
+	edits := make([]protocol.FileEdit, protocol.MaxBatchEdits+1)
+	for i := range edits {
+		edits[i] = protocol.FileEdit{Old: "a = 1", New: "a = 2"}
+	}
+	got := reply(t, root, protocol.Message{Kind: protocol.KindFileEdit, Path: path, Edits: edits})
+	if got.Kind != protocol.KindError {
+		t.Fatalf("reply = %q, want an error", got.Kind)
+	}
+	if !strings.Contains(got.Reason, "over the 64-entry limit") {
+		t.Errorf("refusal does not name the cap: %s", got.Reason)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "a = 1\n" {
+		t.Errorf("file = %q", b)
+	}
+
+	// Exactly the cap is allowed: the limit is a ceiling, not a trap one under.
+	atCap := make([]protocol.FileEdit, protocol.MaxBatchEdits)
+	var sb strings.Builder
+	for i := range atCap {
+		fmt.Fprintf(&sb, "key%d = old\n", i)
+		atCap[i] = protocol.FileEdit{Old: fmt.Sprintf("key%d = old", i), New: fmt.Sprintf("key%d = new", i)}
+	}
+	full := writeFile(t, root, "many.conf", sb.String(), 0o644)
+	ok := reply(t, root, protocol.Message{Kind: protocol.KindFileEdit, Path: full, Edits: atCap})
+	if ok.Kind != protocol.KindFileResult {
+		t.Fatalf("a batch of exactly %d was refused: %s", protocol.MaxBatchEdits, ok.Reason)
+	}
+	if ok.File.Replaced != protocol.MaxBatchEdits {
+		t.Errorf("replaced = %d, want %d", ok.File.Replaced, protocol.MaxBatchEdits)
 	}
 }
