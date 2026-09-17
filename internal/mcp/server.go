@@ -1260,12 +1260,17 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		SpillAfter: maxExecStream,
 	}, &stdout, &stderr)
 	if err != nil {
-		return dialErrorResult(sess, err), nil
+		hint := dialErrorResult(sess, err)
+		if res.SpillPath != "" {
+			// The command ran and failed; its output is still on the device.
+			hint = mcpapi.NewToolResultError(errorTextOf(hint) + "\n" + spillNote(res))
+		}
+		return hint, nil
 	}
 	code := res.Code
 	out := fmt.Sprintf("exit: %d\n", code)
 	if stdout.Len() > 0 {
-		s := tailStream(stdout.Bytes(), res.SpillPath)
+		s := tailStream(stdout.Bytes(), res)
 		out += "\n--- stdout ---\n" + s
 		if !strings.HasSuffix(s, "\n") {
 			out += "\n"
@@ -1282,6 +1287,18 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		out += "(no output)\n"
 	}
 	return mcpapi.NewToolResultText(out), nil
+}
+
+// errorTextOf pulls the message back out of a tool result so a caller can add
+// to it. mcp-go has no accessor, and rebuilding the result from its parts would
+// drop whatever the shared dial-error wording decided to say.
+func errorTextOf(res *mcpapi.CallToolResult) string {
+	for _, c := range res.Content {
+		if t, ok := c.(mcpapi.TextContent); ok {
+			return t.Text
+		}
+	}
+	return ""
 }
 
 // mcpRead and mcpEdit are available over the hosted HTTP endpoint as well as
@@ -1497,6 +1514,13 @@ func fileOpErrorResult(sess sessionAPI, err error) *mcpapi.CallToolResult {
 	// actually known and what to do about it — look first.
 	var lost *client.ResultLostError
 	if errors.As(err, &lost) {
+		// A lost READ left nothing behind to inspect, and the error already
+		// says to retry. Appending "do not simply retry, read the file first"
+		// there would contradict it and send the caller after a hash of
+		// something it never changed.
+		if lost.Kind == protocol.KindFileRead {
+			return mcpapi.NewToolResultError(err.Error())
+		}
 		return mcpapi.NewToolResultError(err.Error() +
 			". Do NOT simply retry: call wanctl_read first and compare the sha256 against what you expected.")
 	}
@@ -1829,16 +1853,35 @@ const maxExecStream = 48 * 1024
 // the head is one grep away and the tail is what the caller needs in front of
 // it. deviceCopy names that file, so the next call is `grep` and not the same
 // command again with a filter guessed blind.
-func tailStream(b []byte, deviceCopy string) string {
+func tailStream(b []byte, res client.ExecOutcome) string {
 	if len(b) <= maxExecStream {
 		return string(b)
 	}
 	tail := b[len(b)-maxExecStream:]
-	where := "the device did not keep the full output (its agent predates this; run `wanctl update` there)"
-	if deviceCopy != "" {
-		where = "full output at " + deviceCopy + " on the device, kept for 1h — read it with wanctl_read or grep it with wanctl_exec"
+	return fmt.Sprintf("[output truncated: showing last %d of %d bytes; %s]\n",
+		len(tail), len(b), spillNote(res)) + string(tail)
+}
+
+// spillNote says what became of the rest of the output. There are three
+// answers, and a caller acts differently on each: the device has it, the device
+// tried and could not, or the device was never asked because its agent is too
+// old to know how. The middle case is why the device reports the byte count
+// even when it reports no path — silence alone cannot tell the last two apart.
+func spillNote(res client.ExecOutcome) string {
+	switch {
+	case res.SpillPath != "" && res.SpillKept > 0 && res.SpillKept < res.SpillBytes:
+		return fmt.Sprintf(
+			"the device kept the FIRST %d bytes at %s (its copy is capped, so the middle is gone) — read it with wanctl_read or grep it with wanctl_exec",
+			res.SpillKept, res.SpillPath)
+	case res.SpillPath != "":
+		return "full output at " + res.SpillPath +
+			" on the device, kept for 1h — read it with wanctl_read or grep it with wanctl_exec"
+	case res.SpillBytes > 0:
+		// It counted, so it understood the request and the file is what failed.
+		return "the device could not keep the full output (no writable temp space); narrow the command with a filter instead"
+	default:
+		return "the device did not keep the full output (its agent predates this; run `wanctl update` there)"
 	}
-	return fmt.Sprintf("[output truncated: showing last %d of %d bytes; %s]\n", len(tail), len(b), where) + string(tail)
 }
 
 func clampStream(b []byte) string {

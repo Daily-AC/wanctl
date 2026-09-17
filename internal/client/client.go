@@ -607,8 +607,14 @@ type ExecOutcome struct {
 	// spilling existed.
 	SpillPath string
 	// SpillBytes is the output's true length in bytes, which is what the tail a
-	// caller shows is a tail of.
+	// caller shows is a tail of. It is reported even when SpillPath is empty,
+	// and that is how a device that tried and could not keep the output is told
+	// apart from an agent too old to have been asked: the first counted, the
+	// second reports nothing at all.
 	SpillBytes int64
+	// SpillKept is how much of the output the device's copy actually holds. Less
+	// than SpillBytes means the file is a prefix and the middle is gone.
+	SpillKept int64
 }
 
 // elevationHonoured checks that a device which reported an exit actually ran
@@ -718,15 +724,23 @@ func execOver(ctx context.Context, rw io.ReadWriter, req ExecRequest, stdout, st
 			}
 			switch m.Kind {
 			case protocol.KindExit:
-				return ExecOutcome{Code: m.Code, SpillPath: m.Path, SpillBytes: m.Size}, elevationHonoured(req, m)
+				return ExecOutcome{
+					Code: m.Code, SpillPath: m.Path, SpillBytes: m.Size, SpillKept: m.SpillKept,
+				}, elevationHonoured(req, m)
 			case protocol.KindError:
+				// The spill rides on the error frame too, and is carried out
+				// with it: a command that failed after emitting megabytes is
+				// exactly when the caller most needs to know where the rest of
+				// the output is, and dropping the path here would have thrown
+				// that away at the last step.
+				lost := ExecOutcome{Code: -1, SpillPath: m.Path, SpillBytes: m.Size, SpillKept: m.SpillKept}
 				// A device that honoured our cancel reports the killed command
 				// as an error. The caller asked for that, so it reads as
 				// cancellation rather than as a device-side failure.
 				if ctxErr := ctx.Err(); ctxErr != nil {
-					return failed, ctxErr
+					return lost, ctxErr
 				}
-				return failed, fmt.Errorf("remote error: %s", m.Reason)
+				return lost, fmt.Errorf("remote error: %s", m.Reason)
 			case protocol.KindReject:
 				return failed, rejectError(m)
 			}

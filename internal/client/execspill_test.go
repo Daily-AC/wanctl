@@ -159,3 +159,44 @@ func TestLostExecConnectionIsNotAnUnsupportedAgent(t *testing.T) {
 		}
 	}
 }
+
+// A command that fails after emitting megabytes is exactly when knowing where
+// the rest of the output went matters most, so the error frame carries the
+// spill and the controller carries it out.
+func TestSpillSurvivesAnErrorFrame(t *testing.T) {
+	device, controller := net.Pipe()
+	defer controller.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		protocol.ReadMessage(device)
+		// Output, then a failure — the shape of a build that died mid-run.
+		protocol.WriteFrame(device, protocol.FrameStdout, bytes.Repeat([]byte("x"), 100))
+		protocol.WriteMessage(device, protocol.Message{
+			Kind:   protocol.KindError,
+			Reason: "command cancelled by the controller",
+			Path:   "/tmp/wanctl-exec-deadbeef.log", Size: 4096, SpillKept: 4096,
+		})
+	}()
+
+	req := ExecRequest{Command: "make", OneShot: true, SpillAfter: 64}
+	if err := protocol.WriteMessage(controller, protocol.Message{Kind: protocol.KindExec, Command: req.Command}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	res, err := execOver(context.Background(), controller, req, &out, &out)
+	<-done
+
+	if err == nil {
+		t.Fatal("an error frame was reported as success")
+	}
+	if res.SpillPath != "/tmp/wanctl-exec-deadbeef.log" {
+		t.Errorf("the spill path was dropped on the error path: %q", res.SpillPath)
+	}
+	if res.SpillBytes != 4096 || res.SpillKept != 4096 {
+		t.Errorf("byte counts lost: %d/%d", res.SpillKept, res.SpillBytes)
+	}
+	if res.Code != -1 {
+		t.Errorf("code = %d, want -1", res.Code)
+	}
+}

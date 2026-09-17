@@ -103,6 +103,13 @@ type Message struct {
 	// tells the controller to say the full output was not kept.
 	SpillAfter int64 `json:"spill_after,omitempty"`
 
+	// exec exit: how much of the output the device's own copy actually holds,
+	// when that is less than Size. A spill file is capped, so a truly enormous
+	// output leaves the device holding its first MaxSpillBytes and the
+	// controller showing its last; saying so is what keeps a caller from
+	// grepping the file for a line that was never written to it.
+	SpillKept int64 `json:"spill_kept,omitempty"`
+
 	// exec: run through an elevation channel (Android; see internal/elevate).
 	// Elevate is the request; Via optionally pins one channel ("su",
 	// "adb") instead of letting the device pick. Both are omitted by every
@@ -205,6 +212,13 @@ const (
 	MaxReadBytes     = 256 << 10 // 256 KiB of returned content
 	MaxEditBytes     = 8 << 20   // 8 MiB, the largest file an edit will rewrite
 	DefaultReadLines = 2000
+
+	// MaxBatchEdits caps the entries in one file_edit. Each entry is searched
+	// for across the whole file, so the work a single request can ask for grows
+	// with the product of the two; without a cap an authenticated controller
+	// could spend a device's CPU with one small frame. Sixty-four is far more
+	// than a human-sized patch and far less than a weapon.
+	MaxBatchEdits = 64
 )
 
 // FileResult is what a device reports after a file_read or a file_edit.
