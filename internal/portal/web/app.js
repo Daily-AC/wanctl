@@ -1252,9 +1252,9 @@
   $$('.sgroup button[data-s]').forEach(function (b) {
     b.onclick = function () { go('settings/' + b.dataset.s); };
   });
-  // 文档不再由门户渲染。文档站上线后把这个地址换掉即可。
+  // 文档不再由门户渲染，链到文档站（2026-09-04 上线，中英双语）。
   $('#docsLink').onclick = function () {
-    window.open('https://github.com/Daily-AC/wanctl#readme', '_blank', 'noopener');
+    window.open('https://wc.z10.dev/docs/', '_blank', 'noopener');
   };
 
   /* ── 令牌 ────────────────────────────────────────────────────────── */
