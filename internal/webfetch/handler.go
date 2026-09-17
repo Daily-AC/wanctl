@@ -51,14 +51,11 @@ var (
 	DefaultFileSeconds = 30
 )
 
-// Long jobs hold a slot for as long as they run, so the caps are what keeps one
-// caller from owning the adapter. A grant is the narrowest bucket, an account
-// the one that matters: one owner can hold many grants at once, and without the
-// middle limit sixteen grants of four operations each would be the whole
-// adapter. They are variables so a test can compress the scale.
+// Long jobs hold a slot for as long as they run, so these caps are what keeps
+// one grant from owning the adapter. They are variables so a test can compress
+// the scale.
 var (
 	maxOperationsPerGrant = 4
-	maxOperationsPerOwner = 8
 	maxOperations         = 64
 )
 
@@ -88,7 +85,6 @@ type Handler struct {
 	mu       sync.Mutex
 	requests map[string]rateWindow
 	running  map[string]int // grant -> operations in flight
-	owned    map[string]int // owner namespace -> operations in flight
 	total    int
 }
 
@@ -100,8 +96,6 @@ type work struct {
 	job       delegation.Job
 	request   delegation.Request
 	token     string
-	owner     string
-	expiresAt time.Time
 	operation Operation
 }
 
@@ -155,7 +149,7 @@ func New(cfg Config) (*Handler, error) {
 	cfg.Seed = append([]byte(nil), cfg.Seed...)
 	cfg.PublicOrigin, cfg.PortalOrigin, cfg.RelayURL = strings.TrimRight(cfg.PublicOrigin, "/"), strings.TrimRight(cfg.PortalOrigin, "/"), strings.TrimRight(cfg.RelayURL, "/")
 	ctx, cancel := context.WithCancel(context.Background())
-	h := &Handler{cfg: cfg, ctx: ctx, cancel: cancel, requests: map[string]rateWindow{}, running: map[string]int{}, owned: map[string]int{}}
+	h := &Handler{cfg: cfg, ctx: ctx, cancel: cancel, requests: map[string]rateWindow{}, running: map[string]int{}}
 	if cleaner, ok := cfg.Store.(interface {
 		CleanupDelegations(context.Context, time.Duration) error
 	}); ok {
@@ -374,11 +368,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// The slot is taken before anything is written down. A refusal that had
 		// already inserted a job would spend the caller's 64-job ledger
 		// allowance on an operation that never ran.
-		owner := access.Namespace
-		if owner == "" {
-			owner = id
-		}
-		if !h.reserve(owner, id) {
+		if !h.reserve(id) {
 			log.Printf("webfetch: call rejected grant=%s reason=adapter_busy", id)
 			h.respond(w, r, 429, map[string]any{
 				"error": "too many operations are already running; this one did not start", "error_code": "adapter_busy",
@@ -390,15 +380,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		payload, _ := json.Marshal(op)
 		job, fresh, err := h.cfg.Jobs.BeginJob(r.Context(), id, query.Get("rid"), digest(payload), payload)
 		if err != nil {
-			h.release(owner, id)
+			h.release(id)
 			h.fail(w, r, err)
 			return
 		}
 		if fresh {
 			log.Printf("webfetch: job created grant=%s job=%s", id, job.ID)
-			h.dispatch(work{job: job, request: request, token: token, owner: owner, expiresAt: access.ExpiresAt, operation: op})
+			h.dispatch(work{job: job, request: request, token: token, operation: op})
 		} else {
-			h.release(owner, id)
+			h.release(id)
 		}
 		h.jobResponse(w, r, ticket, job, !fresh, op, access.ExpiresAt)
 	case len(parts) == 5 && parts[3] == "jobs":
@@ -531,32 +521,28 @@ func (h *Handler) dispatch(task work) {
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
-		defer h.release(task.owner, task.job.GrantID)
+		defer h.release(task.job.GrantID)
 		h.execute(task)
 	}()
 }
 
-func (h *Handler) reserve(owner, grant string) bool {
+func (h *Handler) reserve(grant string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.total >= maxOperations || h.running[grant] >= maxOperationsPerGrant || h.owned[owner] >= maxOperationsPerOwner {
+	if h.total >= maxOperations || h.running[grant] >= maxOperationsPerGrant {
 		return false
 	}
 	h.running[grant]++
-	h.owned[owner]++
 	h.total++
 	return true
 }
 
-func (h *Handler) release(owner, grant string) {
+func (h *Handler) release(grant string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.total--
 	if h.running[grant]--; h.running[grant] <= 0 {
 		delete(h.running, grant)
-	}
-	if h.owned[owner]--; h.owned[owner] <= 0 {
-		delete(h.owned, owner)
 	}
 }
 

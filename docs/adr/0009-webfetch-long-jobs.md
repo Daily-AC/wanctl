@@ -57,16 +57,19 @@ jobs also return `poll_after_seconds` and `deadline_at`, so the client waits
 instead of burning the old "at most 8 polls" budget in half a minute.
 
 **The fixed worker pool is gone.** Each operation runs on its own goroutine under
-three counters: at most 4 in flight per grant, 8 per owner namespace, 64 across
-the adapter. The middle one is the one that matters — a grant is not a person.
-One relay account can hold many grants at once, so grant-plus-global alone let
-sixteen grants of four long operations each take the whole adapter and hand
-every other account `adapter_busy`. A call over any limit is refused **before**
-the ledger write, with `error_code: "adapter_busy"` and
-`execution_started: false`, so a refusal never spends the caller's 64-job
-allowance on an operation that did not run. The slot is released by a deferred
-call around `execute`, which covers a result, a transport failure, a store write
-that fails and a recovered panic alike.
+two counters: at most 4 in flight per grant, 64 across the adapter. One grant's
+long job can no longer starve another, and the global counter still bounds the
+process. A call over either limit is refused **before** the ledger write, with
+`error_code: "adapter_busy"` and `execution_started: false`, so a refusal never
+spends the caller's 64-job allowance on an operation that did not run. The slot
+is released by a deferred call around `execute`, which covers a result, a
+transport failure, a store write that fails and a recovered panic alike.
+
+A per-owner budget between those two was written and then removed: the relay is
+moving to a single-owner deployment (`wanctl-relay-cf-tunnel-plan`, 2026-09-17),
+so one account starving another is not a problem this code needs to solve. If
+the relay ever becomes multi-tenant again, that is the gap to reopen — a grant
+is not a person, and one account can hold many grants at once.
 
 ## Why not run exec through `exec_async` / `exec_poll`
 
@@ -107,10 +110,9 @@ durable to live. Async execution would need a job-store change too.
   above, so this trade is unchanged, just slower to appear.
 - A grant that wants more than four operations at once now gets a clean refusal
   instead of silent queueing behind someone else's render.
-- The per-owner budget is enforced in the adapter, not in the grant store: the
-  relay still lets one account hold any number of approved grants
-  (`internal/relay/delegation_store.go`). Capping grants themselves is a
-  separate decision about what an owner may approve.
+- Cross-account isolation is out of scope while the deployment is single-owner.
+  Sixteen grants of four long operations each can still take the whole adapter;
+  on a shared relay that would be a starvation channel.
 - `unknown` no longer names a cause, because the adapter records it for four
   different ones. The instruction is the same in all of them: do not repeat the
   operation automatically, check the device.
