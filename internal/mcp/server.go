@@ -782,7 +782,7 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpExec)
 
 	s.AddTool(mcpapi.NewTool("wanctl_read",
-		mcpapi.WithDescription("Read a range of lines from a text file on a remote wanctl-enrolled device. Use this instead of `wanctl_exec` with cat/head/sed/Get-Content whenever you want to LOOK at a file: it is performed natively on the device, so it behaves identically on Linux, macOS, Windows and Android, nothing is parsed by a shell, and the reply tells you exactly what you got — 'lines A-B of N', the file's size, and the sha256 OF THE WHOLE FILE. Save that sha256: passing it back as wanctl_edit's expected_sha256 is how you make sure you are patching the text you actually read. Reads at most 256 KiB of content per call; when the range is cut short the result says truncated=true and you should call again with a larger `offset`. Errors: 'not a UTF-8 text file' means the file is binary — use wanctl_pull or wanctl_exec instead, do not retry. Same pairing/policy rules as wanctl_exec: 'PAIRING REQUIRED' carries a URL to relay VERBATIM to the user, 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call wanctl_trust_server and retry, and 'read denied by device policy' means the device's owner has not granted read access to that path."),
+		mcpapi.WithDescription("Read a range of lines from a text file on a remote wanctl-enrolled device. Use this instead of `wanctl_exec` with cat/head/sed/Get-Content whenever you want to LOOK at a file: it is performed natively on the device, so it behaves identically on Linux, macOS, Windows and Android, nothing is parsed by a shell, and the reply tells you exactly what you got — 'lines A-B of N', the file's size, and the sha256 OF THE WHOLE FILE. Save that sha256: passing it back as wanctl_edit's expected_sha256 is how you make sure you are patching the text you actually read. Reads at most 256 KiB of content per call, and always cuts on a line boundary: when the range is cut short the result says truncated=true and names the `offset` to continue from, so paging never loses or repeats a line. The one exception is a single line bigger than 256 KiB, which cannot be returned whole — the result names that line and tells you to read it with wanctl_exec (sed/cut) instead; do not page on, because the same line would come back every time. Errors: 'not a UTF-8 text file' means the file is binary — use wanctl_pull or wanctl_exec instead, do not retry. Same pairing/policy rules as wanctl_exec: 'PAIRING REQUIRED' carries a URL to relay VERBATIM to the user, 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call wanctl_trust_server and retry, and 'read denied by device policy' means the device's owner has not granted read access to that path."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS for shared devices.")),
 		mcpapi.WithString("path", mcpapi.Required(), mcpapi.Description("Absolute path on the target device. `~` is NOT expanded — spell the home directory out.")),
 		mcpapi.WithNumber("offset", mcpapi.Description("1-based line number to start at. Default 1. Use this to page through a file that came back truncated.")),
@@ -1349,8 +1349,15 @@ func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	if res.TotalLines == 0 {
 		head = fmt.Sprintf("%s\nempty file, 0 bytes, sha256 %s\n", path, res.SHA256)
 	}
-	if res.Truncated {
-		head += fmt.Sprintf("TRUNCATED at the 256 KiB cap: call again with offset=%d for the rest.\n", res.LastLine+1)
+	switch {
+	case res.LongLine != 0:
+		// Telling the model to continue past this line would send it back for
+		// the same line every time, because the line itself is the thing that
+		// does not fit.
+		head += fmt.Sprintf("TRUNCATED: line %d is larger than the 256 KiB cap on its own, so only its first part is above. "+
+			"Do NOT call this tool again for that line — read it with wanctl_exec (sed/cut) instead.\n", res.LongLine)
+	case res.Truncated:
+		head += fmt.Sprintf("TRUNCATED at the 256 KiB cap after a whole number of lines: call again with offset=%d for the rest.\n", res.LastLine+1)
 	}
 	return mcpapi.NewToolResultText(head + "\n--- content ---\n" + res.Content), nil
 }

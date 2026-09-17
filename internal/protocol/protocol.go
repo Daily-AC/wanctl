@@ -186,6 +186,11 @@ type FileResult struct {
 	FirstLine  int    `json:"first_line,omitempty"`  // 1-based number of the first returned line
 	LastLine   int    `json:"last_line,omitempty"`   // 1-based number of the last returned line
 	Truncated  bool   `json:"truncated,omitempty"`   // the byte cap cut the requested range short
+	// LongLine names a line that does not fit in MaxReadBytes on its own, whose
+	// first MaxReadBytes are returned as a prefix. It is the one case where
+	// asking again from the next line would not make progress, so every surface
+	// tells the caller to reach for a different tool instead of paging on.
+	LongLine int `json:"long_line,omitempty"`
 
 	// edit
 	Replaced    int `json:"replaced,omitempty"`    // occurrences actually replaced

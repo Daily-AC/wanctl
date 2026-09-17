@@ -35,6 +35,7 @@ import (
 	mcppkg "wanctl/internal/mcp"
 	"wanctl/internal/policy"
 	"wanctl/internal/portal"
+	"wanctl/internal/protocol"
 	"wanctl/internal/relay"
 	"wanctl/internal/script"
 	"wanctl/internal/serverlog"
@@ -932,6 +933,14 @@ func cmdRead(ctx context.Context, args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "lines %d-%d of %d, sha256 %s, truncated=%s\n",
 		res.FirstLine, res.LastLine, res.TotalLines, res.SHA256, truncated)
+	switch {
+	case res.LongLine != 0:
+		// Asking again from the next line would return this same line forever.
+		fmt.Fprintf(os.Stderr, "line %d is larger than %d KiB; only its first part is shown — use exec with sed/cut to inspect it\n",
+			res.LongLine, protocol.MaxReadBytes>>10)
+	case res.Truncated:
+		fmt.Fprintf(os.Stderr, "continue with --offset %d\n", res.LastLine+1)
+	}
 	return nil
 }
 

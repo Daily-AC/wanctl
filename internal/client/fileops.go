@@ -39,6 +39,9 @@ type ReadResult struct {
 	SizeBytes  int64
 	SHA256     string
 	Truncated  bool
+	// LongLine names a line too large to return whole, whose first 256 KiB came
+	// back instead. Paging past it is the one continuation that cannot work.
+	LongLine int
 }
 
 // EditResult is what a device reports for an applied edit.
@@ -85,6 +88,7 @@ func (c *Client) ReadFile(ctx context.Context, req ReadRequest) (*ReadResult, er
 		SizeBytes:  res.SizeBytes,
 		SHA256:     res.SHA256,
 		Truncated:  res.Truncated,
+		LongLine:   res.LongLine,
 	}, nil
 }
 

@@ -77,7 +77,13 @@ does, and against a **live agent** sent a frame kind it has never heard of.
 | 8 | edit gated like `file_put`, read like `file_get` | PASS | `TestFileReadAndEditUseTheSamePolicyKindsAsGetAndPut`, `TestFileReadAndEditRefusalsMatchGetAndPut`, `TestBypassModeCoversEdit` |
 | 9 | old agent → the update instruction, within 10 s | PASS | `TestOldAgentUnknownKindBecomesAnUpdateInstruction`, `TestLiveAgentUnknownKindBecomesAnUpdateInstruction` |
 | 10 | real link: build + local agent/controller round trip | PASS | see below |
-| 11 | `gofmt -l .` prints nothing | PASS | clean |
+| 11 | `gofmt -l .` prints nothing | PASS |
+| R1 | `all=true` cannot make the agent allocate more than the edit limit | PASS | `TestEditRefusesAnEditThatWouldGrowPastTheLimit`, `TestEditGrowthLimitBoundary` |
+| R2 | a capability/delegation denial logs a `file` event with the path | PASS | `TestRejectedFileRequestsAreLoggedWithTheirPath` |
+| R3 | invalid UTF-8 past the 8 KiB sniff is refused, not silently replaced | PASS | `TestReadRefusesInvalidUTF8PastTheSniff` |
+| R4 | truncation cuts on a line boundary; an oversized line is named, not paged | PASS | `TestReadStopsAtTheByteCapOnALineBoundary`, `TestReadNamesALineTooLargeToReturn` |
+| R5 | an edit refuses a binary file, like a read does | PASS | `TestEditRefusesBinaryFiles` |
+| R6 | an absurd `limit` cannot overflow the last-line number | PASS | `TestReadClampsAnAbsurdLimit` | clean |
 
 `go vet ./...` clean, `go test ./...` green across all 30 packages (no rerun needed; the known
 `TestAccessTokenFailsClosed` flake, issue #90, did not fire).
@@ -104,6 +110,41 @@ Two harnesses, both real:
      the file's current hash; an edit whose `old` matched 5000 times was refused, exit 1.
    - Reading a binary file was refused with the not-text message, exit 1.
    - `wanctl logs --type file` showed `READ <path>` and `EDIT <path>` entries with decisions.
+
+## Review round 1
+
+Six findings from the review of PR #91, all fixed on the same branch.
+
+1. **`all=true` could have been asked for arbitrary memory.** `strings.Replace` allocates its
+   whole output up front, and only the input was checked against the 8 MiB limit, so 8 MiB of
+   `a` replaced by a 1 KiB string was an 8 GiB allocation on the device. The projected output
+   size is now computed and refused before any replacement happens, which also closes the gap
+   where an edit could grow a file past a size it could never have been uploaded at.
+2. **Denials before the policy gate lost the path.** `rejectedRequestEvent`
+   (`internal/agent/delegation.go`) knew `file_put` and `file_get` but not the new kinds, so a
+   capability or delegation refusal logged a bare `request` event. Both kinds now log a `file`
+   event reading `READ <path>` / `EDIT <path>`.
+3. **Read content was not byte-faithful.** The text sniff only saw the first 8 KiB, but the
+   content is marshalled as a JSON string and `encoding/json` rewrites invalid UTF-8 as U+FFFD
+   without saying so. The returned range is now validated and refused with the same not-text
+   error, so a file that starts ASCII and turns to bytes is a refusal rather than quiet
+   corruption.
+4. **Truncated reads could not be paged.** The cap used to cut mid-line while every surface
+   told the caller to continue at the next line, which loses that line's tail. Truncation now
+   happens at the last complete line that fits, and `returned` covers whole lines only. A
+   single line larger than the whole cap is the case paging cannot solve, so it comes back as
+   a prefix with `long_line` naming it, and the CLI trailer and the `wanctl_read` description
+   both say to use exec with sed/cut rather than to page on.
+5. **An edit did not check that it was editing text.** The tool description promises a text
+   file; the same sniff a read applies now runs before an edit, so a binary is refused instead
+   of corrupted.
+6. **An absurd `limit` overflowed.** `--limit 9223372036854775807` wrapped the last-line number
+   negative. The line budget is clamped to 1 Mi lines and the sum is overflow-guarded.
+
+All six were re-checked over the real link as well as in tests: a 400 KiB file read back as
+exactly two whole lines with `continue with --offset 3`, that continuation returning lines 3–4
+with nothing lost or repeated; a 300 KiB line reported as `line 2 is larger than 256 KiB`; the
+8 GiB edit and the binary edit both refused with exit 1 and the file untouched.
 
 ## Deliberate decisions
 
