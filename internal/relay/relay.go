@@ -101,6 +101,16 @@ type Relay struct {
 	enrollMu    sync.Mutex
 	enrollCodes map[string]*enrollCode // one-time device-enrollment codes
 
+	// MCP OAuth. mcpSeed is the same secret the MCP handler runs on, which is
+	// what lets an access token sealed here be opened there with no lookup.
+	// Requests and codes are short-lived and stay in memory; clients and
+	// refresh tokens are durable and live in oauthStore.
+	mcpSeed       []byte
+	oauthStore    OAuthStore
+	oauthMu       sync.Mutex
+	oauthRequests map[string]*oauthAuthzRequest
+	oauthCodes    map[string]*oauthCode
+
 	notifyDedupeMu sync.Mutex
 	notifyDedupe   map[notifyDedupeKey]time.Time
 }
@@ -145,6 +155,7 @@ func (r *Relay) Handler() http.Handler {
 	r.registerAccess(mux)
 	r.registerUser(mux)
 	r.registerDist(mux)
+	r.registerOAuth(mux)
 	if r.mcpHandler != nil {
 		// /mcp is the canonical URL an AI host registers:
 		// https://<relay>/mcp. /wanctl-mcp is an alias kept for deployments

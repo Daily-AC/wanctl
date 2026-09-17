@@ -128,6 +128,35 @@
     reject.onclick = function () { decide('/api/delegations/reject', { request_id: delegate.dataset.request }); };
   }
 
+  /* ── OAuth 同意页：允许 / 拒绝 ─────────────────────────────────────
+     决定走 POST（同源 + 双提交 CSRF），服务端算好该跳去哪，这里只负责跳。
+     不用 <form action> 直接往客户端的回调地址提交：那是跨站导航，CSP 的
+     form-action 'self' 挡它，而放宽 CSP 只为省一次 fetch 是坏交易。 */
+  var consent = $('#oauthConsent');
+  if (consent) {
+    var allow = $('#oauthAllow'), denyBtn = $('#oauthDeny'), consentErr = $('#oauthError');
+    var decideOAuth = function (allowed) {
+      allow.disabled = denyBtn.disabled = true;
+      consentErr.textContent = '';
+      post('/api/oauth/decide', { request_id: consent.dataset.request, allow: allowed })
+        .then(function (r) {
+          if (!r.ok) {
+            return r.text().then(function (msg) { throw new Error(msg.trim() || ('HTTP ' + r.status)); });
+          }
+          return r.json().then(function (body) {
+            if (!body.redirect) throw new Error(lang === 'en' ? 'No redirect returned.' : '服务端没有返回跳转地址。');
+            location.href = body.redirect;
+          });
+        })
+        .catch(function (err) {
+          consentErr.textContent = err.message || (lang === 'en' ? 'Network error — try again.' : '网络错误，请重试。');
+          allow.disabled = denyBtn.disabled = false;
+        });
+    };
+    consent.onsubmit = function (e) { e.preventDefault(); decideOAuth(true); };
+    denyBtn.onclick = function () { decideOAuth(false); };
+  }
+
   /* ── 设备授权页：复制授权码 ────────────────────────────────────────
      复制成功后「点一下复制」换成「已复制」，有效期那半句留着 —— 它在
      复制之后依然是这一行里唯一还会变的信息。 */

@@ -28,6 +28,7 @@ import (
 	"wanctl/internal/client"
 	"wanctl/internal/config"
 	"wanctl/internal/limits"
+	"wanctl/internal/mcpauth"
 	"wanctl/internal/policy"
 	"wanctl/internal/script"
 	"wanctl/internal/serverlog"
@@ -57,22 +58,124 @@ func ServeStdio() error {
 // mcp-go uses it to rewrite session URLs in responses; pass the same value you
 // register the handler at.
 func Handler(seed []byte, endpointPath string) (http.Handler, error) {
-	if len(seed) < 32 {
-		return nil, fmt.Errorf("mcp seed must be at least 32 bytes, got %d", len(seed))
+	return HandlerWithOptions(Options{Seed: seed, EndpointPath: endpointPath})
+}
+
+// Options configures the hosted MCP handler.
+type Options struct {
+	// Seed is the relay's MCP seed (≥32 bytes).
+	Seed []byte
+	// EndpointPath is the public path the AI host POSTs to, usually "/mcp".
+	EndpointPath string
+	// OAuth, when non-nil, additionally accepts OAuth 2.1 bearer tokens.
+	OAuth *OAuthConfig
+}
+
+// OAuthConfig turns on bearer authentication for the hosted endpoint.
+//
+// It exists because one class of client — ChatGPT's connector is the one that
+// forced the issue — starts a new MCP session for every single tool call. A
+// login stored against Mcp-Session-Id can never survive that, so those clients
+// saw "LOGIN REQUIRED" immediately after logging in successfully. A bearer is
+// carried on every request instead, so identity stops depending on the session.
+type OAuthConfig struct {
+	// ResourceMetadataURL is what a 401 points the client at so it can start
+	// the authorization flow (RFC 9728).
+	ResourceMetadataURL string
+	// Live reports whether the namespace token inside an access token is still
+	// valid. Asked on every bearer request, so revoking a grant takes effect on
+	// the next call rather than when the hour-long token expires.
+	Live func(namespace, token string) bool
+	// Revoke stops the namespace token behind a grant. It is what wanctl_logout
+	// does on this path: the bearer is stateless, so the only durable way to
+	// end the session is to end the token it carries.
+	Revoke func(namespace, token string) error
+}
+
+// HandlerWithOptions is Handler with the optional pieces spelled out.
+func HandlerWithOptions(o Options) (http.Handler, error) {
+	if len(o.Seed) < 32 {
+		return nil, fmt.Errorf("mcp seed must be at least 32 bytes, got %d", len(o.Seed))
 	}
 	sessions = &sessionStore{
-		seed:    append([]byte(nil), seed...),
+		seed:    append([]byte(nil), o.Seed...),
 		m:       map[string]*remoteSession{},
 		revoked: map[string]time.Time{},
+		trust:   map[string]*transport.Store{},
+		oauth:   o.OAuth,
 	}
 	go sessions.gcLoop()
 	s := server.NewMCPServer("wanctl", "1.0.0")
 	registerMCPTools(s)
 	opts := []server.StreamableHTTPOption{}
-	if endpointPath != "" {
-		opts = append(opts, server.WithEndpointPath(endpointPath))
+	if o.EndpointPath != "" {
+		opts = append(opts, server.WithEndpointPath(o.EndpointPath))
 	}
-	return refuseBrowserOrigins(server.NewStreamableHTTPServer(s, opts...)), nil
+	// The bearer is verified by the gate in front, which can answer 401 with a
+	// WWW-Authenticate header; mcp-go answers in JSON-RPC and has no way to.
+	// This carries the gate's verdict the rest of the way in.
+	opts = append(opts, server.WithHTTPContextFunc(func(ctx context.Context, req *http.Request) context.Context {
+		if claim, ok := oauthClaimFrom(req.Context()); ok {
+			return context.WithValue(ctx, oauthClaimKey{}, claim)
+		}
+		return ctx
+	}))
+	h := refuseBrowserOrigins(server.NewStreamableHTTPServer(s, opts...))
+	if o.OAuth != nil {
+		h = oauthGate(append([]byte(nil), o.Seed...), o.OAuth, h)
+	}
+	return h, nil
+}
+
+type oauthClaimKey struct{}
+
+func oauthClaimFrom(ctx context.Context) (mcpauth.Claim, bool) {
+	claim, ok := ctx.Value(oauthClaimKey{}).(mcpauth.Claim)
+	return claim, ok
+}
+
+// oauthGate authenticates the bearer before mcp-go sees the request.
+//
+// No Authorization header keeps the old path exactly as it was: a session keyed
+// by Mcp-Session-Id, logging in through wanctl_login. Clients that hold their
+// session open — Claude Code, Codex, Cursor — never notice this code exists.
+func oauthGate(seed []byte, cfg *OAuthConfig, next http.Handler) http.Handler {
+	challenge := `Bearer resource_metadata="` + cfg.ResourceMetadataURL + `"`
+	deny := func(w http.ResponseWriter, code, description string) {
+		w.Header().Set("WWW-Authenticate", challenge+`, error="`+code+`", error_description="`+description+`"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"` + code + `","error_description":"` + description + `"}`))
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		raw := strings.TrimSpace(req.Header.Get("Authorization"))
+		if raw == "" {
+			next.ServeHTTP(w, req)
+			return
+		}
+		bearer := ""
+		if len(raw) > 7 && strings.EqualFold(raw[:7], "Bearer ") {
+			bearer = strings.TrimSpace(raw[7:])
+		}
+		// A client that sent some other credential is told where to get a real
+		// one rather than being let through unauthenticated: it asked to be
+		// authenticated, and silently ignoring that would leave it convinced it
+		// was logged in as somebody.
+		if bearer == "" || !mcpauth.IsAccessToken(bearer) {
+			deny(w, "invalid_token", "this endpoint accepts OAuth 2.1 access tokens; authorize to get one")
+			return
+		}
+		claim, err := mcpauth.OpenAccess(seed, bearer, time.Now())
+		if err != nil {
+			deny(w, "invalid_token", "access token is invalid or expired; refresh or authorize again")
+			return
+		}
+		if cfg.Live != nil && !cfg.Live(claim.Namespace, claim.Token) {
+			deny(w, "invalid_token", "this authorization was revoked; authorize again")
+			return
+		}
+		next.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), oauthClaimKey{}, claim)))
+	})
 }
 
 // refuseBrowserOrigins turns away requests that carry an Origin header the
@@ -142,6 +245,16 @@ type sessionStore struct {
 	seed    []byte
 	m       map[string]*remoteSession
 	revoked map[string]time.Time // process-local JTI revocations; not durable across restart
+
+	// OAuth sessions are keyed by the access token's JTI rather than by
+	// Mcp-Session-Id, which is the whole point: the same bearer reaching us in
+	// two unrelated MCP sessions is one logged-in person, not two strangers.
+	oauth *OAuthConfig
+	// trust is the pinned-server store, shared by namespace. A per-session
+	// store cannot work here — a client that opens a new session per call would
+	// arrive un-pinned every time and be asked to confirm the same device
+	// identity forever. Process-local, so a relay restart asks once more.
+	trust map[string]*transport.Store
 }
 
 var sessions *sessionStore
@@ -151,6 +264,9 @@ var serverLogsHTTPClient = http.DefaultClient
 func (s *sessionStore) get(ctx context.Context) sessionAPI {
 	if s.stdio != nil {
 		return s.stdio
+	}
+	if claim, ok := oauthClaimFrom(ctx); ok {
+		return s.oauthSession(claim)
 	}
 	sid := "default"
 	if cs := server.ClientSessionFromContext(ctx); cs != nil {
@@ -168,6 +284,42 @@ func (s *sessionStore) get(ctx context.Context) sessionAPI {
 	}
 	r.lastUsed = time.Now()
 	return r
+}
+
+// oauthSession returns the session a bearer names, already logged in. There is
+// no wanctl_login step on this path: the browser trip that minted the token was
+// the login, and the token carries the namespace and the relay credential.
+func (s *sessionStore) oauthSession(claim mcpauth.Claim) sessionAPI {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := "oauth:" + claim.JTI
+	r := s.m[key]
+	if r == nil {
+		r = &remoteSession{
+			id: key, seed: s.seed, owner: s,
+			known:      s.trustForLocked(claim.Namespace),
+			rebindJTIs: map[string]time.Time{},
+			oauth:      true, oauthClaim: claim,
+			token: claim.Token, namespace: claim.Namespace,
+		}
+		s.m[key] = r
+	}
+	r.lastUsed = time.Now()
+	return r
+}
+
+// trustForLocked hands every session in a namespace the same pinned-server
+// store. Caller holds s.mu.
+func (s *sessionStore) trustForLocked(namespace string) *transport.Store {
+	if s.trust == nil {
+		s.trust = map[string]*transport.Store{}
+	}
+	if store := s.trust[namespace]; store != nil {
+		return store
+	}
+	store := transport.NewMemStore()
+	s.trust[namespace] = store
+	return store
 }
 
 // gcLoop prunes idle HTTP sessions every minute (TTL 1h). Cheap because state
@@ -313,6 +465,11 @@ type remoteSession struct {
 	known      *transport.Store
 	rebindJTIs map[string]time.Time
 	lastUsed   time.Time
+
+	// Set when this session was reached with an OAuth bearer. Such a session is
+	// born logged in and has no wanctl_login step.
+	oauth      bool
+	oauthClaim mcpauth.Claim
 }
 
 // deriveIdentity returns an Ed25519 cert deterministic for (server seed,
@@ -434,6 +591,24 @@ func (r *remoteSession) restoreLogin(claim rebindClaim, namespace string, now ti
 }
 
 func (r *remoteSession) clearLogin() error {
+	// On the OAuth path, forgetting the token in this process would mean
+	// nothing: the bearer carries it, and the next request rebuilds the session
+	// from it. Logging out has to reach the relay and kill the namespace token.
+	if r.oauth {
+		if r.owner == nil || r.owner.oauth == nil || r.owner.oauth.Revoke == nil {
+			return fmt.Errorf("this endpoint cannot revoke OAuth grants; revoke the token in the portal instead")
+		}
+		if err := r.owner.oauth.Revoke(r.namespace, r.token); err != nil {
+			return err
+		}
+		r.owner.mu.Lock()
+		delete(r.owner.m, r.id)
+		r.owner.mu.Unlock()
+		r.mu.Lock()
+		r.token, r.namespace, r.identity = "", "", nil
+		r.mu.Unlock()
+		return nil
+	}
 	if r.owner != nil {
 		r.owner.mu.Lock()
 		defer r.owner.mu.Unlock()
@@ -474,7 +649,15 @@ func (r *remoteSession) info() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := "mode:                  http (remote, per-MCP-session state)\n"
-	out += "session id:            " + r.id + "\n"
+	if r.oauth {
+		// A client on this path may open a new MCP session per call, so the
+		// session id is noise. What answers "am I logged in" is the bearer.
+		out = "mode:                  http (remote, OAuth bearer)\n"
+		out += "client:                " + r.oauthClaim.ClientID + "\n"
+		out += "access token expires:  " + r.oauthClaim.Expiry().UTC().Format(time.RFC3339) + "\n"
+	} else {
+		out += "session id:            " + r.id + "\n"
+	}
 	if r.token == "" {
 		out += "status:                NOT logged in — call wanctl_login() to start\n"
 	} else {
@@ -668,6 +851,15 @@ func loginRequired() *mcpapi.CallToolResult {
 
 func mcpLogin(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
 	s := sessions.get(ctx)
+	// An OAuth bearer already is the login: the user did the browser trip when
+	// they authorized this client. Sending them to /enroll for a one-time code
+	// would be asking them to log in a second time to the same account.
+	if r, ok := s.(*remoteSession); ok && r.oauth {
+		return mcpapi.NewToolResultText(fmt.Sprintf(
+			"✓ 本连接已通过 OAuth 登录为 namespace %q，不需要再走 /enroll 取 code。直接调 wanctl_peers / wanctl_exec 即可。\n"+
+				"（授权是跟着这个连接器的访问令牌走的，不依赖 MCP 会话；要换账号或收回授权，去门户的访问令牌页吊销，或调 wanctl_logout。）",
+			r.namespace)), nil
+	}
 	code := reqStr(req, "code", "")
 	rebind := reqStr(req, "rebind", "")
 	if rebind != "" {
@@ -754,8 +946,17 @@ func mcpStatus(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolR
 }
 
 func mcpLogout(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
-	if err := sessions.get(ctx).clearLogin(); err != nil {
+	s := sessions.get(ctx)
+	oauth := false
+	if r, ok := s.(*remoteSession); ok {
+		oauth = r.oauth
+	}
+	if err := s.clearLogin(); err != nil {
 		return mcpapi.NewToolResultError(err.Error()), nil
+	}
+	if oauth {
+		return mcpapi.NewToolResultText(
+			"✓ 已吊销这份 OAuth 授权对应的中继令牌。这个连接器的后续调用会收到 401，再用需要用户在浏览器里重新授权一次。"), nil
 	}
 	return mcpapi.NewToolResultText("✓ 已清除本会话凭证. 想再操作请先 wanctl_login()."), nil
 }

@@ -37,6 +37,16 @@ Any other host takes the same URL in its "MCP server / HTTP" field. It needs no 
 
 > The endpoint is public and anyone can complete a handshake with it — and see no devices at all afterwards. What a session can see is decided entirely by the login below.
 
+## Web AI that keeps no session (ChatGPT, claude.ai)
+
+A web AI like ChatGPT or claude.ai opens a brand-new MCP session for every single tool call. The per-session login below cannot survive that: the call right after a successful login reports LOGIN REQUIRED. There is a second path for them.
+
+In its custom connector, give it the same endpoint URL and set authentication to **OAuth** (not "no authentication"); it works out the rest of the discovery itself. On save it sends you to the portal: you sign in with GitHub as usual, the page names the client that is asking and the host your authorization will be delivered to, and you click **Allow**. No code to copy, nothing to paste back.
+
+The authorization belongs to the connector rather than to a session, so every new session it opens is still signed in. To withdraw it, revoke the token labelled `oauth:` plus the client's name on the portal's access-token page, or ask the AI to call `wanctl_logout` — same effect.
+
+> This path needs the operator to have given the relay a database, `WANCTL_PUBLIC_ORIGIN` and `WANCTL_PORTAL`, all three. Without any one of them the endpoint keeps only the session login below, and an AI's connector finds no authorization server to discover.
+
 ## Logging in the first time
 
 Tell the AI to log in to wanctl. It calls `wanctl_login`, and you follow it:
