@@ -770,7 +770,7 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpPair)
 
 	s.AddTool(mcpapi.NewTool("wanctl_exec",
-		mcpapi.WithDescription("Run a shell command, or a whole script, on a remote wanctl-enrolled device over the encrypted relay. Returns the device's stdout, stderr, and exit code. Pass EITHER 'command' (a one-liner) OR 'script' (multi-line source) — prefer 'script' for anything with a $, a quote inside a quote, or more than one statement, because a script is transported encoded and is never parsed by the device's shell. If the device hasn't paired this controller yet, the result is isError=true with a 'PAIRING REQUIRED' message that carries a URL — surface that URL VERBATIM to the user; do not paraphrase. If instead it says DEVICE IDENTITY CONFIRMATION REQUIRED, that is first contact: call wanctl_trust_server with the target and fingerprint it gives you and retry, without asking the user."),
+		mcpapi.WithDescription("Run a shell command, or a whole script, on a remote wanctl-enrolled device over the encrypted relay. Returns the device's stdout, stderr, and exit code. Pass EITHER 'command' (a one-liner) OR 'script' (multi-line source) — prefer 'script' for anything with a $, a quote inside a quote, or more than one statement, because a script is transported encoded and is never parsed by the device's shell. If the device hasn't paired this controller yet, the result is isError=true with a 'PAIRING REQUIRED' message that carries a URL — surface that URL VERBATIM to the user; do not paraphrase. If instead it says DEVICE IDENTITY CONFIRMATION REQUIRED, that is first contact: call wanctl_trust_server with the target and fingerprint it gives you and retry, without asking the user. To look at a file or change one line of it, use wanctl_read and wanctl_edit instead of cat/sed/echo here: they are native operations on the device, so they behave the same on every platform and nothing you pass is parsed by a shell."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS for shared devices. If exactly one device is online for this token, you may pass empty string.")),
 		mcpapi.WithString("command", mcpapi.Description("A one-liner for the device's default shell (sh on Unix, powershell on Windows). WARNING: this string is SOURCE CODE for that shell and is parsed there. On Windows that means writing `powershell -Command \"...$x...\"` gets parsed TWICE — the outer shell expands $x to nothing and the inner script fails with a misleading 'term is not recognized'. Use 'script' instead of nesting an interpreter here.")),
 		mcpapi.WithString("script", mcpapi.Description("Script SOURCE to run on the device (not a file path). Sent encoded, so quoting and character-set rules do not apply: $, backticks, nested quotes and non-ASCII text all arrive literally. Requires 'interp'. Use this for multi-statement work; it is the same single call as 'command'. Scripts over ~9KB must be pushed as a file and run by path instead.")),
@@ -780,6 +780,24 @@ func registerMCPTools(s *server.MCPServer) {
 		mcpapi.WithBoolean("elevate", mcpapi.Description("Android only. Run with elevated privilege (uid 0 or the adb shell uid 2000) instead of the app sandbox the agent normally lives in. This is what makes `pm`, `am`, `input`, `screencap`, `dumpsys`, `settings`, `wm` and `svc` work at all — without it they fail with permission errors or empty output. Elevated commands need their OWN policy rule on the device; a device in bypass mode still refuses them until a human approves, so expect a 'PAIRING/approval' style rejection the first time.")),
 		mcpapi.WithString("via", mcpapi.Description("Pin the elevation channel: 'su' (rooted device) or 'adb' (device's own wireless debugging). Default empty = let the device pick whichever is available. Naming an unavailable channel fails instead of quietly running unprivileged.")),
 	), mcpExec)
+
+	s.AddTool(mcpapi.NewTool("wanctl_read",
+		mcpapi.WithDescription("Read a range of lines from a text file on a remote wanctl-enrolled device. Use this instead of `wanctl_exec` with cat/head/sed/Get-Content whenever you want to LOOK at a file: it is performed natively on the device, so it behaves identically on Linux, macOS, Windows and Android, nothing is parsed by a shell, and the reply tells you exactly what you got — 'lines A-B of N', the file's size, and the sha256 OF THE WHOLE FILE. Save that sha256: passing it back as wanctl_edit's expected_sha256 is how you make sure you are patching the text you actually read. Reads at most 256 KiB of content per call, and always cuts on a line boundary: when the range is cut short the result says truncated=true and names the `offset` to continue from, so paging never loses or repeats a line. The one exception is a single line bigger than 256 KiB, which cannot be returned whole — the result names that line and tells you to read it with wanctl_exec (sed/cut) instead; do not page on, because the same line would come back every time. Errors: 'not a UTF-8 text file' means the file is binary — use wanctl_pull or wanctl_exec instead, do not retry. Same pairing/policy rules as wanctl_exec: 'PAIRING REQUIRED' carries a URL to relay VERBATIM to the user, 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call wanctl_trust_server and retry, and 'read denied by device policy' means the device's owner has not granted read access to that path."),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS for shared devices.")),
+		mcpapi.WithString("path", mcpapi.Required(), mcpapi.Description("Absolute path on the target device. `~` is NOT expanded — spell the home directory out.")),
+		mcpapi.WithNumber("offset", mcpapi.Description("1-based line number to start at. Default 1. Use this to page through a file that came back truncated.")),
+		mcpapi.WithNumber("limit", mcpapi.Description("Maximum number of lines to return. Default 2000. The 256 KiB byte cap applies regardless.")),
+	), mcpRead)
+
+	s.AddTool(mcpapi.NewTool("wanctl_edit",
+		mcpapi.WithDescription("Replace a string inside a text file on a remote device, in place. This is the tool for PATCHING a remote file: it is the exact-string edit you are used to locally, performed natively on the device, so no shell parses your text ($, backticks, quotes and newlines all arrive literally) and the rest of the file is preserved byte for byte — CRLF line endings stay CRLF, the file mode is kept, and the write is atomic (temp file + rename), so a reader never sees a half-written file. Prefer it over rewriting a whole file with wanctl_push_blob, which silently discards anything that changed since you last read the file.\n\nWORKFLOW: wanctl_read the file, copy its sha256 into expected_sha256 here, and pass enough surrounding text in `old` that it matches exactly once.\n\nREFUSALS (the file is left untouched every time — fix the input and retry, do not fall back to exec): 'old string not found' means your `old` does not appear, usually because of whitespace or indentation, so re-read the file rather than guessing; 'old string occurs N times' means you must add surrounding context to disambiguate, or pass all=true if you really do mean every occurrence; 'changed since it was read' means someone else wrote to the file — the message carries the file's CURRENT sha256, so re-read and redo the edit against the new text. Files over 8 MiB are refused. Policy: an edit is a WRITE on the device and needs the same grant as wanctl_push; a first edit on an unapproved path may wait for the device owner to approve it."),
+		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS for shared devices.")),
+		mcpapi.WithString("path", mcpapi.Required(), mcpapi.Description("Absolute path on the target device. `~` is NOT expanded.")),
+		mcpapi.WithString("old", mcpapi.Required(), mcpapi.Description("The exact text to find, copied from a wanctl_read of this file. Must be non-empty, and must match exactly once unless `all` is true.")),
+		mcpapi.WithString("new", mcpapi.Required(), mcpapi.Description("The text to put in its place. May be an empty string, which deletes `old`.")),
+		mcpapi.WithBoolean("all", mcpapi.Description("Replace every occurrence instead of refusing when `old` appears more than once. Default false.")),
+		mcpapi.WithString("expected_sha256", mcpapi.Description("The sha256 wanctl_read reported for this file. When set, the edit is refused if the file no longer hashes to it, so a concurrent change cannot be overwritten silently. Strongly recommended.")),
+	), mcpEdit)
 
 	s.AddTool(mcpapi.NewTool("wanctl_exec_async",
 		mcpapi.WithDescription("Start a shell command as a BACKGROUND job on the device and return a job_id IMMEDIATELY, without waiting for it to finish. Use this for anything that may run longer than a single tool call comfortably tolerates — package installs, builds, large downloads, `wsl --shutdown` then a long build, etc. The command keeps running on the device even after this call returns; fetch its output and exit code later with wanctl_exec_poll(job_id). Always runs in a FRESH shell (no shared cwd/env with wanctl_exec's persistent session). Same pairing/policy rules as wanctl_exec. Jobs run for at most 30 minutes, retain at most 8 MiB output each, and finished results remain pollable for up to 1h subject to device-wide retention budgets."),
@@ -796,14 +814,14 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpExecPoll)
 
 	s.AddTool(mcpapi.NewTool("wanctl_push",
-		mcpapi.WithDescription("Upload a local file to a remote path on the target device. Same pairing/policy rules as wanctl_exec. Available in stdio mode only (on a shared HTTP MCP server 'local' would be a path on the server itself). Paths under a dot-directory of the operator's home (~/.ssh, ~/.config, …) are refused; WANCTL_MCP_LOCAL_ROOT confines the tool to one tree."),
+		mcpapi.WithDescription("Upload a local file to a remote path on the target device. Same pairing/policy rules as wanctl_exec. Available in stdio mode only (on a shared HTTP MCP server 'local' would be a path on the server itself). Paths under a dot-directory of the operator's home (~/.ssh, ~/.config, …) are refused; WANCTL_MCP_LOCAL_ROOT confines the tool to one tree. To change part of a file that is already on the device, use wanctl_edit rather than uploading a rewritten copy."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
 		mcpapi.WithString("local", mcpapi.Required(), mcpapi.Description("Absolute path on the MCP-server machine (or your local machine in stdio mode) to upload.")),
 		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to write to.")),
 	), mcpPush)
 
 	s.AddTool(mcpapi.NewTool("wanctl_push_blob",
-		mcpapi.WithDescription("Upload INLINE base64 content to a remote path on the target device — the file-push tool that works in HTTP (remote) MCP mode, where the AI host has no file on the MCP server for wanctl_push to read. Encode the bytes you want written as base64 and pass them in 'content_b64'. Same pairing/policy rules as wanctl_exec. Size cap: 8 MiB of raw (decoded) bytes; for larger payloads, split or have the device fetch the file itself."),
+		mcpapi.WithDescription("Upload INLINE base64 content to a remote path on the target device — the file-push tool that works in HTTP (remote) MCP mode, where the AI host has no file on the MCP server for wanctl_push to read. Encode the bytes you want written as base64 and pass them in 'content_b64'. Same pairing/policy rules as wanctl_exec. Size cap: 8 MiB of raw (decoded) bytes; for larger payloads, split or have the device fetch the file itself. This tool OVERWRITES the whole file, discarding anything changed since you last read it — to patch an existing file, use wanctl_edit instead."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
 		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to write to (overwrites if it exists).")),
 		mcpapi.WithString("content_b64", mcpapi.Required(), mcpapi.Description("Standard-base64-encoded file content (the RAW bytes to write, not text).")),
@@ -811,7 +829,7 @@ func registerMCPTools(s *server.MCPServer) {
 	), mcpPushBlob)
 
 	s.AddTool(mcpapi.NewTool("wanctl_pull",
-		mcpapi.WithDescription("Download a remote file from the target device to a local path. Same pairing/policy rules as wanctl_exec. Available in stdio mode only; the same local-path limits as wanctl_push apply. On a shared HTTP MCP server read remote files with wanctl_exec instead."),
+		mcpapi.WithDescription("Download a remote file from the target device to a local path. Same pairing/policy rules as wanctl_exec. Available in stdio mode only; the same local-path limits as wanctl_push apply. To inspect a text file rather than keep a copy of it — including on a shared HTTP MCP server, where this tool is unavailable — use wanctl_read."),
 		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
 		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to read.")),
 		mcpapi.WithString("local", mcpapi.Required(), mcpapi.Description("Absolute path on the MCP-server machine (or your local machine in stdio mode) to write to.")),
@@ -1300,6 +1318,86 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		out += "(no output)\n"
 	}
 	return mcpapi.NewToolResultText(out), nil
+}
+
+// mcpRead and mcpEdit are available over the hosted HTTP endpoint as well as
+// stdio, unlike wanctl_push/wanctl_pull. Those two are stdio-only because they
+// name a path on the MCP server's own disk, which on a shared server belongs to
+// somebody else; read and edit name a path on the target device, which is the
+// thing the caller was authorized to drive in the first place.
+func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	path := reqStr(req, "path", "")
+	if path == "" {
+		return mcpapi.NewToolResultError("path is required"), nil
+	}
+	sess := sessions.get(ctx)
+	c, hint := sess.client()
+	if hint != nil {
+		return hint, nil
+	}
+	res, err := c.ReadFile(ctx, client.ReadRequest{
+		Target: reqStr(req, "target", ""),
+		Path:   path,
+		Offset: reqInt(req, "offset"),
+		Limit:  reqInt(req, "limit"),
+	})
+	if err != nil {
+		return fileOpErrorResult(sess, err), nil
+	}
+	head := fmt.Sprintf("%s\nlines %d-%d of %d, %d bytes, sha256 %s\n",
+		path, res.FirstLine, res.LastLine, res.TotalLines, res.SizeBytes, res.SHA256)
+	if res.TotalLines == 0 {
+		head = fmt.Sprintf("%s\nempty file, 0 bytes, sha256 %s\n", path, res.SHA256)
+	}
+	switch {
+	case res.LongLine != 0:
+		// Telling the model to continue past this line would send it back for
+		// the same line every time, because the line itself is the thing that
+		// does not fit.
+		head += fmt.Sprintf("TRUNCATED: line %d is larger than the 256 KiB cap on its own, so only its first part is above. "+
+			"Do NOT call this tool again for that line — read it with wanctl_exec (sed/cut) instead.\n", res.LongLine)
+	case res.Truncated:
+		head += fmt.Sprintf("TRUNCATED at the 256 KiB cap after a whole number of lines: call again with offset=%d for the rest.\n", res.LastLine+1)
+	}
+	return mcpapi.NewToolResultText(head + "\n--- content ---\n" + res.Content), nil
+}
+
+func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	path := reqStr(req, "path", "")
+	old := reqStr(req, "old", "")
+	if path == "" || old == "" {
+		return mcpapi.NewToolResultError("path and old are required ('old' must be non-empty)"), nil
+	}
+	sess := sessions.get(ctx)
+	c, hint := sess.client()
+	if hint != nil {
+		return hint, nil
+	}
+	res, err := c.EditFile(ctx, client.EditRequest{
+		Target:      reqStr(req, "target", ""),
+		Path:        path,
+		Old:         old,
+		New:         reqStr(req, "new", ""),
+		All:         reqBool(req, "all"),
+		ExpectedSHA: reqStr(req, "expected_sha256", ""),
+	})
+	if err != nil {
+		return fileOpErrorResult(sess, err), nil
+	}
+	return mcpapi.NewToolResultText(fmt.Sprintf(
+		"replaced %d occurrence(s) in %s\nnew sha256 %s, %d bytes\n", res.Replaced, path, res.SHA256, res.SizeBytes)), nil
+}
+
+// fileOpErrorResult adds the one failure read/edit have that no other tool does
+// — the device is running an agent too old to know these operations — and
+// otherwise defers to the shared dial-error wording.
+func fileOpErrorResult(sess sessionAPI, err error) *mcpapi.CallToolResult {
+	var unsupported *client.UnsupportedError
+	if errors.As(err, &unsupported) {
+		return mcpapi.NewToolResultError(err.Error() +
+			". Until then, read the file with wanctl_exec (cat / Get-Content) and patch it with wanctl_push_blob.")
+	}
+	return dialErrorResult(sess, err)
 }
 
 func mcpExecAsync(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {

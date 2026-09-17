@@ -35,6 +35,7 @@ import (
 	mcppkg "wanctl/internal/mcp"
 	"wanctl/internal/policy"
 	"wanctl/internal/portal"
+	"wanctl/internal/protocol"
 	"wanctl/internal/relay"
 	"wanctl/internal/script"
 	"wanctl/internal/serverlog"
@@ -104,6 +105,14 @@ USAGE
                                               "-o -" writes the image to stdout instead)
   wanctl push  [--target NS/DEV] <local> <remote>
   wanctl pull  [--target NS/DEV] <remote> <local>
+  wanctl read  [--target NS/DEV] <path> [--offset N] [--limit N]
+                                              print a line range of a text file on the device; the trailer on
+                                              stderr gives the line numbers, the whole file's sha256 and
+                                              whether the 256 KiB cap cut the range short
+  wanctl edit  [--target NS/DEV] <path> (--old STR | --old-file F) (--new STR | --new-file F) [--all] [--sha SHA256]
+                                              replace a string inside a file on the device, in place and
+                                              atomically. Refuses unless --old matches exactly once (--all
+                                              replaces every occurrence) or if --sha no longer matches the file
   wanctl peers
   wanctl config                               show effective settings (relay/portal/transport) and their source
   wanctl config set key=value ...             persist settings; e.g. wanctl config set relay=https://r portal=https://p
@@ -196,6 +205,10 @@ func main() {
 		err = cmdPush(ctx, os.Args[2:])
 	case "pull":
 		err = cmdPull(ctx, os.Args[2:])
+	case "read":
+		err = cmdRead(ctx, os.Args[2:])
+	case "edit":
+		err = cmdEdit(ctx, os.Args[2:])
 	case "peers":
 		err = cmdPeers(ctx)
 	case "id":
@@ -268,6 +281,7 @@ func main() {
 var relayCommands = map[string]bool{
 	"start": true, "login": true,
 	"exec": true, "screenshot": true, "push": true, "pull": true,
+	"read": true, "edit": true,
 	"peers": true, "pair": true, "friends": true, "share": true,
 	"docs": true, "admin": true,
 }
@@ -884,6 +898,124 @@ func cmdPull(ctx context.Context, args []string) error {
 		return err
 	}
 	return c.Pull(ctx, *target, fs.Arg(0), fs.Arg(1))
+}
+
+// cmdRead prints a line range of a remote text file. The content goes to
+// stdout so it can be piped or redirected byte for byte; everything about the
+// read — which lines these are, how many there are in total, the file's hash —
+// goes to stderr, where it does not contaminate that.
+func cmdRead(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("read", flag.ExitOnError)
+	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
+	offset := fs.Int("offset", 0, "1-based line number to start at (default 1)")
+	limit := fs.Int("limit", 0, "maximum number of lines to return (default 2000)")
+	rest := parseAroundPositionals(fs, args)
+	if len(rest) != 1 {
+		return fmt.Errorf("usage: wanctl read [--target NS/DEV] <path> [--offset N] [--limit N]")
+	}
+	path := rest[0]
+	c, err := client.New()
+	if err != nil {
+		return err
+	}
+	res, err := c.ReadFile(ctx, client.ReadRequest{
+		Target: *target, Path: path, Offset: *offset, Limit: *limit,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(os.Stdout, res.Content); err != nil {
+		return err
+	}
+	truncated := "no"
+	if res.Truncated {
+		truncated = "yes"
+	}
+	fmt.Fprintf(os.Stderr, "lines %d-%d of %d, sha256 %s, truncated=%s\n",
+		res.FirstLine, res.LastLine, res.TotalLines, res.SHA256, truncated)
+	switch {
+	case res.LongLine != 0:
+		// Asking again from the next line would return this same line forever.
+		fmt.Fprintf(os.Stderr, "line %d is larger than %d KiB; only its first part is shown — use exec with sed/cut to inspect it\n",
+			res.LongLine, protocol.MaxReadBytes>>10)
+	case res.Truncated:
+		fmt.Fprintf(os.Stderr, "continue with --offset %d\n", res.LastLine+1)
+	}
+	return nil
+}
+
+// cmdEdit replaces a string inside a remote file. --old/--new take the text
+// directly; --old-file/--new-file read it from a local file, which is how you
+// pass a multi-line block without fighting the shell over quoting.
+func cmdEdit(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("edit", flag.ExitOnError)
+	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
+	old := fs.String("old", "", "the exact text to find; must match once unless -all")
+	oldFile := fs.String("old-file", "", "read the text to find from this local file instead of -old")
+	newText := fs.String("new", "", "the text to put in its place (empty deletes)")
+	newFile := fs.String("new-file", "", "read the replacement from this local file instead of -new")
+	all := fs.Bool("all", false, "replace every occurrence instead of refusing when there is more than one")
+	sha := fs.String("sha", "", "refuse the edit unless the file still has this sha256 (from wanctl read)")
+	rest := parseAroundPositionals(fs, args)
+	if len(rest) != 1 {
+		return fmt.Errorf("usage: wanctl edit [--target NS/DEV] <path> (--old STR | --old-file F) (--new STR | --new-file F) [--all] [--sha SHA256]")
+	}
+	oldText, err := editText("old", *old, *oldFile)
+	if err != nil {
+		return err
+	}
+	replacement, err := editText("new", *newText, *newFile)
+	if err != nil {
+		return err
+	}
+	c, err := client.New()
+	if err != nil {
+		return err
+	}
+	res, err := c.EditFile(ctx, client.EditRequest{
+		Target: *target, Path: rest[0],
+		Old: oldText, New: replacement, All: *all, ExpectedSHA: *sha,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("replaced %d occurrence(s), sha256 %s\n", res.Replaced, res.SHA256)
+	return nil
+}
+
+// parseAroundPositionals parses flags that may sit on either side of the
+// positional arguments, which Go's flag package stops at. `wanctl read /path
+// --limit 20` is the order a person types, and reading it as three positionals
+// and no limit would be a silent wrong answer. Each round consumes the flags in
+// front, takes the one positional it stops on, and resumes after it, so a flag's
+// own value is never mistaken for a positional.
+func parseAroundPositionals(fs *flag.FlagSet, args []string) []string {
+	var positional []string
+	for {
+		fs.Parse(args)
+		if fs.NArg() == 0 {
+			return positional
+		}
+		positional = append(positional, fs.Arg(0))
+		args = fs.Args()[1:]
+	}
+}
+
+// editText resolves one of the -X / -X-file pairs. Giving both is an error
+// rather than a precedence rule: the two disagree about what to write, and
+// picking one silently is how the wrong text ends up in the file.
+func editText(name, inline, path string) (string, error) {
+	if inline != "" && path != "" {
+		return "", fmt.Errorf("give either -%s or -%s-file, not both", name, name)
+	}
+	if path == "" {
+		return inline, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 func cmdPair(ctx context.Context, args []string) error {
