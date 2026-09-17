@@ -37,6 +37,15 @@ const (
 	MaxWriteBytes  = 2048
 )
 
+// Line bounds for read_text. maxReadLines is the device's own line budget, so
+// asking for more is a mistake worth naming here rather than silently clamping
+// on the far side. maxLineNumber is only an overflow guard: a caller may
+// legitimately start at line four million of a log.
+const (
+	maxReadLines  = 1 << 20
+	maxLineNumber = 1<<31 - 1
+)
+
 // Per-tool time budgets. An exec is whatever the device's own policy already
 // allows, and that includes builds and renders: the first real caller's job was
 // a ten-minute Blender run that a sixty-second ceiling turned into an unknown
@@ -67,6 +76,7 @@ var staleGrace = 90 * time.Second
 var ticketPattern = regexp.MustCompile(`^[0-9]{10}-[a-f0-9]{48}$`)
 var clientNoncePattern = regexp.MustCompile(`^[a-f0-9]{48}$`)
 var ridPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+var sha256Pattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 
 type Config struct {
 	Store        delegation.Store
@@ -106,6 +116,19 @@ type Operation struct {
 	Cwd     string `json:"cwd,omitempty"`
 	Path    string `json:"path,omitempty"`
 	Content string `json:"content,omitempty"`
+	// read_text paging. Nil for the same reason as Timeout: a default that the
+	// caller never sent must not become part of what the URL hashes to.
+	Offset *int `json:"offset,omitempty"`
+	Limit  *int `json:"limit,omitempty"`
+	// edit_text. New is required but may be empty, which deletes Old, so an
+	// empty replacement has one canonical form rather than being an omission.
+	Old string `json:"old,omitempty"`
+	New string `json:"new,omitempty"`
+	// Nil when the caller did not send all. An explicit all=false is a
+	// different URL from no all at all and has to stay one, or a caller that
+	// spells the default out cannot tell a replay from a fresh operation.
+	All         *bool  `json:"all,omitempty"`
+	ExpectedSHA string `json:"expected_sha256,omitempty"`
 	// Nil when the caller did not send timeout_seconds. The default is applied
 	// at dispatch and never written into the canonical payload: a replay of an
 	// identical URL must keep hashing the same way across a deploy that changes
@@ -443,6 +466,21 @@ func timeoutBounds(tool string) (ceiling, fallback int) {
 	return MaxFileSeconds, DefaultFileSeconds
 }
 
+// lineParam reads an optional 1-based line parameter. An absent one stays
+// absent for the same reason an absent timeout does: materializing today's
+// default into the canonical payload would make an identical URL hash
+// differently after a deploy that changes that default.
+func lineParam(q url.Values, key string, ceiling int) (*int, error) {
+	if !q.Has(key) {
+		return nil, nil
+	}
+	n, err := strconv.Atoi(q.Get(key))
+	if err != nil || n < 1 || n > ceiling {
+		return nil, fmt.Errorf("%s must be a whole number of 1..%d", key, ceiling)
+	}
+	return &n, nil
+}
+
 func parseOperation(q url.Values) (Operation, error) {
 	op := Operation{Tool: q.Get("tool"), Target: q.Get("target")}
 	if !ridPattern.MatchString(q.Get("rid")) {
@@ -459,17 +497,51 @@ func parseOperation(q url.Values) (Operation, error) {
 		if op.Command == "" || len(op.Command) > 2048 || len(op.Cwd) > 1024 || strings.ContainsAny(op.Command+op.Cwd, "\x00") {
 			return op, fmt.Errorf("command/cwd exceeds limits or is invalid")
 		}
-	case "write_text", "read_text":
+	case "write_text", "read_text", "edit_text":
 		allowed["path"] = true
 		op.Path = q.Get("path")
 		if op.Path == "" || len(op.Path) > 1024 || strings.ContainsAny(op.Path, "\x00") {
 			return op, fmt.Errorf("path required and must be at most 1024 bytes")
 		}
-		if op.Tool == "write_text" {
+		switch op.Tool {
+		case "write_text":
 			allowed["content"] = true
 			op.Content = q.Get("content")
 			if !q.Has("content") || len(op.Content) > MaxWriteBytes || !utf8.ValidString(op.Content) {
 				return op, fmt.Errorf("content is required, must be UTF-8 and at most 2048 bytes; use content= explicitly to write an empty file")
+			}
+		case "read_text":
+			allowed["offset"], allowed["limit"] = true, true
+			var err error
+			// A file may be long enough that the line worth reading is millions
+			// of lines in, so only the line budget is bounded tightly.
+			if op.Offset, err = lineParam(q, "offset", maxLineNumber); err != nil {
+				return op, err
+			}
+			if op.Limit, err = lineParam(q, "limit", maxReadLines); err != nil {
+				return op, err
+			}
+		case "edit_text":
+			allowed["old"], allowed["new"], allowed["all"], allowed["expected_sha256"] = true, true, true, true
+			op.Old, op.New = q.Get("old"), q.Get("new")
+			if op.Old == "" || !utf8.ValidString(op.Old) || strings.Contains(op.Old, "\x00") {
+				return op, fmt.Errorf("old is required and must be UTF-8 text copied from the file; its length is bounded by the %d-byte URL", MaxURLBytes)
+			}
+			if !q.Has("new") || !utf8.ValidString(op.New) || strings.Contains(op.New, "\x00") {
+				return op, fmt.Errorf("new is required and must be UTF-8; use new= explicitly to delete old")
+			}
+			if q.Has("all") {
+				every := q.Get("all") == "true"
+				if !every && q.Get("all") != "false" {
+					return op, fmt.Errorf(`all must be "true" or "false"`)
+				}
+				op.All = &every
+			}
+			if q.Has("expected_sha256") {
+				op.ExpectedSHA = q.Get("expected_sha256")
+				if !sha256Pattern.MatchString(op.ExpectedSHA) {
+					return op, fmt.Errorf("expected_sha256 must be the 64 hexadecimal characters a read_text result reported for this file")
+				}
 			}
 		}
 	default:
@@ -629,37 +701,165 @@ func (h *Handler) execute(task work) {
 		err = c.PushBytes(ctx, task.operation.Target, task.operation.Path, data, 0o600)
 		result["byte_count"], result["sha256"] = len(data), digest(data)
 	case "read_text":
-		var data []byte
-		data, err = c.PullBytes(ctx, task.operation.Target, task.operation.Path, MaxOutputBytes)
-		if err == nil && !utf8.Valid(data) {
-			err = fmt.Errorf("file is not UTF-8 text")
-		}
+		var read *client.ReadResult
+		read, err = c.ReadFile(ctx, client.ReadRequest{
+			Target: task.operation.Target, Path: task.operation.Path,
+			Offset: value(task.operation.Offset), Limit: value(task.operation.Limit),
+		})
 		if err == nil {
-			result["content"], result["byte_count"], result["sha256"] = string(data), len(data), digest(data)
+			fitRead(read, result)
+		}
+	case "edit_text":
+		var edit *client.EditResult
+		edit, err = c.EditFile(ctx, client.EditRequest{
+			Target: task.operation.Target, Path: task.operation.Path,
+			Old: task.operation.Old, New: task.operation.New,
+			All: flag(task.operation.All), ExpectedSHA: task.operation.ExpectedSHA,
+		})
+		if err == nil {
+			result["replaced"], result["sha256"], result["size_bytes"] = edit.Replaced, edit.SHA256, edit.SizeBytes
 		}
 	}
 	if err != nil {
-		result["error"] = boundedText(err.Error(), 4096)
-		var rejected *client.RejectError
-		var untrusted *client.TrustRequiredError
-		if task.operation.Tool != "read_text" && !errors.As(err, &rejected) && !errors.As(err, &untrusted) {
-			state = "unknown"
-			result["instruction"] = unknownInstruction
-		}
-		if errors.As(err, &rejected) {
-			result["error"] = boundedText(rejected.Reason, 4096)
-			if len(rejected.PairingURL) <= 2048 && h.ownerLink(rejected.PairingURL) {
-				result["pairing_url"] = rejected.PairingURL
-				result["error_code"] = "pairing_required"
-				result["execution_started"] = false
-				result["human_checkpoint"] = humanCheckpoints()[1]
-				result["instruction"] = "Step 2 of 2: pairing. Nothing ran. Show the human pairing_url with human_checkpoint.summary (summary_zh in Chinese), and wait until they say they approved it — never fetch that link yourself. Then submit the same operation again under a NEW rid. This job stays failed, and reusing its rid only returns this same failure."
-			}
-		}
+		state = h.recordFailure(task.operation.Tool, err, result)
 		return
 	}
 	result["ok"] = true
 	state = "done"
+}
+
+// recordFailure turns one operation's error into the result a model reads and
+// the state the ledger keeps. It is a method of its own so that each
+// classification can be tested without a device on the other end, which is the
+// only way to exercise the ones a healthy device never produces.
+func (h *Handler) recordFailure(tool string, err error, result map[string]any) string {
+	result["error"] = boundedText(err.Error(), 4096)
+	var rejected *client.RejectError
+	var untrusted *client.TrustRequiredError
+	var refused *client.FileOpError
+	var unsupported *client.UnsupportedError
+
+	// An UnsupportedError is not only a device saying it has never heard of this
+	// verb. internal/client raises the same error when the session simply ends
+	// after the request went out, and an edit committed a moment before the
+	// connection dropped is then indistinguishable from one that never started.
+	// A read pays nothing for that confusion — neither case wrote anything — but
+	// for an edit it is the difference between "send it again" and "a file may
+	// already have changed", so an edit keeps the cause-neutral unknown until
+	// the client can tell the two apart.
+	tooOld := errors.As(err, &unsupported) && tool != "edit_text"
+	// The device answered and said what it did. Anything else is a lost outcome,
+	// and for a tool that can change the device that is unknown.
+	decided := errors.As(err, &rejected) || errors.As(err, &untrusted) ||
+		errors.As(err, &refused) || tooOld
+
+	state := "failed"
+	if !decided && tool != "read_text" {
+		state = "unknown"
+		result["instruction"] = unknownInstruction
+	}
+	if errors.As(err, &unsupported) && !tooOld {
+		// The client's own sentence names a cause it cannot know. Replace it
+		// rather than let a model read "run wanctl update" as "nothing ran".
+		result["error"] = "the device session ended without an answer to this edit. An agent too old to know edit_text ends it that way, and so does an edit that was applied just before its reply was lost; the adapter cannot tell those apart."
+	}
+	if errors.As(err, &refused) {
+		// A refused read or edit did not replace the target file, and the
+		// caller's way out is a corrected operation — which is a different
+		// operation, so it needs a new rid. Saying only "failed" would strand
+		// it: the rules forbid reusing a rid with new arguments and forbid a new
+		// rid after a failure whose effect is unknown. This one is not unknown.
+		result["error_code"], result["execution_started"] = "file_refused", false
+		if r := refused.Result; r != nil {
+			if r.SHA256 != "" {
+				result["sha256"] = r.SHA256
+			}
+			if r.SizeBytes != 0 {
+				result["size_bytes"] = r.SizeBytes
+			}
+			if r.Occurrences != 0 {
+				result["occurrences"] = r.Occurrences
+			}
+		}
+		result["instruction"] = refusalInstruction(tool)
+	}
+	if tooOld {
+		result["error_code"], result["execution_started"] = "device_agent_too_old", false
+		result["instruction"] = "Nothing ran. This device's wanctl agent predates read_text. Ask the human to run `wanctl update` on the device; until they have, read the file with exec instead."
+	}
+	if errors.As(err, &rejected) {
+		result["error"] = boundedText(rejected.Reason, 4096)
+		if len(rejected.PairingURL) <= 2048 && h.ownerLink(rejected.PairingURL) {
+			result["pairing_url"] = rejected.PairingURL
+			result["error_code"] = "pairing_required"
+			result["execution_started"] = false
+			result["human_checkpoint"] = humanCheckpoints()[1]
+			result["instruction"] = "Step 2 of 2: pairing. Nothing ran. Show the human pairing_url with human_checkpoint.summary (summary_zh in Chinese), and wait until they say they approved it — never fetch that link yourself. Then submit the same operation again under a NEW rid. This job stays failed, and reusing its rid only returns this same failure."
+		}
+	}
+	return state
+}
+
+func value(n *int) int {
+	if n == nil {
+		return 0
+	}
+	return *n
+}
+
+func flag(b *bool) bool { return b != nil && *b }
+
+// refusalInstruction tells the caller what a device-side refusal leaves behind
+// and how to get out of it. Both tools left the file alone; only an edit has a
+// correction to make.
+func refusalInstruction(tool string) string {
+	if tool == "edit_text" {
+		return "The device refused this edit; the target file was not replaced and still holds exactly the text it had. Read the error: 'not found' means your old text does not appear, so read the file again rather than guessing at whitespace; 'occurs N times' means add surrounding lines to old, or pass all=true if you really mean every occurrence; 'changed since it was read' carries the file's current sha256, so read it again and redo the edit against that text. Then send the corrected edit under a NEW rid. Do not fall back to exec or write_text."
+	}
+	return "The device refused this read; no file was touched. A file that is not UTF-8 text cannot be read with this tool at all — do not retry it here. Correct the path or the line range and read again under a NEW rid."
+}
+
+// fitRead cuts a device read down to what one WebFetch response may carry. The
+// device already returns whole lines up to its own larger cap, so the only work
+// left is the outer 32 KiB bound: cut it on a line boundary and say where to
+// continue, or, for a single line that cannot fit at all, say that paging on
+// would never make progress.
+func fitRead(res *client.ReadResult, out map[string]any) {
+	content, last, truncated, longLine := res.Content, res.LastLine, res.Truncated, res.LongLine
+	if len(content) > MaxOutputBytes {
+		if cut := strings.LastIndexByte(content[:MaxOutputBytes], '\n'); cut >= 0 {
+			content = content[:cut+1]
+			last = res.FirstLine + strings.Count(content, "\n") - 1
+			truncated, longLine = true, 0
+		} else {
+			content = string(trimPartialRune([]byte(content[:MaxOutputBytes])))
+			last, longLine, truncated = res.FirstLine, res.FirstLine, true
+		}
+	}
+	out["content"], out["total_lines"] = content, res.TotalLines
+	out["first_line"], out["last_line"] = res.FirstLine, last
+	out["size_bytes"], out["sha256"], out["truncated"] = res.SizeBytes, res.SHA256, truncated
+	switch {
+	case longLine != 0:
+		out["long_line"] = longLine
+		out["instruction"] = "Line " + strconv.Itoa(longLine) + " does not fit in one response on its own, so only its beginning is above. Do NOT ask for this line again — the same prefix would come back every time. Read it with exec (sed/cut) instead."
+	case truncated:
+		out["next_offset"] = last + 1
+		out["instruction"] = "Cut at the response cap after a whole number of lines. Continue with offset=" + strconv.Itoa(last+1) + " under a NEW rid; nothing is lost and nothing repeats."
+	}
+}
+
+// trimPartialRune drops up to three trailing bytes of a buffer cut at an
+// arbitrary offset, so a multi-byte character split by the cut does not leave
+// invalid UTF-8 in the response.
+func trimPartialRune(b []byte) []byte {
+	for range 3 {
+		if len(b) == 0 || utf8.Valid(b) {
+			break
+		}
+		b = b[:len(b)-1]
+	}
+	return b
 }
 
 func boundedText(text string, limit int) string {

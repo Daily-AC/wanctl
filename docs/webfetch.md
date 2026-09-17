@@ -148,8 +148,37 @@ placeholders rather than runnable sample commands. The available tools are:
 | Tool | Parameters | Result |
 | --- | --- | --- |
 | `exec` | `command`, optional `cwd`, optional `timeout_seconds` (1–1800, default 300) | One-shot execution, exit code, bounded stdout/stderr |
+| `read_text` | `path`, optional `offset` (1-based line, default 1), optional `limit` (lines, default 2000) | `content`, `total_lines`, `first_line`, `last_line`, `size_bytes`, `sha256` of the whole file, `truncated`, and `next_offset` or `long_line` |
+| `edit_text` | `path`, `old`, `new`, optional `all`, optional `expected_sha256` | `replaced`, `sha256`, `size_bytes` |
 | `write_text` | `path`, `content` | wanctl file upload, byte count and SHA-256 |
-| `read_text` | `path` | wanctl file download, UTF-8 contents, byte count and SHA-256 |
+
+`read_text` and `edit_text` are the device's own file operations, not a shell:
+the same line range and the same in-place replacement wanctl's CLI and MCP
+server perform, reached through a GET. Nothing a caller sends is parsed by a
+shell, the result reports exactly which lines came back, and an edit preserves
+the rest of the file byte for byte — CRLF endings, file mode and all — through
+an atomic temp-file rename.
+
+Paging a read is the caller's job: continue at `last_line + 1` while `last_line`
+is below `total_lines`. `truncated: true` means the 32 KiB response cap cut the
+range on a line boundary, and `next_offset` then names the line to resume at, so
+nothing is lost or repeated. `long_line` names a single line too large to return
+whole; asking for it again would return the same prefix forever, so read that one
+with `exec`. The `sha256` a read reports is the whole file's, and passing it back
+as an edit's `expected_sha256` is how a caller proves it is patching the text it
+read.
+
+Use `edit_text`, not `write_text`, to change a file that already exists:
+`write_text` replaces the whole file and discards anything written to it since
+the last read. An edit's `old` and `new` travel inside the URL, so the 8 KiB URL
+limit — not a separate cap — is what bounds one edit; edit a span at a time.
+Refusals (`old` not found, `old` found more than once without `all=true`, an
+`expected_sha256` that no longer matches) do not replace the target file and
+return `error_code: "file_refused"` with `execution_started: false`, the
+occurrence count or the file's current `sha256`, and are corrected and
+resubmitted under a **new rid**. A read is gated by the device's read permission and an edit by its
+write permission, exactly like `read_text` and `write_text`; both appear in the
+device's event log as `READ`/`EDIT` on the path.
 
 The response contains a `job_id` and `result_url`. Running jobs additionally
 return a fresh `next_url`, a `poll_after_seconds` hint and the job's own
@@ -180,9 +209,15 @@ same job; changing parameters returns 409. The durable ledger records the job
 before dispatch, so repeated fetches and an adapter restart never automatically
 repeat an operation. If a response is lost, fetch the identical URL
 again under the same `rid` and arguments: that returns the job already recorded
-rather than running it twice. A **new** rid is correct only after a result that
+rather than running it twice — the STORED result of that job, not a fresh one,
+so a read replayed after the file changed still shows what the first read
+returned. An `edit_text` whose session ended without an answer is recorded as
+`unknown`, not as a refusal: a committed edit whose reply was lost and a device
+too old to know the verb are indistinguishable from the controller's side. A **new** rid is correct only after a result that
 says nothing ran (`pairing_required` or `adapter_busy`, both with
-`execution_started: false`), never after `failed` or `unknown`. An interrupted
+`execution_started: false`), or after a `file_refused` read or edit, which also
+carries `execution_started: false` because the device decided and did not
+replace the target file; never after a plain `failed` or after `unknown`. An interrupted
 call may have produced a side effect even without a result: `unknown` means the
 owner must inspect the device before deciding whether to try a new request. This
 is not a claim of exactly-once execution of arbitrary external effects.
@@ -190,13 +225,16 @@ is not a claim of exactly-once execution of arbitrary external effects.
 Limits: pending requests expire after 10 minutes; approved grants last 1–60
 minutes on up to 16 devices; each grant allows 64 jobs. `exec` allows
 `timeout_seconds` of 1–1800 including queue time (default 300), so a build,
-install or render finishes instead of expiring; `read_text` and `write_text`
-allow 1–60 (default 30), because a transfer of at most 32 KiB that is slow is
-stuck. A job's deadline is also clamped to the grant's remaining time, so the
+install or render finishes instead of expiring; `read_text`, `edit_text` and
+`write_text` allow 1–60 (default 30), because a file operation bounded by 32 KiB
+of output and an 8 KiB URL that is slow is stuck. A job's deadline is also
+clamped to the grant's remaining time, so the
 owner must approve a duration longer than the task. Four operations run
 concurrently per grant and 64 across the adapter; a call beyond that fails
 immediately with `error_code: "adapter_busy"` and `execution_started: false`.
-URLs are capped at 8 KiB; writes at 2 KiB UTF-8; reads at 32 KiB; exec captures
+URLs are capped at 8 KiB, which is also what bounds an edit's `old` and `new`;
+writes at 2 KiB UTF-8; a read returns at most 32 KiB, cut on a line boundary
+whatever `limit` asked for; exec captures
 at most 16 KiB each of stdout and stderr and cancels on overflow. `HEAD` cannot
 create or execute tasks.
 
