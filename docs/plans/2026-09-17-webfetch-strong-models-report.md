@@ -192,7 +192,6 @@ alongside the existing `staleGrace`. Nothing outside the package assigns them.
 fails (`internal/webfetch/handler.go`, the deferred writer logs and drops it).
 Pre-existing, unchanged by this branch.
 
-**Cross-account starvation is knowingly unaddressed.** Sixteen grants of four
-long operations each can still occupy all 64 adapter slots. That is acceptable
-because the relay is going single-owner; on a shared relay it would be a
-starvation channel, and the ADR records where to reopen it.
+**Cross-account isolation is out of scope.** The relay is going single-owner, so
+there is no second account to protect and a per-owner budget would only have
+capped the one owner below the 64 slots already available to them.

@@ -65,11 +65,11 @@ spends the caller's 64-job allowance on an operation that did not run. The slot
 is released by a deferred call around `execute`, which covers a result, a
 transport failure, a store write that fails and a recovered panic alike.
 
-A per-owner budget between those two was written and then removed: the relay is
-moving to a single-owner deployment (`wanctl-relay-cf-tunnel-plan`, 2026-09-17),
-so one account starving another is not a problem this code needs to solve. If
-the relay ever becomes multi-tenant again, that is the gap to reopen — a grant
-is not a person, and one account can hold many grants at once.
+A third counter, a budget per owner namespace, was written during review and
+then removed. The relay is moving to a single-owner deployment
+(`wanctl-relay-cf-tunnel-plan`, 2026-09-17): there is no second account to
+protect, and an 8-per-owner budget would only have capped the one owner at 8 of
+the 64 slots they already paid for.
 
 ## Why not run exec through `exec_async` / `exec_poll`
 
@@ -110,9 +110,8 @@ durable to live. Async execution would need a job-store change too.
   above, so this trade is unchanged, just slower to appear.
 - A grant that wants more than four operations at once now gets a clean refusal
   instead of silent queueing behind someone else's render.
-- Cross-account isolation is out of scope while the deployment is single-owner.
-  Sixteen grants of four long operations each can still take the whole adapter;
-  on a shared relay that would be a starvation channel.
+- Cross-account isolation is out of scope: the deployment is single-owner, so
+  the only concurrency that matters is the owner's own.
 - `unknown` no longer names a cause, because the adapter records it for four
   different ones. The instruction is the same in all of them: do not repeat the
   operation automatically, check the device.
