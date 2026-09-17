@@ -16,7 +16,7 @@ const Width = 80
 // the entry point is a wall nobody reads.
 func Index(relay, portal string) string {
 	var b strings.Builder
-	b.WriteString("wanctl — a remote computer for AI agents, over an end-to-end encrypted relay\n")
+	b.WriteString("wanctl — " + Headline + ", over an encrypted relay\n")
 	b.WriteString("USAGE: wanctl <command> [flags]   ·   wanctl help <command>  explains one\n")
 	for _, g := range IndexGroups {
 		head := " " + string(g.Group)
@@ -163,7 +163,7 @@ func kind(p Param) string {
 func Markdown() string {
 	var b strings.Builder
 	b.WriteString("# wanctl command contract\n\n")
-	b.WriteString(wrapPlain(Product, 78) + "\n\n")
+	b.WriteString(mdParagraphs(Product) + "\n\n")
 	b.WriteString("This file is generated. It is the output of `wanctl help --markdown`, and\n")
 	b.WriteString("the same catalog (`internal/catalog`) produces the CLI help and the MCP tool\n")
 	b.WriteString("descriptions, so the three cannot drift. Regenerate with:\n\n")

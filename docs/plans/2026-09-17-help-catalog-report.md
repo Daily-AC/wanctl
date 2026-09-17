@@ -35,11 +35,14 @@ That has a consequence for how entries are written. What an MCP host loads from
 this catalog is that agent's system prompt — read once, before any work, by the
 thing about to act. So entries are operating instructions, not reference prose:
 when to reach for this and not that, what an error obliges you to do next, what
-to do before you start. The last of those is now explicit. `wanctl_exec` and
-`wanctl_read` both carry a START OF TASK rule: before working in a project
-directory on the device, read its AGENTS.md or CLAUDE.md if one is there,
-because it outranks how the agent would otherwise proceed. A test pins the rule
-so it cannot be dropped silently.
+to do before you start. The last of those is explicit in the DEV LOOP paragraph
+on `wanctl_exec`, and again on `wanctl_read`: before working inside a project
+directory, read its AGENTS.md or CLAUDE.md with `wanctl_read` if one exists, and
+follow it. A test pins the rule so it cannot be dropped silently.
+
+One claim, one source. `catalog.Headline` is the sentence the index header, the
+contract intro and the README all render or are checked against, so what wanctl
+is cannot be updated in one place and go stale in the other two.
 
 ## Files changed
 
@@ -57,14 +60,14 @@ so it cannot be dropped silently.
 | `help_catalog_test.go` | index budget, both spellings, unknown command, doc drift |
 | `entrypoint_test.go`, `fileops_cli_test.go` | updated for the new index |
 | `docs/contract.md` | generated |
-| `README.md` | one link, one product line |
+| `README.md` | one link, one product line, pinned to `catalog.Headline` by a test |
 
 ## Criteria
 
 | # | Criterion | Result |
 |---|---|---|
 | 1 | Every MCP tool still registered with identical name, parameter names, types, required flags | pass — snapshot captured from `main` before any change, asserted in `TestRegistrationMatchesSnapshot` |
-| 2 | Must-keep phrases present in generated descriptions | pass — `TestDescriptionsKeepTheRules`, tool and parameter level, including START OF TASK |
+| 2 | Must-keep phrases present in generated descriptions | pass — `TestDescriptionsKeepTheRules`, tool and parameter level, including the AGENTS.md rule |
 | 3 | Bare `wanctl` ≤ 30 lines, ≤ 80 columns | pass — 29 lines, 77 columns (`TestIndexFitsTheBudget`) |
 | 4 | `help exec`, `exec -h`, `help read`, `help wanctl_read` render; `help nosuch` exits non-zero with the index | pass — `TestHelpRendersEntriesForBothSpellings`, `TestHelpForUnknownCommandFails` |
 | 5 | `docs/contract.md` in sync | pass — `TestContractDocIsInSync` |
@@ -74,7 +77,7 @@ so it cannot be dropped silently.
 ## Real output: bare `wanctl`
 
 ```
-wanctl — a remote computer for AI agents, over an end-to-end encrypted relay
+wanctl — the external harness for a web AI, over an encrypted relay
 USAGE: wanctl <command> [flags]   ·   wanctl help <command>  explains one
  DEVICE LIFECYCLE (run on the machine you want to control)
   start       log in if needed, then run the agent in the background
@@ -121,10 +124,7 @@ MCP tool: wanctl_exec
   that URL VERBATIM to the user; do not paraphrase. If instead it says DEVICE
   IDENTITY CONFIRMATION REQUIRED, that is first contact: call
   wanctl_trust_server with the target and fingerprint it gives you and retry,
-  without asking the user. To look at a file or change one line of it, use
-  wanctl_read and wanctl_edit instead of cat/sed/echo here: they are native
-  operations on the device, so they behave the same on every platform and
-  nothing you pass is parsed by a shell.
+  without asking the user.
 
   DEV LOOP — how these primitives fit together, because most work is a loop and
   not one call: wanctl_exec keeps a persistent shell per device, so cwd and
@@ -137,13 +137,8 @@ MCP tool: wanctl_exec
   on the device, identical on every OS, and nothing you pass is parsed by a
   shell. Reach for wanctl_push_blob only for binaries or for a large file that
   does not exist on the device yet — it overwrites whole files and loses
-  concurrent edits.
-
-  START OF TASK: before you do any work inside a project directory on the
-  device, wanctl_read that directory's AGENTS.md or CLAUDE.md if one is there.
-  It is that project's operating instructions — build commands, conventions,
-  things not to touch — and it overrides your defaults. Read it first, not after
-  your first command fails.
+  concurrent edits. Before working inside a project directory, read its
+  AGENTS.md or CLAUDE.md with wanctl_read if one exists, and follow it.
 
   On the command line --target may be omitted when the first argument names a
   device, or when exactly one device is online. --script takes a path to a local
