@@ -60,6 +60,7 @@ one list, the dev loop, the AGENTS.md rule, the four refusals. 39 lines. The sam
 | 6 | catalog: snapshot extended, must-keep extended, contract regenerated | PASS — with one deliberate schema change, below |
 | 7 | gofmt / go vet / go test | PASS — all packages green; `TestAccessTokenFailsClosed` (#90) did not flake on either run |
 | 8 | real link: relay + agent + controller, all four by hand | PASS — transcript below |
+| 9 | a lost result is not an unsupported agent (write/edit/read/exec) | PASS — `TestLostConnectionAfterSendIsNotAnUnsupportedAgent`, `TestExplicitUnknownRequestIsStillAnUnsupportedAgent`, `TestFileErrorsDistinguishLostResultsFromOldAgents`, `TestLostExecConnectionIsNotAnUnsupportedAgent` |
 
 ### Criterion 8, by hand
 
@@ -100,6 +101,30 @@ wanctl_screenshot{"target":"lab-mac"}
 initialize → instructions: 39 lines
 device event log: WRITE …/app.toml · EDIT …/app.toml · WRITE …/run.sh, all with decisions
 ```
+
+## Criterion 9, added after review of the WebFetch PR
+
+`internal/client/fileops.go` turned any `io.EOF` after the request frame into
+`UnsupportedError` — "device agent does not support …; run `wanctl update`". That inference is
+only sound when the device says so. A device that had already applied an edit and then lost the
+connection produced a message claiming nothing ran, naming a fix that would not help, and
+inviting a retry that for a non-idempotent edit replaces text that is no longer there.
+
+Now only an explicit `unknown request: <kind>` reply means unsupported. A connection that ends
+after the frame was sent is a new `ResultLostError` carrying the kind and the path:
+
+> result unknown: the connection dropped after the request was sent; read the file and compare
+> sha256 before retrying — the change to /etc/app.conf may or may not have been applied
+
+`mcpRead`, `mcpEdit` and `mcpWrite` all render it through `fileOpErrorResult`, which adds
+"Do NOT simply retry: call wanctl_read first and compare the sha256", and never the update
+instruction. A lost `file_read` says the opposite — nothing was changed, so retry — because a
+read has nothing to inspect afterwards. Both failures are now rows in the three tools' error
+tables in the contract.
+
+The exec path (which is how a screenshot travels) never had the bug: it returns the read error
+as itself. `execOver` was extracted from `ExecOut`, mirroring the `fileOpOver` seam, so that
+property is asserted rather than assumed.
 
 ## Contradictions and judgment calls
 

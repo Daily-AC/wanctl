@@ -2,7 +2,9 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"image/png"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -10,6 +12,7 @@ import (
 	"testing"
 
 	"wanctl/internal/policy"
+	"wanctl/internal/protocol"
 )
 
 // Over the real relay, through a real agent: a command whose output passes the
@@ -113,4 +116,43 @@ func TestScreenshotOverTheRelayReturnsAPNG(t *testing.T) {
 		t.Fatalf("received a %dx%d image", cfg.Width, cfg.Height)
 	}
 	t.Logf("received %dx%d, %d bytes over the relay", cfg.Width, cfg.Height, shot.Len())
+}
+
+// The exec path — which is how a screenshot travels — never made the mistake
+// the file path did: a connection that ends mid-command is reported as what it
+// is, not as an agent that cannot run the command. Asserted so the new
+// screenshot tool cannot inherit it later.
+func TestLostExecConnectionIsNotAnUnsupportedAgent(t *testing.T) {
+	device, controller := net.Pipe()
+	defer controller.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// The device receives the command — and may well be running it — then
+		// the session ends without an exit frame ever arriving.
+		protocol.ReadMessage(device)
+		device.Close()
+	}()
+
+	req := ExecRequest{Command: "screenshot", Elevate: true, ElevateOptional: true}
+	if err := protocol.WriteMessage(controller, protocol.Message{
+		Kind: protocol.KindExec, Command: req.Command, OneShot: true, Elevate: req.Elevate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	var out bytes.Buffer
+	res, err := execOver(context.Background(), controller, req, &out, &out)
+	if err == nil {
+		t.Fatal("a dropped connection was reported as success")
+	}
+	if res.Code != -1 {
+		t.Errorf("exit code = %d, want -1 for a command whose result never arrived", res.Code)
+	}
+	for _, forbidden := range []string{"does not support", "wanctl update"} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Errorf("message = %q, which blames the agent's version", err.Error())
+		}
+	}
 }

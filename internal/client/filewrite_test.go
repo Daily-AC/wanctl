@@ -133,3 +133,80 @@ func TestOldAgentUnknownWriteBecomesAnUpdateInstruction(t *testing.T) {
 		t.Fatalf("message = %q, want the update instruction for write", err.Error())
 	}
 }
+
+// A device that ran the operation and then lost the connection must not be
+// reported as one that cannot run it at all. The two look identical on the wire
+// — the session ends — and only one of them means "nothing happened".
+func TestLostConnectionAfterSendIsNotAnUnsupportedAgent(t *testing.T) {
+	for _, kind := range []string{protocol.KindFileEdit, protocol.KindFileWrite, protocol.KindFileRead} {
+		t.Run(kind, func(t *testing.T) {
+			device, controller := net.Pipe()
+			defer controller.Close()
+			go func() {
+				// Read the request — the device has it, and in the edit and
+				// write cases has already applied it — then drop the session
+				// without answering.
+				protocol.ReadMessage(device)
+				device.Close()
+			}()
+
+			_, err := fileOpOver(controller, protocol.Message{
+				Kind: kind, Path: "/etc/app.conf", Old: "a", New: "b", Content: "x\n",
+			})
+			var unsupported *UnsupportedError
+			if errors.As(err, &unsupported) {
+				t.Fatalf("a dropped connection was reported as an unsupported agent: %v", err)
+			}
+			var lost *ResultLostError
+			if !errors.As(err, &lost) {
+				t.Fatalf("error = %v, want a ResultLostError", err)
+			}
+			if lost.Kind != kind || lost.Path != "/etc/app.conf" {
+				t.Errorf("lost result names %s %q", lost.Kind, lost.Path)
+			}
+			if !strings.Contains(err.Error(), "result unknown") {
+				t.Errorf("message does not lead with the uncertainty: %q", err.Error())
+			}
+			if strings.Contains(err.Error(), "wanctl update") {
+				t.Errorf("message tells the caller to update an agent that may be fine: %q", err.Error())
+			}
+			// A write or an edit may already be on disk; a read cannot be.
+			if kind == protocol.KindFileRead {
+				if !strings.Contains(err.Error(), "retry") {
+					t.Errorf("a lost read should say retrying is safe: %q", err.Error())
+				}
+			} else if !strings.Contains(err.Error(), "compare sha256") {
+				t.Errorf("a lost mutation should say to check the file: %q", err.Error())
+			}
+		})
+	}
+}
+
+// The other half of the same distinction: an explicit refusal of the frame kind
+// still means the device cannot do this, and still says to update it.
+func TestExplicitUnknownRequestIsStillAnUnsupportedAgent(t *testing.T) {
+	device, controller := net.Pipe()
+	defer controller.Close()
+	go func() {
+		defer device.Close()
+		if _, err := protocol.ReadMessage(device); err != nil {
+			return
+		}
+		protocol.WriteMessage(device, protocol.Message{
+			Kind: protocol.KindError, Reason: "unknown request: " + protocol.KindFileEdit,
+		})
+	}()
+
+	_, err := fileOpOver(controller, protocol.Message{Kind: protocol.KindFileEdit, Path: "/etc/app.conf", Old: "a", New: "b"})
+	var unsupported *UnsupportedError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("error = %v, want an UnsupportedError", err)
+	}
+	var lost *ResultLostError
+	if errors.As(err, &lost) {
+		t.Error("an explicit refusal was read as a lost result")
+	}
+	if !strings.Contains(err.Error(), "wanctl update") {
+		t.Errorf("message = %q, want the update instruction", err.Error())
+	}
+}
