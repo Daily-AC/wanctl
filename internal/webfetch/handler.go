@@ -35,8 +35,34 @@ const (
 	MaxURLBytes    = 8192
 	MaxOutputBytes = 32 << 10
 	MaxWriteBytes  = 2048
-	MaxRequestTime = 60 * time.Second
 )
+
+// Per-tool time budgets. An exec is whatever the device's own policy already
+// allows, and that includes builds and renders: the first real caller's job was
+// a ten-minute Blender run that a sixty-second ceiling turned into an unknown
+// outcome. A file transfer is bounded by MaxWriteBytes / MaxOutputBytes, so a
+// slow one is a stuck one and must not hold a slot for half an hour. The
+// defaults are variables so a test can prove that changing one does not change
+// the replay identity of a call that never sent timeout_seconds.
+var (
+	MaxExecSeconds     = 1800
+	DefaultExecSeconds = 300
+	MaxFileSeconds     = 60
+	DefaultFileSeconds = 30
+)
+
+// Long jobs hold a slot for as long as they run, so these caps are what keeps
+// one grant from owning the adapter. They are variables so a test can compress
+// the scale.
+var (
+	maxOperationsPerGrant = 4
+	maxOperations         = 64
+)
+
+// staleGrace is how long after a job's own deadline the adapter still expects to
+// write an outcome. Past that the result is genuinely unknown. It is a variable
+// so tests can compress the time scale instead of sleeping through a deadline.
+var staleGrace = 90 * time.Second
 
 var ticketPattern = regexp.MustCompile(`^[0-9]{10}-[a-f0-9]{48}$`)
 var clientNoncePattern = regexp.MustCompile(`^[a-f0-9]{48}$`)
@@ -55,10 +81,11 @@ type Handler struct {
 	cfg      Config
 	ctx      context.Context
 	cancel   context.CancelFunc
-	queue    chan work
 	wg       sync.WaitGroup
 	mu       sync.Mutex
 	requests map[string]rateWindow
+	running  map[string]int // grant -> operations in flight
+	total    int
 }
 
 type rateWindow struct {
@@ -79,7 +106,31 @@ type Operation struct {
 	Cwd     string `json:"cwd,omitempty"`
 	Path    string `json:"path,omitempty"`
 	Content string `json:"content,omitempty"`
-	Timeout int    `json:"timeout_seconds"`
+	// Nil when the caller did not send timeout_seconds. The default is applied
+	// at dispatch and never written into the canonical payload: a replay of an
+	// identical URL must keep hashing the same way across a deploy that changes
+	// a default, or a lost-response retry turns into a 409.
+	Timeout *int `json:"timeout_seconds,omitempty"`
+}
+
+func (o Operation) timeout() int {
+	if o.Timeout != nil {
+		return *o.Timeout
+	}
+	_, fallback := timeoutBounds(o.Tool)
+	return fallback
+}
+
+// effectiveDeadline is the moment after which this job cannot still be running:
+// its own timeout, or the end of the grant, whichever comes first. One value
+// drives execution, the advertised deadline_at and the stale-state inference,
+// so a client is never told to wait past the point where a result can arrive.
+func effectiveDeadline(created time.Time, timeout int, grantExpiry time.Time) time.Time {
+	deadline := created.Add(time.Duration(timeout) * time.Second)
+	if !grantExpiry.IsZero() && grantExpiry.Before(deadline) {
+		return grantExpiry
+	}
+	return deadline
 }
 
 func New(cfg Config) (*Handler, error) {
@@ -98,11 +149,7 @@ func New(cfg Config) (*Handler, error) {
 	cfg.Seed = append([]byte(nil), cfg.Seed...)
 	cfg.PublicOrigin, cfg.PortalOrigin, cfg.RelayURL = strings.TrimRight(cfg.PublicOrigin, "/"), strings.TrimRight(cfg.PortalOrigin, "/"), strings.TrimRight(cfg.RelayURL, "/")
 	ctx, cancel := context.WithCancel(context.Background())
-	h := &Handler{cfg: cfg, ctx: ctx, cancel: cancel, queue: make(chan work, 64), requests: map[string]rateWindow{}}
-	for i := 0; i < 4; i++ {
-		h.wg.Add(1)
-		go h.worker()
-	}
+	h := &Handler{cfg: cfg, ctx: ctx, cancel: cancel, requests: map[string]rateWindow{}, running: map[string]int{}}
 	if cleaner, ok := cfg.Store.(interface {
 		CleanupDelegations(context.Context, time.Duration) error
 	}); ok {
@@ -194,14 +241,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/webfetch" || r.URL.Path == "/webfetch/" || r.URL.Path == "/webfetch/v1" {
-		h.respond(w, r, 200, map[string]any{
-			"title": "wanctl WebFetch", "status": "start", "entry_url": h.cfg.PublicOrigin + "/webfetch/v1",
-			"owner_start_url":     h.cfg.PortalOrigin + "/webfetch/connect",
-			"start_url_template":  h.cfg.PublicOrigin + "/webfetch/new/{client_nonce}",
-			"client_nonce_format": "48 lowercase hexadecimal characters from 24 cryptographically random bytes; never reuse a sample, guess randomness, or copy another conversation's value",
-			"instruction":         "This is a GET-only API, not a web form. If you have a secure random generator, create client_nonce, substitute it into start_url_template and read that complete URL with the same URL-reading tool. Otherwise give owner_start_url to the owner: that page generates a fresh connection prompt to paste here. Never fetch the literal template or invent approval/status URLs. Verify the returned client_nonce equals yours; a mismatch indicates another request's cached response. Give the real approval_url and continuation_prompt to the owner and wait. Only the owner may approve in wanctl. A URL-reading tool can read subsequent GET URLs too; no browser cookies, POST, Python, MCP or special headers are required.",
-			"authorization":       "wanctl device scope, expiry, revocation, identity trust and device-local policy apply",
-		})
+		h.respond(w, r, 200, discovery(h.cfg.PublicOrigin, h.cfg.PortalOrigin))
 		return
 	}
 	// A public, commonly fetched discovery URL must never carry a live ticket:
@@ -294,7 +334,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"request_expires_at": request.RequestExpiresAt, "controller_fingerprint": identity.Fingerprint,
 			"approval_url": h.cfg.PortalOrigin + "/webfetch/approve?request=" + url.QueryEscape(id),
 			"status_url":   statusURL, "continuation_prompt": h.continuationPrompt(statusURL),
-			"instruction": "Give the owner BOTH approval_url and continuation_prompt, including its complete URL. The owner verifies identities, selects devices and approves a duration in wanctl. Stop while approval is pending. After approval, GET the SAME status_url to discover devices and tools; do not open start_url or create another request. This GET does not grant access.",
+			"continuation_prompt_zh": h.continuationPromptZH(statusURL),
+			"human_checkpoint":       humanCheckpoints()[0],
+			"instruction":            "Show the human approval_url with human_checkpoint.summary (use summary_zh if you are speaking Chinese), then stop and wait. Only the human can approve, in the wanctl portal. When they say they are done, GET the SAME status_url; do not create another request. This request expires at request_expires_at.",
 		}
 		if clientNonce != "" {
 			pending["client_nonce"] = clientNonce
@@ -324,25 +366,57 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		payload, _ := json.Marshal(op)
-		job, fresh, err := h.cfg.Jobs.BeginJob(r.Context(), id, query.Get("rid"), digest(payload), payload)
+		rid, hash := query.Get("rid"), digest(payload)
+		// Look the rid up before deciding anything about capacity. A client
+		// recovering a lost response replays the identical URL, and telling it
+		// "nothing ran, use a new rid" because the adapter happens to be full
+		// would run the same operation a second time.
+		switch existing, err := h.cfg.Jobs.FindJob(r.Context(), id, rid); {
+		case err == nil && existing.PayloadHash != hash:
+			h.conflict(w, r, ticket, id)
+			return
+		case err == nil:
+			h.jobResponse(w, r, ticket, existing, true, op, access.ExpiresAt)
+			return
+		case !errors.Is(err, delegation.ErrNotFound):
+			h.fail(w, r, err)
+			return
+		}
+		// Only a genuinely new operation can be refused for capacity, and that
+		// refusal writes nothing: a job row spent on something that never ran
+		// would eat the caller's 64-job ledger allowance.
+		if !h.reserve(id) {
+			log.Printf("webfetch: call rejected grant=%s reason=adapter_busy", id)
+			h.respond(w, r, 429, map[string]any{
+				"error": "too many operations are already running; this one did not start", "error_code": "adapter_busy",
+				"execution_started": false, "status_url": h.statusURL(ticket),
+				"instruction": "No job was created and nothing ran under this rid. Read your running jobs' next_url until one finishes, then send this same URL again.",
+			})
+			return
+		}
+		// Held until the dispatch goroutine takes ownership, so that an error or
+		// a panic anywhere between here and there still returns the slot.
+		held := true
+		defer func() {
+			if held {
+				h.release(id)
+			}
+		}()
+		job, fresh, err := h.cfg.Jobs.BeginJob(r.Context(), id, rid, hash, payload)
+		if errors.Is(err, delegation.ErrConflict) {
+			h.conflict(w, r, ticket, id)
+			return
+		}
 		if err != nil {
 			h.fail(w, r, err)
 			return
 		}
 		if fresh {
 			log.Printf("webfetch: job created grant=%s job=%s", id, job.ID)
-			select {
-			case h.queue <- work{job: job, request: request, token: token, operation: op}:
-			default:
-				result, _ := json.Marshal(map[string]any{"ok": false, "error": "adapter queue is full; operation did not start"})
-				if err := h.cfg.Jobs.FinishJob(r.Context(), id, job.ID, "failed", result); err != nil {
-					h.fail(w, r, err)
-					return
-				}
-				job.State, job.Result = "failed", result
-			}
+			held = false
+			h.dispatch(work{job: job, request: request, token: token, operation: op})
 		}
-		h.jobResponse(w, r, ticket, job, !fresh)
+		h.jobResponse(w, r, ticket, job, !fresh, op, access.ExpiresAt)
 	case len(parts) == 5 && parts[3] == "jobs":
 		job, err := h.cfg.Jobs.GetJob(r.Context(), id, parts[4])
 		if err != nil {
@@ -354,14 +428,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, r, delegation.ErrForbidden)
 			return
 		}
-		h.jobResponse(w, r, ticket, job, false)
+		h.jobResponse(w, r, ticket, job, false, op, access.ExpiresAt)
 	default:
 		h.respond(w, r, 404, map[string]any{"error": "not found"})
 	}
 }
 
+// timeoutBounds is the per-tool ceiling and default, in seconds. exec may be a
+// build or a render; a file transfer of at most 32 KiB may not.
+func timeoutBounds(tool string) (ceiling, fallback int) {
+	if tool == "exec" {
+		return MaxExecSeconds, DefaultExecSeconds
+	}
+	return MaxFileSeconds, DefaultFileSeconds
+}
+
 func parseOperation(q url.Values) (Operation, error) {
-	op := Operation{Tool: q.Get("tool"), Target: q.Get("target"), Timeout: 30}
+	op := Operation{Tool: q.Get("tool"), Target: q.Get("target")}
 	if !ridPattern.MatchString(q.Get("rid")) {
 		return op, fmt.Errorf("rid must contain 1..64 ASCII letters, digits, hyphens or underscores")
 	}
@@ -369,13 +452,6 @@ func parseOperation(q url.Values) (Operation, error) {
 		return op, fmt.Errorf("target must equal a devices[].target value in namespace/device_id format; a bare namespace, bare ID or namespace:ID is invalid")
 	}
 	allowed := map[string]bool{"rid": true, "tool": true, "target": true, "format": true, "timeout_seconds": true}
-	if value := q.Get("timeout_seconds"); value != "" {
-		n, err := strconv.Atoi(value)
-		if err != nil || n < 1 || n > 60 {
-			return op, fmt.Errorf("timeout_seconds must be 1..60")
-		}
-		op.Timeout = n
-	}
 	switch op.Tool {
 	case "exec":
 		allowed["command"], allowed["cwd"] = true, true
@@ -399,6 +475,17 @@ func parseOperation(q url.Values) (Operation, error) {
 	default:
 		return op, fmt.Errorf("unknown tool")
 	}
+	// An omitted timeout stays omitted: op is the canonical replay identity, and
+	// baking today's default into it would make an identical URL hash
+	// differently after a deploy that changes that default.
+	if value := q.Get("timeout_seconds"); value != "" {
+		ceiling, _ := timeoutBounds(op.Tool)
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 || n > ceiling {
+			return op, fmt.Errorf("timeout_seconds must be 1..%d for tool %s", ceiling, op.Tool)
+		}
+		op.Timeout = &n
+	}
 	for key := range q {
 		if !allowed[key] {
 			return op, fmt.Errorf("unknown parameter %q", key)
@@ -407,33 +494,81 @@ func parseOperation(q url.Values) (Operation, error) {
 	return op, nil
 }
 
-func (h *Handler) jobResponse(w http.ResponseWriter, r *http.Request, ticket string, job delegation.Job, duplicate bool) {
-	resultURL := h.sessionURL(ticket) + "/jobs/" + job.ID
-	state := job.State
-	if (state == "running" || state == "queued") && time.Since(job.CreatedAt) > 90*time.Second {
-		state = "unknown"
+// unknownInstruction says what "unknown" means without naming a cause. The
+// adapter records that state for a lost transport, an overflowing output, a
+// recovered panic and an elapsed deadline alike; naming only the deadline told
+// the reader something false in three of the four cases.
+const unknownInstruction = "The adapter lost track of this job before a result was recorded. It may have run on the device. Do not repeat it automatically: ask the human to check the device before you create a new request."
+
+// jobState downgrades a still-running job to "unknown" only once its effective
+// deadline has passed and the adapter has had staleGrace on top of that to write
+// an outcome. A fixed 90-second window reported healthy long jobs as unknown.
+func jobState(state string, now, deadline time.Time) string {
+	if state != "running" && state != "queued" {
+		return state
 	}
+	if now.After(deadline.Add(staleGrace)) {
+		return "unknown"
+	}
+	return state
+}
+
+func (h *Handler) jobResponse(w http.ResponseWriter, r *http.Request, ticket string, job delegation.Job, duplicate bool, op Operation, grantExpiry time.Time) {
+	resultURL := h.sessionURL(ticket) + "/jobs/" + job.ID
+	now := time.Now()
+	age := now.Sub(job.CreatedAt)
+	deadline := effectiveDeadline(job.CreatedAt, op.timeout(), grantExpiry)
+	state := jobState(job.State, now, deadline)
 	statusURL := h.statusURL(ticket)
 	data := map[string]any{"title": "wanctl job", "job_id": job.ID, "request_id": job.RequestID, "status": state, "duplicate_request": duplicate, "result_url": resultURL, "result": job.Result, "status_url": statusURL, "continuation_prompt": h.continuationPrompt(statusURL)}
 	if state == "running" || state == "queued" {
-		data["next_url"] = resultURL + "?check=" + strconv.FormatInt(time.Now().UnixNano(), 10)
-		data["instruction"] = "Read next_url for the result. Do not submit this operation under a new rid."
+		wait := 5
+		if age > time.Minute {
+			wait = 30
+		}
+		data["next_url"] = resultURL + "?check=" + strconv.FormatInt(now.UnixNano(), 10)
+		data["poll_after_seconds"] = wait
+		data["deadline_at"] = deadline
+		data["instruction"] = "Still running. Wait poll_after_seconds, then read next_url. Keep polling until the status is done, failed or unknown; a long job is normal up to deadline_at, which is also bounded by when this authorization ends. Retry a lost read by fetching the same URL again; never resubmit the operation under a new rid."
 	}
 	if state == "unknown" {
-		data["instruction"] = "The operation outcome is unknown after an interruption. Do not automatically repeat it. Ask the owner to inspect device logs."
+		data["instruction"] = unknownInstruction
 	}
 	h.respond(w, r, 200, data)
 }
 
-func (h *Handler) worker() {
-	defer h.wg.Done()
-	for {
-		select {
-		case <-h.ctx.Done():
-			return
-		case task := <-h.queue:
-			h.execute(task)
-		}
+// dispatch runs one operation on its own goroutine, on a slot the caller has
+// already reserved. A long exec therefore cannot block another grant's short
+// call behind it, which a fixed worker pool did as soon as operations were
+// allowed to outlive a minute. The release is deferred here rather than inside
+// execute so that every exit — a result, a transport failure, a store write
+// that fails, a recovered panic — gives the slot back.
+func (h *Handler) dispatch(task work) {
+	h.wg.Add(1)
+	go func() {
+		defer h.wg.Done()
+		defer h.release(task.job.GrantID)
+		h.execute(task)
+	}()
+}
+
+func (h *Handler) reserve(grant string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.total >= maxOperations || h.running[grant] >= maxOperationsPerGrant {
+		return false
+	}
+	h.running[grant]++
+	h.total++
+	return true
+}
+
+func (h *Handler) release(grant string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.total--
+	if h.running[grant]--; h.running[grant] <= 0 {
+		delete(h.running, grant)
 	}
 }
 
@@ -442,7 +577,7 @@ func (h *Handler) execute(task work) {
 	state := "failed"
 	defer func() {
 		if recover() != nil {
-			result = map[string]any{"ok": false, "error": "internal adapter failure; outcome unknown"}
+			result = map[string]any{"ok": false, "error": "internal adapter failure; outcome unknown", "instruction": unknownInstruction}
 			state = "unknown"
 		}
 		encoded, _ := json.Marshal(result)
@@ -457,10 +592,7 @@ func (h *Handler) execute(task work) {
 		result["error"] = "delegation is no longer valid; operation did not start"
 		return
 	}
-	deadline := task.job.CreatedAt.Add(time.Duration(task.operation.Timeout) * time.Second)
-	if access.ExpiresAt.Before(deadline) {
-		deadline = access.ExpiresAt
-	}
+	deadline := effectiveDeadline(task.job.CreatedAt, task.operation.timeout(), access.ExpiresAt)
 	if !time.Now().Before(deadline) {
 		result["error"] = "job expired before dispatch; operation did not start"
 		return
@@ -512,7 +644,7 @@ func (h *Handler) execute(task work) {
 		var untrusted *client.TrustRequiredError
 		if task.operation.Tool != "read_text" && !errors.As(err, &rejected) && !errors.As(err, &untrusted) {
 			state = "unknown"
-			result["instruction"] = "The operation may have started. Do not retry under a new rid; ask the owner to inspect the device."
+			result["instruction"] = unknownInstruction
 		}
 		if errors.As(err, &rejected) {
 			result["error"] = boundedText(rejected.Reason, 4096)
@@ -520,7 +652,8 @@ func (h *Handler) execute(task work) {
 				result["pairing_url"] = rejected.PairingURL
 				result["error_code"] = "pairing_required"
 				result["execution_started"] = false
-				result["instruction"] = "The operation did not start. The owner must approve pairing in wanctl; do not approve it by fetching the link. After the owner confirms pairing, submit a NEW attempt with a NEW rid. Reusing this completed job's rid only returns the same failure."
+				result["human_checkpoint"] = humanCheckpoints()[1]
+				result["instruction"] = "Step 2 of 2: pairing. Nothing ran. Show the human pairing_url with human_checkpoint.summary (summary_zh in Chinese), and wait until they say they approved it — never fetch that link yourself. Then submit the same operation again under a NEW rid. This job stays failed, and reusing its rid only returns this same failure."
 			}
 		}
 		return
@@ -570,6 +703,19 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
+// conflict answers a rid that already names a different operation. It carries
+// no execution_started and no invitation to pick a new rid: the earlier
+// operation under this rid may well have run, and a model that reads "nothing
+// ran" here will happily run the work twice.
+func (h *Handler) conflict(w http.ResponseWriter, r *http.Request, ticket, grant string) {
+	log.Printf("webfetch: call rejected grant=%s reason=rid_conflict", grant)
+	h.respond(w, r, 409, map[string]any{
+		"error":      "this rid already names a different operation; its arguments do not match the ones recorded",
+		"error_code": "rid_conflict", "status_url": h.statusURL(ticket),
+		"instruction": "Stop here. Nothing ran just now, but the earlier operation recorded under this rid may have. Read status_url and find out what it did before you decide anything else. Do not resend this URL, and do not move the same work to another rid until you know.",
+	})
+}
+
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	status, message := 500, "delegation service unavailable"
 	switch {
@@ -592,13 +738,16 @@ var responseTemplate = template.Must(template.New("response").Parse(`<!doctype h
 <title>wanctl WebFetch</title>
 <style>body{font:16px/1.65 system-ui;max-width:800px;margin:64px auto;padding:0 24px;color:#222}a,code{overflow-wrap:anywhere}a{color:#1268d3}pre{background:#f5f5f7;padding:20px;border-radius:12px;white-space:pre-wrap;overflow-wrap:anywhere}h1{font-size:28px}h2{font-size:22px}</style>
 <h1>wanctl WebFetch</h1>
+{{with .Document.summary}}<p>{{.}}</p>{{end}}
+{{with .Document.procedure}}<h2>Procedure</h2><ol>{{range .}}<li>{{.}}</li>{{end}}</ol>{{end}}
+{{with .Document.human_checkpoints}}<h2>The two things the human does</h2><ul>{{range .}}<li><strong>{{.name}}</strong> — {{.summary}} (link: <code>{{.url_field}}</code>)</li>{{end}}</ul>{{end}}
+{{with .Document.human_checkpoint}}<h2>{{.name}}</h2><p>{{.summary}}</p><p lang="zh-CN">{{.summary_zh}}</p>{{end}}
 {{if .Document.call_endpoint}}
-<h2>Authorized: call tools with GET</h2>
-<p>Use the same URL-reading tool that opened this page. Fill a template below with URL-encoded values and GET the complete URL. No separate exec connector, POST, cookies or special headers are needed.</p>
+<h2>Approved: call tools with GET</h2>
 <p><strong>call_endpoint</strong><br><code>{{.Document.call_endpoint}}</code></p>
 <p><strong>Allowed target values</strong>{{range .Document.devices}}<br><code>{{.Target}}</code>{{end}}</p>
 {{range .Document.tools}}<p><strong>{{.name}} — GET call_url_template</strong><br><code>{{.call_url_template}}</code><br>{{.description}}</p>{{end}}
-<p>Replace every {placeholder}; never fetch an unfilled template. Use a new rid for each new operation and the same rid and arguments when retrying it. GET result_url / next_url until done, failed or unknown (at most 8 polls). Return only the actual result. Keep the full status_url and exec template in your reply so later turns can continue.</p>
+<p>Fill every {placeholder} with a URL-encoded value; never fetch an unfilled template. A new rid per new operation, the same rid and arguments to retry one. Follow next_url until the status is done, failed or unknown, waiting poll_after_seconds between reads. Report the actual result, and keep status_url and the exec template in your reply.</p>
 {{end}}
 {{range .Links}}<p><strong>{{.Name}}</strong><br><a href="{{.URL}}">{{.URL}}</a></p>{{end}}
 <h2>Protocol response</h2><pre>{{.JSON}}</pre></html>`))

@@ -68,6 +68,32 @@
       ? '请使用联网工具实际读取这个独立申请的完整 URL：\n' + start.dataset.url + '\n按真实响应返回 approval_url 和完整 continuation_prompt，等待我在 wanctl 中批准。批准后，使用同一个网页读取工具 GET 调用网址，完成我明确请求的任务；回复中保留完整 status_url 和 exec 的 call_url_template，供后续对话继续使用。调用说明：' + start.dataset.help + '\n不要模拟响应或代替我审批；授权完成前不要执行设备命令。'
       : 'Use your URL-reading tool to GET this complete URL for a new request:\n' + start.dataset.url + '\nReturn the real approval_url and complete continuation_prompt, then wait for my approval in wanctl. After approval, use the same URL-reading tool to GET call URLs for tasks I request. Keep the full status_url and exec call_url_template in your reply for later turns. Help: ' + start.dataset.help + '\nDo not simulate responses or approve on my behalf. Do not run device commands before approval.';
   }
+  /* 「复制」按钮：把它指向的那段文字放进剪贴板。选不中剪贴板时退回选中
+     文本 —— 手动 ⌘C 也是复制，比一句「复制失败」有用。 */
+  function say(en, zh) {
+    var hint = $('#webfetchCopyHint');
+    if (hint) hint.textContent = lang === 'zh' ? zh : en;
+  }
+  $$('[data-copy]').forEach(function (btn) {
+    btn.onclick = function () {
+      var target = document.getElementById(btn.getAttribute('data-copy'));
+      if (!target) return;
+      var text = (target.textContent || '').trim();
+      var fallback = function () {
+        var range = document.createRange();
+        range.selectNodeContents(target);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        say('Select the line above and copy it.', '请选中上面这行文字复制。');
+      };
+      if (!navigator.clipboard) { fallback(); return; }
+      navigator.clipboard.writeText(text).then(function () {
+        say('Copied. Paste it into your AI chat.', '已复制，粘贴到 AI 对话里即可。');
+      }).catch(fallback);
+    };
+  });
+
   var webfetchCopy = $('#webfetchCopy');
   if (webfetchCopy) {
     webfetchCopy.onclick = function () {

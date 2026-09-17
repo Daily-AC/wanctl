@@ -683,6 +683,23 @@ pre code{background:none;padding:0;font-size:1em}
 .delegation form .fine{margin:2px 0}
 .token-scope{display:block;font-size:11px;color:var(--ink-2);overflow-wrap:anywhere;max-width:26rem}
 
+/* 「连接网页 AI」：这一屏的主体就是那一行要复制的话，中英各一条。
+   两条都摆出来而不是跟着语言开关切换 —— 复制的人和读这句话的 AI 未必
+   说同一种语言，而多出来的那一条只有一行高。 */
+.auth h2{margin:30px 0 0;font-size:16px;font-weight:600;letter-spacing:-.2px}
+.say{
+  margin-top:14px;padding:14px 16px;border-radius:14px;background:var(--canvas-2);
+  display:grid;grid-template-columns:1fr auto;align-items:end;gap:4px 12px;
+}
+.say-lang{grid-column:1/-1;margin:0;font-size:11.5px;color:var(--ink-2)}
+.say-text{margin:0;font-size:14px;line-height:1.5;overflow-wrap:anywhere;min-width:0}
+.say-copy{flex:none;align-self:end;font-size:13px;padding:7px 14px}
+.say-steps{margin:12px 0 0;padding-left:1.15em;color:var(--ink-2);font-size:13.5px;line-height:1.6}
+.say-steps li{margin:6px 0}
+/* 复制反馈是一行状态文字。还没有话说的时候它不该先占一段空白。 */
+.auth .fine#webfetchCopyHint:empty{margin:0}
+.auth #webfetchPrompt{margin-top:12px;font-family:var(--mono);font-size:12px;line-height:1.55}
+
 /* 申请访问的四种状态。页面把四段都发下来，选哪一段由 <body data-req>
    决定 —— 纯 CSS，脚本没跑起来的时候看到的也是对的那一段。
    状态是服务端算的：不能让人看见一张交上去会被拒的表单。 */

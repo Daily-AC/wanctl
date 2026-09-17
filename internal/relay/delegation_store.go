@@ -307,6 +307,16 @@ func scanDelegationJob(row interface{ Scan(...any) error }) (delegation.Job, err
 
 const delegationJobColumns = `id,grant_id,request_id,payload_hash,payload,state,result,created_at`
 
+// FindJob is the same lookup BeginJob does under its advisory lock, without the
+// insert: a caller replaying a URL after a lost response needs to reach its job
+// even when nothing new may start.
+func (p *PGStore) FindJob(ctx context.Context, grant, rid string) (delegation.Job, error) {
+	if !validDelegationID(grant) || !validDelegationID(rid) {
+		return delegation.Job{}, delegation.ErrInvalid
+	}
+	return scanDelegationJob(p.db.QueryRowContext(ctx, `SELECT `+delegationJobColumns+` FROM delegation_jobs WHERE grant_id=$1 AND request_id=$2`, grant, rid))
+}
+
 func (p *PGStore) BeginJob(ctx context.Context, grant, rid, payloadHash string, payload json.RawMessage) (delegation.Job, bool, error) {
 	if !validDelegationID(grant) || !validDelegationID(rid) || !validDelegationHash(payloadHash) || len(payload) > maxDelegationPayload || !json.Valid(payload) {
 		return delegation.Job{}, false, delegation.ErrInvalid
