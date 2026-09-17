@@ -10,6 +10,13 @@ SDK or MCP adapters. No permission logic depends on the AI provider or the
 client's implementation language. A client must be able to fetch a specified
 HTTPS URL and read its response; searching an index alone is not sufficient.
 
+The portal's public `/webfetch/help` is a short, login-free calling guide. Every
+protocol response includes `help_url`, and connection prompts carry its full URL.
+Approved HTML starts with the GET endpoint, allowed targets and tool URL templates;
+the full JSON follows. The same URL-reading tool can fetch a completed call URL,
+without a separate exec connector. Readiness replies should retain the complete
+`status_url` and exec template so later chat turns keep the calling instructions.
+
 ## Owner workflow
 
 For a web chat, start in the authenticated portal at **Settings → Connect web
