@@ -28,7 +28,7 @@ minutes without ending in `unknown`.
 | 1 | Full flow test with a fake device | `TestWebFetchOnePromptFlowThroughBothHumanCheckpoints` — discovery → `new/{nonce}` → approve → manifest → exec returns `pairing_required` (asserts `pairing_url`, the named Step 2 of 2 checkpoint and the `NEW rid` instruction) → pair → exec under a new rid returns `done` with `exit_code` 0 |
 | 2 | Long exec ends `done`, others run meanwhile | `TestWebFetchLongExecFinishesAndDoesNotBlockAnotherGrant` (real device, `timeout_seconds=900`, another grant's job completes during it) plus `TestLongJobIsNotReportedUnknownBeforeItsOwnDeadline` for the clock boundary. See the caveat below |
 | 3 | Discovery JSON names both checkpoints and keeps the security rules | `TestDiscoveryNamesBothHumanCheckpointsAndKeepsSecurityRules`, asserting on `human_checkpoints[].id/name/url_field` and the eight `security.*` keys |
-| 4 | Rendered `/webfetch/v1` under 2,500 words per language | **928 Latin words, 104 Han characters.** Pinned by `TestDiscoveryPageStaysShortEnoughToRead` |
+| 4 | Rendered `/webfetch/v1` under 2,500 words per language | **985 Latin words, 104 Han characters** after fix round 1 (928 before the added security rules). Pinned by `TestDiscoveryPageStaysShortEnoughToRead` |
 | 5 | `/webfetch/connect` one-line prompt above the fold at 390×844 | Yes. Measured, see below |
 | 6 | `go vet ./...`, `gofmt -l .`, the two test packages | All clean; the whole `go test ./...` is green with PostgreSQL |
 | 7 | Live fetch of `/webfetch/v1` | Yes, via `go run ./tools/webfetch-demo` |
@@ -172,3 +172,27 @@ clients that cannot generate 24 random bytes. Every target model can. Removing
 both would delete a textarea, ~20 lines of `auth.js`, and one branch of the
 discovery document. It was kept this round because the brief asked for the
 existing details to stay below the new first screen.
+
+
+## Fix round 1 — cross-vendor security review of PR #92
+
+| Finding | Change | Test |
+| --- | --- | --- |
+| F1 Owner-level concurrency isolation missing; `adapter_busy` also spent the victim's ledger allowance | Third counter: 4 per grant, **8 per owner namespace**, 64 per adapter. The slot is reserved **before** `BeginJob`, so a refusal writes nothing and returns 429 with `adapter_busy` and no `job_id`. Release is a `defer` around `execute` in the dispatch goroutine, covering a result, transport failure, store-write failure and recovered panic; the request path releases on a duplicate rid and on a `BeginJob` error | `TestOperationSlotsAreBudgetedPerOwnerAndAlwaysReleased`, `TestWebFetchBusyAdapterRefusesWithoutTouchingTheLedger` |
+| F2 Identical-URL replay changed identity across the deploy | `Operation.Timeout` is `*int` with `omitempty`. An omitted `timeout_seconds` never enters the canonical payload; the default is applied at dispatch through `Operation.timeout()`. An explicit value stays in the hash and still 409s when changed | `TestOmittedTimeoutIsNotPartOfTheReplayIdentity`, `TestWebFetchIdenticalURLReplaysTheSameJobAcrossDefaultChanges` |
+| F3 Approved JSON manifest lost the same-rid retry rule | `security` (all ten rules) is now in the approved manifest, not only discovery. `rid_unique_per_operation` split into `retry_a_lost_response_on_the_same_url` and `new_rid_only_when_nothing_ran`. The manifest `instruction` and both continuation prompts say it too | `TestApprovedManifestCarriesTheRetryRules` |
+| F4 `deadline_at` ignored the grant clamp | One `effectiveDeadline(created, timeout, grantExpiry)` drives execution, `deadline_at` and `jobState` | `TestWebFetchDeadlineIsClampedToTheGrant`, plus the grant-clamp row in `TestLongJobIsNotReportedUnknownBeforeItsOwnDeadline` |
+| F5 `unknown` blamed the deadline for four different causes | One `unknownInstruction` constant, cause-neutral, used by `jobResponse`, the transport-failure path and the recovered panic. `docs/webfetch.md` and `docs/webfetch.zh.md` updated | `TestUnknownDoesNotBlameTheDeadline`, `TestWebFetchInterruptedJobDoesNotBlameTheDeadline` |
+
+Test seams added: `MaxExecSeconds`, `DefaultExecSeconds`, `MaxFileSeconds`,
+`DefaultFileSeconds` and the three concurrency caps are now package variables,
+alongside the existing `staleGrace`. Nothing outside the package assigns them.
+
+**Not fixed, as agreed:** `execute` discards a known exit code when `FinishJob`
+fails (`internal/webfetch/handler.go`, the deferred writer logs and drops it).
+Pre-existing, unchanged by this branch.
+
+**Per-owner budget lives in the adapter, not the grant store.** The relay still
+lets one account hold any number of approved grants
+(`internal/relay/delegation_store.go`); capping that is a separate decision about
+what an owner may approve, and `internal/relay` was not in scope for this wave.

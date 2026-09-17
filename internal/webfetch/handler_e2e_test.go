@@ -455,3 +455,117 @@ func TestWebFetchTimeoutCeilingIsPerTool(t *testing.T) {
 		t.Fatalf("the refusal does not state the file ceiling: %v", refused)
 	}
 }
+
+// A refusal must not be written down. Spending a ledger slot on an operation
+// that never ran would let a busy adapter burn the caller's 64-job allowance.
+func TestWebFetchBusyAdapterRefusesWithoutTouchingTheLedger(t *testing.T) {
+	f := liveWebFetch(t)
+	previous := maxOperationsPerGrant
+	maxOperationsPerGrant = 1
+	t.Cleanup(func() { maxOperationsPerGrant = previous })
+
+	session, _ := f.approve(t, testTicket("7"), true)
+	long := url.Values{"rid": {"holds-the-slot"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"sleep 2"}, "timeout_seconds": {"900"}}
+	_, held := fetchDoc(t, session+"/call?"+long.Encode())
+	if held["status"] != "running" && held["status"] != "queued" {
+		t.Fatalf("the first job did not take the slot: %v", held)
+	}
+	busy := url.Values{"rid": {"refused"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"printf webfetch-ok"}}
+	status, refused := fetchDoc(t, session+"/call?"+busy.Encode())
+	if status != 429 || refused["error_code"] != "adapter_busy" || refused["execution_started"] != false {
+		t.Fatalf("a full adapter did not refuse cleanly: %d %v", status, refused)
+	}
+	if refused["job_id"] != nil {
+		t.Fatalf("a refusal created a job: %v", refused)
+	}
+	var jobs int
+	f.db.QueryRow("SELECT count(*) FROM delegation_jobs").Scan(&jobs)
+	if jobs != 1 {
+		t.Fatalf("the refused call consumed a ledger slot: %d jobs", jobs)
+	}
+	// Once the long job ends its slot comes back and the same rid works.
+	if finished := awaitJob(t, held); finished["status"] != "done" {
+		t.Fatalf("the long job did not finish: %v", finished)
+	}
+	_, retried := fetchDoc(t, session+"/call?"+busy.Encode())
+	if retried = awaitJob(t, retried); retried["status"] != "done" {
+		t.Fatalf("the slot was not released after a terminal state: %v", retried)
+	}
+}
+
+// A lost response is recovered by fetching the identical URL. That must keep
+// working across a deploy that changes a default the caller never sent.
+func TestWebFetchIdenticalURLReplaysTheSameJobAcrossDefaultChanges(t *testing.T) {
+	f := liveWebFetch(t)
+	session, _ := f.approve(t, testTicket("6"), true)
+	call := session + "/call?" + url.Values{"rid": {"replay-1"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"printf webfetch-ok"}}.Encode()
+	_, first := fetchDoc(t, call)
+	first = awaitJob(t, first)
+	if first["status"] != "done" {
+		t.Fatalf("first attempt=%v", first)
+	}
+	previous := DefaultExecSeconds
+	DefaultExecSeconds = 77
+	t.Cleanup(func() { DefaultExecSeconds = previous })
+	_, replayed := fetchDoc(t, call)
+	if replayed["job_id"] != first["job_id"] || replayed["duplicate_request"] != true {
+		t.Fatalf("a changed default turned a replay into a new identity: %v", replayed)
+	}
+	// An explicitly supplied timeout is part of the operation and still clashes.
+	explicit := session + "/call?" + url.Values{"rid": {"replay-2"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"printf webfetch-ok"}, "timeout_seconds": {"120"}}.Encode()
+	if status, _ := fetchDoc(t, explicit); status != 200 {
+		t.Fatalf("explicit timeout rejected: %d", status)
+	}
+	changed := session + "/call?" + url.Values{"rid": {"replay-2"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"printf webfetch-ok"}, "timeout_seconds": {"240"}}.Encode()
+	if status, _ := fetchDoc(t, changed); status != 409 {
+		t.Fatalf("a changed explicit timeout did not conflict: %d", status)
+	}
+}
+
+// deadline_at is a promise about when a result can still arrive. A grant that
+// ends in a minute cannot honour a fifteen-minute timeout.
+func TestWebFetchDeadlineIsClampedToTheGrant(t *testing.T) {
+	f := liveWebFetch(t)
+	session, request := f.approve(t, testTicket("5"), true)
+	if request.ExpiresAt == nil {
+		t.Fatal("approved grant carries no expiry")
+	}
+	long := url.Values{"rid": {"clamped"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"sleep 2"}, "timeout_seconds": {"900"}}
+	_, job := fetchDoc(t, session+"/call?"+long.Encode())
+	raw, _ := job["deadline_at"].(string)
+	deadline, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t.Fatalf("deadline_at=%q %v", raw, err)
+	}
+	// The fixture approves one minute, so 900 seconds must not survive.
+	if gap := deadline.Sub(*request.ExpiresAt); gap > time.Second || gap < -time.Second {
+		t.Fatalf("deadline_at %s is not the grant expiry %s", deadline, request.ExpiresAt)
+	}
+	awaitJob(t, job)
+}
+
+// unknown is recorded well before any deadline when the adapter stops. The text
+// the model reads must not tell it the deadline elapsed.
+func TestWebFetchInterruptedJobDoesNotBlameTheDeadline(t *testing.T) {
+	f := liveWebFetch(t)
+	session, _ := f.approve(t, testTicket("4"), true)
+	long := url.Values{"rid": {"interrupted"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"sleep 2"}, "timeout_seconds": {"900"}}
+	_, job := fetchDoc(t, session+"/call?"+long.Encode())
+	if job["status"] != "running" && job["status"] != "queued" {
+		t.Fatalf("job did not start: %v", job)
+	}
+	f.h.Close() // cancels the operation mid-flight, minutes before its deadline
+	_, stopped := fetchDoc(t, job["result_url"].(string))
+	if stopped["status"] != "unknown" {
+		t.Fatalf("an interrupted job did not read unknown: %v", stopped)
+	}
+	text := fmt.Sprint(stopped["result"]) + fmt.Sprint(stopped["instruction"])
+	for _, forbidden := range []string{"deadline passed", "timed out", "expired"} {
+		if strings.Contains(strings.ToLower(text), forbidden) {
+			t.Fatalf("the interruption was reported as %q: %v", forbidden, stopped)
+		}
+	}
+	if !strings.Contains(text, "check the device") {
+		t.Fatalf("the unknown result does not send the human to the device: %v", stopped)
+	}
+}

@@ -39,16 +39,34 @@ the observed failure was a caller who did not set the parameter at all: a
 too-large default fails slowly and visibly, a too-small one kills the job and
 leaves the device state ambiguous.
 
-**`unknown` is now derived from the job's own deadline.** `jobState` reports
+**An omitted `timeout_seconds` stays omitted from the canonical payload.** The
+payload is the replay identity: a lost response is recovered by fetching the
+identical URL, which must hash to the same job. If the default were baked in,
+moving it from 30 to 300 would change that hash and turn a legitimate transport
+retry into a 409. The default is applied at dispatch only; an explicitly supplied
+value stays in the hash and still conflicts when it changes. Jobs created before
+this deploy did record the old default, so a pre-deploy rid replayed with no
+`timeout_seconds` will 409 once. Grants live at most 60 minutes, so that window
+closes by itself.
+
+**`unknown` is now derived from the job's effective deadline** — the earlier of
+the requested timeout and the end of the grant, one value shared by execution,
+the advertised `deadline_at` and the stale-state inference. `jobState` reports
 `unknown` only after `CreatedAt + timeout_seconds + staleGrace` (90 s). Running
 jobs also return `poll_after_seconds` and `deadline_at`, so the client waits
 instead of burning the old "at most 8 polls" budget in half a minute.
 
 **The fixed worker pool is gone.** Each operation runs on its own goroutine under
-two counters: at most 4 in flight per grant, 64 across the adapter. One grant's
-long job can no longer starve another grant, and the global counter still bounds
-the process. A call over either limit is refused before dispatch with
-`error_code: "adapter_busy"` and `execution_started: false`.
+three counters: at most 4 in flight per grant, 8 per owner namespace, 64 across
+the adapter. The middle one is the one that matters — a grant is not a person.
+One relay account can hold many grants at once, so grant-plus-global alone let
+sixteen grants of four long operations each take the whole adapter and hand
+every other account `adapter_busy`. A call over any limit is refused **before**
+the ledger write, with `error_code: "adapter_busy"` and
+`execution_started: false`, so a refusal never spends the caller's 64-job
+allowance on an operation that did not run. The slot is released by a deferred
+call around `execute`, which covers a result, a transport failure, a store write
+that fails and a recovered panic alike.
 
 ## Why not run exec through `exec_async` / `exec_poll`
 
@@ -89,3 +107,10 @@ durable to live. Async execution would need a job-store change too.
   above, so this trade is unchanged, just slower to appear.
 - A grant that wants more than four operations at once now gets a clean refusal
   instead of silent queueing behind someone else's render.
+- The per-owner budget is enforced in the adapter, not in the grant store: the
+  relay still lets one account hold any number of approved grants
+  (`internal/relay/delegation_store.go`). Capping grants themselves is a
+  separate decision about what an owner may approve.
+- `unknown` no longer names a cause, because the adapter records it for four
+  different ones. The instruction is the same in all of them: do not repeat the
+  operation automatically, check the device.
