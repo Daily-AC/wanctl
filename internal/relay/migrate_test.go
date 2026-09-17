@@ -192,6 +192,7 @@ func TestEmbeddedMigrationsApplyEveryVersion(t *testing.T) {
 		{7, "RENAME COLUMN name TO device_id"},
 		{8, "ALTER TABLE acl ADD COLUMN IF NOT EXISTS manage"},
 		{9, "CREATE TABLE delegation_requests"},
+		{10, "CREATE TABLE oauth_clients"},
 	}
 	if len(state.committedBodies) != len(want) {
 		t.Fatalf("applied %d migrations, want %d: %#v",

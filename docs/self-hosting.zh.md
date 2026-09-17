@@ -182,6 +182,26 @@ relay 不是它要防的那个攻击者；不打开，这个端点就只能读�
 WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1
 ```
 
+### 可选：让网页 AI 用 OAuth 登录
+
+每调用一次工具就新开一个 MCP 会话的连接器——ChatGPT 就是——永远拿不住一份按会话
+存的登录。这类客户端改用 OAuth 2.1 的 bearer 认人，而只要 relay 同时备齐数据库、
+公网 origin 和门户三样，它自己就会把这条路打开：
+
+```ini
+# selfhost/.env, then: docker compose up -d --no-deps relay
+WANCTL_PUBLIC_ORIGIN=https://relay.example.com
+WANCTL_PORTAL=https://portal.example.com
+```
+
+relay 会打印 `MCP OAuth enabled`，并开始提供
+`/.well-known/oauth-protected-resource` 和
+`/.well-known/oauth-authorization-server`；人真正看见的那张同意页由门户在
+`/oauth/authorize` 上提供。客户端是自己注册的，注册本身不给任何权限——权限从一个
+已登录的人点头那一刻才开始，每次点头都会以客户端名字出现在他的令牌列表里，也在那里
+吊销。不带 bearer 的客户端什么都不变，照旧按会话登录。这需要迁移 010 建两张表，所以
+跟任何一次结构变更一样，升上这个版本前先备份数据库。
+
 ### 可选：给设备提供签名过的发布包
 
 打开发布分发之后，设备一行就能装上，之后用 `wanctl update` 升级，两者都对着项目的
