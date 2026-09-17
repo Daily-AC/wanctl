@@ -51,6 +51,8 @@ func rejectedRequestEvent(fp, name string, m protocol.Message, reason string) ev
 		e.Type, e.Detail = "file", "READ "+m.Path
 	case protocol.KindFileEdit:
 		e.Type, e.Detail = "file", "EDIT "+m.Path
+	case protocol.KindFileWrite:
+		e.Type, e.Detail = "file", "WRITE "+m.Path
 	case protocol.KindLogs:
 		e.Type, e.Detail = "logs", "read event log"
 	}

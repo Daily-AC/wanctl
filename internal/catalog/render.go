@@ -169,6 +169,12 @@ func Markdown() string {
 	b.WriteString("descriptions, so the three cannot drift. Regenerate with:\n\n")
 	b.WriteString("```\ngo run . help --markdown > docs/contract.md\n```\n\n")
 
+	b.WriteString("## Instructions\n\n")
+	b.WriteString("This is what an MCP host is handed before it calls anything — the\n")
+	b.WriteString("`instructions` field of the initialize response, and the output of\n")
+	b.WriteString("`wanctl help --instructions`. It is the harness's system prompt.\n\n")
+	b.WriteString("```\n" + Instructions() + "```\n\n")
+
 	b.WriteString("## Commands\n\n")
 	b.WriteString("| Command | MCP tool | Summary |\n|---|---|---|\n")
 	for _, c := range Commands {
@@ -201,13 +207,17 @@ func Markdown() string {
 				if p.Required {
 					req = "**yes**"
 				}
+				typ := p.Type
+				if p.Type == TypeArray {
+					typ = "array of {old, new}"
+				}
 				meaning := escapePipes(p.Desc)
 				if p.CLIDesc != "" {
 					// The two surfaces genuinely disagree about this argument,
 					// so the contract has to print both rather than pick one.
 					meaning += " **On the CLI:** " + escapePipes(p.CLIDesc)
 				}
-				b.WriteString("| " + mcpName + " | " + cli + " | " + p.Type + " | " + req + " | " + meaning + " |\n")
+				b.WriteString("| " + mcpName + " | " + cli + " | " + typ + " | " + req + " | " + meaning + " |\n")
 			}
 		}
 		if c.CLIExample != "" {

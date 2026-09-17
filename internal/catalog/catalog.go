@@ -37,6 +37,7 @@ const (
 	TypeString = "string"
 	TypeBool   = "boolean"
 	TypeNumber = "number"
+	TypeArray  = "array"
 )
 
 // Param is one argument, on either surface or both.
@@ -63,6 +64,11 @@ type Param struct {
 	CLIOnly bool
 	// MCPOnly keeps it out of the CLI parameter table.
 	MCPOnly bool
+	// Items is the JSON Schema of one element, and only a TypeArray parameter
+	// has one. It is registered as the array's `items`, which is what tells a
+	// caller the shape of the objects it may put in the list instead of leaving
+	// it to guess from the prose.
+	Items map[string]any
 }
 
 // NotOnCLI marks a parameter that exists only as an MCP argument.

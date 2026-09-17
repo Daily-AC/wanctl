@@ -57,7 +57,8 @@ const (
 	// whatever cat/sed/echo do in that device's shell.
 	KindFileRead   = "file_read"   // client -> server, read a line range
 	KindFileEdit   = "file_edit"   // client -> server, replace a string in place
-	KindFileResult = "file_result" // server -> client, result of a read or an edit
+	KindFileWrite  = "file_write"  // client -> server, create or overwrite a text file
+	KindFileResult = "file_result" // server -> client, result of a read, an edit or a write
 
 	KindEOF    = "eof"    // end of a FrameData stream
 	KindLogs   = "logs"   // client -> server, request event-log lines
@@ -93,6 +94,15 @@ type Message struct {
 	OneShot bool   `json:"oneshot,omitempty"`
 	Cwd     string `json:"cwd,omitempty"` // working directory for the command (policy scope)
 
+	// exec: when the output passes SpillAfter bytes, the device keeps the whole
+	// thing in a file under its temp dir and names that file in the exit
+	// message, so a controller that can only carry a truncated tail back to its
+	// caller can still say where the rest is. Zero — every controller that does
+	// not ask — means nothing is ever written. An agent from before this field
+	// existed decodes it into nothing and answers with no Path, which is what
+	// tells the controller to say the full output was not kept.
+	SpillAfter int64 `json:"spill_after,omitempty"`
+
 	// exec: run through an elevation channel (Android; see internal/elevate).
 	// Elevate is the request; Via optionally pins one channel ("su",
 	// "adb") instead of letting the device pick. Both are omitted by every
@@ -126,7 +136,8 @@ type Message struct {
 	// and a single click trusts the controller; the next dial then goes through.
 	PairingURL string `json:"pairing_url,omitempty"`
 
-	// file_put / file_get / file_meta
+	// file_put / file_get / file_meta. On an exit message Path and Size instead
+	// name the spill file the device wrote for an over-long command output.
 	Path string `json:"path,omitempty"`
 	Size int64  `json:"size,omitempty"`
 	Mode uint32 `json:"mode,omitempty"` // file permission bits
@@ -137,6 +148,18 @@ type Message struct {
 	New         string `json:"new,omitempty"`             // edit: what to put there; empty means delete
 	All         bool   `json:"all,omitempty"`             // edit: replace every occurrence instead of refusing on >1
 	ExpectedSHA string `json:"expected_sha256,omitempty"` // edit: refuse unless the file still hashes to this
+	Content     string `json:"content,omitempty"`         // write: the whole new text of the file
+
+	// Edits is the other shape a file_edit takes: several replacements applied
+	// to the same file in one request, each matching the text as it was BEFORE
+	// any of them ran. It is exclusive with Old/New — a request carrying both
+	// is refused rather than resolved by precedence — and All has no meaning
+	// here, because an entry that matches more than once is the error.
+	//
+	// One request rather than several is not only a round trip saved: the whole
+	// set is checked before anything is written, so a batch that would half
+	// apply leaves the file exactly as it was.
+	Edits []FileEdit `json:"edits,omitempty"`
 
 	// File carries the outcome of a file_read or file_edit. It rides on a
 	// file_result message and also on the error that refuses one, because the
@@ -167,6 +190,12 @@ type Message struct {
 	Data        json.RawMessage `json:"data,omitempty"` // console_state / approval_notif payload
 }
 
+// FileEdit is one replacement inside a multi-edit file_edit request.
+type FileEdit struct {
+	Old string `json:"old"` // the text to find; must occur exactly once in the original
+	New string `json:"new"` // what to put there; empty deletes Old
+}
+
 // File operation limits. MaxReadBytes bounds what one file_read returns, so a
 // caller that asks for a line range inside a huge file gets a bounded reply
 // rather than a 16 MiB frame; MaxEditBytes bounds the file a file_edit will
@@ -195,6 +224,9 @@ type FileResult struct {
 	// edit
 	Replaced    int `json:"replaced,omitempty"`    // occurrences actually replaced
 	Occurrences int `json:"occurrences,omitempty"` // occurrences found (populated on a refusal)
+
+	// write
+	Created bool `json:"created,omitempty"` // the file did not exist before this write
 
 	// both
 	SizeBytes int64  `json:"size_bytes"`       // the whole file's size, after an edit

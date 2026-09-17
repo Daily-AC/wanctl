@@ -21,6 +21,54 @@ descriptions, so the three cannot drift. Regenerate with:
 go run . help --markdown > docs/contract.md
 ```
 
+## Instructions
+
+This is what an MCP host is handed before it calls anything — the
+`instructions` field of the initialize response, and the output of
+`wanctl help --instructions`. It is the harness's system prompt.
+
+```
+wanctl is the external harness for a web AI: your hands and eyes on a machine
+you do not run on, behind that device owner's policy. A refusal is an answer.
+
+  wanctl_login         log in via the portal and save the token (no daemon)
+  wanctl_status        local agent and credential state, or a remote device's
+  wanctl_logout        stop the agent and forget the saved login
+  wanctl_peers         list the devices this token can reach
+  wanctl_pair          check trust, or get the URL the device owner approves
+  wanctl_exec          run a command or script on a device (persistent shell)
+  wanctl_read          print a line range of a text file on a device
+  wanctl_edit          replace an exact string inside a file on a device
+  wanctl_write         create or replace a whole text file on a device
+  wanctl_exec_async    start a background job and return its id at once
+  wanctl_exec_poll     fetch a background job's new output and status
+  wanctl_push          copy a local file to a device
+  wanctl_push_blob     upload inline base64 content to a path on the device
+  wanctl_pull          copy a file from a device to this machine
+  wanctl_logs          read a device's activity log, or portal/relay server logs
+  wanctl_server_logs   read recent portal or relay process logs
+  wanctl_id            show this controller's identity fingerprint
+  wanctl_trust         list pinned device identities, or trusted controllers
+  wanctl_trust_server  pin a device's identity for this controller
+  wanctl_rules         show or change this machine's local policy rules
+  wanctl_screenshot    capture a device's screen as a PNG
+
+DEV LOOP
+  wanctl_exec keeps a persistent shell per device: cd once and stay there. Long
+  work goes to wanctl_exec_async, then wanctl_exec_poll until it is done.
+  Read with wanctl_read, patch with wanctl_edit (several {old,new} in ONE call),
+  write files with wanctl_write. Never cat/sed/echo a file through a shell.
+  Over-long exec output returns its TAIL; the rest waits in a device file.
+  Before working in a project directory, read its AGENTS.md or CLAUDE.md with
+  wanctl_read if one exists and follow it: it outranks how you would proceed.
+
+REFUSALS — none of these mean try again:
+  PAIRING REQUIRED: give the URL in the message to the user, then retry.
+  DEVICE IDENTITY CONFIRMATION REQUIRED: call wanctl_trust_server, retry.
+  DEVICE IDENTITY MISMATCH: refused, nothing sent; report both fingerprints.
+  LOGIN REQUIRED: call wanctl_login; a saved rebind restores it instantly.
+```
+
 ## Commands
 
 | Command | MCP tool | Summary |
@@ -33,6 +81,7 @@ go run . help --markdown > docs/contract.md
 | `exec` | `wanctl_exec` | Run a command, or a whole script, on a device |
 | `read` | `wanctl_read` | Read a range of lines from a text file on a device |
 | `edit` | `wanctl_edit` | Replace a string inside a file on a device, atomically |
+| `write` | `wanctl_write` | Create or completely replace a text file on a device |
 | — | `wanctl_exec_async` | Start a background job and return its id at once |
 | — | `wanctl_exec_poll` | Fetch a background job's new output and status |
 | `push` | `wanctl_push` | Upload a local file to a path on the device |
@@ -54,7 +103,7 @@ go run . help --markdown > docs/contract.md
 | `docs` | — | Read and write the portal's documentation articles |
 | `friends` | — | List and manage friend relationships between namespaces |
 | `share` | — | Grant another namespace the use of one of your devices |
-| `screenshot` | — | Capture an Android device's screen to a local PNG |
+| `screenshot` | `wanctl_screenshot` | Capture a device's screen as a PNG |
 | `config` | — | Show or persist relay, portal and transport settings |
 | `label` | — | Show or set this controller's self-description |
 | `admin` | — | Mint, list and revoke admission invites |
@@ -230,6 +279,12 @@ does not exist on the device yet — it overwrites whole files and loses
 concurrent edits. Before working inside a project directory, read its
 AGENTS.md or CLAUDE.md with wanctl_read if one exists, and follow it.
 
+LONG OUTPUT: what comes back is capped. Past the cap you get the LAST 48 KiB —
+the end, where a build's error and a script's result live — behind a line that
+says how many bytes there were in total and names a file ON THE DEVICE holding
+the whole thing, kept for an hour. Do not re-run the command with a filter you
+guessed: grep that file with another wanctl_exec.
+
 **On the command line.**
 
 On the command line --target may be omitted when the first argument names a
@@ -326,18 +381,31 @@ wanctl_read{"target":"home-pc","path":"/etc/hosts","limit":200}
 
 *Replace a string inside a file on a device, atomically*
 
-Replace a string inside a text file on a remote device, in place. This is the
-tool for PATCHING a remote file: it is the exact-string edit you are used to
-locally, performed natively on the device, so no shell parses your text ($,
-backticks, quotes and newlines all arrive literally) and the rest of the file
-is preserved byte for byte — CRLF line endings stay CRLF, the file mode is
-kept, and the write is atomic (temp file + rename), so a reader never sees a
-half-written file. Prefer it over rewriting a whole file with
+Replace text inside a file on a remote device, in place. This is the tool for
+PATCHING a remote file: it is the exact-string edit you are used to locally,
+performed natively on the device, so no shell parses your text ($, backticks,
+quotes and newlines all arrive literally) and the rest of the file is
+preserved byte for byte — CRLF line endings stay CRLF, the file mode is kept,
+and the write is atomic (temp file + rename), so a reader never sees a
+half-written file. Use it for CHANGES to an existing file; to create a file or
+rewrite one end to end use wanctl_write, and prefer either over
 wanctl_push_blob, which silently discards anything that changed since you last
 read the file.
 
 WORKFLOW: wanctl_read the file, copy its sha256 into expected_sha256 here, and
 pass enough surrounding text in `old` that it matches exactly once.
+
+SEVERAL EDITS AT ONCE: pass `edits` — a list of {old, new} — instead of
+old/new, and make ONE call with several entries rather than several calls.
+Every entry matches the file as you read it, not the result of the entry
+before it, so you never have to imagine the intermediate text. Keep each `old`
+as SMALL as it can be while still matching exactly once: do not pad it with
+unchanged lines above and below, and do not include regions you are not
+changing. The whole batch is checked before anything is written — an entry
+that matches twice, an entry that matches nothing, or two entries claiming the
+same bytes refuses the call by index and leaves the file exactly as it was.
+`all` belongs to the single old/new form only; expected_sha256 works with
+both.
 
 REFUSALS (the file is left untouched every time — fix the input and retry, do
 not fall back to exec): 'old string not found' means your `old` does not
@@ -360,8 +428,9 @@ both --old and --old-file is an error rather than a precedence rule.
 |---|---|---|---|---|
 | `target` | `--target NS/DEV` | string | **yes** | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS for shared devices. |
 | `path` | `<path>` | string | **yes** | Absolute path on the target device. `~` is NOT expanded. |
-| `old` | `--old STR \| --old-file F` | string | **yes** | The exact text to find, copied from a wanctl_read of this file. Must be non-empty, and must match exactly once unless `all` is true. |
-| `new` | `--new STR \| --new-file F` | string | **yes** | The text to put in its place. May be an empty string, which deletes `old`. |
+| `old` | `--old STR \| --old-file F` | string | no | The exact text to find, copied from a wanctl_read of this file. Must be non-empty, and must match exactly once unless `all` is true. Required unless you pass `edits` instead; giving both forms is refused rather than resolved. |
+| `new` | `--new STR \| --new-file F` | string | no | The text to put in its place. May be an empty string, which deletes `old`. Belongs with `old`, not with `edits`. |
+| `edits` | — | array of {old, new} | no | Several replacements applied to this file in one atomic call, as [{"old":…,"new":…}, …]. Use this instead of repeating the tool: each `old` matches the ORIGINAL text you read, each must occur exactly once, and two entries may not overlap. Keep every `old` as small as it can be while unique — padding with unchanged context is what makes an entry collide with the next one. Mutually exclusive with old/new. |
 | — | `--old-file F` | string | no | Read the text to find from this local file instead of --old. This is how a multi-line block gets through without fighting the shell over quoting. Giving both --old and --old-file is an error, not a precedence rule. |
 | — | `--new-file F` | string | no | Read the replacement from this local file instead of --new. |
 | `all` | `--all` | boolean | no | Replace every occurrence instead of refusing when `old` appears more than once. Default false. |
@@ -373,7 +442,10 @@ wanctl edit --target lab /app.conf --old "port = 80" --new "port = 8080"
 ```
 
 ```
-wanctl_edit{"target":"lab","path":"/app.conf","old":"80","new":"8080"}
+wanctl_edit{"target":"lab","path":"/a.conf","old":"80","new":"8080"}
+  wanctl_edit{"target":"lab","path":"/a.conf","edits":[
+    {"old":"port = 80","new":"port = 8080"},
+    {"old":"debug = on","new":"debug = off"}]}
 ```
 
 | Error | What to do |
@@ -381,9 +453,59 @@ wanctl_edit{"target":"lab","path":"/app.conf","old":"80","new":"8080"}
 | `old string not found` | The `old` text does not appear, usually a whitespace or indentation difference. Re-read the file instead of guessing. |
 | `old string occurs N times` | Add surrounding context so it matches once, or pass --all / all=true if every occurrence is meant. |
 | `changed since it was read` | Someone else wrote to the file. The message carries the current sha256; re-read and redo the edit. |
+| `edits[N]: old string occurs M times` | That entry of the batch is ambiguous. Nothing was written; give entry N more surrounding text and send the whole batch again. |
+| `edits[N] overlaps edits[M]` | Two entries claim the same bytes. Nothing was written; merge them into one entry. |
+| `pass either 'old'/'new' or 'edits', not both` | The call mixed the two forms. Pick one and resend. |
 | `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
 | `does not support read/edit; run `wanctl update`` | The device is running a wanctl older than the file tools. Update it there, then retry. |
+
+## `wanctl write` / `wanctl_write`
+
+*Create or completely replace a text file on a device*
+
+Create a text file on a remote device, or replace one end to end, with the
+content you pass inline. Use write only for NEW files or COMPLETE rewrites;
+for changes to an existing file use wanctl_edit, which leaves the rest of the
+file untouched and cannot silently drop someone else's change. Missing parent
+directories are created. An existing file keeps its mode — a 0755 script stays
+executable — and a new one gets 0644. The write is atomic (temp file +
+rename), so a reader sees either the old file or the new one. Content is UTF-8
+TEXT: 8 MiB at most, and bytes that are not valid UTF-8 are refused, because
+they would not survive the trip. Binaries go through wanctl_push_blob (MCP) or
+wanctl push (CLI) instead. Policy: a write is the same grant as wanctl_push
+and wanctl_edit, so a first write to an unapproved path may wait for the
+device owner to approve it.
+
+**On the command line.**
+
+--content takes the text directly and --content-file reads it from a local
+file, which is how a multi-line file gets through without fighting the shell
+over quoting. Giving both is an error rather than a precedence rule.
+
+| Parameter | CLI | Type | Required | Meaning |
+|---|---|---|---|---|
+| `target` | `--target NS/DEV` | string | **yes** | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS for shared devices. |
+| `path` | `<path>` | string | **yes** | Absolute path on the target device. `~` is NOT expanded. Parent directories are created if they do not exist. |
+| `content` | `--content STR \| --content-file F` | string | **yes** | The whole new text of the file, UTF-8. An empty string is allowed and writes an empty file. Nothing is appended: whatever was there before is gone. |
+| — | `--content-file F` | string | no | Read the content from this local file instead of --content. Giving both is an error, not a precedence rule. |
+
+```
+wanctl write --target lab /etc/app/config.toml --content-file ./config.toml
+```
+
+```
+wanctl_write{"target":"lab","path":"/srv/run.sh",
+    "content":"#!/bin/sh\nexec ./app\n"}
+```
+
+| Error | What to do |
+|---|---|
+| `not a UTF-8 text file` | The content is not text. Use push_blob (MCP) or push (CLI) for bytes; retrying write will not help. |
+| `over the 8388608-byte write limit` | Too large for an inline write. Upload it with push, or split it. |
+| `write denied by device policy` | The device owner has not granted write access to that path. |
+| `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
+| `does not support write; run `wanctl update`` | The device is running a wanctl older than the write tool. Update it there, then retry. |
 
 ## `wanctl_exec_async`
 
@@ -891,29 +1013,63 @@ wanctl share grant --device home-pc --to other-ns
   wanctl share revoke --device home-pc --to other-ns
 ```
 
-## `wanctl screenshot`
+## `wanctl screenshot` / `wanctl_screenshot`
 
-*Capture an Android device's screen to a local PNG*
+*Capture a device's screen as a PNG*
+
+Look at what is on a device's screen. This is the harness's eyes for anything
+a command cannot tell you: a dialog waiting for a click, a desktop app's
+state, a phone mid-flow, whether the thing you just started actually came up.
+Works on Android (screencap through the elevation channel), macOS
+(screencapture), Windows (the whole virtual screen, every monitor, through
+.NET) and Linux (grim, gnome-screenshot or ImageMagick's import — the first
+one installed; if none is, the error names them so you can install one).
+Captures the whole screen: there is no window picker and no region.
+
+Policy: a capture is gated as an ELEVATED command on every platform, the same
+class Android needs it in. That means it needs its own device rule and a
+device in bypass mode still refuses it until a human approves — looking at
+someone's screen is not covered by permission to run commands. Expect an
+approval wait on the first capture of a device. Same pairing and identity
+rules as wanctl_exec: 'PAIRING REQUIRED' carries a URL to relay VERBATIM to
+the user, and 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call
+wanctl_trust_server with the target and fingerprint it gives you, then retry.
+
+**On the command line.**
 
 `screencap -p` writes a PNG to stdout, and through a shell pipeline stdout is
-a terminal — a screenful of binary. This writes a file instead, and only
-writes to stdout when explicitly asked with `-o -`. Implies --elevate, because
-screencap needs it.
+a terminal — a screenful of binary. The CLI writes a file instead, and only
+writes to stdout when explicitly asked with `-o -`.
+
+**As an MCP tool.**
+
+The PNG comes back as image content, with a line of text giving its dimensions
+and size. Captures over 4 MiB are downscaled to fit — the text line says so
+and names the format — because the point is for you to SEE the screen, not to
+archive it. If you need the original bytes, capture to a file on the device
+with wanctl_exec and fetch it.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
-| — | `[DEVICE] \| --target NS/DEV` | string | no | Device ID or unique name. It may also be the first positional argument. |
+| `target` | `[DEVICE] \| --target NS/DEV` | string | **yes** | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS for shared devices. On the CLI it may also be the first positional argument. |
 | — | `-o FILE` | string | no | Local file to write. Defaults to screenshot-<device>-<time>.png; "-" writes the PNG to stdout instead, which is the only way to pipe it. |
-| — | `--via su\|adb` | string | no | Pin the elevation channel: 'su' (rooted device) or 'adb' (the device's own wireless debugging). Default empty lets the device pick. |
+| `via` | `--via su\|adb` | string | no | Android only: pin the elevation channel, 'su' (rooted device) or 'adb' (the device's own wireless debugging). Default empty lets the device pick, and it is ignored by a desktop, which needs no channel. |
 
 ```
 wanctl screenshot home-phone -o ./screen.png
+```
+
+```
+wanctl_screenshot{"target":"home-pc"}
 ```
 
 | Error | What to do |
 |---|---|
 | `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
+| `elevated command denied by device policy` | A capture needs its own rule on the device, and bypass mode does not cover it. Ask the owner to approve the pending request, then retry. |
+| `no screen capture tool on this device` | A Linux device with none of grim / gnome-screenshot / import installed. Install one (the message names them) — retrying will not help. |
+| `did not return a PNG` | The device answered with something else, usually an agent too old for desktop capture. Run `wanctl update` on it, then retry. |
 
 ## `wanctl config`
 
