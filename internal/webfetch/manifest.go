@@ -43,14 +43,16 @@ func humanCheckpoints() []map[string]any {
 // instead of matching prose.
 func securityRules() map[string]any {
 	return map[string]any{
-		"client_nonce_per_conversation":      "Generate a fresh client_nonce for every conversation. Never reuse a sample, another conversation's value, or anything you did not generate randomly.",
-		"no_url_reuse":                       "Start, approval, status, result and call URLs are bearer credentials for this conversation only. Never reuse another conversation's URL, look one up in a search index, or publish one.",
-		"get_only":                           "Every step is a GET with your URL-reading tool. No POST, cookies, Authorization header, MCP server or code execution is part of this protocol.",
-		"no_store":                           "Responses are no-store. Read them live; never serve a cached or indexed copy as the current state.",
-		"rid_unique_per_operation":           "Every new operation needs a new rid. The same rid with identical parameters returns the same job; with different parameters it returns 409. That is what makes a repeated fetch safe.",
-		"pairing_required_means_not_started": "A result with error_code pairing_required also carries execution_started: false. Nothing ran on the device. Do not open the pairing link yourself; only the human may approve it.",
-		"unknown_means_check_the_device":     "status unknown means the operation may have run. Never repeat it automatically. Ask the human to check the device.",
-		"human_approves":                     "Only the device owner approves device access and pairing, in wanctl. Never simulate a response, invent a URL, or act on their behalf.",
+		"client_nonce_per_conversation":         "Generate a fresh client_nonce for every conversation. Never reuse a sample, another conversation's value, or anything you did not generate randomly.",
+		"no_url_reuse":                          "Start, approval, status, result and call URLs are bearer credentials for this conversation only. Never reuse another conversation's URL, look one up in a search index, or publish one.",
+		"get_only":                              "Every step is a GET with your URL-reading tool. No POST, cookies, Authorization header, MCP server or code execution is part of this protocol.",
+		"no_store":                              "Responses are no-store. Read them live; never serve a cached or indexed copy as the current state.",
+		"rid_unique_per_operation":              "One rid means one operation. A new operation needs a new rid.",
+		"retry_a_lost_response_on_the_same_url": "If a call's response never arrives, or a result read fails midway, fetch the IDENTICAL URL again with the SAME rid and the SAME arguments. That returns the job already recorded and can never run the operation twice. Changing any argument under a used rid returns 409.",
+		"new_rid_only_when_nothing_ran":         "Use a new rid only after a result that says nothing ran: error_code pairing_required or adapter_busy, each with execution_started: false. Never after failed, and never after unknown.",
+		"pairing_required_means_not_started":    "A result with error_code pairing_required also carries execution_started: false. Nothing ran on the device. Do not open the pairing link yourself; only the human may approve it.",
+		"unknown_means_check_the_device":        "status unknown means the operation may have run. Never repeat it automatically. Ask the human to check the device.",
+		"human_approves":                        "Only the device owner approves device access and pairing, in wanctl. Never simulate a response, invent a URL, or act on their behalf.",
 	}
 }
 
@@ -87,11 +89,11 @@ func (h *Handler) statusURL(ticket string) string {
 // sentence they act on, one sentence that lets any later turn resume from the
 // URL alone. Both languages ship, because both portal pages already do.
 func (h *Handler) continuationPrompt(statusURL string) string {
-	return "Read " + statusURL + " to continue: it carries the current status, devices[].target, call_endpoint and tools[].call_url_template. Keep that URL and the exec call_url_template in your reply so a later turn can pick up from here; do not create a second authorization request or approve anything yourself."
+	return "Read " + statusURL + " to continue: it carries the current status, devices[].target, call_endpoint, tools[].call_url_template and the security rules, including retrying a lost response on the identical URL under the same rid. Keep that URL and the exec call_url_template in your reply so a later turn can pick up from here; do not create a second authorization request or approve anything yourself."
 }
 
 func (h *Handler) continuationPromptZH(statusURL string) string {
-	return "继续时请读取 " + statusURL + "：其中有当前状态、devices[].target、call_endpoint 和 tools[].call_url_template。请在回复中保留这个网址和 exec 的 call_url_template，供后续对话继续使用；不要重复申请授权，也不要代替主人批准任何事。"
+	return "继续时请读取 " + statusURL + "：其中有当前状态、devices[].target、call_endpoint、tools[].call_url_template 和安全规则，包括「响应丢失时用同一个 rid 重新读取完全相同的网址」。请在回复中保留这个网址和 exec 的 call_url_template，供后续对话继续使用；不要重复申请授权，也不要代替主人批准任何事。"
 }
 
 func (h *Handler) manifest(ticket string, access delegation.Access) map[string]any {
@@ -112,13 +114,15 @@ func (h *Handler) manifest(ticket string, access delegation.Access) map[string]a
 		"required_call_parameters": []string{"rid", "tool", "target"},
 		"target_format":            "namespace/device_id; copy a devices[].target value verbatim, then URL-encode it (its slash becomes %2F)",
 		"rid_format":               "1..64 ASCII letters, digits, hyphens or underscores; a new one per new operation",
-		"instruction":              "GET call_endpoint?rid=UNIQUE_ID&tool=TOOL&target=DEVICE_TARGET plus that tool's parameters, URL-encoding each value once. Then follow next_url until the status is done, failed or unknown, waiting poll_after_seconds between reads. Check status and http_status: a page that loads is not a result. Approved device access is not pairing — a first exec may come back with error_code pairing_required, which is Step 2 of 2 and belongs to the human.",
+		"instruction":              "GET call_endpoint?rid=UNIQUE_ID&tool=TOOL&target=DEVICE_TARGET plus that tool's parameters, URL-encoding each value once. Then follow next_url until the status is done, failed or unknown, waiting poll_after_seconds between reads. If a response is lost, fetch the identical URL again with the same rid and arguments — that returns the same job instead of running it twice; a new rid is correct only when a result says nothing ran. Check status and http_status: a page that loads is not a result. Approved device access is not pairing — a first exec may come back with error_code pairing_required, which is Step 2 of 2 and belongs to the human.",
 		"next_human_checkpoint":    humanCheckpoints()[1],
+		"security":                 securityRules(),
 		"tools":                    toolManifests(endpoint, targets),
 		"limits": map[string]any{
 			"jobs_per_grant": 64, "url_bytes": MaxURLBytes, "output_bytes": MaxOutputBytes,
 			"exec_timeout_seconds_max": MaxExecSeconds, "file_timeout_seconds_max": MaxFileSeconds,
 			"concurrent_operations_per_grant": maxOperationsPerGrant,
+			"concurrent_operations_per_owner": maxOperationsPerOwner,
 			"grant_minutes_max":               60,
 		},
 		"notice": "Commands and results are visible to this adapter and to the web chat provider. Do not send secrets. A lost or ambiguous job is never rerun automatically.",

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"html"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -101,11 +103,7 @@ func TestDiscoveryNamesBothHumanCheckpointsAndKeepsSecurityRules(t *testing.T) {
 	if !ok {
 		t.Fatalf("security = %v", doc["security"])
 	}
-	for _, rule := range []string{
-		"client_nonce_per_conversation", "no_url_reuse", "get_only", "no_store",
-		"rid_unique_per_operation", "pairing_required_means_not_started",
-		"unknown_means_check_the_device", "human_approves",
-	} {
+	for _, rule := range securityRuleKeys {
 		if text, _ := security[rule].(string); strings.TrimSpace(text) == "" {
 			t.Fatalf("security rule %q was dropped", rule)
 		}
@@ -149,23 +147,166 @@ func TestDiscoveryPageStaysShortEnoughToRead(t *testing.T) {
 	}
 }
 
+// Every rule the protocol promises, by key. A client that reads one document
+// must not have to find the rest somewhere else.
+var securityRuleKeys = []string{
+	"client_nonce_per_conversation", "no_url_reuse", "get_only", "no_store",
+	"rid_unique_per_operation", "retry_a_lost_response_on_the_same_url",
+	"new_rid_only_when_nothing_ran", "pairing_required_means_not_started",
+	"unknown_means_check_the_device", "human_approves",
+}
+
+// A client that only ever reads the approved status document still has to learn
+// that a lost response is recovered on the same rid, and that a new rid is for
+// the cases where nothing ran. JSON callers never see the HTML wrapper that
+// used to be the only place saying so.
+func TestApprovedManifestCarriesTheRetryRules(t *testing.T) {
+	h := staticHandler(t)
+	doc := h.manifest("1700000000-"+strings.Repeat("a", 48), delegation.Access{
+		Namespace: "alice", GrantID: "d_test", Delegated: true,
+		ExpiresAt: time.Now().Add(30 * time.Minute),
+		Devices:   []delegation.Device{{Namespace: "alice", ID: "dev-1", Fingerprint: "SHA256:x"}},
+	})
+	security, ok := doc["security"].(map[string]any)
+	if !ok {
+		t.Fatalf("the approved manifest carries no security block: %v", doc["security"])
+	}
+	for _, rule := range securityRuleKeys {
+		if text, _ := security[rule].(string); strings.TrimSpace(text) == "" {
+			t.Fatalf("the approved manifest dropped security rule %q", rule)
+		}
+	}
+	same := security["retry_a_lost_response_on_the_same_url"].(string)
+	if !strings.Contains(same, "SAME rid") || !strings.Contains(same, "IDENTICAL URL") {
+		t.Fatalf("the same-rid retry rule is not stated plainly: %q", same)
+	}
+	fresh := security["new_rid_only_when_nothing_ran"].(string)
+	if !strings.Contains(fresh, "pairing_required") || !strings.Contains(fresh, "adapter_busy") {
+		t.Fatalf("the new-rid rule does not name the cases where nothing ran: %q", fresh)
+	}
+	// The instruction a model actually follows has to say it too.
+	if !strings.Contains(doc["instruction"].(string), "identical URL") {
+		t.Fatalf("the calling instruction omits the lost-response retry: %v", doc["instruction"])
+	}
+}
+
+// The canonical payload is the replay identity. Moving a default must not move
+// it, or an identical URL becomes a 409 across a deploy.
+func TestOmittedTimeoutIsNotPartOfTheReplayIdentity(t *testing.T) {
+	base := url.Values{"rid": {"r1"}, "tool": {"exec"}, "target": {"alice/dev-1"}, "command": {"make"}}
+	omitted, err := parseOperation(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if omitted.Timeout != nil {
+		t.Fatalf("an omitted timeout was materialized: %v", *omitted.Timeout)
+	}
+	if omitted.timeout() != DefaultExecSeconds {
+		t.Fatalf("dispatch default = %d", omitted.timeout())
+	}
+	payload, _ := json.Marshal(omitted)
+	if strings.Contains(string(payload), "timeout_seconds") {
+		t.Fatalf("the default leaked into the canonical payload: %s", payload)
+	}
+	explicit := base
+	explicit.Set("timeout_seconds", "900")
+	supplied, err := parseOperation(explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	given, _ := json.Marshal(supplied)
+	if !strings.Contains(string(given), `"timeout_seconds":900`) {
+		t.Fatalf("an explicit timeout left the identity: %s", given)
+	}
+	// Changing a supplied value is a different operation and must still clash.
+	explicit.Set("timeout_seconds", "600")
+	changed, _ := parseOperation(explicit)
+	other, _ := json.Marshal(changed)
+	if string(other) == string(given) {
+		t.Fatal("two different explicit timeouts hash alike")
+	}
+}
+
+// One owner cannot own the adapter by holding several grants at once, and every
+// terminal path has to give the slot back.
+func TestOperationSlotsAreBudgetedPerOwnerAndAlwaysReleased(t *testing.T) {
+	h := staticHandler(t)
+	var held [][2]string
+	for i := 0; i < maxOperationsPerOwner; i++ {
+		grant := fmt.Sprintf("d_alice_%d", i/maxOperationsPerGrant)
+		if !h.reserve("alice", grant) {
+			t.Fatalf("alice was refused slot %d inside her own budget", i)
+		}
+		held = append(held, [2]string{"alice", grant})
+	}
+	if h.reserve("alice", "d_alice_spare") {
+		t.Fatal("a fresh grant let one owner past the per-account budget")
+	}
+	if !h.reserve("bob", "d_bob_0") {
+		t.Fatal("one busy owner starved another owner")
+	}
+	// Freeing one of alice's slots lets the previously refused fresh grant in,
+	// so the refusal came from her account budget and not from a grant limit.
+	h.release(held[0][0], held[0][1])
+	if !h.reserve("alice", "d_alice_spare") {
+		t.Fatal("releasing a slot did not free the owner budget")
+	}
+	h.release("alice", "d_alice_spare")
+	held = held[1:]
+	for _, slot := range held {
+		h.release(slot[0], slot[1])
+	}
+	h.release("bob", "d_bob_0")
+	h.mu.Lock()
+	total, grants, owners := h.total, len(h.running), len(h.owned)
+	h.mu.Unlock()
+	if total != 0 || grants != 0 || owners != 0 {
+		t.Fatalf("released slots leaked: total=%d grants=%d owners=%d", total, grants, owners)
+	}
+	if !h.reserve("alice", "d_alice_0") {
+		t.Fatal("the budget never recovered")
+	}
+	h.release("alice", "d_alice_0")
+}
+
+// The adapter records unknown for four different causes. The sentence a model
+// reads must not claim one of them.
+func TestUnknownDoesNotBlameTheDeadline(t *testing.T) {
+	for _, forbidden := range []string{"deadline", "timed out", "expired"} {
+		if strings.Contains(strings.ToLower(unknownInstruction), forbidden) {
+			t.Fatalf("the unknown instruction names a cause it cannot know: %q", forbidden)
+		}
+	}
+	for _, required := range []string{"may have run", "check the device", "Do not repeat it automatically"} {
+		if !strings.Contains(unknownInstruction, required) {
+			t.Fatalf("the unknown instruction dropped %q", required)
+		}
+	}
+}
+
 func TestLongJobIsNotReportedUnknownBeforeItsOwnDeadline(t *testing.T) {
+	created := time.Now().Add(-time.Hour)
+	farOff := created.Add(48 * time.Hour)
 	for _, tc := range []struct {
 		name    string
 		age     time.Duration
 		timeout int
+		expiry  time.Time
 		want    string
 	}{
-		{"two minutes into a fifteen minute job", 120 * time.Second, 900, "running"},
-		{"past a thirty second job", 30*time.Second + staleGrace + time.Second, 30, "unknown"},
-		{"past a fifteen minute job", 900*time.Second + staleGrace + time.Second, 900, "unknown"},
-		{"a finished job is never re-judged", time.Hour, 30, "done"},
+		{"two minutes into a fifteen minute job", 120 * time.Second, 900, farOff, "running"},
+		{"past a thirty second job", 30*time.Second + staleGrace + time.Second, 30, farOff, "unknown"},
+		{"past a fifteen minute job", 900*time.Second + staleGrace + time.Second, 900, farOff, "unknown"},
+		// A long timeout inside a short grant cannot outlive the grant.
+		{"a fifteen minute job in a one minute grant", 60*time.Second + staleGrace + time.Second, 900, created.Add(time.Minute), "unknown"},
+		{"a finished job is never re-judged", time.Hour, 30, farOff, "done"},
 	} {
 		state := "running"
 		if tc.want == "done" {
 			state = "done"
 		}
-		if got := jobState(state, tc.age, tc.timeout); got != tc.want {
+		deadline := effectiveDeadline(created, tc.timeout, tc.expiry)
+		if got := jobState(state, created.Add(tc.age), deadline); got != tc.want {
 			t.Fatalf("%s: state = %q, want %q", tc.name, got, tc.want)
 		}
 	}
