@@ -1480,14 +1480,24 @@ func screenshotResult(raw []byte) *mcpapi.CallToolResult {
 	return mcpapi.NewToolResultImage(line, base64.StdEncoding.EncodeToString(data), mime)
 }
 
-// fileOpErrorResult adds the one failure read/edit have that no other tool does
-// — the device is running an agent too old to know these operations — and
+// fileOpErrorResult adds the two failures the file tools have that no other
+// tool does — the device is running an agent too old to know these operations,
+// and the answer to a request that did reach the device never came back — and
 // otherwise defers to the shared dial-error wording.
 func fileOpErrorResult(sess sessionAPI, err error) *mcpapi.CallToolResult {
 	var unsupported *client.UnsupportedError
 	if errors.As(err, &unsupported) {
 		return mcpapi.NewToolResultError(err.Error() +
 			". Until then, read the file with wanctl_exec (cat / Get-Content) and patch it with wanctl_push_blob.")
+	}
+	// The one outcome that is neither success nor failure: the request reached
+	// the device and the answer did not come back. A model told "it failed"
+	// would redo an edit that may already be applied, so this says what is
+	// actually known and what to do about it — look first.
+	var lost *client.ResultLostError
+	if errors.As(err, &lost) {
+		return mcpapi.NewToolResultError(err.Error() +
+			". Do NOT simply retry: call wanctl_read first and compare the sha256 against what you expected.")
 	}
 	return dialErrorResult(sess, err)
 }

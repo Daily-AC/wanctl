@@ -100,6 +100,36 @@ func unsupportedWhat(kind string) string {
 	}
 }
 
+// ResultLostError says the request reached the device and the answer did not
+// come back: the connection ended after the frame was sent.
+//
+// It is deliberately not an error about the operation failing, because nobody
+// knows whether it failed. For an edit or a write that distinction is the whole
+// message — the file may already hold the new text — so the instruction is to
+// look before acting rather than to retry, which for a non-idempotent edit
+// would be a second replacement of text that is no longer there.
+type ResultLostError struct {
+	Target string
+	Kind   string // the frame kind whose result was lost
+	Path   string // the file it named
+}
+
+func (e *ResultLostError) Error() string {
+	where := ""
+	if e.Path != "" {
+		where = " " + e.Path
+	}
+	if e.Kind == protocol.KindFileRead {
+		// A read changes nothing, so there is nothing to inspect and retrying
+		// is free. Saying so keeps the caller from an anxious hash check it
+		// does not need.
+		return fmt.Sprintf("result unknown: the connection dropped after the request was sent; nothing was changed by reading%s, so retry", where)
+	}
+	return fmt.Sprintf(
+		"result unknown: the connection dropped after the request was sent; read the file and compare sha256 before retrying — the change to%s may or may not have been applied",
+		where)
+}
+
 // ReadFile returns a line range of a file on the target device.
 func (c *Client) ReadFile(ctx context.Context, req ReadRequest) (*ReadResult, error) {
 	res, err := c.fileOp(ctx, req.Target, protocol.Message{
@@ -178,6 +208,10 @@ func (c *Client) fileOp(ctx context.Context, target string, req protocol.Message
 	defer wsconn.CloseOnCancel(ctx, conn)()
 
 	res, err := fileOpOver(conn, req)
+	var lost *ResultLostError
+	if errors.As(err, &lost) {
+		lost.Target = target
+	}
 	var unsupported *UnsupportedError
 	if errors.As(err, &unsupported) {
 		unsupported.Target = target
@@ -198,10 +232,15 @@ func fileOpOver(rw io.ReadWriter, req protocol.Message) (*protocol.FileResult, e
 	}
 	reply, err := protocol.ReadMessage(rw)
 	if err != nil {
-		// An agent old enough to have no default branch at all drops the
-		// session rather than answering. Read that as the same thing.
+		// A connection that ends after the request was sent says nothing about
+		// whether the device ran it. This used to be read as "an agent too old
+		// to have a default branch dropped the session", which is one thing it
+		// can be — and telling a caller whose edit HAD been applied that
+		// nothing ran and to update the agent is the worst answer available:
+		// the fix it names is useless and the claim it makes is false. Only an
+		// explicit `unknown request` reply proves the device did not run this.
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, &UnsupportedError{Kind: req.Kind}
+			return nil, &ResultLostError{Kind: req.Kind, Path: req.Path}
 		}
 		return nil, err
 	}

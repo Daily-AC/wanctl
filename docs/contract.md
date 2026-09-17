@@ -375,6 +375,7 @@ wanctl_read{"target":"home-pc","path":"/etc/hosts","limit":200}
 | `read denied by device policy` | The device owner has not granted read access to that path. |
 | `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
+| `result unknown: the connection dropped` | The request reached the device; the answer did not come back. A read changes nothing, so simply retry. |
 | `does not support read/edit; run `wanctl update`` | The device is running a wanctl older than the file tools. Update it there, then retry. |
 
 ## `wanctl edit` / `wanctl_edit`
@@ -414,9 +415,13 @@ rather than guessing; 'old string occurs N times' means you must add
 surrounding context to disambiguate, or pass all=true if you really do mean
 every occurrence; 'changed since it was read' means someone else wrote to the
 file — the message carries the file's CURRENT sha256, so re-read and redo the
-edit against the new text. Files over 8 MiB are refused. Policy: an edit is a
-WRITE on the device and needs the same grant as wanctl_push; a first edit on
-an unapproved path may wait for the device owner to approve it.
+edit against the new text. Files over 8 MiB are refused. One outcome is
+neither: 'result unknown: the connection dropped after the request was sent'
+means the device got the request and the answer was lost, so the edit may
+already be in the file — wanctl_read it and compare the sha256 before doing
+anything else, and never just repeat the call. Policy: an edit is a WRITE on
+the device and needs the same grant as wanctl_push; a first edit on an
+unapproved path may wait for the device owner to approve it.
 
 **On the command line.**
 
@@ -458,6 +463,7 @@ wanctl_edit{"target":"lab","path":"/a.conf","old":"80","new":"8080"}
 | `pass either 'old'/'new' or 'edits', not both` | The call mixed the two forms. Pick one and resend. |
 | `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
+| `result unknown: the connection dropped` | The request reached the device; the answer did not come back. It may or may not have been applied — read the file and compare its sha256 before retrying, rather than repeating the operation blindly. |
 | `does not support read/edit; run `wanctl update`` | The device is running a wanctl older than the file tools. Update it there, then retry. |
 
 ## `wanctl write` / `wanctl_write`
@@ -473,9 +479,11 @@ executable — and a new one gets 0644. The write is atomic (temp file +
 rename), so a reader sees either the old file or the new one. Content is UTF-8
 TEXT: 8 MiB at most, and bytes that are not valid UTF-8 are refused, because
 they would not survive the trip. Binaries go through wanctl_push_blob (MCP) or
-wanctl push (CLI) instead. Policy: a write is the same grant as wanctl_push
-and wanctl_edit, so a first write to an unapproved path may wait for the
-device owner to approve it.
+wanctl push (CLI) instead. If a call comes back 'result unknown: the
+connection dropped after the request was sent', the device got it and the
+answer was lost: read the file and compare its sha256 before retrying. Policy:
+a write is the same grant as wanctl_push and wanctl_edit, so a first write to
+an unapproved path may wait for the device owner to approve it.
 
 **On the command line.**
 
@@ -505,6 +513,7 @@ wanctl_write{"target":"lab","path":"/srv/run.sh",
 | `over the 8388608-byte write limit` | Too large for an inline write. Upload it with push, or split it. |
 | `write denied by device policy` | The device owner has not granted write access to that path. |
 | `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
+| `result unknown: the connection dropped` | The request reached the device; the answer did not come back. It may or may not have been applied — read the file and compare its sha256 before retrying, rather than repeating the operation blindly. |
 | `does not support write; run `wanctl update`` | The device is running a wanctl older than the write tool. Update it there, then retry. |
 
 ## `wanctl_exec_async`

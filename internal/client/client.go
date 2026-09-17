@@ -684,8 +684,22 @@ func (c *Client) ExecOut(ctx context.Context, req ExecRequest, stdout, stderr io
 		time.AfterFunc(cancelGrace, func() { conn.Close() })
 	})
 	defer stopCancel()
+	return execOver(ctx, conn, req, stdout, stderr)
+}
+
+// execOver reads one command's frames to their end on an already-open session.
+// It is separate from the dial for the same reason fileOpOver is: the wire
+// behaviour — including what a session that ends mid-command looks like — can
+// then be tested against a stand-in device.
+//
+// Note what it does NOT do with a connection that ends after the request was
+// sent: claim the device could not run the command. That inference is only
+// sound when the device says so, and a command that was already running when
+// the link dropped is the commoner case.
+func execOver(ctx context.Context, rw io.ReadWriter, req ExecRequest, stdout, stderr io.Writer) (ExecOutcome, error) {
+	failed := ExecOutcome{Code: -1}
 	for {
-		ft, payload, err := protocol.ReadFrame(conn)
+		ft, payload, err := protocol.ReadFrame(rw)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return failed, ctxErr
