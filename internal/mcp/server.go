@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"wanctl/internal/catalog"
 	"wanctl/internal/client"
 	"wanctl/internal/config"
 	"wanctl/internal/limits"
@@ -745,131 +746,66 @@ func configuredValue(value string) string {
 
 // --- tool registration (shared between stdio and http modes) ---
 
+// registerMCPTools registers every tool the catalog declares. The tool names,
+// descriptions and schemas all come from internal/catalog, which is the same
+// source `wanctl help` renders and docs/contract.md is generated from — so an
+// AI reading a tool description and a human reading the help see one text, not
+// two that drifted. What stays here is the handler behind each name.
 func registerMCPTools(s *server.MCPServer) {
-	s.AddTool(mcpapi.NewTool("wanctl_login",
-		mcpapi.WithDescription("Authenticate THIS MCP session to a wanctl namespace via the team portal. Two-step OAuth flow: (1) call with NO argument first → returns a portal URL + a one-time code prompt the user needs to complete in their browser. (2) call again with the `code` the user pastes back → exchanges it for a namespace token bound ONLY to this MCP session (in HTTP mode) or this machine's wanctl config (in stdio mode). Multiple AI users sharing the same MCP server each log in independently — credentials are never shared across sessions.\n\nFAST RE-BIND: a successful login also returns a `rebind` credential. HTTP-MCP sessions are in-memory, so a relay restart or a dropped/re-initialized connection can surface 'LOGIN REQUIRED' mid-task even though the user is still authorized. When that happens, call wanctl_login(rebind=\"…\") with the credential you saved — it restores access INSTANTLY with no portal round-trip. Only fall back to the OAuth flow if you have no saved rebind credential."),
-		mcpapi.WithString("code", mcpapi.Description("The one-time code the user copied from the portal /enroll page. Omit on the first call.")),
-		mcpapi.WithString("rebind", mcpapi.Description("A rebind credential returned by an earlier successful login in this conversation. Pass it to restore a lost session instantly without re-doing OAuth. Mutually exclusive with code.")),
-	), mcpLogin)
+	handlers := map[string]server.ToolHandlerFunc{
+		"mcpLogin":       mcpLogin,
+		"mcpStatus":      mcpStatus,
+		"mcpLogout":      mcpLogout,
+		"mcpPeers":       mcpPeers,
+		"mcpPair":        mcpPair,
+		"mcpExec":        mcpExec,
+		"mcpRead":        mcpRead,
+		"mcpEdit":        mcpEdit,
+		"mcpExecAsync":   mcpExecAsync,
+		"mcpExecPoll":    mcpExecPoll,
+		"mcpPush":        mcpPush,
+		"mcpPushBlob":    mcpPushBlob,
+		"mcpPull":        mcpPull,
+		"mcpLogs":        mcpLogs,
+		"mcpServerLogs":  mcpServerLogs,
+		"mcpID":          mcpID,
+		"mcpTrust":       mcpTrust,
+		"mcpTrustServer": mcpTrustServer,
+		"mcpRules":       mcpRules,
+	}
+	for _, c := range catalog.MCPCommands() {
+		h, ok := handlers[c.Handler]
+		if !ok {
+			// A catalog entry naming a handler that does not exist would
+			// otherwise register a tool that answers nothing. Fail at startup,
+			// where the first test run catches it.
+			panic("mcp: catalog tool " + c.MCPName + " names unknown handler " + c.Handler)
+		}
+		s.AddTool(mcpapi.NewTool(c.MCPName, toolOptions(c)...), h)
+	}
+}
 
-	s.AddTool(mcpapi.NewTool("wanctl_status",
-		mcpapi.WithDescription("Report whether this MCP session is logged in, what namespace it's bound to, and the controller fingerprint. Call this if a tool says 'login required' and you're not sure if a login already completed."),
-	), mcpStatus)
-
-	s.AddTool(mcpapi.NewTool("wanctl_logout",
-		mcpapi.WithDescription("Clear this MCP session's stored credentials. Subsequent data tools (peers/exec/push/pull/logs) will require a fresh wanctl_login."),
-	), mcpLogout)
-
-	s.AddTool(mcpapi.NewTool("wanctl_peers",
-		mcpapi.WithDescription("List devices currently reachable by the active controller token. Returns each stable device ID with its display label and whether this session has pinned its identity yet ('identity: pinned' / 'identity: unpinned'); structured content contains backward-compatible devices and aliases fields plus an identity map keyed by the canonical namespace/device. Purely a local lookup — it dials nothing. Use this FIRST when the user asks 'what devices are available' or before guessing a target."),
-	), mcpPeers)
-
-	s.AddTool(mcpapi.NewTool("wanctl_pair",
-		mcpapi.WithDescription("Check whether the target device already trusts this MCP session's controller identity, and if not, return the device-side pairing URL up front. On first contact this may instead return DEVICE IDENTITY CONFIRMATION REQUIRED; answer it yourself by calling wanctl_trust_server with the target and fingerprint from that result, then retry — no need to ask the user first. Once the server identity is pinned, returns '✓ already trusted' OR 'PAIRING REQUIRED' with a URL to relay VERBATIM to the user."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS for shared devices.")),
-	), mcpPair)
-
-	s.AddTool(mcpapi.NewTool("wanctl_exec",
-		mcpapi.WithDescription("Run a shell command, or a whole script, on a remote wanctl-enrolled device over the encrypted relay. Returns the device's stdout, stderr, and exit code. Pass EITHER 'command' (a one-liner) OR 'script' (multi-line source) — prefer 'script' for anything with a $, a quote inside a quote, or more than one statement, because a script is transported encoded and is never parsed by the device's shell. If the device hasn't paired this controller yet, the result is isError=true with a 'PAIRING REQUIRED' message that carries a URL — surface that URL VERBATIM to the user; do not paraphrase. If instead it says DEVICE IDENTITY CONFIRMATION REQUIRED, that is first contact: call wanctl_trust_server with the target and fingerprint it gives you and retry, without asking the user. To look at a file or change one line of it, use wanctl_read and wanctl_edit instead of cat/sed/echo here: they are native operations on the device, so they behave the same on every platform and nothing you pass is parsed by a shell."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS for shared devices. If exactly one device is online for this token, you may pass empty string.")),
-		mcpapi.WithString("command", mcpapi.Description("A one-liner for the device's default shell (sh on Unix, powershell on Windows). WARNING: this string is SOURCE CODE for that shell and is parsed there. On Windows that means writing `powershell -Command \"...$x...\"` gets parsed TWICE — the outer shell expands $x to nothing and the inner script fails with a misleading 'term is not recognized'. Use 'script' instead of nesting an interpreter here.")),
-		mcpapi.WithString("script", mcpapi.Description("Script SOURCE to run on the device (not a file path). Sent encoded, so quoting and character-set rules do not apply: $, backticks, nested quotes and non-ASCII text all arrive literally. Requires 'interp'. Use this for multi-statement work; it is the same single call as 'command'. Scripts over ~9KB must be pushed as a file and run by path instead.")),
-		mcpapi.WithString("interp", mcpapi.Description("Interpreter for 'script': 'powershell' for Windows devices, 'sh' for Unix/macOS/Android. Required when 'script' is set.")),
-		mcpapi.WithString("cwd", mcpapi.Description("Working directory on the device for this command (also the policy scope).")),
-		mcpapi.WithBoolean("oneshot", mcpapi.Description("Run in a fresh shell with no persistent session state. Default false — successive exec calls share cwd/env like a real terminal.")),
-		mcpapi.WithBoolean("elevate", mcpapi.Description("Android only. Run with elevated privilege (uid 0 or the adb shell uid 2000) instead of the app sandbox the agent normally lives in. This is what makes `pm`, `am`, `input`, `screencap`, `dumpsys`, `settings`, `wm` and `svc` work at all — without it they fail with permission errors or empty output. Elevated commands need their OWN policy rule on the device; a device in bypass mode still refuses them until a human approves, so expect a 'PAIRING/approval' style rejection the first time.")),
-		mcpapi.WithString("via", mcpapi.Description("Pin the elevation channel: 'su' (rooted device) or 'adb' (device's own wireless debugging). Default empty = let the device pick whichever is available. Naming an unavailable channel fails instead of quietly running unprivileged.")),
-	), mcpExec)
-
-	s.AddTool(mcpapi.NewTool("wanctl_read",
-		mcpapi.WithDescription("Read a range of lines from a text file on a remote wanctl-enrolled device. Use this instead of `wanctl_exec` with cat/head/sed/Get-Content whenever you want to LOOK at a file: it is performed natively on the device, so it behaves identically on Linux, macOS, Windows and Android, nothing is parsed by a shell, and the reply tells you exactly what you got — 'lines A-B of N', the file's size, and the sha256 OF THE WHOLE FILE. Save that sha256: passing it back as wanctl_edit's expected_sha256 is how you make sure you are patching the text you actually read. Reads at most 256 KiB of content per call, and always cuts on a line boundary: when the range is cut short the result says truncated=true and names the `offset` to continue from, so paging never loses or repeats a line. The one exception is a single line bigger than 256 KiB, which cannot be returned whole — the result names that line and tells you to read it with wanctl_exec (sed/cut) instead; do not page on, because the same line would come back every time. Errors: 'not a UTF-8 text file' means the file is binary — use wanctl_pull or wanctl_exec instead, do not retry. Same pairing/policy rules as wanctl_exec: 'PAIRING REQUIRED' carries a URL to relay VERBATIM to the user, 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call wanctl_trust_server and retry, and 'read denied by device policy' means the device's owner has not granted read access to that path."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS for shared devices.")),
-		mcpapi.WithString("path", mcpapi.Required(), mcpapi.Description("Absolute path on the target device. `~` is NOT expanded — spell the home directory out.")),
-		mcpapi.WithNumber("offset", mcpapi.Description("1-based line number to start at. Default 1. Use this to page through a file that came back truncated.")),
-		mcpapi.WithNumber("limit", mcpapi.Description("Maximum number of lines to return. Default 2000. The 256 KiB byte cap applies regardless.")),
-	), mcpRead)
-
-	s.AddTool(mcpapi.NewTool("wanctl_edit",
-		mcpapi.WithDescription("Replace a string inside a text file on a remote device, in place. This is the tool for PATCHING a remote file: it is the exact-string edit you are used to locally, performed natively on the device, so no shell parses your text ($, backticks, quotes and newlines all arrive literally) and the rest of the file is preserved byte for byte — CRLF line endings stay CRLF, the file mode is kept, and the write is atomic (temp file + rename), so a reader never sees a half-written file. Prefer it over rewriting a whole file with wanctl_push_blob, which silently discards anything that changed since you last read the file.\n\nWORKFLOW: wanctl_read the file, copy its sha256 into expected_sha256 here, and pass enough surrounding text in `old` that it matches exactly once.\n\nREFUSALS (the file is left untouched every time — fix the input and retry, do not fall back to exec): 'old string not found' means your `old` does not appear, usually because of whitespace or indentation, so re-read the file rather than guessing; 'old string occurs N times' means you must add surrounding context to disambiguate, or pass all=true if you really do mean every occurrence; 'changed since it was read' means someone else wrote to the file — the message carries the file's CURRENT sha256, so re-read and redo the edit against the new text. Files over 8 MiB are refused. Policy: an edit is a WRITE on the device and needs the same grant as wanctl_push; a first edit on an unapproved path may wait for the device owner to approve it."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS for shared devices.")),
-		mcpapi.WithString("path", mcpapi.Required(), mcpapi.Description("Absolute path on the target device. `~` is NOT expanded.")),
-		mcpapi.WithString("old", mcpapi.Required(), mcpapi.Description("The exact text to find, copied from a wanctl_read of this file. Must be non-empty, and must match exactly once unless `all` is true.")),
-		mcpapi.WithString("new", mcpapi.Required(), mcpapi.Description("The text to put in its place. May be an empty string, which deletes `old`.")),
-		mcpapi.WithBoolean("all", mcpapi.Description("Replace every occurrence instead of refusing when `old` appears more than once. Default false.")),
-		mcpapi.WithString("expected_sha256", mcpapi.Description("The sha256 wanctl_read reported for this file. When set, the edit is refused if the file no longer hashes to it, so a concurrent change cannot be overwritten silently. Strongly recommended.")),
-	), mcpEdit)
-
-	s.AddTool(mcpapi.NewTool("wanctl_exec_async",
-		mcpapi.WithDescription("Start a shell command as a BACKGROUND job on the device and return a job_id IMMEDIATELY, without waiting for it to finish. Use this for anything that may run longer than a single tool call comfortably tolerates — package installs, builds, large downloads, `wsl --shutdown` then a long build, etc. The command keeps running on the device even after this call returns; fetch its output and exit code later with wanctl_exec_poll(job_id). Always runs in a FRESH shell (no shared cwd/env with wanctl_exec's persistent session). Same pairing/policy rules as wanctl_exec. Jobs run for at most 30 minutes, retain at most 8 MiB output each, and finished results remain pollable for up to 1h subject to device-wide retention budgets."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
-		mcpapi.WithString("command", mcpapi.Required(), mcpapi.Description("Shell command to run in the device's default shell (sh on Unix, powershell on Windows).")),
-		mcpapi.WithString("cwd", mcpapi.Description("Working directory on the device for this command (also the policy scope).")),
-	), mcpExecAsync)
-
-	s.AddTool(mcpapi.NewTool("wanctl_exec_poll",
-		mcpapi.WithDescription("Fetch a background job's new output and status (started via wanctl_exec_async). Call repeatedly until state is 'done'. Pass the 'next_offset' from the previous poll as 'offset' to receive only NEW output each time; omit or 0 to get everything from the start. The response carries a status header (state: running|done, exit code when done, next_offset) followed by the output."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS — the same device the job was started on.")),
-		mcpapi.WithString("job_id", mcpapi.Required(), mcpapi.Description("The job id returned by wanctl_exec_async.")),
-		mcpapi.WithNumber("offset", mcpapi.Description("Bytes of output already seen; return only output past this point. Use the previous poll's next_offset. Default 0 = from the start.")),
-	), mcpExecPoll)
-
-	s.AddTool(mcpapi.NewTool("wanctl_push",
-		mcpapi.WithDescription("Upload a local file to a remote path on the target device. Same pairing/policy rules as wanctl_exec. Available in stdio mode only (on a shared HTTP MCP server 'local' would be a path on the server itself). Paths under a dot-directory of the operator's home (~/.ssh, ~/.config, …) are refused; WANCTL_MCP_LOCAL_ROOT confines the tool to one tree. To change part of a file that is already on the device, use wanctl_edit rather than uploading a rewritten copy."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
-		mcpapi.WithString("local", mcpapi.Required(), mcpapi.Description("Absolute path on the MCP-server machine (or your local machine in stdio mode) to upload.")),
-		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to write to.")),
-	), mcpPush)
-
-	s.AddTool(mcpapi.NewTool("wanctl_push_blob",
-		mcpapi.WithDescription("Upload INLINE base64 content to a remote path on the target device — the file-push tool that works in HTTP (remote) MCP mode, where the AI host has no file on the MCP server for wanctl_push to read. Encode the bytes you want written as base64 and pass them in 'content_b64'. Same pairing/policy rules as wanctl_exec. Size cap: 8 MiB of raw (decoded) bytes; for larger payloads, split or have the device fetch the file itself. This tool OVERWRITES the whole file, discarding anything changed since you last read it — to patch an existing file, use wanctl_edit instead."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
-		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to write to (overwrites if it exists).")),
-		mcpapi.WithString("content_b64", mcpapi.Required(), mcpapi.Description("Standard-base64-encoded file content (the RAW bytes to write, not text).")),
-		mcpapi.WithString("mode", mcpapi.Description("Optional octal file mode, e.g. \"0755\" for an executable. Default 0644.")),
-	), mcpPushBlob)
-
-	s.AddTool(mcpapi.NewTool("wanctl_pull",
-		mcpapi.WithDescription("Download a remote file from the target device to a local path. Same pairing/policy rules as wanctl_exec. Available in stdio mode only; the same local-path limits as wanctl_push apply. To inspect a text file rather than keep a copy of it — including on a shared HTTP MCP server, where this tool is unavailable — use wanctl_read."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
-		mcpapi.WithString("remote", mcpapi.Required(), mcpapi.Description("Absolute path on the target device to read.")),
-		mcpapi.WithString("local", mcpapi.Required(), mcpapi.Description("Absolute path on the MCP-server machine (or your local machine in stdio mode) to write to.")),
-	), mcpPull)
-
-	s.AddTool(mcpapi.NewTool("wanctl_logs",
-		mcpapi.WithDescription("Pull JSONL activity events from the target device's local log (every connect/exec/file with its decision and exit code). Useful for auditing what happened, including past pairing/approval outcomes."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("Device ID or unique name/alias (DEVICE|ALIAS), or NS/DEVICE|NS/ALIAS.")),
-		mcpapi.WithString("type", mcpapi.Description("Filter: 'connect', 'exec', or 'file'.")),
-		mcpapi.WithString("grep", mcpapi.Description("Filter: substring of the detail field.")),
-		mcpapi.WithString("since", mcpapi.Description("Filter: RFC3339 timestamp lower bound.")),
-		mcpapi.WithNumber("limit", mcpapi.Description("Return at most this many of the most recent matching events (0 = no cap).")),
-	), mcpLogs)
-
-	s.AddTool(mcpapi.NewTool("wanctl_server_logs",
-		mcpapi.WithDescription("Read recent portal or relay process logs through the secret-gated admin API. Output is redacted before filtering and bounded by the requested limit."),
-		mcpapi.WithString("service", mcpapi.Required(), mcpapi.Description("Server service: 'portal' or 'relay'.")),
-		mcpapi.WithString("since", mcpapi.Description("Lookback duration such as '30m' or '2h'. Default 15m.")),
-		mcpapi.WithNumber("limit", mcpapi.Description("Return at most this many recent lines. Default 200, maximum 2000.")),
-		mcpapi.WithString("grep", mcpapi.Description("Filter by substring after credential redaction.")),
-	), mcpServerLogs)
-
-	s.AddTool(mcpapi.NewTool("wanctl_id",
-		mcpapi.WithDescription("Show THIS MCP session's controller identity fingerprint. The fingerprint is what target devices pair against in the trust step."),
-	), mcpID)
-
-	s.AddTool(mcpapi.NewTool("wanctl_trust",
-		mcpapi.WithDescription("List the trust store for THIS MCP session. 'servers' (default) = explicitly pinned devices. 'clients' = controllers this machine has trusted to drive it (only meaningful in stdio mode if this machine is also running wanctl agent)."),
-		mcpapi.WithString("which", mcpapi.Description("'servers' (default) or 'clients'.")),
-	), mcpTrust)
-
-	s.AddTool(mcpapi.NewTool("wanctl_trust_server",
-		mcpapi.WithDescription("Pin a device's identity for THIS session. Call it as soon as any tool returns DEVICE IDENTITY CONFIRMATION REQUIRED, passing the target and fingerprint copied VERBATIM from that result, then retry the call that failed — do not ask the user to confirm the fingerprint first, because your MCP client's own approval prompt is already the human checkpoint. This is a first-contact step only: it records what the device presented right now, so later calls can detect a change. If a call instead returns 'DEVICE IDENTITY MISMATCH', do NOT call this tool — report both the pinned and the presented fingerprint to the user and stop; re-pinning is a human's decision at a terminal. Note: the handler refuses unless the operator has set WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1 (the hosted endpoint does; a local stdio server usually does not, and there a human runs `wanctl trust server` instead)."),
-		mcpapi.WithString("target", mcpapi.Required(), mcpapi.Description("The owner/device target, copied verbatim from the DEVICE IDENTITY CONFIRMATION REQUIRED result.")),
-		mcpapi.WithString("fingerprint", mcpapi.Required(), mcpapi.Description("The SHA256:... fingerprint, copied verbatim from the same result.")),
-	), mcpTrustServer)
-
-	s.AddTool(mcpapi.NewTool("wanctl_rules",
-		mcpapi.WithDescription("List the local policy rules (allow-list) on THIS machine. Only meaningful in stdio mode if this machine is also running wanctl agent; for controller-only and HTTP-mode hosts the list is empty."),
-	), mcpRules)
+// toolOptions turns one catalog entry into the mcp-go options that describe it.
+func toolOptions(c catalog.Command) []mcpapi.ToolOption {
+	opts := []mcpapi.ToolOption{mcpapi.WithDescription(c.MCPDescription())}
+	for _, p := range c.MCPParams() {
+		var props []mcpapi.PropertyOption
+		if p.Required {
+			props = append(props, mcpapi.Required())
+		}
+		props = append(props, mcpapi.Description(p.Desc))
+		switch p.Type {
+		case catalog.TypeString:
+			opts = append(opts, mcpapi.WithString(p.Name, props...))
+		case catalog.TypeBool:
+			opts = append(opts, mcpapi.WithBoolean(p.Name, props...))
+		case catalog.TypeNumber:
+			opts = append(opts, mcpapi.WithNumber(p.Name, props...))
+		default:
+			panic("mcp: catalog parameter " + c.MCPName + "." + p.Name + " has unknown type " + p.Type)
+		}
+	}
+	return opts
 }
 
 // --- helpers ---

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"wanctl/internal/agent"
+	"wanctl/internal/catalog"
 	// Android has no /etc/resolv.conf, so a CGO_ENABLED=0 binary resolves
 	// nothing until this package's init points the Go resolver somewhere real.
 	// Imported for that side effect; it compiles to nothing elsewhere.
@@ -43,114 +44,64 @@ import (
 	"wanctl/internal/webfetch"
 )
 
-var usage = `wanctl — control a device across the internet over an encrypted, relayed channel
+// usage is the short index bare `wanctl` prints. It used to be sixty lines of
+// every flag of every subcommand, which is the same as printing nothing: the
+// reader who needed one command scrolled past it. The index names each command
+// in one line and points at `wanctl help <command>`, which renders that
+// command's full entry from internal/catalog — the same text the MCP server
+// registers as its tool description.
+var usage = catalog.Index(defaultRelay, defaultPortal)
 
-USAGE
- DEVICE LIFECYCLE (run on the box you want to control)
-  wanctl start                                log in if needed, then run the agent detached in the background;
-                                              this is what makes a machine a controlled device
-  wanctl                                      print this help and one line of local status; changes nothing
-  wanctl stop                                 stop the background agent
-  wanctl status [-target NS/DEV]              show local agent/credential status, or remote agent mode + version
-  wanctl logout                               stop the agent and forget the saved login
-  wanctl service install [--name N] [--portal-fps FP[,FP]] [--mode M]
-                                              install an OS-native always-on service (systemd/launchd/Scheduled Task);
-                                              --name/--portal-fps are baked into the unit (a unit restarts unattended);
-                                              omit --mode so the persisted mode and portal switches survive a restart
-  wanctl service uninstall                     remove that service
-  wanctl service status                        show whether the service is installed + active
-  wanctl agent [flags]                         run the agent in the FOREGROUND (what 'start'/the service spawn)
-  Persistence: 'wanctl start' survives THIS terminal but may die on logout/reboot.
-  'wanctl service install' adds OS-native autostart. Linux needs user lingering
-  for boot-without-login; Windows starts the limited-user task at the next logon.
+// withHelp points a FlagSet's -h at its catalog entry instead of Go's raw flag
+// dump. A subcommand whose FlagSet is named after it ("exec") resolves
+// directly; a nested one ("docs ls") falls back to its parent's entry, which is
+// where the subcommand's own syntax is written.
+func withHelp(fs *flag.FlagSet) *flag.FlagSet {
+	name := fs.Name()
+	c, ok := catalog.Lookup(name)
+	if !ok {
+		if i := strings.Index(name, " "); i > 0 {
+			c, ok = catalog.Lookup(name[:i])
+		}
+	}
+	if !ok {
+		return fs
+	}
+	fs.Usage = func() { fmt.Fprint(fs.Output(), catalog.Entry(c)) }
+	return fs
+}
 
- CONTROLLER (run where you / the AI drive from)
-  wanctl login [--code CODE]                  log in via the portal and save the token — no daemon (use this on AI / controller boxes);
-                                              --code skips the prompt for a front-end that already has the enrollment code
-  wanctl update                               download the latest binary from the relay and swap it in
-  wanctl update --fetch-apk DIR               Android: download+verify the APK there and print its path (the app installs it)
-  wanctl version                              print the immutable release version (or dev)
-  wanctl mcp                                  run a stdio MCP server (per-process, single-user) for an AI host's child process
-  wanctl mcp --http :ADDR                     run a public HTTP/Streamable MCP server (multi-user; needs WANCTL_MCP_SEED env)
-  wanctl docs ls [--group SLUG]               list documentation articles
-  wanctl docs get <slug>                      print one article's body
-  wanctl docs new --slug S --title T --group G [--file F | --editor | < stdin]
-  wanctl docs edit <slug> [--file F | --editor | < stdin]
-  wanctl docs rm <slug>
-  wanctl docs groups                          list documentation groups
-  wanctl docs group new --slug S --title T [--position N]
-  wanctl docs group rm <slug>
-  wanctl friends                             list friends and pending requests
-  wanctl friends add|accept|decline|remove <namespace>
-  wanctl share list
-  wanctl share grant --device DEV --to NS [--manage]
-  wanctl share manage --device DEV --to NS on|off
-  wanctl share revoke --device DEV --to NS
-  wanctl exec  [--target NS/DEV] [--oneshot] [NS/DEV|DEV] <command...>
-  wanctl exec  [--target NS/DEV] --script <local-file> [--interp powershell|sh] [NS/DEV|DEV]
-                                              run a LOCAL script on the device — no shell quoting or encoding hazards
-  wanctl exec  --target ANDROID-DEV -- battery report fresh battery state from an Android APK agent as JSON
-  wanctl exec  --target ANDROID-DEV -- adb-pair <PORT> <CODE>
-                                              pair with the device's own adbd so the adb elevation channel works
-                                              on a phone that is not rooted. PORT and CODE come from the device's
-                                              开发者选项 → 无线调试 → 使用配对码配对设备 screen (that screen's
-                                              port, not the one on the wireless-debugging screen)
-  wanctl exec  --target ANDROID-DEV --elevate [--via su|adb] <command...>
-                                              run with elevated privilege on Android, which is what pm / am /
-                                              input / screencap / dumpsys / settings need. Off by default on the
-                                              device, and elevated commands need their own policy rule —
-                                              bypass mode does not cover them.
-  wanctl screenshot [DEVICE] [-o file.png] [--via su|adb]
-                                              capture an Android screen to a local PNG (implies --elevate;
-                                              "-o -" writes the image to stdout instead)
-  wanctl push  [--target NS/DEV] <local> <remote>
-  wanctl pull  [--target NS/DEV] <remote> <local>
-  wanctl read  [--target NS/DEV] <path> [--offset N] [--limit N]
-                                              print a line range of a text file on the device; the trailer on
-                                              stderr gives the line numbers, the whole file's sha256 and
-                                              whether the 256 KiB cap cut the range short
-  wanctl edit  [--target NS/DEV] <path> (--old STR | --old-file F) (--new STR | --new-file F) [--all] [--sha SHA256]
-                                              replace a string inside a file on the device, in place and
-                                              atomically. Refuses unless --old matches exactly once (--all
-                                              replaces every occurrence) or if --sha no longer matches the file
-  wanctl peers
-  wanctl config                               show effective settings (relay/portal/transport) and their source
-  wanctl config set key=value ...             persist settings; e.g. wanctl config set relay=https://r portal=https://p
-  wanctl config unset key ...                 remove persisted settings
-  wanctl label ["<who you are>"]              show or set this controller's self-description; devices refuse to
-                                              raise a pairing request from a controller without one
-  wanctl id
-  wanctl pair  <device>                       check device trust state; if not yet paired print the URL the device owner clicks to approve
-  wanctl trust [clients|servers]
-  wanctl trust server --target NS/DEV --fingerprint SHA256:... [--replace]
-  wanctl logs [--target NS/DEV] [--type T] [--since RFC3339] [--grep STR] [--limit N]
-                                              read the existing local/remote device activity log
-  wanctl logs --service portal|relay [--since 15m] [--grep STR] [--limit N]
-                                              read recent server logs; --follow is not yet supported
-  wanctl portal-admins [list|add|remove]        manage local portal root fingerprints
-  wanctl admin invite [--github LOGIN]        mint an invite code (or pre-approve a GitHub login); needs WANCTL_ADMIN_SECRET
-  wanctl admin invites | invite-revoke ID     list or revoke admission invites
-  wanctl agent [--name N] [--relay URL] [--token T] [--yes] [--shell S] [--portal-fps FP[,FP]]
-  wanctl relay  [--addr :8080]                run the relay; DATABASE_URL or WANCTL_TOKENS
-  wanctl portal [--addr :8080]                run the web portal (GitHub OAuth or reverse-proxy SSO)
+// isHelpFlag reports whether an argument is a request for help rather than
+// input. `help` itself is deliberately absent: it is a plausible thing to run
+// on a device, and `wanctl exec help` must stay a command.
+func isHelpFlag(arg string) bool {
+	return arg == "-h" || arg == "-help" || arg == "--help"
+}
 
-Defaults: relay=` + configuredDisplay(defaultRelay, "(not set)") + `  portal=` + configuredDisplay(defaultPortal, "(not set)") + `  transport=` + defaultTransport + ` (persist with 'wanctl config set', override with WANCTL_RELAY/WANCTL_PORTAL/WANCTL_TRANSPORT)
-FIRST RUN: with no relay configured, a command that needs one asks on a terminal which
-           instance to use — the project's hosted one (` + hostedPortal + `, invite-only)
-           or a relay you run yourself — and saves the answer. The question is skipped by
-           any configured relay, by a non-terminal stdin/stdout, and by WANCTL_NO_PROMPT=1,
-           which turns it into a printed instruction instead.
-ENV (controller): WANCTL_TOKEN=... (or run 'wanctl' to log in)  WANCTL_RELAY=...  WANCTL_NO_PROMPT=1
-                  WANCTL_PORTAL=... WANCTL_ADMIN_SECRET=... (server logs only)
-ENV (relay):      WANCTL_TOKENS="token:namespace,token2:ns2"  WANCTL_ADMIN_SECRET=...  WANCTL_PORTAL_NS=...
-ENV (portal):     RELAY_ADMIN_URL=...  WANCTL_ADMIN_SECRET=...
-              login, either:  WANCTL_GITHUB_CLIENT_ID/_SECRET=... WANCTL_SESSION_SECRET=<32+ bytes>
-                         or:  PORTAL_USER_HEADER=X-Auth-Request-Email (behind a trusted SSO proxy)
-              PORTAL_PUBLIC_ORIGIN=https://portal.example  PORTAL_DEBUG_WHOAMI=1 (diagnostics only)
-              WANCTL_RELAY=...  WANCTL_PORTAL_TOKEN=...  WANCTL_TRANSPORT=ws
-              WANCTL_LARK_APP_ID=...  WANCTL_LARK_APP_SECRET=... (optional; enables Lark approvals)
-ENV (agent):      WANCTL_PORTAL_FPS=SHA256:...[,SHA256:...]  (WANCTL_PORTAL_FP is a legacy alias)
-`
+// cmdHelp renders the contract: the index, one command's entry, or the whole
+// catalog as Markdown (which is what docs/contract.md is generated from).
+// Either spelling resolves, so an AI that only knows the MCP tool name can run
+// `wanctl help wanctl_read`.
+func cmdHelp(args []string) error {
+	if len(args) > 0 && (args[0] == "--markdown" || args[0] == "-markdown") {
+		fmt.Print(catalog.Markdown())
+		return nil
+	}
+	if len(args) == 0 {
+		fmt.Print(usage)
+		return nil
+	}
+	name := strings.Join(args, " ")
+	c, ok := catalog.Lookup(name)
+	if !ok {
+		// Exiting non-zero matters: `wanctl help typo` in a script should fail
+		// rather than look like it documented something.
+		fmt.Fprintf(os.Stderr, "wanctl: no such command %q\n\n%s", name, usage)
+		os.Exit(2)
+	}
+	fmt.Print(catalog.Entry(c))
+	return nil
+}
 
 // Deployment defaults live in internal/config so they can be injected with
 // -ldflags while environment variables still take precedence at runtime.
@@ -181,6 +132,20 @@ func main() {
 	}
 	ctx := context.Background()
 	var err error
+	// `wanctl exec -h` is a question about wanctl, not a use of it, so it is
+	// answered before the relay gate below: a binary that does not yet know
+	// which instance it talks to must still be able to explain itself. It also
+	// reaches the commands that read a subcommand before any FlagSet exists,
+	// where a -h would otherwise land as a bad argument.
+	if len(os.Args) == 3 && isHelpFlag(os.Args[2]) {
+		if _, ok := catalog.Lookup(os.Args[1]); ok {
+			if err := cmdHelp(os.Args[1:2]); err != nil {
+				fmt.Fprintln(os.Stderr, "wanctl: "+err.Error())
+				os.Exit(1)
+			}
+			return
+		}
+	}
 	if relayCommands[os.Args[1]] {
 		// The first-run question happens before the command's own work, so a
 		// binary that does not know where to connect asks instead of failing
@@ -259,8 +224,7 @@ func main() {
 	case "mcp":
 		err = cmdMCP(ctx, os.Args[2:])
 	case "-h", "--help", "help":
-		fmt.Print(usage)
-		return
+		err = cmdHelp(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", os.Args[1], usage)
 		os.Exit(2)
@@ -301,7 +265,7 @@ func envOr(key, def string) string {
 }
 
 func cmdRelay(args []string) error {
-	fs := flag.NewFlagSet("relay", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("relay", flag.ExitOnError))
 	addr := fs.String("addr", ":8080", "listen address")
 	fs.Parse(args)
 	logs := serverlog.NewDefault()
@@ -437,7 +401,7 @@ func validateAdminSecret(secret string) error {
 }
 
 func cmdPortal(args []string) error {
-	fs := flag.NewFlagSet("portal", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("portal", flag.ExitOnError))
 	addr := fs.String("addr", ":8080", "listen address")
 	fs.Parse(args)
 	logs := serverlog.NewDefault()
@@ -516,7 +480,7 @@ func cmdPortal(args []string) error {
 }
 
 func cmdAgent(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("agent", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("agent", flag.ExitOnError))
 	name := fs.String("name", "", "display name (default hostname; does not change device ID)")
 	relayURL := fs.String("relay", settingValue("relay"), "relay ws(s) URL")
 	token := fs.String("token", envOr("WANCTL_TOKEN", config.StoredToken()), "access/registration token")
@@ -656,7 +620,7 @@ func cmdExec(ctx context.Context, args []string) error {
 	// conventional 128+SIGINT below, so callers see no change in exit code.
 	ctx, stopSignals := signal.NotifyContext(ctx, os.Interrupt)
 	defer stopSignals()
-	fs := flag.NewFlagSet("exec", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("exec", flag.ExitOnError))
 	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
 	oneShot := fs.Bool("oneshot", false, "fresh shell, no session state")
 	cwd := fs.String("cwd", "", "working directory on the device (also the policy scope)")
@@ -745,7 +709,7 @@ func cmdExec(ctx context.Context, args []string) error {
 // when explicitly asked with `-o -` — is the difference between a usable
 // command and a screenful of binary.
 func cmdScreenshot(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("screenshot", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("screenshot", flag.ExitOnError))
 	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
 	out := fs.String("o", "", "local file to write (default screenshot-<device>-<time>.png; \"-\" writes to stdout)")
 	via := fs.String("via", "", "pin the elevation channel: su | adb")
@@ -863,7 +827,7 @@ func buildScriptCommand(path, interpFlag string) (string, error) {
 }
 
 func cmdPush(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("push", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("push", flag.ExitOnError))
 	target := fs.String("target", "", "device")
 	fs.Parse(args)
 	if fs.NArg() != 2 {
@@ -887,7 +851,7 @@ func cmdPush(ctx context.Context, args []string) error {
 }
 
 func cmdPull(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("pull", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("pull", flag.ExitOnError))
 	target := fs.String("target", "", "device")
 	fs.Parse(args)
 	if fs.NArg() != 2 {
@@ -905,7 +869,7 @@ func cmdPull(ctx context.Context, args []string) error {
 // read — which lines these are, how many there are in total, the file's hash —
 // goes to stderr, where it does not contaminate that.
 func cmdRead(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("read", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("read", flag.ExitOnError))
 	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
 	offset := fs.Int("offset", 0, "1-based line number to start at (default 1)")
 	limit := fs.Int("limit", 0, "maximum number of lines to return (default 2000)")
@@ -948,7 +912,7 @@ func cmdRead(ctx context.Context, args []string) error {
 // directly; --old-file/--new-file read it from a local file, which is how you
 // pass a multi-line block without fighting the shell over quoting.
 func cmdEdit(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("edit", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("edit", flag.ExitOnError))
 	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
 	old := fs.String("old", "", "the exact text to find; must match once unless -all")
 	oldFile := fs.String("old-file", "", "read the text to find from this local file instead of -old")
@@ -1019,7 +983,7 @@ func editText(name, inline, path string) (string, error) {
 }
 
 func cmdPair(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("pair", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("pair", flag.ExitOnError))
 	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV); positional <device> also accepted")
 	fs.Parse(args)
 	if *target == "" && fs.NArg() > 0 {
@@ -1140,7 +1104,7 @@ func cmdID() error {
 }
 
 func cmdLogs(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("logs", flag.ExitOnError)
+	fs := withHelp(flag.NewFlagSet("logs", flag.ExitOnError))
 	target := fs.String("target", "", "pull from this device over the relay (omit to read local device log)")
 	logType := fs.String("type", "", "filter: connect | exec | file")
 	grep := fs.String("grep", "", "filter: substring of the detail field")
@@ -1248,7 +1212,7 @@ func cmdRules(args []string) error {
 		}
 		return nil
 	case "add":
-		fs := flag.NewFlagSet("rules add", flag.ExitOnError)
+		fs := withHelp(flag.NewFlagSet("rules add", flag.ExitOnError))
 		kind := fs.String("kind", "exec", "exec | read | write | logs")
 		pattern := fs.String("pattern", "", "exec: command (single-command arg prefix, trailing * ok); file: directory")
 		dir := fs.String("dir", "", "for exec dir-scope: the working directory")
@@ -1303,7 +1267,7 @@ func cmdRules(args []string) error {
 
 func cmdTrust(args []string) error {
 	if len(args) > 0 && args[0] == "server" {
-		fs := flag.NewFlagSet("trust server", flag.ContinueOnError)
+		fs := withHelp(flag.NewFlagSet("trust server", flag.ContinueOnError))
 		target := fs.String("target", "", "canonical owner/device target")
 		fingerprint := fs.String("fingerprint", "", "verified SHA256 device fingerprint")
 		replace := fs.Bool("replace", false, "replace an existing pin after independent verification")
@@ -1366,7 +1330,7 @@ func cmdPortalAdmins(args []string) error {
 		}
 		return nil
 	case "add", "seed":
-		fs := flag.NewFlagSet("portal-admins "+sub, flag.ContinueOnError)
+		fs := withHelp(flag.NewFlagSet("portal-admins "+sub, flag.ContinueOnError))
 		raw := fs.String("fingerprints", "", "comma-separated SHA256 fingerprints")
 		if err := fs.Parse(args); err != nil {
 			return err

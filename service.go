@@ -39,7 +39,7 @@ func cmdService(ctx context.Context, args []string) error {
 		if config.EnvOr("WANCTL_TOKEN", config.StoredToken()) == "" {
 			return fmt.Errorf("not logged in yet — run `wanctl start` (device) or `wanctl login` first so the service has a token")
 		}
-		fs := flag.NewFlagSet("service install", flag.ContinueOnError)
+		fs := withHelp(flag.NewFlagSet("service install", flag.ContinueOnError))
 		name := fs.String("name", "", "device name to bake into the unit (default: hostname, resolved at every start)")
 		portalFPs := fs.String("portal-fps", "", "comma-separated portal admin fingerprints the agent must trust")
 		mode := fs.String("mode", "", "policy mode to bake in; omit so the persisted mode (and portal switches) win")
