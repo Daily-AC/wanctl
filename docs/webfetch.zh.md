@@ -113,13 +113,16 @@ namespace、只填 ID 或使用 `namespace:ID`。每个参数值只编码一次�
 
 | 工具 | 参数 | 结果 |
 | --- | --- | --- |
-| `exec` | `command`，可选 `cwd`、`timeout_seconds` | 一次性执行、退出码和有限长度的 stdout/stderr |
+| `exec` | `command`，可选 `cwd`、`timeout_seconds`（1–1800，默认 300） | 一次性执行、退出码和有限长度的 stdout/stderr |
 | `write_text` | `path`、`content` | wanctl 文件上传、字节数和 SHA-256 |
 | `read_text` | `path` | wanctl 文件下载、UTF-8 文本、字节数和 SHA-256 |
 
-响应包含 `job_id` 和 `result_url`。运行中的任务还返回新的 `next_url`，读取它直到状态变成
-`done`、`failed` 或 `unknown`。适配器异步处理任务，但调用的是 wanctl 原生同步一次性操作，
-不会向委托客户端暴露设备端持久 shell 或脱离连接的异步任务。
+响应包含 `job_id` 和 `result_url`。运行中的任务还返回新的 `next_url`、建议的轮询间隔
+`poll_after_seconds` 和该任务自己的 `deadline_at`，读取它直到状态变成 `done`、`failed`
+或 `unknown`。只有在任务自己的截止时间过去之后仍无结果，才会被判为 `unknown`，
+所以真的要跑几分钟的编译或渲染会保持 `running`。适配器异步处理任务，但调用的是 wanctl
+原生同步一次性操作，不会向委托客户端暴露设备端持久 shell 或脱离连接的异步任务
+（设备会拒绝委托会话上的 `exec_async`/`exec_poll`，见 `docs/adr/0009-webfetch-long-jobs.md`）。
 
 失败任务可能包含 `result.pairing_url`。批准设备使用权不等于控制端已配对。把该链接和
 当前的 `continuation_prompt` 交给主人后停止。参数错误会说明拒绝原因、指向可读取的
@@ -132,8 +135,12 @@ namespace、只填 ID 或使用 `namespace:ID`。每个参数值只编码一次�
 中断的请求即使没有结果也可能已经产生副作用；`unknown` 意味着主人应先检查设备记录，
 再决定是否创建新请求。这不是对任意外部副作用的“恰好执行一次”保证。
 
-限制：待审批申请 10 分钟过期；批准后有效期 1–60 分钟、最多 16 台设备；每份授权 64 个任务；
-任务含排队最长 60 秒、默认 30 秒；并发 4 个操作；URL 最长 8 KiB；写入最多 2 KiB UTF-8；
+限制：待审批申请 10 分钟过期；批准后有效期 1–60 分钟、最多 16 台设备；每份授权 64 个任务。
+`exec` 的 `timeout_seconds` 含排队为 1–1800 秒、默认 300 秒，编译、安装和渲染因此能跑完而不是
+被判超时；`read_text` 和 `write_text` 仍是 1–60 秒、默认 30 秒——最多 32 KiB 的传输如果慢，
+那就是卡住了。任务截止时间还会被授权的剩余时长截断，所以主人批准的时长要长过任务本身。
+并发上限是每份授权 4 个操作、整个适配器 64 个；超出时调用立即失败，返回
+`error_code: "adapter_busy"` 和 `execution_started: false`。URL 最长 8 KiB；写入最多 2 KiB UTF-8；
 读取最多 32 KiB；stdout 和 stderr 分别最多 16 KiB，超限会取消任务。HEAD 不创建或执行任务。
 
 浏览器票据有不可延长的 70 分钟上限。失效授权与任务内容在至少 24 小时后清理，

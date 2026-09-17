@@ -109,8 +109,12 @@ func liveWebFetch(t *testing.T) *liveFixture {
 			t.Fatal(err)
 		}
 	}
-	if err := rules.Add(policy.Rule{Kind: policy.KindExec, Pattern: "printf webfetch-ok", Scope: policy.ScopeGlobal}); err != nil {
-		t.Fatal(err)
+	// A command that outlives a single poll, so a long job can be observed
+	// running while another grant's short job finishes.
+	for _, command := range []string{"printf webfetch-ok", "sleep 2"} {
+		if err := rules.Add(policy.Rule{Kind: policy.KindExec, Pattern: command, Scope: policy.ScopeGlobal}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ag, err := agent.New(agent.Options{RelayURL: relayServer.URL, Token: ownerToken, Name: "webfetch-e2e", Transport: "http", Mode: policy.ModeNormal})
 	if err != nil {
@@ -173,16 +177,27 @@ func (f *liveFixture) approve(t *testing.T, ticket string, pair bool) (string, d
 		t.Fatal(err)
 	}
 	if pair {
-		t.Setenv("WANCTL_CONFIG_DIR", f.agentDir)
-		known, err := transport.OpenStore("known_clients.json")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = known.Add(identity.Fingerprint, "explicit-test-pairing"); err != nil {
-			t.Fatal(err)
-		}
+		f.pair(t, ticket)
 	}
 	return session, request
+}
+
+// pair is the second human checkpoint: the owner approving this controller on
+// the device itself, which approving device access deliberately does not do.
+func (f *liveFixture) pair(t *testing.T, ticket string) {
+	t.Helper()
+	_, _, identity, err := f.h.credentials(ticket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WANCTL_CONFIG_DIR", f.agentDir)
+	known, err := transport.OpenStore("known_clients.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = known.Add(identity.Fingerprint, "explicit-test-pairing"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func awaitJob(t *testing.T, job map[string]any) map[string]any {
@@ -266,6 +281,79 @@ func TestWebFetchRealFileExecPolicyAndRevocation(t *testing.T) {
 	}
 }
 
+// The whole path one prompt has to survive: public discovery, a request the
+// client creates itself, the owner approving device access, the first exec
+// bouncing off pairing, and the retry that finally runs on the device.
+func TestWebFetchOnePromptFlowThroughBothHumanCheckpoints(t *testing.T) {
+	f := liveWebFetch(t)
+	_, entry := fetchDoc(t, f.web.URL+"/webfetch/v1")
+	template, ok := entry["start_url_template"].(string)
+	if !ok || !strings.HasSuffix(template, "/webfetch/new/{client_nonce}") {
+		t.Fatalf("discovery lost its start template: %v", entry)
+	}
+	_, pending := fetchDoc(t, strings.ReplaceAll(template, "{client_nonce}", strings.Repeat("9", 48)))
+	checkpoint, _ := pending["human_checkpoint"].(map[string]any)
+	if pending["status"] != "pending" || checkpoint["id"] != "device_access" || !strings.Contains(fmt.Sprint(checkpoint["name"]), "Step 1 of 2") {
+		t.Fatalf("first checkpoint is unnamed: %v", pending)
+	}
+	if approval, _ := pending["approval_url"].(string); !strings.Contains(approval, "/webfetch/approve?request=") {
+		t.Fatalf("no link to give the human: %v", pending)
+	}
+	parsed, err := url.Parse(pending["status_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket := strings.TrimPrefix(parsed.Path, "/webfetch/s/")
+
+	// Checkpoint 1: the owner approves device access, but not pairing.
+	session, _ := f.approve(t, ticket, false)
+	_, manifest := fetchDoc(t, session)
+	if manifest["status"] != "approved" || manifest["call_endpoint"] == nil {
+		t.Fatalf("manifest after approval=%v", manifest)
+	}
+	values := url.Values{"rid": {"unpaired"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"printf webfetch-ok"}}
+	_, job := fetchDoc(t, session+"/call?"+values.Encode())
+	job = awaitJob(t, job)
+	if job["status"] != "failed" {
+		t.Fatalf("unpaired execution=%v", job)
+	}
+	result := job["result"].(map[string]any)
+	if result["error_code"] != "pairing_required" || result["execution_started"] != false || !strings.Contains(result["instruction"].(string), "NEW rid") {
+		t.Fatalf("pairing recovery is ambiguous: %v", result)
+	}
+	// Checkpoint 2 has to arrive as a link the model can hand over, named as
+	// the second of two steps, or the conversation stalls here.
+	pairingURL, _ := result["pairing_url"].(string)
+	if !strings.HasPrefix(pairingURL, "http://127.0.0.1:9999") {
+		t.Fatalf("no pairing link to give the human: %v", result)
+	}
+	second, _ := result["human_checkpoint"].(map[string]any)
+	if second["id"] != "pairing" || !strings.Contains(fmt.Sprint(second["name"]), "Step 2 of 2") || fmt.Sprint(second["summary_zh"]) == "" {
+		t.Fatalf("second checkpoint is unnamed: %v", result)
+	}
+	if !strings.Contains(fmt.Sprint(job["result"]), "approve") && !strings.Contains(fmt.Sprint(job["result"]), "paired") {
+		t.Fatalf("missing pairing refusal: %v", job)
+	}
+
+	// Checkpoint 2: the owner pairs, the model retries under a new rid.
+	f.pair(t, ticket)
+	values.Set("rid", "paired-retry")
+	_, retry := fetchDoc(t, session+"/call?"+values.Encode())
+	retry = awaitJob(t, retry)
+	if retry["status"] != "done" {
+		t.Fatalf("retry after pairing=%v", retry)
+	}
+	done := retry["result"].(map[string]any)
+	if done["stdout"] != "webfetch-ok" || done["exit_code"] != float64(0) {
+		t.Fatalf("retry produced no real result: %v", done)
+	}
+	// The failed attempt stays failed; only a new rid ever runs again.
+	_, stale := fetchDoc(t, job["result_url"].(string))
+	if stale["status"] != "failed" {
+		t.Fatalf("the refused job was rewritten: %v", stale)
+	}
+}
+
 func TestWebFetchPairingNotBypassedAndInputBoundaries(t *testing.T) {
 	f := liveWebFetch(t)
 	ticket := testTicket("c")
@@ -283,9 +371,6 @@ func TestWebFetchPairingNotBypassedAndInputBoundaries(t *testing.T) {
 	result := job["result"].(map[string]any)
 	if result["error_code"] != "pairing_required" || result["execution_started"] != false || !strings.Contains(result["instruction"].(string), "NEW rid") {
 		t.Fatalf("pairing recovery is ambiguous: %v", result)
-	}
-	if !strings.Contains(fmt.Sprint(job["result"]), "approve") && !strings.Contains(fmt.Sprint(job["result"]), "paired") {
-		t.Fatalf("missing pairing refusal: %v", job)
 	}
 	if status, _ := fetchDoc(t, session+"/call?rid=1&rid=2"); status != 400 {
 		t.Fatalf("duplicate query=%d", status)
@@ -317,5 +402,56 @@ func TestWebFetchPairingNotBypassedAndInputBoundaries(t *testing.T) {
 	id, _, _, _ := f.h.credentials(oldTicket)
 	if err := f.db.QueryRow("SELECT count(*) FROM delegation_requests WHERE id=$1", id).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("expired ticket created record: %d %v", count, err)
+	}
+}
+
+// A build or a render outlives the old sixty-second ceiling. It has to finish
+// with a real exit code, and it must not park the adapter while it runs.
+func TestWebFetchLongExecFinishesAndDoesNotBlockAnotherGrant(t *testing.T) {
+	f := liveWebFetch(t)
+	slow, _ := f.approve(t, testTicket("f"), true)
+	quick, _ := f.approve(t, testTicket("a"), true)
+
+	long := url.Values{"rid": {"long-1"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"sleep 2"}, "timeout_seconds": {"900"}}
+	status, started := fetchDoc(t, slow+"/call?"+long.Encode())
+	if status != 200 || started["status"] == "failed" {
+		t.Fatalf("a 900-second exec was refused: %d %v", status, started)
+	}
+	if started["status"] == "running" && started["poll_after_seconds"] == nil {
+		t.Fatalf("a running job does not say when to look again: %v", started)
+	}
+
+	// While that one runs, an unrelated grant's operation must still complete.
+	short := url.Values{"rid": {"short-1"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"printf webfetch-ok"}}
+	_, other := fetchDoc(t, quick+"/call?"+short.Encode())
+	other = awaitJob(t, other)
+	if other["status"] != "done" || other["result"].(map[string]any)["stdout"] != "webfetch-ok" {
+		t.Fatalf("a long job on one grant blocked another: %v", other)
+	}
+	_, midway := fetchDoc(t, started["result_url"].(string))
+	if midway["status"] == "unknown" {
+		t.Fatalf("a healthy long job was reported unknown: %v", midway)
+	}
+
+	finished := awaitJob(t, started)
+	if finished["status"] != "done" {
+		t.Fatalf("long exec did not finish: %v", finished)
+	}
+	if code := finished["result"].(map[string]any)["exit_code"]; code != float64(0) {
+		t.Fatalf("long exec lost its exit code: %v", finished["result"])
+	}
+}
+
+// The ceiling is per tool: a file transfer of at most 32 KiB is stuck, not slow.
+func TestWebFetchTimeoutCeilingIsPerTool(t *testing.T) {
+	f := liveWebFetch(t)
+	session, _ := f.approve(t, testTicket("8"), true)
+	file := url.Values{"rid": {"slow-read"}, "tool": {"read_text"}, "target": {f.device.Target()}, "path": {filepath.Join(f.root, "absent.txt")}, "timeout_seconds": {"900"}}
+	status, refused := fetchDoc(t, session+"/call?"+file.Encode())
+	if status != 400 || refused["error_code"] != "invalid_parameters" {
+		t.Fatalf("read_text accepted an exec-sized timeout: %d %v", status, refused)
+	}
+	if !strings.Contains(refused["error"].(string), "60") {
+		t.Fatalf("the refusal does not state the file ceiling: %v", refused)
 	}
 }
