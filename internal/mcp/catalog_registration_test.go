@@ -134,6 +134,10 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 			"wanctl_exec_poll",
 			"wanctl_push_blob",
 			"cwd",
+			// Read the project's own instructions before acting in it.
+			"START OF TASK",
+			"AGENTS.md",
+			"CLAUDE.md",
 		},
 		"wanctl_login": {"LOGIN REQUIRED", "rebind"},
 		"wanctl_pair":  {"PAIRING REQUIRED", "DEVICE IDENTITY CONFIRMATION REQUIRED"},
@@ -145,6 +149,7 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 		"wanctl_read": {
 			"offset", "truncated", "sha256", "not a UTF-8 text file",
 			"PAIRING REQUIRED", "256 KiB",
+			"START OF TASK", "AGENTS.md", "CLAUDE.md",
 		},
 		"wanctl_edit": {
 			"expected_sha256", "old string not found", "occurs N times",

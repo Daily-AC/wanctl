@@ -1,11 +1,10 @@
 # wanctl command contract
 
-wanctl is a remote computer for AI agents. A trust layer — relay, pairing,
-pinned device identity, device-side policy rules — decides who may drive which
-machine, and on top of it sits a deliberately small set of primitives: run a
-command, run a background job, read a file, patch a file, move bytes, read the
-log. There is no IDE, no browser driver and no second way to do any of these;
-anything richer is built out of them by the agent.
+wanctl is the external harness for a web AI. The AI in a chat window is the
+brain; wanctl gives it hands (exec, background jobs, read, edit, push/pull),
+eyes (command output, read, logs, screenshot), memory across turns (session
+rebind, job ledger) and safety rails (pairing, device identity, policy rules).
+Together they form one agent.
 
 This file is generated. It is the output of `wanctl help --markdown`, and
 the same catalog (`internal/catalog`) produces the CLI help and the MCP tool
@@ -226,6 +225,12 @@ shell. Reach for wanctl_push_blob only for binaries or for a large file that
 does not exist on the device yet — it overwrites whole files and loses
 concurrent edits.
 
+START OF TASK: before you do any work inside a project directory on the
+device, wanctl_read that directory's AGENTS.md or CLAUDE.md if one is there.
+It is that project's operating instructions — build commands, conventions,
+things not to touch — and it overrides your defaults. Read it first, not after
+your first command fails.
+
 **On the command line.**
 
 On the command line --target may be omitted when the first argument names a
@@ -284,6 +289,11 @@ pairing/policy rules as wanctl_exec: 'PAIRING REQUIRED' carries a URL to relay
 VERBATIM to the user, 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call
 wanctl_trust_server and retry, and 'read denied by device policy' means the
 device's owner has not granted read access to that path.
+
+START OF TASK: the first thing to read in a project directory is its AGENTS.md
+or CLAUDE.md. If one is there, read it before you touch anything else in that
+directory: it carries the project's own instructions, and they outrank how you
+would otherwise proceed.
 
 **On the command line.**
 

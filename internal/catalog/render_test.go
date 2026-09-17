@@ -71,11 +71,12 @@ func TestIndexNamesEveryCLICommand(t *testing.T) {
 	}
 }
 
-// The contract opens with what wanctl is, because the command list alone does
-// not say which primitives are deliberately absent.
+// The contract opens with what wanctl is, because a command list does not say
+// what the list is a list of. The brain/hands framing is the owner's, and it is
+// what tells a reader why the primitives stop where they do.
 func TestMarkdownCarriesTheProductDefinition(t *testing.T) {
 	md := Markdown()
-	for _, want := range []string{"remote computer for AI agents", "no browser driver", "wanctl help --markdown"} {
+	for _, want := range []string{"external harness for a web AI", "Together they form one agent", "wanctl help --markdown"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the Markdown contract does not say %q", want)
 		}
