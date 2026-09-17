@@ -27,9 +27,8 @@ func startDevice(t *testing.T, mode policy.Mode) (*Client, context.Context) {
 }
 
 // startDeviceWithRules is startDevice with the device's rule file seeded before
-// the agent reads it. Bypass mode deliberately does not cover elevated
-// commands, so anything gated as one — a screen capture, on any platform —
-// needs a rule to have been granted, exactly as it would on a real device.
+// the agent reads it, for the cases where what is under test is a request the
+// device would otherwise have to ask a human about.
 func startDeviceWithRules(t *testing.T, mode policy.Mode, rules ...policy.Rule) (*Client, context.Context) {
 	t.Helper()
 	srv := httptest.NewServer(relay.New(relay.EnvTokenStore("tok:alice")).Handler())

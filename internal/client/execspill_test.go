@@ -94,8 +94,11 @@ func TestScreenshotOverTheRelayReturnsAPNG(t *testing.T) {
 	if _, err := exec.LookPath("screencapture"); err != nil {
 		t.Skip("screencapture is not on PATH")
 	}
-	c, ctx := startDeviceWithRules(t, policy.ModeBypass,
-		policy.Rule{Kind: policy.KindExecElevated, Pattern: "screenshot", Scope: policy.ScopeGlobal})
+	// No rule is granted and none is needed: a desktop capture is gated as the
+	// ordinary command it is, which bypass mode covers. A device that demanded
+	// an elevated rule here would be refusing a capability it has already given
+	// this controller.
+	c, ctx := startDevice(t, policy.ModeBypass)
 
 	var shot, errOut bytes.Buffer
 	res, err := c.ExecOut(ctx, ExecRequest{

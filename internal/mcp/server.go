@@ -1443,9 +1443,10 @@ func mcpScreenshot(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Cal
 	var png, stderr bytes.Buffer
 	res, err := c.ExecOut(ctx, client.ExecRequest{
 		Target: reqStr(req, "target", ""), Command: "screenshot", OneShot: true,
-		// Elevated on every platform: that is the class Android needs, and
-		// looking at a screen deserves the same gate on a laptop. Optional
-		// because a desktop agent honours it without any channel to report.
+		// Asked for elevated because Android cannot capture any other way and
+		// only the device knows which kind it is; a desktop gates it as the
+		// ordinary command it is. Optional because a desktop agent honours the
+		// request with no channel to report back.
 		Elevate: true, ElevateOptional: true, Via: reqStr(req, "via", ""),
 	}, &png, &stderr)
 	if err != nil {
