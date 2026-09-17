@@ -148,17 +148,29 @@ func (c *Client) PeersWithAliases(ctx context.Context) ([]string, map[string]str
 	return info.Devices, info.Aliases, nil
 }
 
-// PeersAndShared is PeersWithAliases plus the devices other namespaces have
-// shared with this token. Older relays omit the shared list entirely.
-func (c *Client) PeersAndShared(ctx context.Context) ([]string, map[string]string, []SharedDevice, error) {
+// Peers is everything the relay will say about the devices one token can
+// reach. Namespace is part of it because a bare device ID is only half a
+// target: pins, shares and logs are all keyed by the canonical
+// "namespace/device", and the caller cannot build that on its own.
+type Peers struct {
+	Namespace string
+	Devices   []string
+	Aliases   map[string]string
+	Shared    []SharedDevice
+}
+
+// PeersAndShared is PeersWithAliases plus the namespace and the devices other
+// namespaces have shared with this token. Older relays omit the shared list
+// entirely.
+func (c *Client) PeersAndShared(ctx context.Context) (Peers, error) {
 	info, err := c.peerInfo(ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return Peers{}, err
 	}
 	if info.Aliases == nil {
 		info.Aliases = map[string]string{}
 	}
-	return info.Devices, info.Aliases, info.Shared, nil
+	return Peers{Namespace: info.Namespace, Devices: info.Devices, Aliases: info.Aliases, Shared: info.Shared}, nil
 }
 
 // PeerAliases lists IDs and unambiguous display labels for target completion,
@@ -352,6 +364,16 @@ func canonicalDevice(info peerInfo, target string) string {
 		}
 	}
 	return target
+}
+
+// Pinned reports the identity this controller has already pinned for a
+// canonical "namespace/device" name. Purely local: it reads the known-servers
+// store and never dials the relay or the device.
+func (c *Client) Pinned(name string) (transport.Peer, bool) {
+	if c.known == nil {
+		return transport.Peer{}, false
+	}
+	return c.known.GetByName(name)
 }
 
 // PinServer records an explicitly verified fingerprint for a canonical target.

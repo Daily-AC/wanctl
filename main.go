@@ -913,10 +913,11 @@ func cmdPeers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	devs, aliases, shared, err := c.PeersAndShared(ctx)
+	view, err := c.PeersAndShared(ctx)
 	if err != nil {
 		return err
 	}
+	devs, aliases, shared := view.Devices, view.Aliases, view.Shared
 	if len(devs) == 0 && len(shared) == 0 {
 		fmt.Println("no devices online for this token")
 		return nil
