@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"wanctl/internal/console"
+	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/transport"
 )
@@ -101,5 +103,55 @@ func TestDevicePairStillReports200OnSuccess(t *testing.T) {
 
 	if rec.Code != 200 {
 		t.Fatalf("status = %d %q; want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// The pairing deep link decides what to draw from the device's own console
+// snapshot: a fingerprint still in pending_pairings is answerable, one already
+// in trusted is done, and one in neither is gone. That is three different
+// screens read off two fields of one existing response, so those two fields
+// have to survive the trip through the handler with their fingerprints intact.
+// Dropping either one silently sends every consumed link back to showing two
+// buttons over a request the device no longer holds.
+func TestDeviceConsoleCarriesPendingAndTrustedFingerprints(t *testing.T) {
+	s := newTestPortal(relayFor("alice", "legion", transport.Fingerprint([]byte("legion"))))
+	withDialer(t, s)
+	cli, srv := net.Pipe()
+	defer srv.Close()
+	d := newDeviceConn(cli)
+	defer d.close()
+	s.conns["alice/legion"] = d
+
+	go func() {
+		m, err := protocol.ReadMessage(srv)
+		if err != nil || m.Kind != protocol.KindConsoleState {
+			return
+		}
+		b, _ := json.Marshal(console.State{
+			Mode:            policy.ModeNormal,
+			PendingPairings: []console.PendingPairing{{FP: "SHA256:waiting", Name: "kestrel", Label: "claude-code on kestrel"}},
+			Trusted:         []console.TrustedController{{FP: "SHA256:already", Name: "studio", Label: "studio (my laptop)"}},
+		})
+		protocol.WriteMessage(srv, protocol.Message{Kind: protocol.KindConsoleState, Data: b})
+	}()
+
+	rec := httptest.NewRecorder()
+	s.handleDeviceConsole(rec, userReq("GET", "/api/devices/console?device=legion", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d %q; want 200", rec.Code, rec.Body.String())
+	}
+
+	var got struct {
+		PendingPairings []struct{ FP string } `json:"pending_pairings"`
+		Trusted         []struct{ FP string } `json:"trusted"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if len(got.PendingPairings) != 1 || got.PendingPairings[0].FP != "SHA256:waiting" {
+		t.Fatalf("pending_pairings = %+v; want the one waiting fingerprint", got.PendingPairings)
+	}
+	if len(got.Trusted) != 1 || got.Trusted[0].FP != "SHA256:already" {
+		t.Fatalf("trusted = %+v; want the one trusted fingerprint", got.Trusted)
 	}
 }
