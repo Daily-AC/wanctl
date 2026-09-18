@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"wanctl/internal/delegation"
 )
 
 func TestRateWindowCapacityRecoversAfterExpiry(t *testing.T) {
@@ -38,5 +40,36 @@ func TestRateWindowCapacityRecoversAfterExpiry(t *testing.T) {
 	}
 	if h.rateAllowed("new:after-expiry", 10) {
 		t.Fatal("per-window rate limit lost after capacity recovery")
+	}
+}
+
+// The browser ticket's envelope is the session URL's lifetime, so it has to
+// cover the longest grant the ticket can carry plus the window that grant has
+// to be approved in. The boundary is asserted with an injected clock rather
+// than by waiting for it.
+func TestTicketEnvelopeCoversTheLongestGrant(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name  string
+		issue time.Duration // relative to now; negative is in the past
+		fresh bool
+	}{
+		{"just issued", 0, true},
+		{"inside the old seventy-minute envelope", -65 * time.Minute, true},
+		{"past the old envelope but inside a day-long grant", -1445 * time.Minute, true},
+		{"one minute inside the envelope", -(delegation.TicketLifetime - time.Minute), true},
+		{"exactly at the envelope", -delegation.TicketLifetime, false},
+		{"past the envelope", -1451 * time.Minute, false},
+		{"small clock skew from the future", 20 * time.Second, true},
+		{"a forged future timestamp", 2 * time.Minute, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ticketFresh(now.Add(tc.issue), now); got != tc.fresh {
+				t.Fatalf("ticketFresh(now%+v) = %v, want %v", tc.issue, got, tc.fresh)
+			}
+		})
+	}
+	if delegation.TicketLifetime != 1450*time.Minute {
+		t.Fatalf("envelope = %v, want the 1440-minute ceiling plus the 10-minute request window", delegation.TicketLifetime)
 	}
 }

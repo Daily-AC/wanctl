@@ -148,7 +148,7 @@ func TestDelegationPostgresPendingLimitsAndRejection(t *testing.T) {
 	if err != nil || out.RequestExpiresAt.After(time.Now().Add(10*time.Minute)) {
 		t.Fatalf("request TTL bound: %+v %v", out, err)
 	}
-	for _, minutes := range []int{0, 61} {
+	for _, minutes := range []int{0, delegation.MaxGrantMinutes + 1} {
 		bad := a
 		bad.Minutes = minutes
 		if _, err := p.ApproveDelegation(ctx, bad); !errors.Is(err, delegation.ErrInvalid) {
@@ -302,5 +302,81 @@ func TestDelegationPostgresAdminNamespaceAndInspect(t *testing.T) {
 	}
 	if w := request(http.MethodPost, "/admin/tokens/resolve", string(body), "admin-secret"); w.Code != 404 {
 		t.Fatalf("legacy resolve leak: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// The approval window is what the owner chose, and it is the ledger's unit of
+// account. A day is the ceiling; a minute past it is not clamped but refused,
+// because silently shortening or lengthening an approval is the one thing an
+// approval page may not do.
+func TestDelegationPostgresApprovalDurationBounds(t *testing.T) {
+	p, _, _ := pgDeviceIDStore(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		minutes int
+		ok      bool
+	}{{1, true}, {15, true}, {60, true}, {425, true}, {1440, true}, {0, false}, {-1, false}, {1441, false}} {
+		in, approval, raw := delegationFixture(t, p)
+		approval.Minutes = tc.minutes
+		if _, err := p.CreateDelegation(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+		got, err := p.ApproveDelegation(ctx, approval)
+		if !tc.ok {
+			if !errors.Is(err, delegation.ErrInvalid) {
+				t.Fatalf("%d minutes approved: %+v %v", tc.minutes, got, err)
+			}
+			continue
+		}
+		if err != nil || got.Status != "approved" {
+			t.Fatalf("%d minutes refused: %+v %v", tc.minutes, got, err)
+		}
+		if window := got.GrantedDuration(); window != time.Duration(tc.minutes)*time.Minute {
+			t.Fatalf("%d minutes recorded as %v", tc.minutes, window)
+		}
+		access, ok := p.ResolveAccess(raw)
+		if !ok || access.GrantedMinutes != tc.minutes {
+			t.Fatalf("%d minutes resolved as %d (ok=%v)", tc.minutes, access.GrantedMinutes, ok)
+		}
+		if allowance := delegation.MaxJobs(time.Duration(access.GrantedMinutes)*time.Minute); allowance < delegation.MinJobsPerGrant {
+			t.Fatalf("%d minutes allows %d jobs", tc.minutes, allowance)
+		}
+	}
+}
+
+// A flat 64-job ledger was sized for an hour-long grant. A day-long one would
+// have spent it in the first hour and then refused every operation while still
+// being valid, so the allowance follows the approved duration. The boundary is
+// reached by padding the ledger directly: what is under test is the refusal at
+// the limit, not the cost of writing 1535 rows through the adapter.
+func TestDelegationPostgresJobAllowanceFollowsTheApprovedDuration(t *testing.T) {
+	p, _, exec := pgDeviceIDStore(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		minutes, allowed int
+	}{{15, 64}, {60, 64}, {61, 128}, {1440, 1536}} {
+		in, approval, _ := delegationFixture(t, p)
+		approval.Minutes = tc.minutes
+		if _, err := p.CreateDelegation(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.ApproveDelegation(ctx, approval); err != nil {
+			t.Fatal(err)
+		}
+		exec(`INSERT INTO delegation_jobs(id,grant_id,request_id,payload_hash,payload)
+ SELECT 'j_pad_'||$1||'_'||i, $1, 'pad-'||i, $2, '{}'::jsonb FROM generate_series(1,$3) i`,
+			in.ID, HashToken("pad"), tc.allowed-1)
+		payload := json.RawMessage(`{"tool":"exec"}`)
+		if _, created, err := p.BeginJob(ctx, in.ID, "last-allowed", HashToken(string(payload)), payload); err != nil || !created {
+			t.Fatalf("%d minutes refused job %d of %d: %v", tc.minutes, tc.allowed, tc.allowed, err)
+		}
+		if _, _, err := p.BeginJob(ctx, in.ID, "one-too-many", HashToken(string(payload)), payload); !errors.Is(err, delegation.ErrLimit) {
+			t.Fatalf("%d minutes allowed more than %d jobs: %v", tc.minutes, tc.allowed, err)
+		}
+		// A replay of a job already on the ledger is not a new job, so a full
+		// ledger must still return it rather than refusing the recovery.
+		if job, created, err := p.BeginJob(ctx, in.ID, "last-allowed", HashToken(string(payload)), payload); err != nil || created || job.RequestID != "last-allowed" {
+			t.Fatalf("%d minutes lost a replay at the limit: %+v %v %v", tc.minutes, job, created, err)
+		}
 	}
 }

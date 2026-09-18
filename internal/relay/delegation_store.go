@@ -18,7 +18,6 @@ import (
 const (
 	maxPendingDelegations = 1000
 	maxDelegationDevices  = 16
-	maxDelegationJobs     = 64
 	maxDelegationPayload  = 32 << 10
 	maxDelegationResult   = 256 << 10
 )
@@ -52,7 +51,7 @@ type delegationQuerier interface {
 // identities. Revocation and certificate rotation take effect without a second ACL.
 func readDelegation(ctx context.Context, q delegationQuerier, id, ticketHash string) (delegation.Request, error) {
 	var out delegation.Request
-	var expires sql.NullTime
+	var decided, expires sql.NullTime
 	err := q.QueryRowContext(ctx, `SELECT r.id,r.label,r.controller_fingerprint,
  CASE WHEN r.status='approved' AND (t.id IS NULL OR t.revoked_at IS NOT NULL OR
    EXISTS (SELECT 1 FROM delegation_devices g LEFT JOIN devices d
@@ -61,16 +60,19 @@ func readDelegation(ctx context.Context, q delegationQuerier, id, ticketHash str
  WHEN r.status='approved' AND (t.expires_at IS NULL OR t.expires_at<=now()) THEN 'expired'
  WHEN r.status='pending' AND r.request_expires_at<=now() THEN 'expired'
  ELSE r.status END,
- r.namespace,r.created_at,r.request_expires_at,t.expires_at,COALESCE(r.token_id,0)
+ r.namespace,r.created_at,r.request_expires_at,r.decided_at,t.expires_at,COALESCE(r.token_id,0)
  FROM delegation_requests r LEFT JOIN tokens t ON t.id=r.token_id
  WHERE r.id=$1 AND ($2='' OR r.ticket_hash=$2)`, id, ticketHash).Scan(
 		&out.ID, &out.Label, &out.ControllerFingerprint, &out.Status, &out.Namespace,
-		&out.CreatedAt, &out.RequestExpiresAt, &expires, &out.TokenID)
+		&out.CreatedAt, &out.RequestExpiresAt, &decided, &expires, &out.TokenID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, delegation.ErrNotFound
 	}
 	if err != nil {
 		return out, err
+	}
+	if decided.Valid {
+		out.DecidedAt = &decided.Time
 	}
 	if expires.Valid {
 		out.ExpiresAt = &expires.Time
@@ -157,7 +159,7 @@ func (p *PGStore) GetDelegationByTicket(ctx context.Context, id, ticketHash stri
 }
 
 func (p *PGStore) ApproveDelegation(ctx context.Context, in delegation.Approval) (delegation.Request, error) {
-	if guardNamespace(in.Namespace, "") != nil || len(in.Namespace) > 128 || in.Minutes < 1 || in.Minutes > 60 ||
+	if guardNamespace(in.Namespace, "") != nil || len(in.Namespace) > 128 || in.Minutes < 1 || in.Minutes > delegation.MaxGrantMinutes ||
 		len(in.Devices) < 1 || len(in.Devices) > maxDelegationDevices || !transport.ValidFingerprint(in.ControllerFingerprint) ||
 		len(in.DeviceFingerprints) != len(in.Devices) {
 		return delegation.Request{}, delegation.ErrInvalid
@@ -288,6 +290,7 @@ func (p *PGStore) ResolveAccess(raw string) (delegation.Access, bool) {
 	out.Delegated = true
 	out.GrantID = grant.ID
 	out.ExpiresAt = *grant.ExpiresAt
+	out.GrantedMinutes = int(grant.GrantedDuration().Round(time.Minute) / time.Minute)
 	out.ControllerFingerprint = grant.ControllerFingerprint
 	out.Devices = grant.Devices
 	return out, true
@@ -339,21 +342,25 @@ func (p *PGStore) BeginJob(ctx context.Context, grant, rid, payloadHash string, 
 	if !errors.Is(err, delegation.ErrNotFound) {
 		return delegation.Job{}, false, err
 	}
-	var count int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM delegation_jobs WHERE grant_id=$1`, grant).Scan(&count); err != nil {
-		return delegation.Job{}, false, err
-	}
-	if count >= maxDelegationJobs {
-		return delegation.Job{}, false, delegation.ErrLimit
-	}
 	// The ledger also fails closed on inactive grants. The adapter must still
 	// recheck immediately before dispatch to cover revocation after this write.
+	// This read comes before the ledger quota because the approved duration is
+	// what sizes that quota: a day-long grant is allowed more operations than
+	// an hour-long one, and a grant that is no longer approved is refused as
+	// forbidden rather than as a limit it never reached.
 	access, err := readDelegation(ctx, tx, grant, "")
 	if err != nil {
 		return delegation.Job{}, false, err
 	}
 	if access.Status != "approved" {
 		return delegation.Job{}, false, delegation.ErrForbidden
+	}
+	var count int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM delegation_jobs WHERE grant_id=$1`, grant).Scan(&count); err != nil {
+		return delegation.Job{}, false, err
+	}
+	if count >= delegation.MaxJobs(access.GrantedDuration()) {
+		return delegation.Job{}, false, delegation.ErrLimit
 	}
 	id := "j_" + randHex(16)
 	job, err := scanDelegationJob(tx.QueryRowContext(ctx, `INSERT INTO delegation_jobs(id,grant_id,request_id,payload_hash,payload) VALUES ($1,$2,$3,$4,$5) RETURNING `+delegationJobColumns, id, grant, rid, payloadHash, []byte(payload)))

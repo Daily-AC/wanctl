@@ -8,12 +8,17 @@ import (
 	"wanctl/internal/delegation"
 )
 
-// CleanupDelegations removes inactive delegation records after at least a day.
-// It may only be enabled with time-bounded browser tickets: the adapter must
-// reject an old ticket before looking up or creating its request, so deletion
-// cannot revive an old request ID. Owner tokens and audit records are retained.
+// CleanupDelegations removes inactive delegation records after the retention
+// floor. It may only be enabled with time-bounded browser tickets: the adapter
+// must reject an old ticket before looking up or creating its request, so
+// deletion cannot revive an old request ID. That is why the floor is
+// delegation.MinRetention and not a round day: retention is counted from the
+// request row's created_at, a row can be created a RequestWindow after its
+// ticket was issued, and the grant approved on it may run a full
+// MaxGrantMinutes from there — a day is now exactly the boundary rather than
+// safely past it. Owner tokens and audit records are retained.
 func (p *PGStore) CleanupDelegations(ctx context.Context, retention time.Duration) error {
-	if retention < 24*time.Hour {
+	if retention < delegation.MinRetention {
 		return delegation.ErrInvalid
 	}
 	cutoff := time.Now().Add(-retention)

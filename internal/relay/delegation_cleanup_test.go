@@ -78,7 +78,12 @@ func TestDelegationPostgresCleanupPreservesActiveGrantsAndOwnerData(t *testing.T
 	if err := p.CleanupDelegations(ctx, time.Hour); !errors.Is(err, delegation.ErrInvalid) {
 		t.Fatalf("unsafe retention accepted: %v", err)
 	}
-	if err := p.CleanupDelegations(ctx, 24*time.Hour); err != nil {
+	// A day used to be the floor. With a day-long grant it is exactly the last
+	// moment a live ticket can still name the row, so it is no longer safe.
+	if err := p.CleanupDelegations(ctx, 24*time.Hour); !errors.Is(err, delegation.ErrInvalid) {
+		t.Fatalf("retention equal to the longest grant accepted: %v", err)
+	}
+	if err := p.CleanupDelegations(ctx, delegation.MinRetention); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range removed {
@@ -113,7 +118,7 @@ func TestDelegationPostgresCleanupPreservesActiveGrantsAndOwnerData(t *testing.T
 	if err := db.QueryRow(`SELECT count(*) FROM audit`).Scan(&count); err != nil || count != beforeAudit {
 		t.Fatalf("audit changed: count=%d want=%d err=%v", count, beforeAudit, err)
 	}
-	if err := p.CleanupDelegations(ctx, 24*time.Hour); err != nil {
+	if err := p.CleanupDelegations(ctx, delegation.MinRetention); err != nil {
 		t.Fatalf("repeat cleanup: %v", err)
 	}
 }
@@ -125,7 +130,7 @@ func TestDelegationPostgresCleanupBatchesAcrossConcurrentWorkers(t *testing.T) {
  FROM generate_series(1,600) n`)
 	results := make(chan error, 2)
 	for i := 0; i < 2; i++ {
-		go func() { results <- p.CleanupDelegations(context.Background(), 24*time.Hour) }()
+		go func() { results <- p.CleanupDelegations(context.Background(), delegation.MinRetention) }()
 	}
 	for i := 0; i < 2; i++ {
 		if err := <-results; err != nil {
