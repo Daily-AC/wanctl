@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -36,6 +37,14 @@ type sideQueue struct {
 	done chan struct{}
 	once sync.Once
 
+	// turn admits one poll at a time. Checking the ack, draining, assigning the
+	// sequence and storing the unacked chunk have to be a single operation:
+	// two polls that overlap — a reader whose request was cancelled while it
+	// was parked on an empty queue, plus the retry it sent afterwards — would
+	// otherwise each take a chunk, and the second would overwrite the first's
+	// unacked chunk and lose it for good.
+	turn chan struct{}
+
 	// A drained chunk is removed from ch before it is written to an HTTP
 	// response, so if that response is not delivered whole the bytes are gone
 	// and the end-to-end TLS stream has a hole in it. Readers that speak the
@@ -44,10 +53,13 @@ type sideQueue struct {
 	ackMu   sync.Mutex
 	seq     uint64
 	unacked []byte
+	// head is the tail of a chunk that was split at the drain cap. It is served
+	// before anything still in ch, so splitting never reorders the stream.
+	head []byte
 }
 
 func newSideQueue() *sideQueue {
-	return &sideQueue{ch: make(chan []byte, 256), done: make(chan struct{})}
+	return &sideQueue{ch: make(chan []byte, 256), done: make(chan struct{}), turn: make(chan struct{}, 1)}
 }
 
 func (q *sideQueue) push(b []byte) bool {
@@ -63,73 +75,163 @@ func (q *sideQueue) push(b []byte) bool {
 
 func (q *sideQueue) close() { q.once.Do(func() { close(q.done) }) }
 
+// acquire admits this poll, waiting for any poll already in flight on this
+// direction to finish. It reports false when the caller's request went away
+// first, in which case nothing was taken from the queue.
+func (q *sideQueue) acquire(ctx context.Context) bool {
+	// A free turn is always taken, even by a request that has already been
+	// abandoned: it still has to record whatever it drains as unacked rather
+	// than leave the queue to a poll that would renumber it.
+	select {
+	case q.turn <- struct{}{}:
+		return true
+	default:
+	}
+	select {
+	case q.turn <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (q *sideQueue) release() { <-q.turn }
+
 // take is drain for a reader that acknowledges what it received. ack is the
 // highest sequence the reader has fully received. While an older chunk is still
 // outstanding it is returned again, byte for byte, under its original sequence;
 // only an ack that covers it lets the relay move on. The returned seq is 0 when
-// there is no data.
-func (q *sideQueue) take(ack uint64, timeout time.Duration) (data []byte, seq uint64, closed bool) {
+// there is no data, and ok is false when the request was abandoned before this
+// poll got its turn.
+//
+// A chunk is recorded as unacked before take returns, so a request whose
+// context is cancelled after the drain — the response never reaching the reader
+// — leaves the bytes to be re-served to the next poll rather than dropping them.
+func (q *sideQueue) take(ctx context.Context, ack uint64, timeout time.Duration) (data []byte, seq uint64, closed, ok bool) {
+	if !q.acquire(ctx) {
+		return nil, 0, false, false
+	}
+	defer q.release()
+
 	q.ackMu.Lock()
 	if q.unacked != nil {
 		if ack < q.seq {
 			data, seq = q.unacked, q.seq
 			q.ackMu.Unlock()
-			return data, seq, false
+			return data, seq, false, true
 		}
 		q.unacked = nil
 	}
 	q.ackMu.Unlock()
 
-	data, closed = q.drain(timeout)
+	data, closed = q.drain(ctx, timeout)
 	if len(data) == 0 {
-		return nil, 0, closed
+		return nil, 0, closed, true
 	}
 	q.ackMu.Lock()
 	q.seq++
 	seq = q.seq
 	q.unacked = data
 	q.ackMu.Unlock()
-	return data, seq, false
+	return data, seq, false, true
 }
 
-// maxDrainBytes caps how much one drain coalesces into a single down-poll
-// response. Without a cap a reader that fell behind gets handed everything the
-// writer queued meanwhile — megabytes in one response — and on a slow link a
-// response that large cannot be downloaded inside any sane timeout. Capping it
-// at the controller's write batch makes the down direction mirror the up one
-// and bounds the memory an unacked chunk holds.
-const maxDrainBytes = 256 << 10
+// pollDrain serves a reader that cannot acknowledge: a pre-acknowledgement
+// client, or the in-process bridge, where the hand-off is a function return
+// rather than a response that can half arrive. It takes the same turn as take
+// so two readers never drain the same direction at once.
+func (q *sideQueue) pollDrain(ctx context.Context, timeout time.Duration) (data []byte, closed, ok bool) {
+	if !q.acquire(ctx) {
+		return nil, false, false
+	}
+	defer q.release()
+	data, closed = q.drain(ctx, timeout)
+	return data, closed, true
+}
+
+// maxDrainBytes is a hard cap on how much one drain coalesces into a single
+// down-poll response. Uncapped, a reader that fell behind is handed everything
+// the writer queued meanwhile — megabytes in one response — and on issue #57's
+// 60 KB/s link a response that large could not finish downloading inside the
+// client's request bound, so it was cut in half and the TLS stream lost a chunk
+// out of its middle.
+//
+// The size is chosen against that link. 2 MiB at 60 KB/s takes about 34 s to
+// download, and the client bounds one request at 5 minutes, so a full response
+// finishes in roughly a ninth of its budget even after the 20 s the poll may
+// have parked on the relay first. Larger buys nothing there and only makes the
+// re-send after a truncated body more expensive; smaller costs throughput
+// everywhere else, because serial polling cannot carry more than maxDrainBytes
+// per round trip (2 MiB / 100 ms RTT = 20 MiB/s, against 256 KiB / 100 ms RTT
+// = 2.5 MiB/s).
+//
+// It bounds the response because a chunk that would overshoot is split and its
+// tail served first next time, not appended whole. The memory one direction
+// holds is therefore maxDrainBytes for the unacked chunk, plus the tail of at
+// most one split chunk, plus the 256-slot queue itself — whose chunks are
+// bounded by limits.RelayHTTPUploadBytes on the /h/up path but not on the
+// in-process bridge, which is why the split has to exist at all.
+const maxDrainBytes = 2 << 20
 
 // drain returns bytes available within timeout, coalescing queued chunks up to
 // maxDrainBytes. closed is true only when the queue is closed and no more bytes
-// remain.
-func (q *sideQueue) drain(timeout time.Duration) (data []byte, closed bool) {
-	collect := func(first []byte) []byte {
-		out := append([]byte{}, first...)
+// remain. Callers hold the queue's turn.
+func (q *sideQueue) drain(ctx context.Context, timeout time.Duration) (data []byte, closed bool) {
+	var out []byte
+	// appendCapped takes as much of b as still fits and parks the rest in head.
+	// out is grown by hand so that neither its length nor the memory behind it
+	// can pass the cap, and an idle poll that never sees a byte allocates none.
+	appendCapped := func(b []byte) {
+		if room := maxDrainBytes - len(out); len(b) > room {
+			q.ackMu.Lock()
+			q.head = b[room:]
+			q.ackMu.Unlock()
+			b = b[:room]
+		}
+		if need := len(out) + len(b); need > cap(out) {
+			grown := make([]byte, len(out), max(need, min(2*cap(out), maxDrainBytes)))
+			copy(grown, out)
+			out = grown
+		}
+		out = append(out, b...)
+	}
+	// fill drains what is already queued, without waiting.
+	fill := func() {
 		for len(out) < maxDrainBytes {
 			select {
 			case b := <-q.ch:
-				out = append(out, b...)
+				appendCapped(b)
 			default:
-				return out
+				return
 			}
 		}
-		return out
+	}
+	q.ackMu.Lock()
+	head := q.head
+	q.head = nil
+	q.ackMu.Unlock()
+	if len(head) > 0 {
+		appendCapped(head)
+	}
+	fill()
+	if len(out) > 0 {
+		return out, false
 	}
 	select {
 	case b := <-q.ch:
-		return collect(b), false
-	default:
-	}
-	select {
-	case b := <-q.ch:
-		return collect(b), false
+		appendCapped(b)
+		fill()
+		return out, false
 	case <-time.After(timeout):
+		return nil, false
+	case <-ctx.Done():
 		return nil, false
 	case <-q.done:
 		select {
 		case b := <-q.ch:
-			return collect(b), false
+			appendCapped(b)
+			fill()
+			return out, false
 		default:
 			return nil, true
 		}
@@ -151,6 +253,11 @@ type httpSession struct {
 	lease        *accessLease
 	ownerNS      string
 	lastActive   time.Time
+	// closedAt is set when a peer closed the session gracefully. The session
+	// then stops accepting new bytes but stays in the registry, so the peer
+	// still reading it collects what is already queued instead of having the
+	// remainder 404 out from under it. Guarded by hmu.
+	closedAt time.Time
 }
 
 func (s *httpSession) close() {
@@ -451,6 +558,10 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Tell the reader this relay honours ack=. A reader may only retry a poll
+	// the carrier failed to deliver once it has seen this, because a relay
+	// without it has already dequeued the bytes and a retry would skip them.
+	w.Header().Set(httpconn.DownAckCapabilityHeader, "1")
 	s := r.sessionForAccess(req.URL.Query().Get("session"), access, req.URL.Query().Get("role"))
 	if s == nil {
 		http.Error(w, "no such session", http.StatusNotFound)
@@ -464,6 +575,7 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 		data   []byte
 		seq    uint64
 		closed bool
+		served bool
 	)
 	if ackParam := req.URL.Query().Get(httpconn.DownAckParam); ackParam != "" {
 		ack, err := strconv.ParseUint(ackParam, 10, 64)
@@ -471,11 +583,14 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "bad ack", http.StatusBadRequest)
 			return
 		}
-		data, seq, closed = src.take(ack, downPollWait)
+		data, seq, closed, served = src.take(req.Context(), ack, downPollWait)
 	} else {
 		// Pre-acknowledgement client: serve it the old fire-and-forget way so
 		// a mixed-version fleet keeps working.
-		data, closed = src.drain(downPollWait)
+		data, closed, served = src.pollDrain(req.Context(), downPollWait)
+	}
+	if !served {
+		return // the reader gave up before this poll got its turn
 	}
 	if s.lease != nil && !s.lease.credentialValid() {
 		r.closeHTTPSession(req.URL.Query().Get("session"), s)
@@ -483,6 +598,9 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if closed && len(data) == 0 {
+		// This direction is closed, empty and fully acked, so a gracefully
+		// closed session has nothing left to hand anyone and can go now.
+		r.releaseDrainedSession(req.URL.Query().Get("session"), s)
 		http.Error(w, "session closed", http.StatusGone)
 		return
 	}
@@ -512,13 +630,31 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
 	}
-	delete(r.hsess, sid)
+	s.closedAt = time.Now()
 	r.hmu.Unlock()
+	// Closing the queues stops new bytes and makes the far side see EOF once
+	// they run dry, but the session stays registered: with the drain cap a
+	// backlog needs several more polls to come out, and deleting it here would
+	// 404 them away. It leaves on the first poll that finds this direction
+	// drained, or when the sweeper finds nobody polling it any more.
 	s.close()
-	if s.lease != nil {
+	w.WriteHeader(http.StatusOK)
+}
+
+// releaseDrainedSession retires a gracefully closed session once a reader has
+// taken everything it held. A session torn down any other way (credential
+// revocation, dial failure, the idle sweeper) is already gone from the registry
+// and this is a no-op.
+func (r *Relay) releaseDrainedSession(sid string, s *httpSession) {
+	r.hmu.Lock()
+	retire := !s.closedAt.IsZero() && r.hsess[sid] == s
+	if retire {
+		delete(r.hsess, sid)
+	}
+	r.hmu.Unlock()
+	if retire && s.lease != nil {
 		s.lease.close()
 	}
-	w.WriteHeader(http.StatusOK)
 }
 
 func (r *Relay) session(sid string) *httpSession {
@@ -577,7 +713,9 @@ func (r *Relay) startHTTPReaper() {
 // reapHTTP drops HTTP-registry entries whose agent stopped polling and
 // sessions both parties abandoned. A live agent refreshes lastSeen every poll
 // cycle and a live session is polled every downPollWait, so neither is at
-// risk. Exported timing via the constants keeps the test honest.
+// risk. This is also the bounded idle time that retires a gracefully closed
+// session nobody came back to drain. Exported timing via the constants keeps
+// the test honest.
 func (r *Relay) reapHTTP(now time.Time) {
 	var dead []*httpSession
 	var offline []*httpAgent
