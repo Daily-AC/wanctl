@@ -2,8 +2,12 @@ package main
 
 import (
 	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
+
+	"wanctl/internal/config"
 )
 
 // TestAwaitManagedRestartOutcomes pins the three states an upgrade can end in.
@@ -88,5 +92,96 @@ func TestForeignProcessIsAliveButNotOurs(t *testing.T) {
 		if processAlive(pid) || canTerminatePID(pid) {
 			t.Errorf("pid %d reported usable", pid)
 		}
+	}
+}
+
+// A controller-only host — wanctl installed, logged in, never started as an
+// agent — must come out of an update exactly as it went in. GitHub issue #66:
+// on such a Windows machine `wanctl update` started an agent, which enrolled
+// the machine, which put it in the owner's device list as a controlled device.
+//
+// The assertion is the whole config directory, not just the plan: an update
+// that enrolls leaves a token behind, and one that starts an agent leaves a pid
+// file and a lock. Both halves of the plan are executed here, so a future
+// change that makes either unconditional fails this.
+func TestUpdateLeavesAControllerOnlyHostAlone(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WANCTL_CONFIG_DIR", dir)
+	// Logged in for controller use, which is the reported machine: credentials
+	// are not an agent, and must not be read as one.
+	if err := config.SaveToken("controller-token"); err != nil {
+		t.Fatal(err)
+	}
+	before := configDirEntries(t, dir)
+
+	plan := planUpdateRestart(false)
+	if plan != (updateRestartPlan{}) {
+		t.Fatalf("plan = %+v; a host with no agent is owed nothing", plan)
+	}
+	if err := applyUpdateStop(plan); err != nil {
+		t.Fatalf("stop half: %v", err)
+	}
+	if err := applyUpdateRestart(t.Context(), filepath.Join(dir, "wanctl"), plan); err != nil {
+		t.Fatalf("restart half: %v", err)
+	}
+
+	if pid := config.ReadPID(); pid != 0 {
+		t.Errorf("an agent was started: pid file names %d", pid)
+	}
+	if got := configDirEntries(t, dir); !slices.Equal(got, before) {
+		t.Errorf("config dir went from %v to %v; the update must not write here", before, got)
+	}
+	if tok := config.StoredToken(); tok != "controller-token" {
+		t.Errorf("the controller's own credentials changed to %q — a re-enrollment", tok)
+	}
+}
+
+// The same rule reached through the other entry point's shape: the sudo-split
+// update reads the plan with noRestart hardcoded false, because it is the user
+// phase and the root phase is the one that passes --no-restart. A controller-
+// only host must still get the empty plan there.
+func TestSudoSplitUpdateAlsoPlansNothingWithoutAnAgent(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	if plan := planUpdateRestart(false); plan != (updateRestartPlan{}) {
+		t.Fatalf("plan = %+v, want nothing", plan)
+	}
+}
+
+// configDirEntries is the config directory's contents by name, so a test can
+// say "unchanged" about a directory rather than about the three files it
+// remembered to check.
+func configDirEntries(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	slices.Sort(names)
+	return names
+}
+
+// The corner the pid check exists for: an agent holds the lock but recorded no
+// pid. It is running, so the update owes it a restart, and the plan has to say
+// something a caller can act on. It used to collapse into "restart supervised
+// agent 0" — the two zeros of an unrecorded pid and an absent supervisor marker
+// comparing equal — which reads as a plan and behaves as nothing.
+func TestPlanUpdateRestartDoesNotMistakeAnUnrecordedPIDForASupervisedAgent(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	lock, err := config.AcquireAgentLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	// No WritePID: the agent locked but never recorded itself.
+	plan := planUpdateRestart(false)
+	if plan == (updateRestartPlan{}) || plan.restartManagedPID != 0 {
+		t.Fatalf("plan = %+v; a running agent with no recorded pid is owed an actionable restart", plan)
+	}
+	if !plan.stopDetached || !plan.restartDetached {
+		t.Fatalf("plan = %+v, want a detached stop and restart", plan)
 	}
 }
