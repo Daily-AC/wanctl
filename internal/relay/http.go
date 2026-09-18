@@ -62,9 +62,29 @@ func newSideQueue() *sideQueue {
 	return &sideQueue{ch: make(chan []byte, 256), done: make(chan struct{}), turn: make(chan struct{}, 1)}
 }
 
+// push enqueues a copy of b, or reports false once the queue is closed. The
+// decision is taken under ackMu, which close also takes, so "is it closed" and
+// "enqueue it" cannot both look true to a writer racing a close: once close has
+// returned, every later push is refused. Only a push that finds the queue full
+// waits outside the lock, and one that was already waiting there when the close
+// landed is genuinely concurrent with it, so either answer is honest.
 func (q *sideQueue) push(b []byte) bool {
 	cp := make([]byte, len(b))
 	copy(cp, b)
+	q.ackMu.Lock()
+	select {
+	case <-q.done:
+		q.ackMu.Unlock()
+		return false
+	default:
+	}
+	select {
+	case q.ch <- cp:
+		q.ackMu.Unlock()
+		return true
+	default:
+	}
+	q.ackMu.Unlock()
 	select {
 	case q.ch <- cp:
 		return true
@@ -73,7 +93,21 @@ func (q *sideQueue) push(b []byte) bool {
 	}
 }
 
-func (q *sideQueue) close() { q.once.Do(func() { close(q.done) }) }
+func (q *sideQueue) close() {
+	q.once.Do(func() {
+		q.ackMu.Lock()
+		close(q.done)
+		q.ackMu.Unlock()
+	})
+}
+
+// drained reports that this direction has nothing left for anyone: no chunk
+// waiting to be acknowledged, no tail left over from a split, nothing queued.
+func (q *sideQueue) drained() bool {
+	q.ackMu.Lock()
+	defer q.ackMu.Unlock()
+	return q.unacked == nil && q.head == nil && len(q.ch) == 0
+}
 
 // acquire admits this poll, waiting for any poll already in flight on this
 // direction to finish. It reports false when the caller's request went away
@@ -541,6 +575,14 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "session closed", http.StatusGone)
 		return
 	}
+	// A gracefully closed session is kept reachable so the far side can finish
+	// reading it, not so it can be written to again. Refusing here is what the
+	// queue would say anyway; saying it before the push keeps the answer the
+	// same for an empty body, which never reaches the queue at all.
+	if r.gracefullyClosed(s) {
+		http.Error(w, "session closed", http.StatusGone)
+		return
+	}
 	dst := s.toAgent // role=client writes toward the agent
 	if req.URL.Query().Get("role") == "agent" {
 		dst = s.toClient
@@ -558,9 +600,12 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// Tell the reader this relay honours ack=. A reader may only retry a poll
-	// the carrier failed to deliver once it has seen this, because a relay
-	// without it has already dequeued the bytes and a retry would skip them.
+	// Tell the reader this relay honours ack=. It rides on every answer past
+	// this point — the data-bearing 200, the empty 204, and the 400/404/410
+	// refusals — but not on the 401 above, which is answered before the relay
+	// knows who is asking. A reader may only retry a poll the carrier failed to
+	// deliver once it has seen this, because a relay without it has already
+	// dequeued the bytes and a retry would skip them.
 	w.Header().Set(httpconn.DownAckCapabilityHeader, "1")
 	s := r.sessionForAccess(req.URL.Query().Get("session"), access, req.URL.Query().Get("role"))
 	if s == nil {
@@ -641,11 +686,21 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// releaseDrainedSession retires a gracefully closed session once a reader has
-// taken everything it held. A session torn down any other way (credential
-// revocation, dial failure, the idle sweeper) is already gone from the registry
-// and this is a no-op.
+// releaseDrainedSession retires a gracefully closed session once *both*
+// directions have been taken. Reaching the end of one direction says nothing
+// about the other: a controller that has read everything it was sent still
+// leaves the agent holding an unacknowledged chunk and a split tail, and
+// retiring the session on the first EOF would 404 those away. A session torn
+// down any other way (credential revocation, dial failure, the idle sweeper) is
+// already gone from the registry and this is a no-op.
+//
+// When the far side never comes back to drain its direction, nothing here
+// fires and the session is retired by the idle sweeper instead: reapHTTP scans
+// every httpAgentTTL and drops a session no one has polled for httpSessionIdle.
 func (r *Relay) releaseDrainedSession(sid string, s *httpSession) {
+	if !s.toClient.drained() || !s.toAgent.drained() {
+		return
+	}
 	r.hmu.Lock()
 	retire := !s.closedAt.IsZero() && r.hsess[sid] == s
 	if retire {
@@ -655,6 +710,14 @@ func (r *Relay) releaseDrainedSession(sid string, s *httpSession) {
 	if retire && s.lease != nil {
 		s.lease.close()
 	}
+}
+
+// gracefullyClosed reports whether a peer has ended this session. Like
+// closedAt itself it is guarded by hmu.
+func (r *Relay) gracefullyClosed(s *httpSession) bool {
+	r.hmu.Lock()
+	defer r.hmu.Unlock()
+	return !s.closedAt.IsZero()
 }
 
 func (r *Relay) session(sid string) *httpSession {
