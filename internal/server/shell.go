@@ -118,6 +118,11 @@ type ShellSession struct {
 	token  string
 	mu     sync.Mutex // serializes commands on this session
 	closed bool
+
+	// killDescendants is the hook that ends everything the shell forked for
+	// the command running now. Tests replace it; production uses the per-OS
+	// implementation in session_cancel_{unix,windows}.go.
+	killDescendants func(shellPID int) error
 }
 
 // NewShellSession starts a persistent shell process.
@@ -129,7 +134,7 @@ func NewShellSession(shell string) (*ShellSession, error) {
 	if _, err := rand.Read(tok); err != nil {
 		return nil, err
 	}
-	s := &ShellSession{shell: shell, token: hex.EncodeToString(tok)}
+	s := &ShellSession{shell: shell, token: hex.EncodeToString(tok), killDescendants: killProcessTree}
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
@@ -201,6 +206,21 @@ func (s *ShellSession) Exec(command string, out io.Writer) (int, error) {
 // contents are never inserted into shell source. An empty cwd preserves the
 // session's current working directory.
 func (s *ShellSession) ExecInDir(command, cwd string, out io.Writer) (int, error) {
+	return s.ExecInDirContext(context.Background(), command, cwd, out)
+}
+
+// ExecInDirContext is ExecInDir with cancellation. When ctx is done the command
+// running in the foreground is killed, and only it: the shell process survives
+// with the working directory and environment earlier commands gave it, so the
+// next command on this session picks up where the cancelled one left off
+// (issue #46). See session_cancel.go for how the foreground command is found
+// and what cannot be cancelled this way.
+//
+// A cancelled command reports ctx.Err() rather than the exit status the shell
+// eventually printed for it, which is what the one-shot path does too: the
+// caller must be able to tell "the controller stopped this" from "the command
+// itself failed".
+func (s *ShellSession) ExecInDirContext(ctx context.Context, command, cwd string, out io.Writer) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if cwd != "" {
@@ -209,7 +229,43 @@ func (s *ShellSession) ExecInDir(command, cwd string, out io.Writer) (int, error
 			return code, err
 		}
 	}
-	return s.execLocked(command, out)
+	stop := s.killForegroundWhenDone(ctx)
+	defer stop()
+	code, err := s.execLocked(command, out)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return -1, ctxErr
+	}
+	return code, err
+}
+
+// killForegroundWhenDone arms the cancellation and returns the disarm function,
+// which the caller must run once the command has finished.
+func (s *ShellSession) killForegroundWhenDone(ctx context.Context) func() {
+	done := ctx.Done()
+	if done == nil {
+		return func() {}
+	}
+	finished := make(chan struct{})
+	go func() {
+		select {
+		case <-done:
+			s.InterruptForeground()
+		case <-finished:
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(finished) }) }
+}
+
+// InterruptForeground kills every process the session shell started for the
+// command it is running now and leaves the shell alive. The shell's wait then
+// returns and it prints the end-of-command marker it was already handed, so the
+// in-flight Exec returns on its own; this does not unblock it by force.
+func (s *ShellSession) InterruptForeground() error {
+	if s.cmd == nil || s.cmd.Process == nil || s.killDescendants == nil {
+		return nil
+	}
+	return s.killDescendants(s.cmd.Process.Pid)
 }
 
 func (s *ShellSession) execLocked(command string, out io.Writer) (int, error) {

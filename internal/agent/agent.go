@@ -917,6 +917,10 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 	// goes away mid-command (Ctrl-C) or sends a cancel frame cancels it, and
 	// the per-platform cancel hook kills the shell and its children instead of
 	// leaving an orphan running to completion on the device (#37).
+	//
+	// A persistent session is the same cancel through a narrower door: there
+	// the shell holds the cwd and environment the next command needs, so only
+	// what it forked for this command is killed and the shell stays (#46).
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	pending := watchPeer(conn, cancel)
@@ -981,7 +985,7 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: serr.Error()})
 				return pending
 			}
-			code, err = sess.ExecInDir(m.Command, m.Cwd, out)
+			code, err = sess.ExecInDirContext(ctx, m.Command, m.Cwd, out)
 		}
 	}
 	if err != nil {
