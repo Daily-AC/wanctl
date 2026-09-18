@@ -5,10 +5,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
 	"wanctl/internal/delegation"
+	"wanctl/internal/httpconn"
 	"wanctl/internal/limits"
 	"wanctl/internal/sessionauth"
 )
@@ -33,6 +35,15 @@ type sideQueue struct {
 	ch   chan []byte
 	done chan struct{}
 	once sync.Once
+
+	// A drained chunk is removed from ch before it is written to an HTTP
+	// response, so if that response is not delivered whole the bytes are gone
+	// and the end-to-end TLS stream has a hole in it. Readers that speak the
+	// acknowledged down protocol therefore get the chunk held here until they
+	// report having received it (issue #57).
+	ackMu   sync.Mutex
+	seq     uint64
+	unacked []byte
 }
 
 func newSideQueue() *sideQueue {
@@ -52,12 +63,50 @@ func (q *sideQueue) push(b []byte) bool {
 
 func (q *sideQueue) close() { q.once.Do(func() { close(q.done) }) }
 
-// drain returns bytes available within timeout, coalescing any queued chunks.
-// closed is true only when the queue is closed and no more bytes remain.
+// take is drain for a reader that acknowledges what it received. ack is the
+// highest sequence the reader has fully received. While an older chunk is still
+// outstanding it is returned again, byte for byte, under its original sequence;
+// only an ack that covers it lets the relay move on. The returned seq is 0 when
+// there is no data.
+func (q *sideQueue) take(ack uint64, timeout time.Duration) (data []byte, seq uint64, closed bool) {
+	q.ackMu.Lock()
+	if q.unacked != nil {
+		if ack < q.seq {
+			data, seq = q.unacked, q.seq
+			q.ackMu.Unlock()
+			return data, seq, false
+		}
+		q.unacked = nil
+	}
+	q.ackMu.Unlock()
+
+	data, closed = q.drain(timeout)
+	if len(data) == 0 {
+		return nil, 0, closed
+	}
+	q.ackMu.Lock()
+	q.seq++
+	seq = q.seq
+	q.unacked = data
+	q.ackMu.Unlock()
+	return data, seq, false
+}
+
+// maxDrainBytes caps how much one drain coalesces into a single down-poll
+// response. Without a cap a reader that fell behind gets handed everything the
+// writer queued meanwhile — megabytes in one response — and on a slow link a
+// response that large cannot be downloaded inside any sane timeout. Capping it
+// at the controller's write batch makes the down direction mirror the up one
+// and bounds the memory an unacked chunk holds.
+const maxDrainBytes = 256 << 10
+
+// drain returns bytes available within timeout, coalescing queued chunks up to
+// maxDrainBytes. closed is true only when the queue is closed and no more bytes
+// remain.
 func (q *sideQueue) drain(timeout time.Duration) (data []byte, closed bool) {
 	collect := func(first []byte) []byte {
 		out := append([]byte{}, first...)
-		for {
+		for len(out) < maxDrainBytes {
 			select {
 			case b := <-q.ch:
 				out = append(out, b...)
@@ -65,6 +114,7 @@ func (q *sideQueue) drain(timeout time.Duration) (data []byte, closed bool) {
 				return out
 			}
 		}
+		return out
 	}
 	select {
 	case b := <-q.ch:
@@ -410,7 +460,23 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 	if req.URL.Query().Get("role") == "agent" {
 		src = s.toAgent
 	}
-	data, closed := src.drain(downPollWait)
+	var (
+		data   []byte
+		seq    uint64
+		closed bool
+	)
+	if ackParam := req.URL.Query().Get(httpconn.DownAckParam); ackParam != "" {
+		ack, err := strconv.ParseUint(ackParam, 10, 64)
+		if err != nil {
+			http.Error(w, "bad ack", http.StatusBadRequest)
+			return
+		}
+		data, seq, closed = src.take(ack, downPollWait)
+	} else {
+		// Pre-acknowledgement client: serve it the old fire-and-forget way so
+		// a mixed-version fleet keeps working.
+		data, closed = src.drain(downPollWait)
+	}
 	if s.lease != nil && !s.lease.credentialValid() {
 		r.closeHTTPSession(req.URL.Query().Get("session"), s)
 		http.Error(w, "session closed", http.StatusGone)
@@ -425,6 +491,9 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
+	if seq > 0 {
+		w.Header().Set(httpconn.DownSeqHeader, strconv.FormatUint(seq, 10))
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 }
