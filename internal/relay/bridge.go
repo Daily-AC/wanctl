@@ -24,6 +24,10 @@ type httpSessionConn struct {
 	readQ  *sideQueue
 	writeQ *sideQueue
 	close  func()
+	// settle runs after a read lets go of the queue. This reader is as much a
+	// holder of a direction as an HTTP poll is, and if it is the last one to
+	// let go it has to be the one that retires the session.
+	settle func()
 
 	readMu  sync.Mutex
 	readBuf []byte
@@ -36,6 +40,9 @@ func (c *httpSessionConn) Read(p []byte) (int, error) {
 	}
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
+	if c.settle != nil {
+		defer c.settle()
+	}
 	for len(c.readBuf) == 0 {
 		data, closed, _ := c.readQ.pollDrain(context.Background(), downPollWait)
 		if len(data) > 0 {
@@ -104,6 +111,7 @@ func (r *Relay) closeHTTPSessionDrainable(sid string, s *httpSession) {
 	}
 	r.hmu.Unlock()
 	s.close()
+	r.releaseDrainedSession(sid, s)
 }
 
 func (r *Relay) closeHTTPSession(sid string, s *httpSession) {
@@ -132,7 +140,8 @@ func (r *Relay) httpSessionConn(sid string, s *httpSession, role string) io.Read
 		// The WebSocket leg ending is an ordinary end of session, so the HTTP
 		// peer keeps its queued bytes until it has read them, exactly as it
 		// does when that peer posts /h/close itself.
-		close: func() { r.closeHTTPSessionDrainable(sid, s) },
+		close:  func() { r.closeHTTPSessionDrainable(sid, s) },
+		settle: func() { r.releaseDrainedSession(sid, s) },
 	}
 }
 

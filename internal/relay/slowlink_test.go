@@ -907,6 +907,78 @@ func TestGracefulCloseWaitsForBothDirections(t *testing.T) {
 	}
 }
 
+// awaitInflight waits until a reader is inside the queue, holding it.
+func awaitInflight(t *testing.T, q *sideQueue) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		q.ackMu.Lock()
+		held := q.inflight
+		q.ackMu.Unlock()
+		if held {
+			return
+		}
+		runtime.Gosched()
+	}
+	t.Fatal("no reader ever took hold of the queue")
+}
+
+// A reader that was already parked when the close arrived is still holding its
+// direction while the close walks the two queues, so whoever looks first looks
+// too early: a poll that wakes on the first queue finds the second still open,
+// and a poll that wakes on the second finds the first still held. Retirement
+// has to be attempted by every site that could have completed the last
+// condition, because a check that came too early is only harmless if someone
+// checks again. Otherwise nothing retires the session and it lingers until the
+// idle sweeper, a minute later. The in-process bridge reader is one of those
+// sites and used to attempt nothing at all.
+func TestGracefulCloseRetiresASessionAReaderWasParkedOn(t *testing.T) {
+	// One processor is what CI had when this surfaced: a parked reader does not
+	// get to run again before the close and the polls after it do.
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	cases := map[string]func(t *testing.T, r *Relay, s *httpSession, sid string){
+		"peer posts /h/close with both directions parked": func(t *testing.T, r *Relay, s *httpSession, sid string) {
+			go downPoll(t, r, sid, "client", 0)
+			go downPoll(t, r, sid, "agent", 0)
+			awaitInflight(t, s.toClient)
+			awaitInflight(t, s.toAgent)
+			req := httptest.NewRequest("POST", "/h/close?session="+sid, nil)
+			req.Header.Set("Authorization", "Bearer tok-alice")
+			r.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		},
+		"websocket leg ends with the bridge read parked": func(t *testing.T, r *Relay, s *httpSession, sid string) {
+			go r.httpSessionConn(sid, s, "client").Read(make([]byte, 64))
+			awaitInflight(t, s.toClient)
+			if err := r.httpSessionConn(sid, s, "client").(io.Closer).Close(); err != nil {
+				t.Fatalf("bridge close: %v", err)
+			}
+			if code := downPoll(t, r, sid, "agent", 0).Code; code != http.StatusGone {
+				t.Fatalf("poll after the close = %d, want 410", code)
+			}
+		},
+	}
+	for name, run := range cases {
+		t.Run(name, func(t *testing.T) {
+			for attempt := 1; attempt <= 30; attempt++ {
+				r, s, sid := tunnelSession(t)
+				run(t, r, s, sid)
+				gone := false
+				for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+					if r.session(sid) == nil {
+						gone = true
+						break
+					}
+					runtime.Gosched()
+				}
+				if !gone {
+					t.Fatalf("attempt %d: the session was still registered two seconds after both sides were done with it; nothing retried the check that ran while a parked reader still held a direction",
+						attempt)
+				}
+			}
+		})
+	}
+}
+
 // The queue looks empty for as long as a poll has a chunk in its hands but has
 // not yet recorded it as unacknowledged: it has left the channel and reached no
 // field. A poll on the other direction that checks both sides during that
@@ -975,13 +1047,19 @@ func TestRetirementWaitsForAPollHoldingAChunk(t *testing.T) {
 // registered used to leave /h/up wide open, and push picking between a writable
 // queue and a closed one let some of those uploads land.
 func TestUploadsAfterGracefulCloseAreRejected(t *testing.T) {
+	// With a backlog still to come out, the session is deliberately kept in the
+	// registry, which is exactly when /h/up can still reach it.
 	r, s, sid := tunnelSession(t)
+	s.toAgent.push([]byte("backlog"))
 	closeReq := httptest.NewRequest("POST", "/h/close?session="+sid, nil)
 	closeReq.Header.Set("Authorization", "Bearer tok-alice")
 	rec := httptest.NewRecorder()
 	r.Handler().ServeHTTP(rec, closeReq)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("close = %d, want 200", rec.Code)
+	}
+	if r.session(sid) == nil {
+		t.Fatal("a session with a backlog was retired at the close, so /h/up was never reachable to test")
 	}
 	accepted := 0
 	for range 64 {
@@ -992,13 +1070,23 @@ func TestUploadsAfterGracefulCloseAreRejected(t *testing.T) {
 	if accepted != 0 {
 		t.Fatalf("%d of 64 uploads were accepted after the session was closed", accepted)
 	}
-	if queued := len(s.toAgent.ch); queued != 0 {
-		t.Fatalf("%d chunks were queued onto a closed session", queued)
-	}
 	// An empty body never reaches the queue, so it has to be refused by the
 	// same check rather than falling through to a 200.
 	if code := upPost(t, r, sid, "client", nil).Code; code != http.StatusGone {
 		t.Fatalf("empty upload after close = %d, want 410", code)
+	}
+	if queued := len(s.toAgent.ch); queued != 1 {
+		t.Fatalf("the queue holds %d chunks, want only the one chunk from before the close", queued)
+	}
+	// Once the backlog is out the session goes, and a late upload finds nothing.
+	if code := downPoll(t, r, sid, "agent", 0).Code; code != http.StatusOK {
+		t.Fatal("the backlog did not come out")
+	}
+	if code := downPoll(t, r, sid, "agent", 1).Code; code != http.StatusGone {
+		t.Fatal("the drained direction did not report EOF")
+	}
+	if code := upPost(t, r, sid, "client", []byte("later still")).Code; code == http.StatusOK {
+		t.Fatalf("an upload was accepted after the session was retired")
 	}
 }
 

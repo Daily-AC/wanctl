@@ -651,6 +651,11 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 	if req.URL.Query().Get("role") == "agent" {
 		src = s.toAgent
 	}
+	// Whatever this poll does, it may be the one that empties the last
+	// direction or releases the last hold on it, so it checks on the way out.
+	// Reaching EOF is not the only way a session becomes finished, and a check
+	// that ran too early is never retried unless every site retries it.
+	defer r.releaseDrainedSession(req.URL.Query().Get("session"), s)
 	var (
 		data   []byte
 		seq    uint64
@@ -678,9 +683,6 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if closed && len(data) == 0 {
-		// This direction is closed, empty and fully acked, so a gracefully
-		// closed session has nothing left to hand anyone and can go now.
-		r.releaseDrainedSession(req.URL.Query().Get("session"), s)
 		http.Error(w, "session closed", http.StatusGone)
 		return
 	}
@@ -715,9 +717,12 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 	// Closing the queues stops new bytes and makes the far side see EOF once
 	// they run dry, but the session stays registered: with the drain cap a
 	// backlog needs several more polls to come out, and deleting it here would
-	// 404 them away. It leaves on the first poll that finds this direction
-	// drained, or when the sweeper finds nobody polling it any more.
+	// 404 them away. It leaves once both directions have been taken, or when
+	// the sweeper finds nobody polling it any more.
 	s.close()
+	// Closing the second queue can be the last thing a finished session was
+	// waiting for, and a poll that woke on the first one has already looked.
+	r.releaseDrainedSession(sid, s)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -732,9 +737,16 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 // down any other way (credential revocation, dial failure, the idle sweeper) is
 // already gone from the registry and this is a no-op.
 //
-// When the far side never comes back to drain its direction, nothing here
-// fires and the session is retired by the idle sweeper instead: reapHTTP scans
-// every httpAgentTTL and drops a session no one has polled for httpSessionIdle.
+// Every site that can make the last of those conditions true calls this
+// afterwards — each poll, each read on the in-process bridge, and the close
+// itself, which is what shuts the second queue. One call alone would not do:
+// whoever looks first may look while another reader still has a chunk in hand,
+// and a check that came too early is only harmless if someone checks again.
+//
+// When the far side never comes back to drain its direction, none of them can
+// succeed and the session is retired by the idle sweeper instead: reapHTTP
+// scans every httpAgentTTL and drops a session no one has polled for
+// httpSessionIdle.
 func (r *Relay) releaseDrainedSession(sid string, s *httpSession) {
 	if !s.toClient.settled() || !s.toAgent.settled() {
 		return
