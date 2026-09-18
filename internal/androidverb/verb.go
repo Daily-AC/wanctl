@@ -337,3 +337,28 @@ func allInts(args []string) bool {
 	}
 	return true
 }
+
+// wanctlOnly are the verbs that name no program on any device wanctl runs on:
+// real Android spells them `pm`/`cmd package`, `getprop`/`setprop` and
+// `screencap`, and no desktop has them either. Sent without --elevate they
+// therefore reach the device shell and die with exit 127 — "app: inaccessible
+// or not found" — which reads as a broken device rather than as a missing flag.
+//
+// The other verbs (input, settings, logcat) ARE real Android binaries. A
+// controller may legitimately run them unelevated and get the platform's own
+// answer, so they are deliberately not listed here.
+var wanctlOnly = map[string]bool{"app": true, "prop": true, "screenshot": true}
+
+// NeedsElevation reports that command names a wanctl verb which only exists on
+// the elevated path, so the caller can say so instead of letting the shell
+// report a missing program.
+func NeedsElevation(command string) (string, bool) {
+	argv, ok := splitArgs(command)
+	if !ok || len(argv) == 0 {
+		return "", false
+	}
+	if !wanctlOnly[argv[0]] {
+		return "", false
+	}
+	return argv[0], true
+}

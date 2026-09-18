@@ -639,8 +639,9 @@ func cmdExec(ctx context.Context, args []string) error {
 		"\tInterpreter comes from the extension (.ps1 -> PowerShell, .sh/none -> sh)")
 	interp := fs.String("interp", "", "override the -script interpreter: powershell | sh")
 	elevateFlag := fs.Bool("elevate", false, "run with elevated privilege on the device (Android: root or the\n"+
-		"\tdevice's own adbd — whichever is available). Needs its own policy\n"+
-		"\trule: bypass mode does not cover elevated commands.")
+		"\tdevice's own adbd — whichever is available). Its own policy class:\n"+
+		"\tneeds an approval or an exec-elevated rule, unless the device is in\n"+
+		"\tbypass mode AND has its elevation channel switched on.")
 	via := fs.String("via", "", "pin the elevation channel: su | adb.\n"+
 		"\tFails if that channel is unavailable rather than falling back.")
 	fs.Parse(args)
@@ -1252,7 +1253,7 @@ func cmdRules(args []string) error {
 			scope := string(r.Scope)
 			if r.Scope == policy.ScopeDir {
 				scope = "dir:" + r.Dir
-				if r.Kind != policy.KindExec {
+				if r.Kind != policy.KindExec && r.Kind != policy.KindExecElevated {
 					scope = "dir:" + r.Pattern
 				}
 			}
@@ -1261,15 +1262,19 @@ func cmdRules(args []string) error {
 		return nil
 	case "add":
 		fs := withHelp(flag.NewFlagSet("rules add", flag.ExitOnError))
-		kind := fs.String("kind", "exec", "exec | read | write | logs")
+		kind := fs.String("kind", "exec", "exec | exec-elevated | read | write | logs")
 		pattern := fs.String("pattern", "", "exec: command (single-command arg prefix, trailing * ok); file: directory")
 		dir := fs.String("dir", "", "for exec dir-scope: the working directory")
 		fs.Parse(args)
 		r := policy.Rule{Kind: policy.Kind(*kind), Pattern: *pattern, Scope: policy.ScopeGlobal}
 		switch policy.Kind(*kind) {
-		case policy.KindExec:
+		case policy.KindExec, policy.KindExecElevated:
+			// exec-elevated is a kind the engine has always understood and the
+			// CLI never offered, which left an elevated command with no way to
+			// be pre-authorized anywhere (#63). For a `-script` payload the
+			// pattern is the script token `wanctl` prints, not the base64.
 			if *pattern == "" {
-				return fmt.Errorf("exec rules require --pattern")
+				return fmt.Errorf("%s rules require --pattern", *kind)
 			}
 			if *dir != "" { // exec dir-scope: command pattern restricted to a working dir
 				r.Scope = policy.ScopeDir
@@ -1288,7 +1293,7 @@ func cmdRules(args []string) error {
 			}
 			r.Pattern = "*"
 		default:
-			return fmt.Errorf("invalid --kind %q (want exec|read|write|logs)", *kind)
+			return fmt.Errorf("invalid --kind %q (want exec|exec-elevated|read|write|logs)", *kind)
 		}
 		if err := eng.Add(r); err != nil {
 			return err

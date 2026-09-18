@@ -2,7 +2,9 @@ package script
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -213,4 +215,56 @@ func BomlessNonASCIIPowerShell(remotePath string, data []byte) bool {
 		}
 	}
 	return false
+}
+
+// Canonical turns a command produced by Command back into a short, stable name
+// for the script it carries: `script:sh:<16 hex>` or `script:powershell:<16 hex>`,
+// where the hex is the leading half of the SHA-256 of the bytes the device will
+// actually run.
+//
+// It exists for the policy layer. `-script` deliberately hands the device a
+// base64 blob (see above), and a remembered allow-rule built from that blob is
+// a 24 KB line nobody can read in a rules list, on an approval card, or on a
+// `wanctl rules add` command line. The token is exactly as narrow a grant as
+// the blob was — same script bytes, same token; one byte different, different
+// token — but it fits on a screen and can be typed.
+//
+// ok is false for anything that is not one of the two transports, which is the
+// signal to treat the command as the ordinary command line it is.
+func Canonical(command string) (string, bool) {
+	interp, enc, ok := transportPayload(command)
+	if !ok {
+		return "", false
+	}
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		return "", false
+	}
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("%s%s:%s", CanonicalPrefix, interp, hex.EncodeToString(sum[:8])), true
+}
+
+// CanonicalPrefix marks a rule pattern that names a script rather than a
+// command line. Rule matching keys off it, so it is part of the on-disk format.
+const CanonicalPrefix = "script:"
+
+// transportPayload recognises the two command shapes Command emits and returns
+// the interpreter and the base64 payload. The match is exact on everything
+// except the payload: these strings are generated, never typed, so a command
+// that merely resembles one is not one.
+func transportPayload(command string) (Interp, string, bool) {
+	c := strings.TrimSpace(command)
+	const (
+		posixPre  = "printf %s '"
+		posixPost = "' | base64 -d | sh"
+		psPre     = "powershell -NoProfile -NonInteractive -EncodedCommand '"
+		psPost    = "'"
+	)
+	switch {
+	case strings.HasPrefix(c, posixPre) && strings.HasSuffix(c, posixPost):
+		return POSIX, c[len(posixPre) : len(c)-len(posixPost)], true
+	case strings.HasPrefix(c, psPre) && strings.HasSuffix(c, psPost):
+		return PowerShell, c[len(psPre) : len(c)-len(psPost)], true
+	}
+	return "", "", false
 }

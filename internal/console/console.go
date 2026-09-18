@@ -324,7 +324,11 @@ func (s *Service) Ask(req policy.Request) policy.Decision {
 	id := newID()
 	p := &pending{
 		view: Pending{
-			ID: id, Kind: string(req.Kind), Cmd: req.Cmd, Path: req.Path,
+			// CommandLabel, not the raw command: a `-script` run arrives as a
+			// 24 KB base64 blob, and a front-end that draws it asks a human to
+			// approve something nobody can read. The label is the same token
+			// the remembered rule will carry, so card and rule agree.
+			ID: id, Kind: string(req.Kind), Cmd: policy.CommandLabel(req.Cmd), Path: req.Path,
 			Cwd: req.Cwd, Peer: req.Peer, Created: time.Now(),
 		},
 		decided: make(chan policy.Decision, 1),

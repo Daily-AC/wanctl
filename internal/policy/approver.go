@@ -40,7 +40,7 @@ func (c *ConsoleApprover) Ask(req Request) Decision {
 	fmt.Fprintf(c.out, "\n──────────────────────────────────────────────\n")
 	switch req.Kind {
 	case KindExec:
-		fmt.Fprintf(c.out, "  Approve COMMAND from %s\n    cmd: %s\n", short(req.Peer), req.Cmd)
+		fmt.Fprintf(c.out, "  Approve COMMAND from %s\n    cmd: %s\n", short(req.Peer), CommandLabel(req.Cmd))
 		if req.Cwd != "" {
 			fmt.Fprintf(c.out, "    cwd: %s\n", req.Cwd)
 		}
@@ -49,7 +49,7 @@ func (c *ConsoleApprover) Ask(req Request) Decision {
 		// mistake it for the ordinary one; the whole point of the separate
 		// policy class is that this decision is a bigger one.
 		fmt.Fprintf(c.out, "  Approve ELEVATED COMMAND from %s\n", short(req.Peer))
-		fmt.Fprintf(c.out, "    cmd: %s\n", req.Cmd)
+		fmt.Fprintf(c.out, "    cmd: %s\n", CommandLabel(req.Cmd))
 		if req.Via != "" {
 			fmt.Fprintf(c.out, "    via: %s\n", req.Via)
 		}
