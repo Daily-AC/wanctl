@@ -130,11 +130,12 @@ func (h *Handler) manifest(ticket string, access delegation.Access) map[string]a
 		"security":                 securityRules(),
 		"tools":                    toolManifests(endpoint, targets),
 		"limits": map[string]any{
-			"jobs_per_grant": 64, "url_bytes": MaxURLBytes, "output_bytes": MaxOutputBytes,
+			"jobs_per_grant": delegation.MaxJobs(time.Duration(access.GrantedMinutes) * time.Minute),
+			"url_bytes":      MaxURLBytes, "output_bytes": MaxOutputBytes,
 			"exec_timeout_seconds_max": MaxExecSeconds, "file_timeout_seconds_max": MaxFileSeconds,
 			"read_lines_default": protocol.DefaultReadLines, "write_bytes_max": MaxWriteBytes,
 			"concurrent_operations_per_grant": maxOperationsPerGrant,
-			"grant_minutes_max":               60,
+			"grant_minutes_max":               delegation.MaxGrantMinutes,
 		},
 		"notice": "Commands and results are visible to this adapter and to the web chat provider. Do not send secrets. A lost or ambiguous job is never rerun automatically.",
 	}

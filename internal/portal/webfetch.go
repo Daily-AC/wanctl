@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -223,8 +224,8 @@ func (s *Server) handleDelegationApprove(w http.ResponseWriter, r *http.Request)
 		ControllerFingerprint string            `json:"controller_fingerprint"`
 		DeviceFingerprints    map[string]string `json:"device_fingerprints"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !body.Confirmed || len(body.Devices) == 0 || len(body.Devices) > 16 || body.Minutes < 1 || body.Minutes > 60 {
-		http.Error(w, "select 1 to 16 devices, confirm identities and choose 1 to 60 minutes", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !body.Confirmed || len(body.Devices) == 0 || len(body.Devices) > 16 || body.Minutes < 1 || body.Minutes > delegation.MaxGrantMinutes {
+		http.Error(w, "select 1 to 16 devices, confirm identities and choose 1 to "+strconv.Itoa(delegation.MaxGrantMinutes)+" minutes", http.StatusBadRequest)
 		return
 	}
 	req, ok := s.delegationRequest(w, ns, body.RequestID)

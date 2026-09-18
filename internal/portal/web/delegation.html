@@ -39,20 +39,26 @@
          data-zh="还没有已登记身份的自有设备，请先接入设备。">No owned devices with a registered identity. Enroll a device first.</p>
       {{end}}
     </fieldset>
-    <label class="delegate-duration" for="delegateMinutes"><span data-en="Expires in" data-zh="有效期">Expires in</span>
-      <select id="delegateMinutes" name="minutes">
-        <option value="5" data-en="5 minutes" data-zh="5 分钟">5 minutes</option>
-        <option value="15" selected data-en="15 minutes" data-zh="15 分钟">15 minutes</option>
-        <option value="30" data-en="30 minutes" data-zh="30 分钟">30 minutes</option>
-        <option value="60" data-en="60 minutes" data-zh="60 分钟">60 minutes</option>
-      </select>
-    </label>
+    <div class="delegate-duration">
+      <label for="delegateMinutes" data-en="Expires in" data-zh="有效期">Expires in</label>
+      <div class="duration-set">
+        <button type="button" class="chip" data-minutes="15" data-en="15 min" data-zh="15 分钟">15 min</button>
+        <button type="button" class="chip" data-minutes="60" data-en="1 hour" data-zh="1 小时">1 hour</button>
+        <button type="button" class="chip" data-minutes="240" data-en="4 hours" data-zh="4 小时">4 hours</button>
+        <button type="button" class="chip" data-minutes="1440" data-en="24 hours" data-zh="24 小时">24 hours</button>
+        <span class="duration-custom">
+          <input id="delegateMinutes" name="minutes" type="number" min="1" max="1440" step="1" value="15" required
+                 data-lbl-en="Minutes of access, 1 to 1440" data-lbl-zh="授权分钟数，1 到 1440">
+          <span data-en="min" data-zh="分钟">min</span>
+        </span>
+      </div>
+    </div>
     <label class="delegate-confirm"><input id="delegateConfirm" type="checkbox" required>
       <span data-en="I recognize this request and have checked the controller and selected device fingerprints."
             data-zh="我确认这是我的申请，已核对控制端和所选设备的指纹。">I recognize this request and have checked the controller and selected device fingerprints.</span>
     </label>
-    <p class="fine" data-en="This grants device use only. It cannot change trust, rules or mode, or approve operations. First connections still use the existing pairing flow. A device in bypass mode allows operations without asking."
-       data-zh="只授予设备使用权，不能修改信任、规则和模式，也不能审批操作。首次连接仍需按现有流程配对；处于 bypass 模式的设备会直接放行操作。">This grants device use only. It cannot change trust, rules or mode, or approve operations. First connections still use the existing pairing flow. A device in bypass mode allows operations without asking.</p>
+    <p class="fine" data-en="This grants device use only. It cannot change trust, rules or mode, or approve operations. First connections still use the existing pairing flow. A device in bypass mode allows operations without asking. The longer you approve, the longer the AI's session link keeps working. Anyone holding that link can act as this client until then, so revoke it in Access tokens once the work is done."
+       data-zh="只授予设备使用权，不能修改信任、规则和模式，也不能审批操作。首次连接仍需按现有流程配对；处于 bypass 模式的设备会直接放行操作。批准的时间越长，AI 手里那个会话链接就有效越久——拿到链接的人都能以这个客户端的身份操作，事情做完请在「访问令牌」里吊销。">This grants device use only. It cannot change trust, rules or mode, or approve operations. First connections still use the existing pairing flow. A device in bypass mode allows operations without asking. The longer you approve, the longer the AI's session link keeps working. Anyone holding that link can act as this client until then, so revoke it in Access tokens once the work is done.</p>
     <div class="delegate-actions">
       <button type="submit" class="btn" id="delegateApprove" disabled data-en="Approve access" data-zh="同意访问">Approve access</button>
       <button type="button" class="btn soft" id="delegateReject" data-en="Reject" data-zh="拒绝">Reject</button>
