@@ -902,7 +902,10 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
 		reason := "command denied by device policy: " + m.Command
 		if kind == policy.KindExecElevated {
-			reason = "elevated command denied by device policy: " + policy.CommandLabel(m.Command) +
+			// CommandPattern, not CommandLabel: this text is read by whoever
+			// will go and write the rule, so it carries the whole token rather
+			// than the abbreviation a card shows.
+			reason = "elevated command denied by device policy: " + policy.CommandPattern(m.Command) +
 				" (elevated commands need their own rule; bypass mode does not cover them" +
 				" until this device's elevation channel is switched on)"
 		}
@@ -962,10 +965,12 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 			code, err = pairCode, pairErr
 		} else if handled, builtinCode, builtinErr := server.RunBuiltin(m.Command, out); handled {
 			code, err = builtinCode, builtinErr
-		} else if verb, needsElevate := androidverb.NeedsElevation(m.Command); needsElevate {
+		} else if verb, needsElevate := androidverb.NeedsElevation(runtime.GOOS, m.Command); needsElevate {
 			// The verb dispatcher only runs on the elevated path, so without
 			// --elevate this would reach the shell and come back as exit 127
 			// with the device blamed for a flag the caller left off (#71).
+			// Android only: on a desktop these are just words, and one of them
+			// may well name a program the caller means to run.
 			code, err = -1, fmt.Errorf("%q is a wanctl verb and only runs elevated: add --elevate (and turn on 提权通道 on the device)", verb)
 		} else if m.OneShot {
 			code, err = server.RunOneShotContext(ctx, a.opts.Shell, m.Command, m.Cwd, out)

@@ -217,10 +217,9 @@ func BomlessNonASCIIPowerShell(remotePath string, data []byte) bool {
 	return false
 }
 
-// Canonical turns a command produced by Command back into a short, stable name
-// for the script it carries: `script:sh:<16 hex>` or `script:powershell:<16 hex>`,
-// where the hex is the leading half of the SHA-256 of the bytes the device will
-// actually run.
+// Canonical turns a command produced by Command back into a stable name for the
+// script it carries: `script:sh:<64 hex>` or `script:powershell:<64 hex>`, where
+// the hex is the full SHA-256 of the bytes the device will actually run.
 //
 // It exists for the policy layer. `-script` deliberately hands the device a
 // base64 blob (see above), and a remembered allow-rule built from that blob is
@@ -228,6 +227,12 @@ func BomlessNonASCIIPowerShell(remotePath string, data []byte) bool {
 // `wanctl rules add` command line. The token is exactly as narrow a grant as
 // the blob was — same script bytes, same token; one byte different, different
 // token — but it fits on a screen and can be typed.
+//
+// The whole digest is in the token because the token IS the authorization: a
+// truncated one turns "find a second script with this hash" into a birthday
+// search over the truncation, which for 64 bits an attacker preparing a benign
+// and a malicious variant can run at around 2^32 work — get the benign one
+// approved, reuse the grant. Short is for eyes only; see Short.
 //
 // ok is false for anything that is not one of the two transports, which is the
 // signal to treat the command as the ordinary command line it is.
@@ -241,7 +246,30 @@ func Canonical(command string) (string, bool) {
 		return "", false
 	}
 	sum := sha256.Sum256(raw)
-	return fmt.Sprintf("%s%s:%s", CanonicalPrefix, interp, hex.EncodeToString(sum[:8])), true
+	return CanonicalPrefix + string(interp) + ":" + hex.EncodeToString(sum[:]), true
+}
+
+// shortHex is how much of a token's digest is shown to a human. It is a label,
+// never a comparison: nothing matches on a prefix.
+const shortHex = 16
+
+// Short abbreviates a Canonical token for a prompt or an approval card, where
+// 64 hex characters are a wall rather than information. The visible part is a
+// prefix of the real one, so a person can check the card against the rule the
+// device wrote, and the trailing … says out loud that this is not the whole
+// thing and is not what goes in `--pattern`.
+//
+// Anything that is not a token is returned unchanged.
+func Short(token string) string {
+	rest, ok := strings.CutPrefix(token, CanonicalPrefix)
+	if !ok {
+		return token
+	}
+	interp, digest, ok := strings.Cut(rest, ":")
+	if !ok || len(digest) <= shortHex {
+		return token
+	}
+	return CanonicalPrefix + interp + ":" + digest[:shortHex] + "…"
 }
 
 // CanonicalPrefix marks a rule pattern that names a script rather than a
@@ -252,6 +280,12 @@ const CanonicalPrefix = "script:"
 // the interpreter and the base64 payload. The match is exact on everything
 // except the payload: these strings are generated, never typed, so a command
 // that merely resembles one is not one.
+//
+// The length check is not decoration. The prefix and the suffix share the
+// quote, so `printf %s ' | base64 -d | sh` satisfies HasPrefix and HasSuffix at
+// once while being shorter than the two together — and slicing it panicked the
+// agent from inside the text of a refusal, which any paired controller could
+// reach without being allowed to run anything at all.
 func transportPayload(command string) (Interp, string, bool) {
 	c := strings.TrimSpace(command)
 	const (
@@ -261,10 +295,16 @@ func transportPayload(command string) (Interp, string, bool) {
 		psPost    = "'"
 	)
 	switch {
-	case strings.HasPrefix(c, posixPre) && strings.HasSuffix(c, posixPost):
+	case wrapped(c, posixPre, posixPost):
 		return POSIX, c[len(posixPre) : len(c)-len(posixPost)], true
-	case strings.HasPrefix(c, psPre) && strings.HasSuffix(c, psPost):
+	case wrapped(c, psPre, psPost):
 		return PowerShell, c[len(psPre) : len(c)-len(psPost)], true
 	}
 	return "", "", false
+}
+
+// wrapped reports whether c starts with pre, ends with post, and is long enough
+// to hold both without them overlapping.
+func wrapped(c, pre, post string) bool {
+	return len(c) >= len(pre)+len(post) && strings.HasPrefix(c, pre) && strings.HasSuffix(c, post)
 }

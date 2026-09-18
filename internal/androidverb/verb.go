@@ -352,7 +352,18 @@ var wanctlOnly = map[string]bool{"app": true, "prop": true, "screenshot": true}
 // NeedsElevation reports that command names a wanctl verb which only exists on
 // the elevated path, so the caller can say so instead of letting the shell
 // report a missing program.
-func NeedsElevation(command string) (string, bool) {
+//
+// goos gates it, because these verbs are Android's: on a desktop `app` and
+// `prop` and `screenshot` are ordinary words, and a machine may well have a
+// program by one of those names that the controller means to run. Answering
+// such a command with "add --elevate" would be both wrong and unfixable —
+// there is no elevation channel on a desktop to turn on (review of #108,
+// 2026-09-18). Taken as a parameter rather than read from runtime so the
+// decision can be tested from either side, as elevate.Configure does.
+func NeedsElevation(goos, command string) (string, bool) {
+	if goos != "android" {
+		return "", false
+	}
 	argv, ok := splitArgs(command)
 	if !ok || len(argv) == 0 {
 		return "", false

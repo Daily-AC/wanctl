@@ -398,7 +398,7 @@ var Commands = []Command{
 		CLINote:   "The CLI also writes: `wanctl rules add` appends a rule and `wanctl rules rm` removes one. Rules are enforced by the agent on THIS machine, so they only mean anything where a device runs.",
 		Params: []Param{
 			{Name: "kind", CLI: "--kind exec|exec-elevated|read|write|logs", Type: TypeString, CLIOnly: true, Desc: "What the rule governs. `exec-elevated` is its own class: an `exec` rule never authorizes the elevated form of the same command, and on a device where bypass mode is on but the elevation channel is off this is the only way to pre-authorize one. `wanctl rules add` only."},
-			{Name: "pattern", CLI: "--pattern P", Type: TypeString, CLIOnly: true, Desc: "For exec and exec-elevated, a command prefix with an optional trailing *; for a command sent with --script, the `script:<interp>:<hash>` token the device names it by. For file kinds, a directory. `wanctl rules add` only."},
+			{Name: "pattern", CLI: "--pattern P", Type: TypeString, CLIOnly: true, Desc: "For exec and exec-elevated, a command prefix with an optional trailing *; for a command sent with --script, the `script:<interp>:<sha256>` token the device names it by (a refusal prints it in full; approval cards abbreviate it). For file kinds, a directory. `wanctl rules add` only."},
 			{Name: "dir", CLI: "--dir D", Type: TypeString, CLIOnly: true, Desc: "For an exec or exec-elevated rule scoped to a working directory. `wanctl rules add` only."},
 		},
 		CLIExample: "wanctl rules\n  wanctl rules add --kind exec --pattern \"git *\"\n  wanctl rules add --kind exec-elevated --pattern \"pm install *\"",

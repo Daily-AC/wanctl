@@ -28,7 +28,7 @@ func TestRememberedScriptRuleNamesTheScriptNotTheBlob(t *testing.T) {
 	if !strings.HasPrefix(r.Pattern, script.CanonicalPrefix) {
 		t.Fatalf("pattern = %q, want a %s… token", r.Pattern, script.CanonicalPrefix)
 	}
-	if strings.Contains(r.Pattern, "base64") || len(r.Pattern) > 64 {
+	if strings.Contains(r.Pattern, "base64") || len(r.Pattern) > 96 {
 		t.Fatalf("pattern is still the transport blob: %q", r.Pattern)
 	}
 	e := &Engine{rules: []Rule{r}}
@@ -80,5 +80,76 @@ func TestScriptTokenIsTypeable(t *testing.T) {
 		if r <= ' ' || r > '~' {
 			t.Fatalf("token %q contains a character nobody can type: %q", tok, r)
 		}
+	}
+}
+
+// A command whose text IS the token is not the script the token names. Before
+// the script branch moved ahead of the string-equality allow, a remembered
+// script rule matched that literal string — and a file of that name on PATH
+// then ran under the script's grant (review of #108, 2026-09-18).
+func TestLiteralTokenIsNotTheScriptItNames(t *testing.T) {
+	cmd := scriptCmd(t, "printf approved-script\n")
+	r := RuleFor(Request{Kind: KindExecElevated, Cmd: cmd}, ScopeGlobal)
+	e := &Engine{rules: []Rule{r}}
+	if e.Allowed(Request{Kind: KindExecElevated, Cmd: r.Pattern}) {
+		t.Fatalf("a command equal to the pattern %q was authorized by it; "+
+			"an executable of that name would run under the script's grant", r.Pattern)
+	}
+	if e.Allowed(Request{Kind: KindExecElevated, Cmd: r.Pattern + " --now"}) {
+		t.Fatal("the token behaved as a command prefix")
+	}
+	if !e.Allowed(Request{Kind: KindExecElevated, Cmd: cmd}) {
+		t.Fatal("the rule stopped matching the script it names")
+	}
+}
+
+// The persisted pattern is the whole digest; only what a human is shown is cut
+// short, and never compared.
+func TestScriptRuleStoresTheWholeDigest(t *testing.T) {
+	cmd := scriptCmd(t, "id\n")
+	r := RuleFor(Request{Kind: KindExecElevated, Cmd: cmd}, ScopeGlobal)
+	full, _ := script.Canonical(cmd)
+	if r.Pattern != full {
+		t.Fatalf("stored pattern = %q, want the full token %q", r.Pattern, full)
+	}
+	label := CommandLabel(cmd)
+	if label == full {
+		t.Fatal("the approval label was not abbreviated")
+	}
+	if !strings.HasPrefix(full, strings.TrimSuffix(label, "…")) {
+		t.Fatalf("label %q is not a visible prefix of the rule %q", label, full)
+	}
+	// And the abbreviation is a label, not a key.
+	e := &Engine{rules: []Rule{{Kind: KindExecElevated, Pattern: label, Scope: ScopeGlobal}}}
+	if e.Allowed(Request{Kind: KindExecElevated, Cmd: cmd}) {
+		t.Fatal("a truncated token matched a script; the digest must be compared whole")
+	}
+}
+
+// Nothing on the policy path may panic on a command a stranger chose. The
+// refusal text, the approval card and rule matching all go through these.
+func TestMalformedScriptShapedCommandsDoNotPanic(t *testing.T) {
+	e := &Engine{rules: []Rule{
+		{Kind: KindExecElevated, Pattern: "script:sh:" + strings.Repeat("ab", 32), Scope: ScopeGlobal},
+		{Kind: KindExec, Pattern: "*", Scope: ScopeGlobal},
+	}}
+	for _, c := range []string{
+		"printf %s ' | base64 -d | sh",
+		"powershell -NoProfile -NonInteractive -EncodedCommand '",
+		"printf %s '",
+		"'",
+	} {
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("%q panicked on the policy path: %v", c, p)
+				}
+			}()
+			if e.Allowed(Request{Kind: KindExecElevated, Cmd: c}) {
+				t.Errorf("%q matched a script rule", c)
+			}
+			CommandPattern(c)
+			CommandLabel(c)
+		}()
 	}
 }

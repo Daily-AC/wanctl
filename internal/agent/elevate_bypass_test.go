@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"wanctl/internal/elevate"
 	"wanctl/internal/eventlog"
@@ -233,38 +237,142 @@ func TestElevatedScriptIsRememberedByItsToken(t *testing.T) {
 	}
 }
 
-// A verb sent without --elevate used to reach the device shell and come back as
-// exit 127, blaming the device for a missing flag (#71 "Minor").
-func TestVerbWithoutElevateSaysSo(t *testing.T) {
+// Whether a verb name without --elevate is answered with "add --elevate" is a
+// per-platform decision, unit-tested in internal/androidverb. What this test
+// pins is the desktop half of it end to end: a real program named `app` on the
+// device's PATH runs, exactly as it did before the verb check existed. A
+// desktop has no elevation channel to switch on, so answering it with advice
+// about --elevate would be both wrong and unfixable (review of #108).
+func TestDesktopRunsAProgramNamedLikeAVerb(t *testing.T) {
+	if runtime.GOOS == "android" || runtime.GOOS == "windows" {
+		t.Skip("posix desktop shells only")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app"), []byte("#!/bin/sh\nprintf desktop-app-ok\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
 	base := relayBase(t)
 	startAgent(t, base, policy.AllowApprover{}, policy.ModeBypass)
 	dr := connectController(t, base)
 	defer dr.Conn.Close()
 
-	out, code, reason := execOnce(t, dr, "app install /sdcard/Download/app.apk", "")
-	if code == 127 {
-		t.Fatal("the verb still fell through to the shell")
+	out, code, reason := execOnce(t, dr, "app install whatever", "")
+	if strings.Contains(reason, "--elevate") {
+		t.Fatalf("a desktop program named like an Android verb was refused: %q", reason)
 	}
-	if !strings.Contains(reason, "--elevate") {
-		t.Fatalf("reason = %q, want it to name the missing flag", reason)
-	}
-	if strings.Contains(out+reason, "not found") || strings.Contains(out+reason, "inaccessible") {
-		t.Fatalf("the shell's own answer leaked through: out=%q reason=%q", out, reason)
+	if code != 0 || !strings.Contains(out, "desktop-app-ok") {
+		t.Fatalf("the program did not run: out=%q code=%d reason=%q", out, code, reason)
 	}
 }
 
-// …but a verb name that is also a real Android program keeps working
-// unelevated: the check is about wanctl's own inventions, not about every word
-// the verb table happens to contain.
-func TestRealBinaryVerbsStillRunUnelevated(t *testing.T) {
+// Nothing a controller can put in a command may kill the agent. A command
+// shaped like the --script transport but too short to be one panicked inside
+// the text of its own REFUSAL: no rule, no approval, no elevation needed —
+// a paired controller on a normal-mode device took the whole agent down
+// (review of #108, P1).
+func TestMalformedScriptShapedCommandIsRefusedNotFatal(t *testing.T) {
 	base := relayBase(t)
-	startAgent(t, base, policy.AllowApprover{}, policy.ModeBypass)
+	ag := startAgent(t, base, policy.DenyApprover{}, policy.ModeNormal)
+	ag.elevator = elevate.NewManager(true, "", &fakeChannel{kind: elevate.KindSu})
 	dr := connectController(t, base)
 	defer dr.Conn.Close()
 
-	_, _, reason := execOnce(t, dr, "logcat -d", "")
-	if strings.Contains(reason, "--elevate") {
-		t.Fatalf("logcat was refused as a wanctl verb: %q — it is a real program "+
-			"a controller may legitimately run unelevated", reason)
+	for _, cmd := range []string{
+		"printf %s ' | base64 -d | sh",
+		"powershell -NoProfile -NonInteractive -EncodedCommand '",
+	} {
+		if _, code, reason, _ := execElevated(t, dr, cmd, ""); code != -1 || reason == "" {
+			t.Fatalf("%q: code=%d reason=%q, want a refusal", cmd, code, reason)
+		}
+		// Still serving: it answers the next request on the same session. (A
+		// denial, because this device's approver says no to everything — what
+		// matters is that something came back at all.)
+		if _, _, reason := execOnce(t, dr, "echo still-here", ""); !strings.Contains(reason, "echo still-here") {
+			t.Fatalf("after refusing %q the agent stopped answering: reason=%q", cmd, reason)
+		}
+	}
+}
+
+// The same command on the approval path: it reaches the approver and is drawn
+// on a card, both of which render it.
+func TestMalformedScriptShapedCommandReachesTheApprover(t *testing.T) {
+	base := relayBase(t)
+	ap := &recordingApprover{give: policy.Decision{Allow: false}}
+	ag := startAgent(t, base, ap, policy.ModeNormal)
+	ag.elevator = elevate.NewManager(true, "", &fakeChannel{kind: elevate.KindSu})
+	dr := connectController(t, base)
+	defer dr.Conn.Close()
+
+	const cmd = "printf %s ' | base64 -d | sh"
+	execElevated(t, dr, cmd, "")
+	asked := ap.asked()
+	if len(asked) != 1 || asked[0].Cmd != cmd {
+		t.Fatalf("approver saw %+v, want one request for the command itself", asked)
+	}
+	if got := policy.CommandLabel(cmd); got != cmd {
+		t.Fatalf("the card would draw %q, want the command unchanged — it is not a script", got)
+	}
+}
+
+// The console queue is the portal's side of an approval, and it is where the
+// label/pattern split has to hold: the card shows an abbreviated script token,
+// the remembered rule carries the whole digest, and what is on the card is a
+// visible prefix of what was written so a person can check one against the
+// other. Nothing ever matches on the short form.
+func TestConsoleCardAbbreviatesWhatTheRuleStoresWhole(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	ag, err := New(Options{Name: "console-test", RelayURL: "ws://unused", Token: "unused", Mode: policy.ModeNormal, Shell: "/bin/sh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ag.Close)
+	changed, cancel := ag.console.Subscribe()
+	defer cancel()
+
+	cmd, err := script.Command(script.POSIX, []byte("pm install -r /sdcard/app.apk\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := make(chan bool, 1)
+	go func() {
+		ok, _ := ag.gate(policy.Request{Kind: policy.KindExecElevated, Cmd: cmd, Via: "adb"})
+		allowed <- ok
+	}()
+
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the elevated request never reached the console queue")
+	}
+	pending := ag.console.State().Pending
+	if len(pending) != 1 || pending[0].Kind != string(policy.KindExecElevated) {
+		t.Fatalf("pending = %+v, want one exec-elevated request", pending)
+	}
+	card := pending[0].Cmd
+	full, _ := script.Canonical(cmd)
+	if card == full {
+		t.Fatalf("the card drew the whole digest %q; it is a wall, not information", card)
+	}
+	if !strings.HasPrefix(full, strings.TrimSuffix(card, "…")) {
+		t.Fatalf("card %q is not a visible prefix of the token %q", card, full)
+	}
+
+	if !ag.console.Decide(pending[0].ID, "g") {
+		t.Fatal("the console could not deliver a verdict")
+	}
+	if !<-allowed {
+		t.Fatal("an approved elevated command was refused")
+	}
+	rules := ag.engine.List()
+	if len(rules) != 1 || rules[0].Pattern != full {
+		t.Fatalf("remembered %+v, want one rule carrying the whole token %q", rules, full)
+	}
+	if !ag.engine.Allowed(policy.Request{Kind: policy.KindExecElevated, Cmd: cmd}) {
+		t.Fatal("the remembered rule does not match the script it was written for")
+	}
+	if ag.engine.Allowed(policy.Request{Kind: policy.KindExecElevated, Cmd: card}) {
+		t.Fatal("the abbreviation on the card matched as a command")
 	}
 }
