@@ -56,6 +56,11 @@ type sideQueue struct {
 	// head is the tail of a chunk that was split at the drain cap. It is served
 	// before anything still in ch, so splitting never reorders the stream.
 	head []byte
+	// inflight marks a poll that holds the turn and may be part way through
+	// taking bytes out. Between the receive from ch and the store into unacked
+	// those bytes are in no field at all, so without this the queue looks empty
+	// while a whole chunk is in a poll's hands.
+	inflight bool
 }
 
 func newSideQueue() *sideQueue {
@@ -101,12 +106,38 @@ func (q *sideQueue) close() {
 	})
 }
 
-// drained reports that this direction has nothing left for anyone: no chunk
-// waiting to be acknowledged, no tail left over from a split, nothing queued.
-func (q *sideQueue) drained() bool {
+// beginTake and endTake bracket a poll's hold on the queue, so that a chunk
+// which has left ch but not yet reached unacked still counts as being here.
+// They are the same critical section unacked is published in, which is what
+// makes settled's answer good until the queue is next touched.
+func (q *sideQueue) beginTake() {
+	q.ackMu.Lock()
+	q.inflight = true
+	q.ackMu.Unlock()
+}
+
+func (q *sideQueue) endTake() {
+	q.ackMu.Lock()
+	q.inflight = false
+	q.ackMu.Unlock()
+}
+
+// settled reports that this direction can never hand anyone another byte: it is
+// closed to new ones, no poll is part way through taking any out, and none are
+// left queued, held as a split tail, or waiting to be acknowledged.
+//
+// The closed check is what keeps the answer from going stale. Once it holds,
+// push refuses and only a take could move anything — and a take can only find
+// what the other three checks just said is not there.
+func (q *sideQueue) settled() bool {
+	select {
+	case <-q.done:
+	default:
+		return false
+	}
 	q.ackMu.Lock()
 	defer q.ackMu.Unlock()
-	return q.unacked == nil && q.head == nil && len(q.ch) == 0
+	return !q.inflight && q.unacked == nil && q.head == nil && len(q.ch) == 0
 }
 
 // acquire admits this poll, waiting for any poll already in flight on this
@@ -146,6 +177,8 @@ func (q *sideQueue) take(ctx context.Context, ack uint64, timeout time.Duration)
 		return nil, 0, false, false
 	}
 	defer q.release()
+	q.beginTake()
+	defer q.endTake() // runs after unacked is stored, before the turn is freed
 
 	q.ackMu.Lock()
 	if q.unacked != nil {
@@ -179,6 +212,8 @@ func (q *sideQueue) pollDrain(ctx context.Context, timeout time.Duration) (data 
 		return nil, false, false
 	}
 	defer q.release()
+	q.beginTake()
+	defer q.endTake()
 	data, closed = q.drain(ctx, timeout)
 	return data, closed, true
 }
@@ -690,7 +725,10 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 // directions have been taken. Reaching the end of one direction says nothing
 // about the other: a controller that has read everything it was sent still
 // leaves the agent holding an unacknowledged chunk and a split tail, and
-// retiring the session on the first EOF would 404 those away. A session torn
+// retiring the session on the first EOF would 404 those away — including a
+// chunk a poll has already pulled out of the queue but not yet recorded, which
+// is why settled covers a take in flight and not just the fields it writes. A
+// session torn
 // down any other way (credential revocation, dial failure, the idle sweeper) is
 // already gone from the registry and this is a no-op.
 //
@@ -698,7 +736,7 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 // fires and the session is retired by the idle sweeper instead: reapHTTP scans
 // every httpAgentTTL and drops a session no one has polled for httpSessionIdle.
 func (r *Relay) releaseDrainedSession(sid string, s *httpSession) {
-	if !s.toClient.drained() || !s.toAgent.drained() {
+	if !s.toClient.settled() || !s.toAgent.settled() {
 		return
 	}
 	r.hmu.Lock()
