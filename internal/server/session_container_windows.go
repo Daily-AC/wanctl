@@ -68,10 +68,12 @@ func (c *sessionContainer) Kill() error {
 	if c == nil || c.job == 0 {
 		return nil
 	}
+	// Every error here is propagated. The job is one this process created and
+	// still holds, and terminating a job whose processes have all exited
+	// succeeds, so there is no benign failure to forgive — and reporting a
+	// clean cancellation for a kill that did not happen is the one answer that
+	// is never true.
 	if err := windows.TerminateJobObject(c.job, 1); err != nil {
-		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
-			return nil // the job is already terminating
-		}
 		return fmt.Errorf("terminate session job object: %w", err)
 	}
 	return nil
