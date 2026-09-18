@@ -268,20 +268,22 @@ func MatchCommand(p, c string) bool { return matchCommand(p, c, false) }
 func matchCommand(p, c string, psShell bool) bool {
 	p = strings.TrimSpace(p)
 	c = strings.TrimSpace(c)
+	// A script:<interp>:<digest> pattern names one script, never a command
+	// line, so it is decided first and only against the script a command
+	// actually carries. Left after the equality test below it was also matched
+	// by a command whose text happens to BE the token — and a file of that name
+	// on PATH then ran under the script's grant, which is a different program
+	// entirely (review of #108, 2026-09-18). There is no prefix form of "this
+	// script" either: a pattern that names one is satisfied by that one.
+	if strings.HasPrefix(p, script.CanonicalPrefix) {
+		tok, ok := script.Canonical(c)
+		return ok && tok == p
+	}
 	if c == p {
 		return true
 	}
 	if p == "*" {
 		return true
-	}
-	// A script:<interp>:<hash> pattern names one script, not a command line,
-	// so it is compared against the script the command carries and never
-	// against the command's text. Only an exact token match passes: there is
-	// no prefix form of "this script", and a pattern that names a script must
-	// not be satisfied by a command that merely mentions one.
-	if strings.HasPrefix(p, script.CanonicalPrefix) {
-		tok, ok := script.Canonical(c)
-		return ok && tok == p
 	}
 	if !isSingleSimpleCommand(c) {
 		return false
@@ -385,11 +387,12 @@ func CommandPattern(cmd string) string {
 	return cmd
 }
 
-// CommandLabel is how a command is shown to whoever is deciding about it, and
-// in the rules list. It is CommandPattern: the person approving a `-script` run
-// is shown the script's token, which is what the remembered rule will say, so
-// the prompt and the rule cannot disagree.
-func CommandLabel(cmd string) string { return CommandPattern(cmd) }
+// CommandLabel is how a command is shown to whoever is deciding about it: the
+// command itself, or an abbreviated script token. What is shown is a prefix of
+// what CommandPattern stores, so a person can check a card against the rule the
+// device wrote, but nothing is ever compared against the short form — the whole
+// digest is the authorization.
+func CommandLabel(cmd string) string { return script.Short(CommandPattern(cmd)) }
 
 // Add appends a rule and persists.
 func (e *Engine) Add(r Rule) error {

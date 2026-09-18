@@ -956,7 +956,7 @@ mean anything where a device runs.
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
 | — | `--kind exec\|exec-elevated\|read\|write\|logs` | string | no | What the rule governs. `exec-elevated` is its own class: an `exec` rule never authorizes the elevated form of the same command, and on a device where bypass mode is on but the elevation channel is off this is the only way to pre-authorize one. `wanctl rules add` only. |
-| — | `--pattern P` | string | no | For exec and exec-elevated, a command prefix with an optional trailing *; for a command sent with --script, the `script:<interp>:<hash>` token the device names it by. For file kinds, a directory. `wanctl rules add` only. |
+| — | `--pattern P` | string | no | For exec and exec-elevated, a command prefix with an optional trailing *; for a command sent with --script, the `script:<interp>:<sha256>` token the device names it by (a refusal prints it in full; approval cards abbreviate it). For file kinds, a directory. `wanctl rules add` only. |
 | — | `--dir D` | string | no | For an exec or exec-elevated rule scoped to a working directory. `wanctl rules add` only. |
 
 ```

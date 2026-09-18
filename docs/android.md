@@ -270,14 +270,20 @@ wanctl rules add --kind exec-elevated --pattern "pm install *"
 ```
 
 An `exec` rule never authorizes the elevated form of the same command, and an
-`exec-elevated` rule never authorizes the plain one. A command sent with
-`--script` crosses the wire as a base64 blob, so the device names it by a short
-stable token instead — `script:sh:<16 hex>`, the leading half of the SHA-256 of
-the script's bytes. That token is what the approval prompt shows, what the
-remembered rule stores, and what you would put in `--pattern` to pre-authorize
-one script. It is exactly as narrow as the blob was: change a byte, get a
-different token. The event log records which channel ran each elevated command,
-so `wanctl logs` can answer *what has run as root on this phone*.
+`exec-elevated` rule never authorizes the plain one.
+
+A command sent with `--script` crosses the wire as a base64 blob, so the device
+names it by a stable token instead: `script:sh:<64 hex>`, the SHA-256 of the
+script's bytes. That token is what the remembered rule stores, what a refusal
+prints, and what goes in `--pattern` to pre-authorize one script. It is exactly
+as narrow as the blob was — change a byte, get a different token — and the
+digest is carried whole, because the token *is* the authorization and a
+truncated one could be collided against. Approval prompts and the portal card
+show the first 16 hex characters followed by `…`, which is a label to read, not
+a pattern to copy; the full token is in `wanctl rules` on the device.
+
+The event log records which channel ran each elevated command, so `wanctl logs`
+can answer *what has run as root on this phone*.
 
 With the switch off, the channels are not even probed — a rooted device raises
 no root-manager consent dialog for a feature nobody turned on.

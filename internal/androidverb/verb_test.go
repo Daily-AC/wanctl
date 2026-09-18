@@ -302,3 +302,43 @@ func TestDispatchPassesThroughTheChannelAndExitCode(t *testing.T) {
 		t.Fatalf("the pinned channel %q did not reach the elevator (got %q)", elevate.KindSu, r.via)
 	}
 }
+
+// NeedsElevation is what stops `app install …` sent without --elevate from
+// reaching the shell and coming back as exit 127, blaming the device for a
+// missing flag (#71 "Minor"). It answers only for Android: on a desktop these
+// are ordinary words, a machine may have a program by one of those names, and
+// there is no elevation channel to turn on anyway (review of #108).
+func TestNeedsElevationIsAndroidOnly(t *testing.T) {
+	cases := []struct {
+		goos, command string
+		want          string
+	}{
+		{"android", "app install /sdcard/app.apk", "app"},
+		{"android", "prop get ro.product.model", "prop"},
+		{"android", "screenshot", "screenshot"},
+		{"darwin", "app install /sdcard/app.apk", ""},
+		{"linux", "app", ""},
+		{"windows", "screenshot", ""},
+		// Real Android programs a controller may legitimately run unelevated,
+		// and get the platform's own answer.
+		{"android", "logcat -d", ""},
+		{"android", "settings get global adb_wifi_enabled", ""},
+		{"android", "input tap 1 2", ""},
+		// Not verbs at all.
+		{"android", "", ""},
+		{"android", "pm list packages", ""},
+		{"android", "apply-updates", ""},
+	}
+	for _, c := range cases {
+		got, ok := NeedsElevation(c.goos, c.command)
+		if c.want == "" {
+			if ok {
+				t.Errorf("NeedsElevation(%q, %q) = %q, want it left alone", c.goos, c.command, got)
+			}
+			continue
+		}
+		if !ok || got != c.want {
+			t.Errorf("NeedsElevation(%q, %q) = (%q, %v), want (%q, true)", c.goos, c.command, got, ok, c.want)
+		}
+	}
+}
