@@ -240,11 +240,19 @@ func NewShellSession(shell string) (*ShellSession, error) {
 		return abandon(err)
 	}
 	go func() {
-		cmd.Wait()
-		// Reaping releases the shell's pid, and with it the process-group id
-		// that is the same number. The container must stop using it at exactly
-		// this point, before anything can be given that number again.
+		// cmd.Wait waits for I/O after the kernel has already reaped the
+		// process. The pid — and the Unix process-group id that is the same
+		// number — can be reused in that window (issue #110). Kill leftover
+		// group members first (issue #111: a background process that never
+		// called setsid still holds the pgid after a natural `exit`), then
+		// drop the identity at the kernel wait so a later Kill cannot hit a
+		// stranger. Let Wait finish copying after that.
+		if cmd.Process != nil {
+			_, _ = cmd.Process.Wait()
+		}
+		_ = container.Kill()
 		container.reap()
+		_ = cmd.Wait()
 		pw.Close()
 	}()
 
