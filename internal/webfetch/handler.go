@@ -49,12 +49,13 @@ const (
 // Per-tool time budgets. An exec is whatever the device's own policy already
 // allows, and that includes builds and renders: the first real caller's job was
 // a ten-minute Blender run that a sixty-second ceiling turned into an unknown
-// outcome. A file transfer is bounded by MaxWriteBytes / MaxOutputBytes, so a
+// outcome, and four hours is what a grant long enough to be walked away from
+// can actually spend on one operation. A file transfer is bounded by MaxWriteBytes / MaxOutputBytes, so a
 // slow one is a stuck one and must not hold a slot for half an hour. The
 // defaults are variables so a test can prove that changing one does not change
 // the replay identity of a call that never sent timeout_seconds.
 var (
-	MaxExecSeconds     = 1800
+	MaxExecSeconds     = 14400
 	DefaultExecSeconds = 300
 	MaxFileSeconds     = 60
 	DefaultFileSeconds = 30
@@ -75,6 +76,18 @@ var staleGrace = 90 * time.Second
 
 var ticketPattern = regexp.MustCompile(`^[0-9]{10}-[a-f0-9]{48}$`)
 var clientNoncePattern = regexp.MustCompile(`^[a-f0-9]{48}$`)
+
+// ticketFresh bounds the self-describing timestamp a browser ticket carries.
+// The envelope has to cover the longest life the ticket's own grant can have,
+// or the session URL would stop resolving while the grant it names is still
+// approved — the long-task case exactly. So it is the request window plus the
+// longest approvable grant, one value derived in delegation, never a literal
+// here. The future bound stays at 30 seconds of clock skew: a ticket claiming
+// to come from later than now is not a long job, it is a forged timestamp.
+// now is a parameter so the boundary can be tested without sleeping.
+func ticketFresh(issued, now time.Time) bool {
+	return !issued.After(now.Add(30*time.Second)) && now.Before(issued.Add(delegation.TicketLifetime))
+}
 var ridPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 var sha256Pattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 
@@ -183,7 +196,7 @@ func New(cfg Config) (*Handler, error) {
 			defer ticker.Stop()
 			for {
 				ctx, cancel := context.WithTimeout(h.ctx, 10*time.Second)
-				if err := cleaner.CleanupDelegations(ctx, 24*time.Hour); err != nil && h.ctx.Err() == nil {
+				if err := cleaner.CleanupDelegations(ctx, delegation.MinRetention); err != nil && h.ctx.Err() == nil {
 					log.Print("webfetch: expired-record cleanup unavailable")
 				}
 				cancel()
@@ -298,7 +311,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ticket := parts[2]
 	issuedSeconds, _ := strconv.ParseInt(strings.SplitN(ticket, "-", 2)[0], 10, 64)
 	issued := time.Unix(issuedSeconds, 0)
-	if issued.After(time.Now().Add(30*time.Second)) || !time.Now().Before(issued.Add(70*time.Minute)) {
+	if !ticketFresh(issued, time.Now()) {
 		h.fail(w, r, delegation.ErrExpired)
 		return
 	}
@@ -324,7 +337,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	request, err := h.cfg.Store.GetDelegationByTicket(r.Context(), id, digest([]byte(ticket)))
 	if errors.Is(err, delegation.ErrNotFound) && len(parts) == 3 {
-		if !time.Now().Before(issued.Add(10 * time.Minute)) {
+		if !time.Now().Before(issued.Add(delegation.RequestWindow)) {
 			h.fail(w, r, delegation.ErrExpired)
 			return
 		}
@@ -341,7 +354,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.respond(w, r, 400, map[string]any{"error": "invalid client label"})
 			return
 		}
-		request, err = h.cfg.Store.CreateDelegation(r.Context(), delegation.NewRequest{ID: id, TicketHash: digest([]byte(ticket)), TokenHash: digest([]byte(token)), Label: label, ControllerFingerprint: identity.Fingerprint, RequestExpiresAt: issued.Add(10 * time.Minute)})
+		request, err = h.cfg.Store.CreateDelegation(r.Context(), delegation.NewRequest{ID: id, TicketHash: digest([]byte(ticket)), TokenHash: digest([]byte(token)), Label: label, ControllerFingerprint: identity.Fingerprint, RequestExpiresAt: issued.Add(delegation.RequestWindow)})
 		if err == nil {
 			log.Printf("webfetch: request created grant=%s", request.ID)
 		}

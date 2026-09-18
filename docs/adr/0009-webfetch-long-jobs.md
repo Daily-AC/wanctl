@@ -31,6 +31,8 @@ operations from one grant would stall every other user's `read_text`.
 Keep the synchronous one-shot wanctl operation and raise the ceilings.
 
 **`exec` gets 1–1800 seconds, default 300. File tools stay at 1–60, default 30.**
+(ADR 0010 later raised the `exec` ceiling to 14400; the reasoning below for why
+the bound is per tool, and why the default moved to 300, is unchanged.)
 The number is per tool because the tools differ in kind: an `exec` is whatever
 device policy already allows, including builds and renders, while `read_text`
 and `write_text` move at most 32 KiB — one that is slow is stuck, and it must not
@@ -46,9 +48,11 @@ moving it from 30 to 300 would change that hash and turn a legitimate transport
 retry into a 409. The default is applied at dispatch only; an explicitly supplied
 value stays in the hash and still conflicts when it changes. Jobs created before
 this deploy did record the old default, so a pre-deploy rid replayed with no
-`timeout_seconds` will 409 once. No compatibility shim was written for it:
-grants live at most 60 minutes, so the window closes by itself, and the 409 is
-the safe answer anyway. `rid_conflict` tells the caller to stop and read the
+`timeout_seconds` will 409 once. No compatibility shim was written for it: the
+window closes by itself once every pre-deploy grant has expired, and the 409 is
+the safe answer anyway. That window was at most 60 minutes when this was
+written; ADR 0010 raised the longest grant to 24 hours, so it is now up to a
+day, and the trade was re-accepted there rather than reopened. `rid_conflict` tells the caller to stop and read the
 earlier job's result; it deliberately carries no `execution_started` and never
 suggests moving the work to a new rid, because the operation recorded under that
 rid may well have run.
@@ -106,9 +110,10 @@ durable to live. Async execution would need a job-store change too.
 ## Consequences
 
 - A thirty-minute exec works, but only inside a grant that is long enough: the
-  deadline is still clamped to `access.ExpiresAt`, and a grant is at most 60
-  minutes. The discovery procedure therefore tells the model to ask the human for
-  a duration longer than the task.
+  deadline is still clamped to `access.ExpiresAt`, and a grant was at most 60
+  minutes when this was written — the ceiling ADR 0010 then raised to 24 hours,
+  alongside the exec ceiling itself. The discovery procedure therefore tells the
+  model to ask the human for a duration longer than the task.
 - An adapter restart still loses in-flight jobs; they read `unknown` after their
   deadline rather than after 90 seconds. Recovering them needs the async path
   above, so this trade is unchanged, just slower to appear.

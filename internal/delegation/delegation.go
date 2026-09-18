@@ -9,6 +9,56 @@ import (
 	"time"
 )
 
+// MaxGrantMinutes is the longest access an owner may approve. A full day,
+// because the grant now has to outlive the work rather than the conversation:
+// a web AI starts a build, a render or an install, the human closes the tab and
+// comes back in the same chat hours later to read the result. Everything that
+// used to restate "a grant lives at most an hour" — the browser ticket
+// envelope, the per-grant job allowance, the retention floor, the manifest —
+// derives from this one number instead.
+const MaxGrantMinutes = 1440
+
+// RequestWindow is how long an unapproved browser ticket may still create or
+// hold its pending request. It is also the slack between a ticket's timestamp
+// and the earliest moment a grant approved on it can start running.
+const RequestWindow = 10 * time.Minute
+
+// TicketLifetime bounds a browser ticket's own timestamp. A ticket has to stay
+// readable for as long as the grant it may carry: the request can be created up
+// to RequestWindow after the ticket was issued, and the owner may then approve
+// MaxGrantMinutes on it. Anything shorter would expire the session URL out from
+// under a grant that is still valid, which is exactly the long-task case.
+const TicketLifetime = RequestWindow + MaxGrantMinutes*time.Minute
+
+// MinRetention is the floor for deleting inactive delegation records. Deletion
+// may never free a request ID that a live ticket can still name, and retention
+// is measured from the request row's own created_at — at worst RequestWindow
+// after the ticket was issued, so the row must survive MaxGrantMinutes from
+// there. An extra hour keeps that strictly, not exactly, satisfied.
+const MinRetention = MaxGrantMinutes*time.Minute + time.Hour
+
+// Job ledger allowance. The old flat 64 was sized for a one-hour grant; kept
+// flat, a day-long grant would have spent it in the first hour and then refused
+// every further operation while still being valid. The rate is therefore per
+// approved hour, and the old number survives as the floor so that short grants
+// are unchanged.
+const (
+	JobsPerGrantHour = 64
+	MinJobsPerGrant  = 64
+)
+
+// MaxJobs is the number of jobs one grant's ledger accepts, the single place
+// that turns an approved duration into that allowance. Partial hours round up:
+// a 15-minute grant and a 61-minute one are both charged a whole hour, so the
+// owner never has to reason about the boundary.
+func MaxJobs(granted time.Duration) int {
+	hours := int((granted + time.Hour - 1) / time.Hour)
+	if n := hours * JobsPerGrantHour; n > MinJobsPerGrant {
+		return n
+	}
+	return MinJobsPerGrant
+}
+
 var (
 	ErrNotFound  = errors.New("delegation not found")
 	ErrForbidden = errors.New("delegation forbidden")
@@ -35,6 +85,10 @@ type Access struct {
 	ExpiresAt             time.Time `json:"expires_at,omitempty"`
 	Devices               []Device  `json:"devices,omitempty"`
 	ControllerFingerprint string    `json:"controller_fingerprint,omitempty"`
+	// GrantedMinutes is the whole window the owner approved, not what is left
+	// of it. The job allowance is a property of the approval, so it must not
+	// shrink as the grant runs down.
+	GrantedMinutes int `json:"granted_minutes,omitempty"`
 }
 
 func (a Access) Allows(target string) bool {
@@ -60,9 +114,20 @@ type Request struct {
 	Namespace             string     `json:"namespace,omitempty"`
 	CreatedAt             time.Time  `json:"created_at"`
 	RequestExpiresAt      time.Time  `json:"request_expires_at"`
+	DecidedAt             *time.Time `json:"decided_at,omitempty"`
 	ExpiresAt             *time.Time `json:"expires_at,omitempty"`
 	Devices               []Device   `json:"devices,omitempty"`
 	TokenID               int        `json:"token_id,omitempty"`
+}
+
+// GrantedDuration is the window the owner approved: the decision instant to the
+// token's expiry, both written by the same transaction. It is zero unless the
+// request was approved, which is the only state that has a duration at all.
+func (r Request) GrantedDuration() time.Duration {
+	if r.DecidedAt == nil || r.ExpiresAt == nil {
+		return 0
+	}
+	return r.ExpiresAt.Sub(*r.DecidedAt)
 }
 
 // NewRequest contains hashes only. The adapter derives the relay credential
