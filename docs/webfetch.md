@@ -52,7 +52,8 @@ portal origins, linked from the connect page and advertised as `skill_url` in
 discovery. Pasted into a Claude project, a custom GPT or any host with a skill
 setting, it replaces the copied connection prompt: the AI already knows to start
 at this relay's `/webfetch/v1`, and the owner only asks for the work. The route
-carries no credential and grants nothing, and it is 404 where WebFetch is off.
+carries no credential and grants nothing, and it answers from configuration
+alone like `/webfetch/help`, so a public fetch never becomes a relay request.
 
 Only owned devices with persistent IDs and recorded fingerprints can be selected
 in this initial version. Ordinary cross-account sharing is unchanged. Device

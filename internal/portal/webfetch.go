@@ -35,72 +35,29 @@ const (
 	skillPortalPlaceholder = "@WANCTL_PORTAL@"
 )
 
-// errWebFetchOff means the relay serves no WebFetch adapter: it is not built
-// in, or the instance has no seed configured. errWebFetchOrigin means it
-// answers with an origin the portal will not hand to an AI.
-var (
-	errWebFetchOff    = errors.New("web AI access is unavailable on this relay")
-	errWebFetchOrigin = errors.New("invalid WebFetch discovery origin")
-)
-
-// webFetchOrigin consumes the same public discovery document as every other
-// client, through the configured internal relay address, and returns the public
-// relay origin it advertises. Reaching it at all is also how the portal learns
-// that WebFetch is enabled here.
-func (s *Server) webFetchOrigin() (string, error) {
-	resp, err := s.hc.Get(s.relayURL + "/webfetch/v1?format=json")
-	if err != nil {
-		return "", errWebFetchOff
-	}
-	defer resp.Body.Close()
-	var entry struct {
-		Protocol string `json:"protocol"`
-		Template string `json:"start_url_template"`
-	}
-	const suffix = "/webfetch/new/{client_nonce}"
-	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&entry) != nil || entry.Protocol != "wanctl.webfetch.v1" || !strings.HasSuffix(entry.Template, suffix) {
-		return "", errWebFetchOff
-	}
-	origin := strings.TrimSuffix(entry.Template, suffix)
-	if relayPublicOrigin(origin) != origin {
-		return "", errWebFetchOrigin
-	}
-	return origin, nil
-}
-
 // handleWebFetchSkill serves the skill as Markdown, login-free: the AI that
 // loads it has no portal session, and the file carries no credential — only
 // this instance's two public origins and the protocol every client reads
-// anyway. A relay without WebFetch has nothing to describe, so the route is
-// 404 there rather than handing out instructions that cannot work.
+// anyway.
+//
+// Like the quick reference, it answers from configuration alone. A public
+// route that called the relay on every fetch would make an unauthenticated
+// GET into a relay request, and this one is meant to be fetched by whatever
+// URL reader the owner's chat happens to use. An instance with no relay
+// configured has no protocol to describe, so the route is 404 there.
 func (s *Server) handleWebFetchSkill(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "GET required", http.StatusMethodNotAllowed)
 		return
 	}
-	relay, err := s.webFetchOrigin()
-	if errors.Is(err, errWebFetchOrigin) {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	if err != nil {
+	if s.relayPublic == "" {
 		http.NotFound(w, r)
 		return
 	}
-	body := bytes.ReplaceAll(webFetchSkill, []byte(skillRelayPlaceholder), []byte(relay))
+	body := bytes.ReplaceAll(webFetchSkill, []byte(skillRelayPlaceholder), []byte(s.relayPublic))
 	body = bytes.ReplaceAll(body, []byte(skillPortalPlaceholder), []byte(s.requestOrigin(r)))
-	if r.URL.Query().Get("format") == "json" {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		json.NewEncoder(w).Encode(map[string]string{
-			"protocol":  "wanctl.webfetch.v1",
-			"skill":     string(body),
-			"skill_url": s.requestOrigin(r) + "/webfetch/skill",
-		})
-		return
-	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	w.Header().Set("Content-Disposition", `inline; filename="SKILL.md"`)
 	w.Write(body)
 }
 
@@ -125,13 +82,26 @@ func (s *Server) handleWebFetchConnect(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	origin, err := s.webFetchOrigin()
-	if errors.Is(err, errWebFetchOrigin) {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
+	// Consume the same public discovery document as other clients, through the
+	// configured internal relay address. This also checks that WebFetch is on.
+	resp, err := s.hc.Get(s.relayURL + "/webfetch/v1?format=json")
 	if err != nil {
 		s.renderStatus(w, http.StatusServiceUnavailable, "webfetch-connect.html", map[string]any{"NS": ns})
+		return
+	}
+	defer resp.Body.Close()
+	var entry struct {
+		Protocol string `json:"protocol"`
+		Template string `json:"start_url_template"`
+	}
+	const suffix = "/webfetch/new/{client_nonce}"
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&entry) != nil || entry.Protocol != "wanctl.webfetch.v1" || !strings.HasSuffix(entry.Template, suffix) {
+		s.renderStatus(w, http.StatusServiceUnavailable, "webfetch-connect.html", map[string]any{"NS": ns})
+		return
+	}
+	origin := strings.TrimSuffix(entry.Template, suffix)
+	if relayPublicOrigin(origin) != origin {
+		http.Error(w, "invalid WebFetch discovery origin", http.StatusBadGateway)
 		return
 	}
 	var nonce [24]byte
