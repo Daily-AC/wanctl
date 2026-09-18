@@ -80,3 +80,54 @@ func TestUnixCaptureNamesTheToolsToInstall(t *testing.T) {
 		}
 	}
 }
+
+// The failure a Mac reports when the agent has no Screen Recording permission.
+// screencapture says only that the display would not give it an image, so the
+// agent has to recognise that line and say what it means; otherwise the person
+// reads "could not create image from display" and has nothing to act on.
+//
+// These are the captured stderr strings, not a real capture: denying TCC to
+// this test process is not something a test can do.
+func TestScreencaptureDenialExplainsScreenRecording(t *testing.T) {
+	for _, stderr := range []string{
+		"screencapture: could not create image from display 1",
+		"screencapture: cannot create image from display",
+	} {
+		err := captureFailure("/usr/sbin/screencapture", stderr)
+		if err == nil {
+			t.Fatalf("%q was not treated as a failure", stderr)
+		}
+		got := err.Error()
+		if !strings.Contains(got, stderr) {
+			t.Errorf("the original line is gone from %q", got)
+		}
+		for _, want := range []string{
+			"Screen Recording",
+			"System Settings",
+			"Privacy & Security",
+			"restart the agent",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("the remedy does not say %q: %s", want, got)
+			}
+		}
+	}
+}
+
+// Every other capture failure keeps the tool's own words and gains nothing:
+// a permission remedy on an unrelated error sends the reader the wrong way.
+func TestOtherCaptureFailuresAreNotBlamedOnPermissions(t *testing.T) {
+	cases := map[string]string{
+		"/usr/sbin/screencapture": "screencapture: cannot write file to intended destination",
+		"grim":                    "compositor does not support wlr-screencopy",
+	}
+	for tool, stderr := range cases {
+		got := captureFailure(tool, stderr).Error()
+		if !strings.Contains(got, stderr) {
+			t.Errorf("%s: the original line is gone from %q", tool, got)
+		}
+		if strings.Contains(got, "Screen Recording") {
+			t.Errorf("%s: an unrelated failure was blamed on permissions: %s", tool, got)
+		}
+	}
+}

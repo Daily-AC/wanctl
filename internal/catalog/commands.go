@@ -538,6 +538,7 @@ var Commands = []Command{
 			{Text: "DEVICE IDENTITY CONFIRMATION REQUIRED", Means: "First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target \u2026 --fingerprint \u2026`, or the wanctl_trust_server tool) and retry."},
 			{Text: "command denied by device policy", Means: "The device has not allowed this controller to capture its screen. Ask the owner to approve the pending request, then retry. On Android the refusal names an ELEVATED command, which needs its own rule that bypass mode does not cover."},
 			{Text: "no screen capture tool on this device", Means: "A Linux device with none of grim / gnome-screenshot / import installed. Install one (the message names them) — retrying will not help."},
+			{Text: "screencapture failed: … create image from display", Means: "macOS withheld the screen: the agent has no Screen Recording permission. Open System Settings → Privacy & Security → Screen Recording on that Mac, add the wanctl binary (or the app that launched the agent), turn it on, then restart the agent — retrying without that will not help."},
 			{Text: "did not return a PNG", Means: "The device answered with something else, usually an agent too old for desktop capture. Run `wanctl update` on it, then retry."},
 		},
 	},
