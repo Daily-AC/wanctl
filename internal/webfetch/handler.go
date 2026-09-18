@@ -88,6 +88,7 @@ var clientNoncePattern = regexp.MustCompile(`^[a-f0-9]{48}$`)
 func ticketFresh(issued, now time.Time) bool {
 	return !issued.After(now.Add(30*time.Second)) && now.Before(issued.Add(delegation.TicketLifetime))
 }
+
 var ridPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 var sha256Pattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 
