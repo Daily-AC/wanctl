@@ -87,12 +87,12 @@ func cmdUpdate(ctx context.Context, args []string) error {
 		return fmt.Errorf("chmod new binary: %w", err)
 	}
 
+	// Read before the swap, never after: what this host was is a fact about the
+	// machine as the update found it, and the swap is the point after which it
+	// can no longer be observed.
 	plan := planUpdateRestart(*noRestart)
-	if plan.stopDetached {
-		fmt.Println("正在停止后台 agent …")
-		if err := cmdStop(); err != nil {
-			return fmt.Errorf("stop daemon: %w", err)
-		}
+	if err := applyUpdateStop(plan); err != nil {
+		return err
 	}
 
 	if err := replaceBinary(tmp, self); err != nil {
@@ -102,18 +102,7 @@ func cmdUpdate(ctx context.Context, args []string) error {
 
 	fmt.Printf("✓ 已安装 wanctl %s: %s\n", version, self)
 	reportPATHShadow(self)
-	if plan.restartDetached {
-		fmt.Println("正在重启后台 agent …")
-		if err := cmdStart(ctx); err != nil {
-			return fmt.Errorf("restart daemon: %w", err)
-		}
-	} else if plan.restartManagedPID > 0 {
-		fmt.Println("正在通过原 supervisor 重启 agent …")
-		if err := restartManagedAgent(self, plan.restartManagedPID); err != nil {
-			return err
-		}
-	}
-	return nil
+	return applyUpdateRestart(ctx, self, plan)
 }
 
 var errAPKSelfUpdate = fmt.Errorf(
@@ -276,11 +265,8 @@ func splitUpdateViaSudo(ctx context.Context, self string) error {
 	}
 
 	plan := planUpdateRestart(false)
-	if plan.stopDetached {
-		fmt.Println("正在停止后台 agent …")
-		if err := cmdStop(); err != nil {
-			return fmt.Errorf("stop daemon: %w", err)
-		}
+	if err := applyUpdateStop(plan); err != nil {
+		return err
 	}
 
 	fmt.Printf("wanctl: %s 需要 sudo 才能替换,请在下方提示输入密码 …\n", filepath.Dir(self))
@@ -292,18 +278,7 @@ func splitUpdateViaSudo(ctx context.Context, self string) error {
 		return fmt.Errorf("sudo wanctl update: %w", err)
 	}
 
-	if plan.restartDetached {
-		fmt.Println("正在重启后台 agent …")
-		if err := cmdStart(ctx); err != nil {
-			return fmt.Errorf("restart daemon: %w", err)
-		}
-	} else if plan.restartManagedPID > 0 {
-		fmt.Println("正在通过原 supervisor 重启 agent …")
-		if err := restartManagedAgent(self, plan.restartManagedPID); err != nil {
-			return err
-		}
-	}
-	return nil
+	return applyUpdateRestart(ctx, self, plan)
 }
 
 type updateRestartPlan struct {
@@ -312,11 +287,24 @@ type updateRestartPlan struct {
 	restartManagedPID int
 }
 
-// planUpdateRestart decides what this update owes the running agent. Liveness
-// comes from the agent lock: a pid file left behind by a dead agent, plus the
-// pid reuse that eventually follows, previously made an update stop a stranger
-// and then *start* an agent on a machine that had never run one -- which is how
-// a controller-only PC registered itself as a controlled device.
+// planUpdateRestart decides what this update owes the running agent, from the
+// state of the machine before anything is swapped.
+//
+// An update replaces a binary. It may put back an agent it interrupted; it may
+// never produce one that was not there, because starting an agent enrolls the
+// machine as a controlled device — a row in the relay, a name in someone's
+// portal, an entry other namespaces can be given. That is not something a
+// command whose job is to copy a file gets to do, and undoing it means an
+// administrator deleting a device record.
+//
+// So the answer is "restart" only when this machine was serving, and liveness
+// comes from the agent lock, which exists exactly as long as an agent does. It
+// used to come from the number in agent.pid, which is a label: a pid file left
+// behind by a dead agent, plus the pid reuse that eventually follows, made an
+// update stop a stranger and then *start* an agent on a machine that had never
+// run one. That is how a controller-only PC registered itself as a controlled
+// device (GitHub issue #66); bare `wanctl` enrolling on sight was the other
+// half of it.
 func planUpdateRestart(noRestart bool) updateRestartPlan {
 	pid, running := agentRunning()
 	return planUpdateRestartWithLiveness(noRestart, pid, running)
@@ -326,10 +314,49 @@ func planUpdateRestartWithLiveness(noRestart bool, pid int, alive bool) updateRe
 	if noRestart || !alive {
 		return updateRestartPlan{}
 	}
-	if config.ManagedPID() == pid {
+	// pid > 0 is not decoration. An agent holding the lock may have recorded no
+	// pid, and a host with no supervisor marker reads back 0 from ManagedPID:
+	// without this, those two zeros matched and the plan came out as "restart
+	// the supervised agent 0", which every caller correctly does nothing about.
+	// The result was an update that silently skipped the restart it owed — and
+	// a liveness check that could be removed without any test noticing.
+	if pid > 0 && config.ManagedPID() == pid {
 		return updateRestartPlan{restartManagedPID: pid}
 	}
 	return updateRestartPlan{stopDetached: true, restartDetached: true}
+}
+
+// applyUpdateStop and applyUpdateRestart carry out the plan. They are one pair
+// rather than a block inlined at each entry point because there are two entry
+// points — the ordinary update and the sudo-split one — and a rule about not
+// starting agents that is written down twice is a rule that drifts. The empty
+// plan, which is what a controller-only host produces, runs nothing in either.
+
+func applyUpdateStop(plan updateRestartPlan) error {
+	if !plan.stopDetached {
+		return nil
+	}
+	fmt.Println("正在停止后台 agent …")
+	if err := cmdStop(); err != nil {
+		return fmt.Errorf("stop daemon: %w", err)
+	}
+	return nil
+}
+
+func applyUpdateRestart(ctx context.Context, self string, plan updateRestartPlan) error {
+	switch {
+	case plan.restartDetached:
+		fmt.Println("正在重启后台 agent …")
+		if err := cmdStart(ctx); err != nil {
+			return fmt.Errorf("restart daemon: %w", err)
+		}
+		return nil
+	case plan.restartManagedPID > 0:
+		fmt.Println("正在通过原 supervisor 重启 agent …")
+		return restartManagedAgent(self, plan.restartManagedPID)
+	default:
+		return nil
+	}
 }
 
 // How long to wait for the supervisor to put a new agent in place of the one we
