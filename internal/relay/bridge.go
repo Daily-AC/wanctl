@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"sort"
@@ -36,7 +37,7 @@ func (c *httpSessionConn) Read(p []byte) (int, error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
 	for len(c.readBuf) == 0 {
-		data, closed := c.readQ.drain(downPollWait)
+		data, closed, _ := c.readQ.pollDrain(context.Background(), downPollWait)
 		if len(data) > 0 {
 			c.readBuf = data
 			break
@@ -89,6 +90,22 @@ func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegat
 	return s
 }
 
+// closeHTTPSessionDrainable ends a session the gentle way: the queues stop
+// accepting bytes and report EOF once empty, but the session stays registered
+// so whichever peer is still reading collects the backlog instead of watching
+// it 404. See handleHClose.
+func (r *Relay) closeHTTPSessionDrainable(sid string, s *httpSession) {
+	if s == nil {
+		return
+	}
+	r.hmu.Lock()
+	if r.hsess[sid] == s && s.closedAt.IsZero() {
+		s.closedAt = time.Now()
+	}
+	r.hmu.Unlock()
+	s.close()
+}
+
 func (r *Relay) closeHTTPSession(sid string, s *httpSession) {
 	if s == nil {
 		return
@@ -112,7 +129,10 @@ func (r *Relay) httpSessionConn(sid string, s *httpSession, role string) io.Read
 	return &httpSessionConn{
 		readQ:  readQ,
 		writeQ: writeQ,
-		close:  func() { r.closeHTTPSession(sid, s) },
+		// The WebSocket leg ending is an ordinary end of session, so the HTTP
+		// peer keeps its queued bytes until it has read them, exactly as it
+		// does when that peer posts /h/close itself.
+		close: func() { r.closeHTTPSessionDrainable(sid, s) },
 	}
 }
 
