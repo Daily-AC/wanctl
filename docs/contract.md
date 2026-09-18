@@ -62,7 +62,7 @@ DEV LOOP
   Before working in a project directory, read its AGENTS.md or CLAUDE.md with
   wanctl_read if one exists and follow it: it outranks how you would proceed.
 
-REFUSALS — none of these mean try again:
+REFUSALS — none of these mean retry as-is:
   PAIRING REQUIRED: give the URL in the message to the user, then retry.
   DEVICE IDENTITY CONFIRMATION REQUIRED: call wanctl_trust_server, retry.
   DEVICE IDENTITY MISMATCH: refused, nothing sent; report both fingerprints.
@@ -116,20 +116,25 @@ REFUSALS — none of these mean try again:
 
 *Authenticate to a wanctl namespace through the portal*
 
-Authenticate THIS MCP session to a wanctl namespace via the team portal.
-Two-step OAuth flow: (1) call with NO argument first → returns a portal URL +
-a one-time code prompt the user needs to complete in their browser. (2) call
-again with the `code` the user pastes back → exchanges it for a namespace
-token bound ONLY to this MCP session (in HTTP mode) or this machine's wanctl
-config (in stdio mode). Multiple AI users sharing the same MCP server each log
-in independently — credentials are never shared across sessions.
+Get this session a credential; every other tool needs one before it can reach
+a device. Reach for it when a tool comes back 'LOGIN REQUIRED', and not before
+— a session that already has a credential gains nothing from logging in again.
 
-FAST RE-BIND: a successful login also returns a `rebind` credential. HTTP-MCP
-sessions are in-memory, so a relay restart or a dropped/re-initialized
-connection can surface 'LOGIN REQUIRED' mid-task even though the user is still
-authorized. When that happens, call wanctl_login(rebind="…") with the
-credential you saved — it restores access INSTANTLY with no portal round-trip.
-Only fall back to the OAuth flow if you have no saved rebind credential.
+TWO STEPS. Call with NO argument first: you get back a portal URL and a
+one-time code prompt, and that URL is for the user, verbatim, because only a
+human at a browser can complete it. Call again with the `code` they paste back
+and it becomes a namespace token bound ONLY to this MCP session (in HTTP mode)
+or to this machine's wanctl config (in stdio mode). Several AI users sharing
+one MCP server each log in for themselves; no credential is ever shared
+between sessions.
+
+SAVE THE REBIND CREDENTIAL that a successful login returns. HTTP-MCP sessions
+live in memory, so a relay restart or a dropped connection makes 'LOGIN
+REQUIRED' surface mid-task even though the user revoked nothing and is still
+authorized. That is not a reason to send them back to the portal: call
+wanctl_login(rebind="…") with the credential you saved and access comes back
+at once, with no round trip through a browser. Go through the OAuth flow again
+only when you have no saved rebind credential.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
@@ -152,9 +157,16 @@ wanctl_login{}  then  wanctl_login{"code":"ABC123"}
 
 *Report login state, and on a device the agent's mode and version*
 
-Report whether this MCP session is logged in, what namespace it's bound to,
-and the controller fingerprint. Call this if a tool says 'login required' and
-you're not sure if a login already completed.
+Answer "am I logged in, and as what" without touching the network. Reach for
+it when a tool said login was required and you are not sure whether a login
+already went through, or before telling the user which namespace you are about
+to act in. It reports the login state, the namespace this session is bound to,
+and this controller's fingerprint.
+
+It is not a reachability test. Whether a device exists and can be driven by
+this token is wanctl_peers; whether a particular device answers right now is
+the CLI's --target form. A clean status here and a failing exec are not a
+contradiction.
 
 **On the command line.**
 
@@ -178,8 +190,13 @@ wanctl_status{}
 
 *Clear the stored credentials*
 
-Clear this MCP session's stored credentials. Subsequent data tools
-(peers/exec/push/pull/logs) will require a fresh wanctl_login.
+Throw this session's credential away. Do it when the user asks to disconnect,
+or when the session is being handed to someone else — not as housekeeping at
+the end of a task, because the next tool call would then have to walk a human
+back through the portal.
+
+Afterwards every tool that touches a device — peers, exec, read, edit, write,
+push, pull, logs — answers 'LOGIN REQUIRED' until wanctl_login runs again.
 
 **On the command line.**
 
@@ -199,13 +216,24 @@ wanctl_logout{}
 
 *List reachable devices and whether their identity is pinned*
 
-List devices currently reachable by the active controller token. Returns each
-stable device ID with its display label and whether this session has pinned
-its identity yet ('identity: pinned' / 'identity: unpinned'); structured
-content contains backward-compatible devices and aliases fields plus an
-identity map keyed by the canonical namespace/device. Purely a local lookup —
-it dials nothing. Use this FIRST when the user asks 'what devices are
-available' or before guessing a target.
+Find out what this token can actually drive, before you name a target. Reach
+for it first whenever the user says a device name you have not used in this
+session, or asks what is available: a guessed target costs a round trip and
+returns an error that reads like a fault when it is only a typo. It is a local
+lookup and dials nothing, so it stays useful even when everything else is
+failing.
+
+Each entry is a stable device ID with its display label and whether this
+session has pinned that device's identity yet ('identity: pinned' / 'identity:
+unpinned'). Unpinned means first contact is still ahead of you: expect DEVICE
+IDENTITY CONFIRMATION REQUIRED on the first real call to it and answer that
+yourself with wanctl_trust_server. Structured content carries the same devices
+and aliases fields as before, plus an identity map keyed by the canonical
+namespace/device.
+
+A device the user swears exists but that is missing here is not reachable by
+this token — it is offline, or in another namespace, or shared to you and
+since revoked. Say that rather than retrying.
 
 ```
 wanctl peers
@@ -223,13 +251,20 @@ wanctl_peers{}
 
 *Check a device's trust state, or get the URL to pair with it*
 
-Check whether the target device already trusts this MCP session's controller
-identity, and if not, return the device-side pairing URL up front. On first
-contact this may instead return DEVICE IDENTITY CONFIRMATION REQUIRED; answer
-it yourself by calling wanctl_trust_server with the target and fingerprint
-from that result, then retry — no need to ask the user first. Once the server
-identity is pinned, returns '✓ already trusted' OR 'PAIRING REQUIRED' with a
-URL to relay VERBATIM to the user.
+Ask whether a device will take orders from this session before you try to give
+it one. Worth a call when you are about to start something disruptive on a
+device this session has not used yet, so the user gets the approval link up
+front rather than halfway through the work. Routine work does not need it:
+every other tool raises the same refusals on its own.
+
+Three answers, each with its own next move. '✓ already trusted' means go
+ahead. 'PAIRING REQUIRED' carries a URL valid for five minutes — relay it to
+the user VERBATIM, never paraphrased or shortened, wait for them to approve,
+then retry. 'DEVICE IDENTITY CONFIRMATION REQUIRED' is first contact and is
+yours to answer rather than the user's: call wanctl_trust_server with the
+target and fingerprint from that result, then call this again. Do not ask
+permission for that step; your MCP client's own approval prompt is the human
+checkpoint.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
@@ -253,15 +288,23 @@ wanctl_pair{"target":"home-pc"}
 
 *Run a command, or a whole script, on a device*
 
-Run a shell command, or a whole script, on a remote wanctl-enrolled device
-over the encrypted relay. Returns the device's stdout, stderr, and exit code.
-Pass EITHER 'command' (a one-liner) OR 'script' (multi-line source) — prefer
-'script' for anything with a $, a quote inside a quote, or more than one
-statement, because a script is transported encoded and is never parsed by the
-device's shell. If the device hasn't paired this controller yet, the result is
-isError=true with a 'PAIRING REQUIRED' message that carries a URL — surface
-that URL VERBATIM to the user; do not paraphrase. If instead it says DEVICE
-IDENTITY CONFIRMATION REQUIRED, that is first contact: call
+Run a command on a machine you are not running on, and get back its stdout,
+stderr and exit code. This is the general-purpose primitive: reach for it for
+things that are genuinely commands — git, a package manager, a service check —
+and not for looking at or changing files, which have their own tools and are
+covered below.
+
+Pass EITHER 'command' (a one-liner) OR 'script' (multi-line source). Choose
+'script' the moment the text carries a $, a quote inside a quote, or more than
+one statement: a script is transported encoded and is never parsed by the
+device's shell, so what you wrote is what runs. A one-liner is SOURCE CODE for
+that shell and is parsed there, which is why a nested `powershell -Command
+"...$x..."` is parsed twice and fails with a misleading error.
+
+If the device has not approved this controller yet, the result is isError=true
+with a 'PAIRING REQUIRED' message carrying a URL — surface that URL to the
+user VERBATIM, do not paraphrase it, and retry once they approve. 'DEVICE
+IDENTITY CONFIRMATION REQUIRED' is first contact instead: call
 wanctl_trust_server with the target and fingerprint it gives you and retry,
 without asking the user.
 
@@ -523,16 +566,24 @@ wanctl_write{"target":"lab","path":"/srv/run.sh",
 
 *Start a background job and return its id at once*
 
-Start a shell command as a BACKGROUND job on the device and return a job_id
-IMMEDIATELY, without waiting for it to finish. Use this for anything that may
-run longer than a single tool call comfortably tolerates — package installs,
-builds, large downloads, `wsl --shutdown` then a long build, etc. The command
-keeps running on the device even after this call returns; fetch its output and
-exit code later with wanctl_exec_poll(job_id). Always runs in a FRESH shell
-(no shared cwd/env with wanctl_exec's persistent session). Same pairing/policy
-rules as wanctl_exec. Jobs run for at most 30 minutes, retain at most 8 MiB
-output each, and finished results remain pollable for up to 1h subject to
-device-wide retention budgets.
+Start work that will not finish inside one tool call, and get a job_id back
+immediately. Reach for it BEFORE starting anything whose length you cannot
+honestly predict — a package install, a build, a large download, a dev server
+meant to stay up — because wanctl_exec holds the call open until the command
+ends, and a call that times out loses both the output and the knowledge that
+the thing is still running. Here the command keeps running on the device after
+this returns; collect its output and exit code with wanctl_exec_poll(job_id).
+
+It always runs in a FRESH shell. It does not inherit the working directory or
+the exported variables of wanctl_exec's persistent session, so pass 'cwd'
+explicitly instead of relying on a cd from an earlier call. Pairing, device
+identity and policy are exactly as for wanctl_exec.
+
+The ceilings are real: a job runs for at most 30 minutes, keeps at most 8 MiB
+of output, and stays pollable for up to an hour after it ends, subject to the
+device's overall retention budget. Anything that has to outlive those belongs
+in something the device itself supervises — a service, a scheduled task —
+started through this tool once.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
@@ -554,12 +605,22 @@ wanctl_exec_async{"target":"lab","command":"npm run dev","cwd":"/srv"}
 
 *Fetch a background job's new output and status*
 
-Fetch a background job's new output and status (started via
-wanctl_exec_async). Call repeatedly until state is 'done'. Pass the
-'next_offset' from the previous poll as 'offset' to receive only NEW output
-each time; omit or 0 to get everything from the start. The response carries a
-status header (state: running|done, exit code when done, next_offset) followed
-by the output.
+Collect what a background job has produced since you last looked. Call it
+after wanctl_exec_async and keep calling until state is 'done', which is also
+the only point at which an exit code exists — before that a job has no result,
+only output so far.
+
+Pass the previous poll's 'next_offset' back as 'offset' so each call returns
+only NEW output. Omit it or pass 0 only when you deliberately want everything
+from the start; re-reading the beginning on every poll is how a long build's
+output fills a conversation for no gain. The reply opens with a status header
+— state running|done, the exit code once done, next_offset — and the output
+follows it.
+
+A poll that returns no new output is neither a failure nor a reason to start
+the job again: it means nothing has been written since your last call. Wait,
+do something else, and poll again. Starting a second copy of a build is worse
+than waiting for the first.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
@@ -575,13 +636,22 @@ wanctl_exec_poll{"target":"home-pc","job_id":"j-7f2","offset":4096}
 
 *Upload a local file to a path on the device*
 
-Upload a local file to a remote path on the target device. Same pairing/policy
-rules as wanctl_exec. Available in stdio mode only (on a shared HTTP MCP
-server 'local' would be a path on the server itself). Paths under a
-dot-directory of the operator's home (~/.ssh, ~/.config, …) are refused;
-WANCTL_MCP_LOCAL_ROOT confines the tool to one tree. To change part of a file
-that is already on the device, use wanctl_edit rather than uploading a
-rewritten copy.
+Send a file that already exists on this machine to a path on the device. Reach
+for it for bytes you cannot type out: a compiled binary, an archive, an image.
+For anything expressible as text, prefer wanctl_write to create a file and
+wanctl_edit to change one — this tool replaces a whole file and silently
+discards whatever changed on the device since you last read it.
+
+Available in stdio mode only. On a shared HTTP MCP server it is withdrawn,
+because 'local' would name a path on the server rather than on the caller's
+machine; there the equivalent is wanctl_push_blob with inline content.
+
+Local paths are deliberately fenced: anything under a dot-directory of the
+operator's home (~/.ssh, ~/.config and the like) is refused, and when
+WANCTL_MCP_LOCAL_ROOT is set the tool cannot read outside that tree. Those
+refusals are the operator's policy rather than a transient error — report them
+and stop, do not go looking for another path to the same bytes. Pairing and
+device policy are the same as for wanctl_exec.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
@@ -607,14 +677,20 @@ wanctl_push{"target":"lab","local":"/tmp/app","remote":"/opt/app"}
 
 *Upload inline base64 content to a path on the device*
 
-Upload INLINE base64 content to a remote path on the target device — the
-file-push tool that works in HTTP (remote) MCP mode, where the AI host has no
-file on the MCP server for wanctl_push to read. Encode the bytes you want
-written as base64 and pass them in 'content_b64'. Same pairing/policy rules as
-wanctl_exec. Size cap: 8 MiB of raw (decoded) bytes; for larger payloads,
-split or have the device fetch the file itself. This tool OVERWRITES the whole
-file, discarding anything changed since you last read it — to patch an
-existing file, use wanctl_edit instead.
+Put bytes on the device when you have no file on the MCP server to send — the
+normal case in HTTP (remote) MCP mode, where wanctl_push is withdrawn because
+the AI host's files are not on the server. Encode what you want written as
+standard base64 and pass it in 'content_b64'.
+
+Reach for it for BINARY content. Text does not belong here: wanctl_write takes
+the content directly with no encoding step, and a CHANGE to a file that is
+already on the device belongs in wanctl_edit, because this tool overwrites the
+file whole and anything edited since you last read it is gone without a word.
+
+The cap is 8 MiB of raw (decoded) bytes; a larger body is refused, not
+truncated. Past that, split the payload or have the device fetch the file
+itself with wanctl_exec. Pairing and device policy are the same as for
+wanctl_exec.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
@@ -637,11 +713,16 @@ wanctl_push_blob{"target":"lab","remote":"/opt/run.sh",
 
 *Download a file from the device to a local path*
 
-Download a remote file from the target device to a local path. Same
-pairing/policy rules as wanctl_exec. Available in stdio mode only; the same
-local-path limits as wanctl_push apply. To inspect a text file rather than
-keep a copy of it — including on a shared HTTP MCP server, where this tool is
-unavailable — use wanctl_read.
+Bring a file off the device and keep it on this machine. Reach for it only
+when you need the actual bytes locally — a binary, an archive, a log you will
+hand to another tool. To LOOK at a text file, use wanctl_read instead: it
+needs no local file, it reports line ranges and the whole file's sha256, and
+it works on a shared HTTP MCP server where this tool is unavailable.
+
+stdio mode only, and the same local-path limits as wanctl_push apply:
+dot-directories of the operator's home are refused and WANCTL_MCP_LOCAL_ROOT
+confines the tool to one tree. Pairing and device policy are the same as for
+wanctl_exec.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
@@ -667,9 +748,19 @@ wanctl_pull{"target":"lab","remote":"/var/log/app.log","local":"./app"}
 
 *Read a device's activity log: connects, execs, file operations*
 
-Pull JSONL activity events from the target device's local log (every
-connect/exec/file with its decision and exit code). Useful for auditing what
-happened, including past pairing/approval outcomes.
+Find out what actually happened on a device, as the device itself recorded it.
+Reach for it when a call was refused and you need to know whether the owner
+ever saw the request, when the user asks what a controller did to their
+machine, or when an exec's own output does not explain its outcome. Every
+connect, exec and file operation is one JSONL event carrying the policy
+decision and the exit code, which is where an approval that was granted — or
+quietly never was — becomes visible.
+
+This is the LOG, not live state. It will not say whether a device is online
+now (wanctl_peers) or whether a background job is still running
+(wanctl_exec_poll). Narrow with 'type', 'grep' and 'since' rather than pulling
+everything and reading it here, and note that 'limit' keeps the most recent
+matches rather than the first.
 
 **On the command line.**
 
@@ -704,8 +795,18 @@ wanctl_logs{"target":"home-pc","type":"exec","limit":50}
 
 *Read recent portal or relay process logs*
 
-Read recent portal or relay process logs through the secret-gated admin API.
-Output is redacted before filtering and bounded by the requested limit.
+Read the portal's or the relay's own process log, for the one question a
+device's log cannot answer: whether the failure is on the server side at all.
+Reach for it when calls fail for every device rather than one, or when a
+pairing a user swears they approved never seems to arrive — not for auditing
+what a controller did to a device, which is wanctl_logs.
+
+It is gated on WANCTL_ADMIN_SECRET in the server's environment. Without it the
+call is refused and retrying changes nothing: say so and move on, because an
+ordinary user is not meant to have it. Output is redacted before your filter
+runs, so a 'grep' for a token or a code finds nothing even when the line is
+there — filter on the surrounding words instead. Keep 'since' short; the
+default lookback is 15 minutes and the hard cap is 2000 lines.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
@@ -730,8 +831,16 @@ wanctl_server_logs{"service":"relay","since":"30m"}
 
 *Show this controller identity's fingerprint*
 
-Show THIS MCP session's controller identity fingerprint. The fingerprint is
-what target devices pair against in the trust step.
+Show THIS controller's own fingerprint — the string a device owner sees on the
+approval screen and pins. Reach for it when a user is standing at their device
+deciding whether to approve a pairing and wants to check that the fingerprint
+in front of them is yours, or when a device lists a trusted controller and the
+question is whether that is this session.
+
+It is about this side of the connection only. The DEVICE's fingerprint, the
+one you pin with wanctl_trust_server, is a different string and never comes
+from here — it arrives inside the DEVICE IDENTITY CONFIRMATION REQUIRED
+message.
 
 ```
 wanctl id
@@ -745,9 +854,18 @@ wanctl_id{}
 
 *List the trust store*
 
-List the trust store for THIS MCP session. 'servers' (default) = explicitly
-pinned devices. 'clients' = controllers this machine has trusted to drive it
-(only meaningful in stdio mode if this machine is also running wanctl agent).
+List what this session has already decided to trust, which is how you tell
+first contact from a changed identity before acting on either. 'servers' (the
+default) is the devices whose identity this session has pinned: a target that
+is missing from that list will raise DEVICE IDENTITY CONFIRMATION REQUIRED on
+the next call and you answer it with wanctl_trust_server, while a target that
+IS in the list and raises DEVICE IDENTITY MISMATCH has changed under you and
+is a matter for the user, not for another tool call.
+
+'clients' is the other direction — controllers this machine has allowed to
+drive it — and only means anything in stdio mode on a machine that is also
+running wanctl agent. On a controller-only host, and on an HTTP MCP server, it
+is empty, and that emptiness is normal rather than a symptom.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
@@ -765,19 +883,26 @@ wanctl_trust{"which":"servers"}
 
 *Pin a device's identity for this controller*
 
-Pin a device's identity for THIS session. Call it as soon as any tool returns
-DEVICE IDENTITY CONFIRMATION REQUIRED, passing the target and fingerprint
-copied VERBATIM from that result, then retry the call that failed — do not ask
-the user to confirm the fingerprint first, because your MCP client's own
-approval prompt is already the human checkpoint. This is a first-contact step
-only: it records what the device presented right now, so later calls can
-detect a change. If a call instead returns 'DEVICE IDENTITY MISMATCH', do NOT
-call this tool — report both the pinned and the presented fingerprint to the
-user and stop; re-pinning is a human's decision at a terminal. Note: the
-handler refuses unless the operator has set
-WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1 (the hosted endpoint does; a local
-stdio server usually does not, and there a human runs `wanctl trust server`
-instead).
+Pin what a device presented on first contact, so that a later change in its
+identity can be detected. Call it as soon as any tool returns DEVICE IDENTITY
+CONFIRMATION REQUIRED, passing the target and fingerprint copied VERBATIM out
+of that result, then retry the call that failed. Do not stop to ask the user
+to confirm the fingerprint first: your MCP client's own approval prompt is
+already the human checkpoint, and on first contact there is nothing to compare
+the fingerprint against anyway. This records what the device presented right
+now; that is its whole purpose, and it is a one-time step per device.
+
+'DEVICE IDENTITY MISMATCH' is the opposite situation, and this tool is the
+wrong answer to it. There the device presented something other than what is
+pinned — a reinstall, or someone standing in the middle. Do NOT call this
+tool: report both the pinned and the presented fingerprint to the user and
+stop. Re-pinning is a decision a human makes at a terminal with `wanctl trust
+server --replace`.
+
+The handler refuses outright unless the operator has set
+WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1. The hosted endpoint sets it; a local
+stdio server usually does not, and there the way forward is to tell the user
+to run `wanctl trust server` themselves rather than to retry.
 
 **On the command line.**
 
@@ -807,9 +932,20 @@ wanctl_trust_server{"target":"ns/home-pc","fingerprint":"SHA256:…"}
 
 *List the policy rules this machine enforces on controllers*
 
-List the local policy rules (allow-list) on THIS machine. Only meaningful in
-stdio mode if this machine is also running wanctl agent; for controller-only
-and HTTP-mode hosts the list is empty.
+List the policy THIS machine enforces on controllers that dial into it — what
+the agent running here allows without stopping to ask a human. Read it when
+you are working on the device side of the connection and want to know why a
+controller is being refused.
+
+It says nothing about what a remote device will let you do. A 'denied by
+device policy' answer from exec, read, write or screenshot comes from that
+device's own rules, which live on that device and cannot be read from here;
+the way through is its owner approving the pending request, not a call to this
+tool.
+
+Only meaningful in stdio mode on a machine that is also running wanctl agent.
+For a controller-only host and for an HTTP MCP server the list is empty, and
+that is not a fault to investigate.
 
 **On the command line.**
 
