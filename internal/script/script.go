@@ -259,17 +259,44 @@ const shortHex = 16
 // device wrote, and the trailing … says out loud that this is not the whole
 // thing and is not what goes in `--pattern`.
 //
-// Anything that is not a token is returned unchanged.
+// Only something this package could have produced is abbreviated: the prefix,
+// an interpreter we know, and exactly one SHA-256 in lowercase hex. Everything
+// else comes back untouched. Callers must pass Canonical's own return value
+// rather than an arbitrary command, and this check is the second lock on that:
+// `script:sh:0123456789abcdef; printf pwned` is a shell command wearing a
+// token's clothes, and abbreviating it would show a human the first half and
+// hide the part that runs (review of #108, 2026-09-18).
 func Short(token string) string {
 	rest, ok := strings.CutPrefix(token, CanonicalPrefix)
 	if !ok {
 		return token
 	}
 	interp, digest, ok := strings.Cut(rest, ":")
-	if !ok || len(digest) <= shortHex {
+	if !ok {
+		return token
+	}
+	switch Interp(interp) {
+	case POSIX, PowerShell:
+	default:
+		return token
+	}
+	if len(digest) != hex.EncodedLen(sha256.Size) || !isLowerHex(digest) {
 		return token
 	}
 	return CanonicalPrefix + interp + ":" + digest[:shortHex] + "…"
+}
+
+// isLowerHex reports whether s is what hex.EncodeToString produces, so nothing
+// carrying a shell operator, a space or an upper-case byte can pass for a
+// digest.
+func isLowerHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // CanonicalPrefix marks a rule pattern that names a script rather than a
