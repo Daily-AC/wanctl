@@ -338,7 +338,7 @@ func TestDelegationPostgresApprovalDurationBounds(t *testing.T) {
 		if !ok || access.GrantedMinutes != tc.minutes {
 			t.Fatalf("%d minutes resolved as %d (ok=%v)", tc.minutes, access.GrantedMinutes, ok)
 		}
-		if allowance := delegation.MaxJobs(time.Duration(access.GrantedMinutes)*time.Minute); allowance < delegation.MinJobsPerGrant {
+		if allowance := delegation.MaxJobs(time.Duration(access.GrantedMinutes) * time.Minute); allowance < delegation.MinJobsPerGrant {
 			t.Fatalf("%d minutes allows %d jobs", tc.minutes, allowance)
 		}
 	}
