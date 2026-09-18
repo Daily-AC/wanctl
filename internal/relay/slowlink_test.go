@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -785,6 +786,182 @@ func TestGracefulCloseStaysDrainable(t *testing.T) {
 	}
 	if r.session(sid) != nil {
 		t.Fatal("a fully drained closed session was left in the registry")
+	}
+}
+
+// downPoll drives one /h/down straight through the handler, with no server or
+// carrier in the way, so a test can interleave the two directions by hand.
+func downPoll(t *testing.T, r *Relay, sid, role string, ack uint64) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("GET", fmt.Sprintf("/h/down?session=%s&role=%s&ack=%d", sid, role, ack), nil)
+	req.Header.Set("Authorization", "Bearer tok-alice")
+	rec := httptest.NewRecorder()
+	r.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+func upPost(t *testing.T, r *Relay, sid, role string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/h/up?session="+sid+"&role="+role, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok-alice")
+	rec := httptest.NewRecorder()
+	r.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+// Reaching the end of one direction says nothing about the other. The reader
+// that finished still leaves its peer holding an unacknowledged chunk and the
+// tail of a split one, and retiring the session on that first EOF takes both
+// away: the peer's next poll gets a 404 for bytes the relay had promised to
+// keep. Covered for both ways a session ends gracefully, and for a poll that
+// was already parked on the empty direction when the close landed.
+func TestGracefulCloseWaitsForBothDirections(t *testing.T) {
+	closers := map[string]func(t *testing.T, r *Relay, s *httpSession, sid string){
+		"peer posts /h/close": func(t *testing.T, r *Relay, s *httpSession, sid string) {
+			req := httptest.NewRequest("POST", "/h/close?session="+sid, nil)
+			req.Header.Set("Authorization", "Bearer tok-alice")
+			rec := httptest.NewRecorder()
+			r.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("close = %d, want 200", rec.Code)
+			}
+		},
+		"websocket leg ends": func(t *testing.T, r *Relay, s *httpSession, sid string) {
+			if err := r.httpSessionConn(sid, s, "client").(io.Closer).Close(); err != nil {
+				t.Fatalf("bridge close: %v", err)
+			}
+		},
+	}
+	for name, closeSession := range closers {
+		for _, parked := range []bool{false, true} {
+			label := name
+			if parked {
+				label += "/with a poll already parked"
+			}
+			t.Run(label, func(t *testing.T) {
+				r, s, sid := tunnelSession(t)
+
+				// The agent is mid-stream: one chunk delivered but not yet
+				// acknowledged, and a tail left over from splitting at the cap.
+				const tail = 5
+				payload := bytes.Repeat([]byte("A"), maxDrainBytes+tail)
+				s.toAgent.push(payload)
+				first := downPoll(t, r, sid, "agent", 0)
+				if first.Code != http.StatusOK || first.Body.Len() != maxDrainBytes {
+					t.Fatalf("first agent poll = %d with %d bytes, want 200 with %d", first.Code, first.Body.Len(), maxDrainBytes)
+				}
+
+				// The controller has read everything it was sent and parks on
+				// an empty queue, either before or after the close.
+				empty := make(chan *httptest.ResponseRecorder, 1)
+				if parked {
+					go func() { empty <- downPoll(t, r, sid, "client", 0) }()
+					if !awaitPendingDrains(1) {
+						t.Fatal("the controller poll never reached the queue")
+					}
+				}
+				closeSession(t, r, s, sid)
+				if !parked {
+					empty <- downPoll(t, r, sid, "client", 0)
+				}
+				select {
+				case rec := <-empty:
+					if rec.Code != http.StatusGone {
+						t.Fatalf("poll on the drained direction = %d, want 410", rec.Code)
+					}
+				case <-time.After(30 * time.Second):
+					t.Fatal("the parked controller poll never woke")
+				}
+
+				// None of that is the agent's business: its chunk and the tail
+				// behind it must still be there.
+				resend := downPoll(t, r, sid, "agent", 0)
+				if resend.Code != http.StatusOK {
+					t.Fatalf("agent re-poll = %d, want the unacknowledged chunk re-sent; the other direction draining retired the session",
+						resend.Code)
+				}
+				if !bytes.Equal(resend.Body.Bytes(), payload[:maxDrainBytes]) {
+					t.Fatalf("agent re-poll returned %d bytes, want the same %d", resend.Body.Len(), maxDrainBytes)
+				}
+				seq, err := strconv.ParseUint(resend.Header().Get(httpconn.DownSeqHeader), 10, 64)
+				if err != nil {
+					t.Fatalf("re-send carried no sequence: %v", err)
+				}
+				rest := downPoll(t, r, sid, "agent", seq)
+				if rest.Code != http.StatusOK || !bytes.Equal(rest.Body.Bytes(), payload[maxDrainBytes:]) {
+					t.Fatalf("split tail = %d %q, want 200 with the last %d bytes", rest.Code, rest.Body.Bytes(), tail)
+				}
+				tailSeq, err := strconv.ParseUint(rest.Header().Get(httpconn.DownSeqHeader), 10, 64)
+				if err != nil {
+					t.Fatalf("tail carried no sequence: %v", err)
+				}
+				// Now both directions really are empty, so the session goes.
+				if done := downPoll(t, r, sid, "agent", tailSeq); done.Code != http.StatusGone {
+					t.Fatalf("poll after the last byte = %d, want 410", done.Code)
+				}
+				if r.session(sid) != nil {
+					t.Fatal("a session both sides had drained was left in the registry")
+				}
+			})
+		}
+	}
+}
+
+// A gracefully closed session stays reachable so the far side can finish
+// reading it. That is not permission to write to it again: keeping the session
+// registered used to leave /h/up wide open, and push picking between a writable
+// queue and a closed one let some of those uploads land.
+func TestUploadsAfterGracefulCloseAreRejected(t *testing.T) {
+	r, s, sid := tunnelSession(t)
+	closeReq := httptest.NewRequest("POST", "/h/close?session="+sid, nil)
+	closeReq.Header.Set("Authorization", "Bearer tok-alice")
+	rec := httptest.NewRecorder()
+	r.Handler().ServeHTTP(rec, closeReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("close = %d, want 200", rec.Code)
+	}
+	accepted := 0
+	for range 64 {
+		if upPost(t, r, sid, "client", []byte("late")).Code == http.StatusOK {
+			accepted++
+		}
+	}
+	if accepted != 0 {
+		t.Fatalf("%d of 64 uploads were accepted after the session was closed", accepted)
+	}
+	if queued := len(s.toAgent.ch); queued != 0 {
+		t.Fatalf("%d chunks were queued onto a closed session", queued)
+	}
+	// An empty body never reaches the queue, so it has to be refused by the
+	// same check rather than falling through to a 200.
+	if code := upPost(t, r, sid, "client", nil).Code; code != http.StatusGone {
+		t.Fatalf("empty upload after close = %d, want 410", code)
+	}
+}
+
+// An upload genuinely racing the close may land or be refused, but the answer
+// and the queue have to agree: a 200 means those bytes are there to be read.
+func TestUploadRacingGracefulCloseIsAllOrNothing(t *testing.T) {
+	for i := range 64 {
+		r, s, sid := tunnelSession(t)
+		chunk := []byte("racing")
+		start := make(chan struct{})
+		done := make(chan struct{})
+		go func() {
+			<-start
+			r.closeHTTPSessionDrainable(sid, s)
+			close(done)
+		}()
+		close(start)
+		code := upPost(t, r, sid, "client", chunk).Code
+		<-done
+		queued := len(s.toAgent.ch)
+		switch {
+		case code == http.StatusOK && queued != 1:
+			t.Fatalf("run %d: upload answered 200 but %d chunks are queued", i, queued)
+		case code != http.StatusOK && queued != 0:
+			t.Fatalf("run %d: upload answered %d but %d chunks were queued anyway", i, code, queued)
+		}
 	}
 }
 
