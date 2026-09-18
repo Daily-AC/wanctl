@@ -8,36 +8,29 @@ import (
 	"testing"
 )
 
-// skillPortal answers discovery the way a relay with WebFetch enabled does.
-func skillPortal(t *testing.T, enabled bool) *Server {
+// skillPortal answers nothing: like the quick reference, the skill is built
+// from configuration, so a public fetch of it must never become a relay
+// request.
+func skillPortal(t *testing.T, relay string) *Server {
 	t.Helper()
-	return newTestPortal(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/webfetch/v1" {
-			t.Fatalf("the skill route must not call anything but discovery: %s", r.URL.Path)
-		}
-		if !enabled {
-			// A relay built without a seed serves no adapter at all.
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]string{
-			"protocol":           "wanctl.webfetch.v1",
-			"start_url_template": "https://relay.test/webfetch/new/{client_nonce}",
-		})
+	s := newTestPortal(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("the public skill route must not contact the relay: %s", r.URL.Path)
 	})
+	s.relayPublic = relay
+	return s
 }
 
-func fetchSkill(t *testing.T, s *Server, query string) *httptest.ResponseRecorder {
+func fetchSkill(t *testing.T, s *Server) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()
 	// Deliberately no session cookie and no identity header: the AI that loads
 	// this file has neither.
-	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/webfetch/skill"+query, nil))
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/webfetch/skill", nil))
 	return w
 }
 
 func TestWebFetchSkillIsPublicMarkdownForThisInstance(t *testing.T) {
-	w := fetchSkill(t, skillPortal(t, true), "")
+	w := fetchSkill(t, skillPortal(t, "https://relay.test"))
 	body := w.Body.String()
 	if w.Code != http.StatusOK || w.Header().Get("Location") != "" {
 		t.Fatalf("anonymous skill = %d %s", w.Code, w.Header().Get("Location"))
@@ -70,35 +63,15 @@ func TestWebFetchSkillIsPublicMarkdownForThisInstance(t *testing.T) {
 	}
 }
 
-func TestWebFetchSkillJSONCarriesTheSameMarkdown(t *testing.T) {
-	s := skillPortal(t, true)
-	markdown := fetchSkill(t, s, "").Body.String()
-	w := fetchSkill(t, s, "?format=json")
-	var out struct {
-		Protocol string `json:"protocol"`
-		Skill    string `json:"skill"`
-		SkillURL string `json:"skill_url"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-		t.Fatalf("format=json is not JSON: %v", err)
-	}
-	if out.Protocol != "wanctl.webfetch.v1" || out.Skill != markdown {
-		t.Errorf("json skill = %q, %d bytes; markdown is %d bytes", out.Protocol, len(out.Skill), len(markdown))
-	}
-	if out.SkillURL != "http://example.com/webfetch/skill" {
-		t.Errorf("skill_url = %q", out.SkillURL)
-	}
-}
-
-// Nothing here works without the adapter, so the route says so in the only way
-// a URL reader understands rather than serving instructions that cannot run.
-func TestWebFetchSkillIs404WhenWebFetchIsDisabled(t *testing.T) {
-	w := fetchSkill(t, skillPortal(t, false), "")
+// Without a relay there is no protocol entry to send the reader to, and half a
+// skill is worse than none.
+func TestWebFetchSkillIs404WithoutARelay(t *testing.T) {
+	w := fetchSkill(t, skillPortal(t, ""))
 	if w.Code != http.StatusNotFound {
-		t.Fatalf("skill with WebFetch disabled = %d, want 404", w.Code)
+		t.Fatalf("skill without a configured relay = %d, want 404", w.Code)
 	}
 	if strings.Contains(w.Body.String(), "wanctl-webfetch") {
-		t.Error("the disabled route still served the skill")
+		t.Error("the unconfigured route still served the skill")
 	}
 }
 

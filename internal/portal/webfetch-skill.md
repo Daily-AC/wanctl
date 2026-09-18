@@ -35,10 +35,11 @@ mangles HTML.
    `tools[].call_url_template`. Copy a `target` exactly as given
    (`namespace/device_id`); never guess or abbreviate it.
 
-Grants last at most 60 minutes and are per conversation. Keep the full
-`status_url` and the `exec` call template in your reply so later turns can
-continue without redoing step 1. If a later call says the grant expired or was
-revoked, start again from step 1.
+A grant is per conversation and lasts as long as the owner approved; the
+discovery document states the maximum. Keep the full `status_url` and the
+`exec` call template in your reply so later turns can continue without redoing
+step 1. If a later call says the grant expired or was revoked, start again from
+step 1.
 
 ## 2. Call a tool
 
