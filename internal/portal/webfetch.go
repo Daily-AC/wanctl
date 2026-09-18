@@ -1,7 +1,9 @@
 package portal
 
 import (
+	"bytes"
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +17,50 @@ import (
 	"wanctl/internal/delegation"
 	"wanctl/internal/transport"
 )
+
+// The Agent Skill a web AI loads once instead of being handed a connection
+// prompt every conversation. It is a template: the two origins are this
+// instance's, so the served file names the relay and portal the reader can
+// actually reach.
+//
+// It lives beside this file rather than under web/, because everything under
+// web/ is embedded into the asset server and anything there that is not HTML
+// is served verbatim at /assets/ — which for this file would publish the
+// unfilled template, placeholders and all.
+//
+//go:embed webfetch-skill.md
+var webFetchSkill []byte
+
+const (
+	skillRelayPlaceholder  = "@WANCTL_RELAY@"
+	skillPortalPlaceholder = "@WANCTL_PORTAL@"
+)
+
+// handleWebFetchSkill serves the skill as Markdown, login-free: the AI that
+// loads it has no portal session, and the file carries no credential — only
+// this instance's two public origins and the protocol every client reads
+// anyway.
+//
+// Like the quick reference, it answers from configuration alone. A public
+// route that called the relay on every fetch would make an unauthenticated
+// GET into a relay request, and this one is meant to be fetched by whatever
+// URL reader the owner's chat happens to use. An instance with no relay
+// configured has no protocol to describe, so the route is 404 there.
+func (s *Server) handleWebFetchSkill(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.relayPublic == "" {
+		http.NotFound(w, r)
+		return
+	}
+	body := bytes.ReplaceAll(webFetchSkill, []byte(skillRelayPlaceholder), []byte(s.relayPublic))
+	body = bytes.ReplaceAll(body, []byte(skillPortalPlaceholder), []byte(s.requestOrigin(r)))
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Write(body)
+}
 
 // Public, credential-free instructions must be readable by the AI's HTTP client,
 // without the owner's portal session or a live relay request.
@@ -67,7 +113,8 @@ func (s *Server) handleWebFetchConnect(w http.ResponseWriter, r *http.Request) {
 	// The authenticated owner gets a unique bootstrap URL, not a grant. The AI
 	// still creates its request and waits for the owner's separate approval.
 	startURL := origin + "/webfetch/new/" + hex.EncodeToString(nonce[:])
-	s.render(w, "webfetch-connect.html", map[string]any{"NS": ns, "Relay": origin, "StartURL": startURL, "HelpURL": s.requestOrigin(r) + "/webfetch/help"})
+	s.render(w, "webfetch-connect.html", map[string]any{"NS": ns, "Relay": origin, "StartURL": startURL,
+		"HelpURL": s.requestOrigin(r) + "/webfetch/help", "SkillURL": s.requestOrigin(r) + "/webfetch/skill"})
 }
 
 type delegationDevice struct {

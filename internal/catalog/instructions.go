@@ -27,8 +27,7 @@ import (
 // `wanctl help <command>` away and does not belong here.
 func Instructions() string {
 	var b strings.Builder
-	b.WriteString("wanctl is " + Headline + ": your hands and eyes on a machine\n")
-	b.WriteString("you do not run on, behind that device owner's policy. A refusal is an answer.\n\n")
+	b.WriteString(instructionsHeader)
 
 	for _, c := range MCPCommands() {
 		b.WriteString(fmt.Sprintf("  %-20s %s\n", c.MCPName, instructionLine(c)))

@@ -954,6 +954,7 @@ var responseTemplate = template.Must(template.New("response").Parse(`<!doctype h
 <h1>wanctl WebFetch</h1>
 {{with .Document.summary}}<p>{{.}}</p>{{end}}
 {{with .Document.procedure}}<h2>Procedure</h2><ol>{{range .}}<li>{{.}}</li>{{end}}</ol>{{end}}
+{{with .Document.instructions}}<h2>The primitives, and how they fit together</h2><pre>{{.}}</pre>{{end}}
 {{with .Document.human_checkpoints}}<h2>The two things the human does</h2><ul>{{range .}}<li><strong>{{.name}}</strong> — {{.summary}} (link: <code>{{.url_field}}</code>)</li>{{end}}</ul>{{end}}
 {{with .Document.human_checkpoint}}<h2>{{.name}}</h2><p>{{.summary}}</p><p lang="zh-CN">{{.summary_zh}}</p>{{end}}
 {{if .Document.call_endpoint}}
@@ -982,7 +983,7 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, status int, da
 		return
 	}
 	var links []struct{ Name, URL string }
-	for _, key := range []string{"help_url", "entry_url", "owner_start_url", "approval_url", "status_url", "next_url", "result_url"} {
+	for _, key := range []string{"help_url", "skill_url", "entry_url", "owner_start_url", "approval_url", "status_url", "next_url", "result_url"} {
 		if value, ok := data[key].(string); ok {
 			links = append(links, struct{ Name, URL string }{key, value})
 		}

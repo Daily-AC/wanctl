@@ -50,6 +50,16 @@ generate their own secure random nonce as follows.
    the device's operation rules or enable bypass.
 5. Revoke the delegation from **Settings → Access tokens** when finished.
 
+A chat that accepts an Agent Skill needs none of that per conversation. The
+portal serves one at `/webfetch/skill`: a login-free Markdown file with YAML
+frontmatter (`name: wanctl-webfetch`), filled in with this instance's relay and
+portal origins, linked from the connect page and advertised as `skill_url` in
+discovery. Pasted into a Claude project, a custom GPT or any host with a skill
+setting, it replaces the copied connection prompt: the AI already knows to start
+at this relay's `/webfetch/v1`, and the owner only asks for the work. The route
+carries no credential and grants nothing, and it answers from configuration
+alone like `/webfetch/help`, so a public fetch never becomes a relay request.
+
 Only owned devices with persistent IDs and recorded fingerprints can be selected
 in this initial version. Ordinary cross-account sharing is unchanged. Device
 renames do not change grants; device removal or certificate rotation invalidates
@@ -120,7 +130,12 @@ operation or result is exposed.
 ### Discovery and independent requests
 
 `GET /webfetch/v1` (also `/webfetch`) is public, static and credential-free.
-It also advertises `owner_start_url` for clients without a secure random generator.
+It also advertises `owner_start_url` for clients without a secure random generator,
+`skill_url` for hosts that load an Agent Skill, and an `instructions` block: the
+primitives and the dev loop rendered from the same catalog `wanctl help
+--instructions` and the MCP server's instructions field render from, narrowed to
+the four tools a delegated session has, so the two surfaces cannot drift. The
+protocol's own procedure, human checkpoints and security rules stay here.
 It returns `start_url_template: https://RELAY/webfetch/new/{client_nonce}`.
 `GET /webfetch/new/CLIENT_NONCE` creates a pending request and returns its
 `approval_url`, `status_url` and `continuation_prompt`. Templates must be filled
