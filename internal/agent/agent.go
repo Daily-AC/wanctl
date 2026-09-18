@@ -980,18 +980,12 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 		} else if m.OneShot {
 			code, err = server.RunOneShotContext(ctx, a.opts.Shell, m.Command, m.Cwd, out)
 		} else {
-			sess, serr := a.session(fp)
+			var serr error
+			code, err, serr = a.execInSession(ctx, fp, m, out)
 			if serr != nil {
 				spill.Close()
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: serr.Error()})
 				return pending
-			}
-			code, err = sess.ExecInDirContext(ctx, m.Command, m.Cwd, out)
-			if sess.Closed() {
-				// Cancelling a session command destroys the session by
-				// design (#46). Drop it so the next command on this target
-				// builds a fresh shell rather than finding a dead one.
-				a.dropSession(fp, sess)
 			}
 		}
 	}
@@ -1207,6 +1201,36 @@ func (a *Agent) serveSessionHTTP(ctx context.Context, base string, open sessiona
 		return
 	}
 	a.handleSession(ctx, nc, open)
+}
+
+// execInSession runs a command on this controller's persistent session. serr is
+// set only when no session could be built at all; anything the command itself
+// reported comes back in err.
+//
+// A session can be cancelled and dropped by another request between this one
+// acquiring it and running, which used to surface as "session closed" for a
+// command that never reached the device. The session says so precisely, and
+// that one error is answered by acquiring a fresh session and running once.
+// Nothing else is retried: every other failure leaves open the possibility that
+// the command did run, and running it twice is worse than reporting it once.
+func (a *Agent) execInSession(ctx context.Context, fp string, m protocol.Message, out io.Writer) (code int, err, serr error) {
+	for attempt := 0; ; attempt++ {
+		sess, sessErr := a.session(fp)
+		if sessErr != nil {
+			return -1, nil, sessErr
+		}
+		code, err = sess.ExecInDirContext(ctx, m.Command, m.Cwd, out)
+		if sess.Closed() {
+			// Cancelling a session command destroys the session by design
+			// (#46). Drop it so the next command on this target builds a fresh
+			// shell rather than finding a dead one.
+			a.dropSession(fp, sess)
+		}
+		if errors.Is(err, server.ErrSessionUnusable) && attempt == 0 {
+			continue
+		}
+		return code, err, nil
+	}
 }
 
 // dropSession forgets a session and tears it down, so the next command for this

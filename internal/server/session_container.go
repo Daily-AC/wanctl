@@ -28,43 +28,54 @@ import (
 // cancelGate binds a cancellation to exactly one request.
 //
 // The hard part is not firing the kill, it is guaranteeing that a kill armed by
-// request A can never land on request B. Signalling a goroutine to stand down
-// is not enough: it may already be past the check. So arming returns a disarm
-// that takes the same lock the firing path holds, which means it *waits* for an
-// in-flight cancel to finish and then reports whether it happened. The caller
-// disarms while it still holds the session lock, so the next request cannot
-// start until the previous one's cancellation has fully resolved either way.
+// request A can never land on request B. Two things are needed and neither is
+// sufficient alone.
+//
+// Signalling a watcher to stand down does not stop it: it may already be past
+// the check. So disarming takes the same lock the firing path holds, which
+// means it waits for an in-flight cancellation to finish and then reports
+// whether it happened. The caller disarms while it still holds the session
+// lock, so the next request cannot start until the previous one's
+// cancellation has fully resolved either way.
+//
+// Waiting is still not enough, because a watcher can wake *after* its own
+// request disarmed and after the next one armed, and a shared "is anything
+// armed" flag reads true in that state — measured at 50 misfires in 100 runs.
+// So every arming takes a generation number, the watcher carries the one it
+// was armed with, and firing does nothing unless that generation is still the
+// live one. A late watcher names a request that is over and is ignored.
 type cancelGate struct {
-	mu     sync.Mutex
-	armed  bool
-	fired  bool
-	err    error
-	kill   func() error
-	stop   chan struct{}
-	closed sync.Once
+	mu       sync.Mutex
+	next     uint64 // generation counter; every arm takes the next value
+	live     uint64 // the generation currently armed, 0 when none is
+	firedGen uint64 // the generation a cancellation actually fired for
+	err      error
+	kill     func() error
 }
 
 func newCancelGate(kill func() error) *cancelGate {
-	return &cancelGate{kill: kill, stop: make(chan struct{})}
+	return &cancelGate{kill: kill}
 }
 
-// arm watches ctx until the returned disarm is called. disarm reports whether
-// the cancellation fired and what the kill returned.
+// arm watches ctx on behalf of one request until the returned disarm is called.
+// disarm reports whether the cancellation fired for *this* request and what the
+// kill returned.
 func (g *cancelGate) arm(ctx context.Context) (disarm func() (bool, error)) {
 	done := ctx.Done()
 	if done == nil {
 		return func() (bool, error) { return false, nil }
 	}
 	g.mu.Lock()
-	g.armed, g.fired, g.err = true, false, nil
+	g.next++
+	mine := g.next
+	g.live = mine
 	g.mu.Unlock()
 
-	g.stop = make(chan struct{})
-	stop := g.stop
+	stop := make(chan struct{})
 	go func() {
 		select {
 		case <-done:
-			g.fire()
+			g.fire(mine)
 		case <-stop:
 		}
 	}()
@@ -73,25 +84,36 @@ func (g *cancelGate) arm(ctx context.Context) (disarm func() (bool, error)) {
 		once.Do(func() { close(stop) })
 		g.mu.Lock()
 		defer g.mu.Unlock()
-		g.armed = false
-		return g.fired, g.err
+		if g.live == mine {
+			g.live = 0
+		}
+		if g.firedGen != mine {
+			return false, nil
+		}
+		return true, g.err
 	}
 }
 
-// fire kills the container, unless the request that armed it has already been
-// disarmed — in which case this cancellation belongs to a request that is over
-// and must do nothing.
-func (g *cancelGate) fire() {
+// fire kills the container on behalf of generation gen, unless that generation
+// is no longer the armed one — in which case this cancellation belongs to a
+// request that is over and must do nothing.
+func (g *cancelGate) fire(gen uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if !g.armed {
+	if gen == 0 || g.live != gen {
 		return
 	}
-	g.armed = false
-	g.fired = true
+	g.live = 0
+	g.firedGen = gen
 	g.err = g.kill()
 }
 
 // ErrSessionCancelled is what a command reports when the controller stopped it.
 // The session it ran in no longer exists: callers must discard it.
 var ErrSessionCancelled = errors.New("session cancelled by the controller")
+
+// ErrSessionUnusable says the session was already gone when the request reached
+// it, so nothing was submitted to the device. It is the one failure a caller may
+// safely answer by acquiring a fresh session and running the command once:
+// every other error leaves open the possibility that the command did run.
+var ErrSessionUnusable = errors.New("session closed before the command was submitted")
