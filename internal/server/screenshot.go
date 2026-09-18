@@ -79,7 +79,7 @@ func captureScreen(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	if len(png) == 0 {
-		return nil, fmt.Errorf("the capture tool produced an empty file; on macOS this usually means this agent has not been granted Screen Recording permission in System Settings → Privacy & Security")
+		return nil, fmt.Errorf("the capture tool produced an empty file; on macOS this usually means %s", screenRecordingRemedy)
 	}
 	if !bytes.HasPrefix(png, []byte("\x89PNG\r\n\x1a\n")) {
 		return nil, fmt.Errorf("the capture tool produced %d bytes that are not a PNG", len(png))
@@ -139,9 +139,40 @@ func runCapture(ctx context.Context, tool string, args ...string) error {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return fmt.Errorf("%s failed: %s", filepath.Base(tool), msg)
+		return captureFailure(tool, msg)
 	}
 	return nil
+}
+
+// screenRecordingRemedy is what a person has to do about a macOS capture that
+// TCC refused. It is one sentence because it arrives at the controller inside a
+// `remote error:` line, often in front of an AI harness rather than a human.
+const screenRecordingRemedy = "this agent has not been granted Screen Recording permission: " +
+	"open System Settings → Privacy & Security → Screen Recording, add the wanctl binary " +
+	"(or the app that launched the agent, such as Terminal), turn it on, then restart the agent"
+
+// screenRecordingDenied reports whether a screencapture failure is macOS
+// withholding the screen for want of that permission.
+//
+// screencapture does not set an exit code that distinguishes this from any
+// other failure, and it does not name TCC: all a denied process is told is that
+// the display would not yield an image. Both spellings macOS has used are
+// matched, and the display number that follows is left out of the comparison.
+func screenRecordingDenied(msg string) bool {
+	return strings.Contains(strings.ToLower(msg), "create image from display")
+}
+
+// captureFailure turns one capture tool's stderr into the error the controller
+// reads. Only screencapture gets the permission remedy appended, which is the
+// darwin path by construction: no other platform ships that tool. The original
+// line is kept in front of the remedy, so anything already matching on it —
+// a log, a person searching the web for it — still finds it.
+func captureFailure(tool, msg string) error {
+	base := filepath.Base(tool)
+	if base == "screencapture" && screenRecordingDenied(msg) {
+		return fmt.Errorf("%s failed: %s: %s", base, msg, screenRecordingRemedy)
+	}
+	return fmt.Errorf("%s failed: %s", base, msg)
 }
 
 // windowsCapture is the PowerShell that blits the virtual screen — every
