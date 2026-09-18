@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -273,24 +275,256 @@ func TestCancelUnderErrexitReportsCancellation(t *testing.T) {
 	}
 }
 
-// A kill that failed must reach the caller. Reporting a clean cancellation when
-// the device could not stop anything is the one answer that is never true.
-func TestFailedKillIsReportedNotSwallowed(t *testing.T) {
+// A kill that failed must reach the caller, and reach it while the command it
+// could not stop is still running. Waiting for that command to end by itself is
+// the one thing a cancellation cannot do.
+func TestFailedKillIsReportedWhileTheCommandStillRuns(t *testing.T) {
 	session := newTestSession(t)
-	session.gate = newCancelGate(func() error { return errors.New("no permission to signal the group") })
+	// The kill does nothing and reports why. The shell therefore survives and
+	// the marker never comes, so nothing but cutting the output can return
+	// this command — which is the point. The session's own Close cleans up.
+	session.killContainer = func() error {
+		return errors.New("no permission to signal the group")
+	}
 
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	done := runAsync(session, ctx, parkChild(pidFile, 2))
-	waitForPIDFile(t, pidFile)
-	cancel()
+	done := runAsync(session, ctx, parkChild(pidFile, 600))
+	pid := waitForPIDFile(t, pidFile)
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
 
-	r := awaitExec(t, done, 10*time.Second)
+	start := time.Now()
+	cancel()
+	r := awaitExec(t, done, 5*time.Second)
+	// Comfortably inside sessionWaitDelay: this must not be the reaper timing
+	// out on the pipes, it must be the cancellation cutting the output itself.
+	if took := time.Since(start); took > sessionWaitDelay/2 {
+		t.Fatalf("the failed kill took %s to reach the caller; the command runs for ten minutes", took)
+	}
 	if !errors.Is(r.err, ErrSessionCancelled) {
 		t.Fatalf("failed cancel = (%d, %v), want it to still report a cancellation", r.code, r.err)
 	}
 	if !strings.Contains(r.err.Error(), "no permission to signal the group") {
 		t.Fatalf("failed cancel reported %q without saying the kill failed", r.err)
+	}
+}
+
+// A watcher can wake after its own request disarmed and after the next request
+// armed. A gate that only asks "is anything armed" reads true in that state and
+// destroys a session nobody cancelled — 50 times in 100 under the scheduling
+// the review used. Generations make the late watcher name a request that is
+// over.
+func TestLateWatcherCannotFireForTheRequestThatFollowedIt(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	for range 100 {
+		var kills atomic.Int32
+		gate := newCancelGate(func() error { kills.Add(1); return nil })
+
+		first, cancelFirst := context.WithCancel(context.Background())
+		disarmFirst := gate.arm(first)
+		disarmFirst()
+		cancelFirst() // the first request is over; its watcher wakes now
+
+		second, cancelSecond := context.WithCancel(context.Background())
+		disarmSecond := gate.arm(second)
+		runtime.Gosched() // let the first watcher run against the second arming
+		fired, _ := disarmSecond()
+		cancelSecond()
+		runtime.Gosched()
+
+		if fired {
+			t.Fatalf("a request whose context was never cancelled was reported cancelled")
+		}
+		if got := kills.Load(); got != 0 {
+			t.Fatalf("a watcher belonging to a finished request killed the session %d times", got)
+		}
+	}
+}
+
+// The same thing against a real shell, with the stale callback invoked directly
+// so there is no scheduling to wait on.
+func TestStaleCancelCallbackCannotKillTheNextCommand(t *testing.T) {
+	session := newTestSession(t)
+	var stale func()
+	first, cancelFirst := context.WithCancel(context.Background())
+	defer cancelFirst()
+	// Capture the firing callback exactly as the first request's watcher holds
+	// it, generation and all, then end that request.
+	gen := armAndCaptureGeneration(t, session, first)
+	stale = func() { session.gate.fire(gen) }
+
+	second, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	done := runAsync(session, second, parkChild(pidFile, 600))
+	pid := waitForPIDFile(t, pidFile)
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+
+	stale() // the first request's cancellation, arriving during the second
+
+	select {
+	case r := <-done:
+		t.Fatalf("an uncancelled command was stopped by an earlier request's cancellation: (%d, %v)", r.code, r.err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if session.Closed() {
+		t.Fatal("the session was destroyed by a cancellation belonging to a finished request")
+	}
+	if second.Err() != nil {
+		t.Fatal("the second request's own context was cancelled; the test proves nothing")
+	}
+
+	cancelSecond()
+	if r := awaitExec(t, done, 5*time.Second); !errors.Is(r.err, ErrSessionCancelled) {
+		t.Fatalf("the second request's own cancel = (%d, %v)", r.code, r.err)
+	}
+}
+
+// armAndCaptureGeneration arms the gate for ctx, ends that request, and returns
+// the generation its watcher would fire with.
+func armAndCaptureGeneration(t *testing.T, session *ShellSession, ctx context.Context) uint64 {
+	t.Helper()
+	disarm := session.gate.arm(ctx)
+	session.gate.mu.Lock()
+	gen := session.gate.next
+	session.gate.mu.Unlock()
+	disarm()
+	return gen
+}
+
+// A descendant that left the container still holds the shell's stdout. The
+// cancellation must not wait for it: if it does, the command never returns,
+// Closed() never answers, and the session can never be replaced.
+func TestEscapedDescendantCannotHoldACancelledSession(t *testing.T) {
+	session := newTestSession(t)
+	pidFile := filepath.Join(t.TempDir(), "escaped.pid")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// `set -m` turns on job control, which puts the background job in a process
+	// group of its own — outside the container the session is killed by.
+	done := runAsync(session, ctx, "set -m; /bin/sleep 600 & echo $! > "+pidFile+"; wait")
+	pid := waitForPIDFile(t, pidFile)
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+
+	shellGroup, err := syscall.Getpgid(session.cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childGroup, err := syscall.Getpgid(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childGroup == shellGroup {
+		t.Skipf("this shell keeps job-control children in the session's group (%d); nothing escapes to test", shellGroup)
+	}
+
+	start := time.Now()
+	cancel()
+	r := awaitExec(t, done, 5*time.Second)
+	// Inside sessionWaitDelay on purpose. The reaper eventually closes the
+	// pipes anyway, so a looser bound would pass without the cancellation
+	// cutting the output at all.
+	if took := time.Since(start); took > sessionWaitDelay/2 {
+		t.Fatalf("the cancel waited %s for a process that had left the container", took)
+	}
+	if !errors.Is(r.err, ErrSessionCancelled) {
+		t.Fatalf("cancel with an escaped descendant = (%d, %v)", r.code, r.err)
+	}
+
+	// Closed() must answer immediately: the agent asks it while holding the
+	// lock that guards every session on the device.
+	answered := make(chan bool, 1)
+	go func() { answered <- session.Closed() }()
+	select {
+	case closed := <-answered:
+		if !closed {
+			t.Fatal("the session reports itself open after being cancelled")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Closed() blocked; every other session on the device would be stalled behind it")
+	}
+
+	if syscall.Kill(pid, 0) != nil {
+		t.Log("the escaped process died anyway on this shell")
+	}
+}
+
+// A container is signalled at most once and never after the shell is reaped,
+// because a process-group id is only a number and can be given to another group
+// once this one is gone.
+func TestContainerKillsOnceAndNeverAfterReap(t *testing.T) {
+	t.Run("only the first kill signals", func(t *testing.T) {
+		cmd := exec.Command("/bin/sh", "-c", "sleep 30")
+		prepareSessionContainer(cmd)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		container, err := captureSessionContainer(cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+		if err := container.Kill(); err != nil {
+			t.Fatalf("first kill = %v", err)
+		}
+		pgid := container.pgid
+		if err := container.Kill(); err != nil {
+			t.Fatalf("second kill = %v, want a no-op", err)
+		}
+		if container.pgid != pgid {
+			t.Fatal("the second kill changed the container's state")
+		}
+		if !container.killed {
+			t.Fatal("the container does not remember that it killed")
+		}
+	})
+
+	t.Run("a reaped container stops naming its group", func(t *testing.T) {
+		container := &sessionContainer{pgid: 424242}
+		container.reap()
+		if container.pgid != 0 {
+			t.Fatalf("a reaped container still holds pgid %d, which may belong to someone else now", container.pgid)
+		}
+		if err := container.Kill(); err != nil {
+			t.Fatalf("kill after reap = %v, want a no-op", err)
+		}
+		if container.killed {
+			t.Fatal("kill after reap signalled a group id that no longer names this session")
+		}
+	})
+}
+
+// A shell that could not be contained must be killed, reaped and have both ends
+// of its output pipe closed. Leaving the copier blocked writing into a pipe
+// nobody reads leaks a goroutine and two descriptors per attempt.
+func TestShellThatCannotBeContainedIsCleanedUp(t *testing.T) {
+	wrapper := filepath.Join(t.TempDir(), "noisy-shell")
+	script := "#!/bin/sh\necho startup\nwhile :; do sleep 1; done\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	injected := errors.New("injected containment failure")
+	restore := captureSession
+	captureSession = func(cmd *exec.Cmd) (*sessionContainer, error) { return nil, injected }
+	t.Cleanup(func() { captureSession = restore })
+
+	settle := func() {
+		for range 40 {
+			runtime.GC()
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+	settle()
+	before := runtime.NumGoroutine()
+	for range 3 {
+		if _, err := NewShellSession(wrapper); !errors.Is(err, injected) {
+			t.Fatalf("NewShellSession = %v, want the injected failure", err)
+		}
+	}
+	settle()
+	if after := runtime.NumGoroutine(); after > before+1 {
+		t.Fatalf("three failed starts left %d goroutines behind (%d -> %d)", after-before, before, after)
 	}
 }

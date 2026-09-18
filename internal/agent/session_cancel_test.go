@@ -4,6 +4,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/relay"
+	"wanctl/internal/server"
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
 )
@@ -193,5 +196,89 @@ func TestSessionCommandCancelledByCancelFrame(t *testing.T) {
 	}
 	if strings.Contains(out, dir) || !strings.Contains(out, "mark=[]") {
 		t.Fatalf("the command after the cancel frame ran on the old session: %q", out)
+	}
+}
+
+// A second request can acquire the session just before another request cancels
+// and drops it. The review measured that request coming back "session closed"
+// for a command that never reached the device. It must instead get a fresh
+// shell and run, because nothing was submitted — and the cancelled request must
+// still report its cancellation rather than being retried.
+func TestRequestHoldingACancelledSessionGetsAFreshShell(t *testing.T) {
+	a := &Agent{opts: Options{Shell: "/bin/sh"}, sessions: map[string]*server.ShellSession{}}
+	t.Cleanup(func() {
+		for _, sess := range a.sessions {
+			sess.Close()
+		}
+	})
+
+	marked, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := a.session("fp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Exec("cd "+marked, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	// The cancelled request parks a command, which holds the session's lock.
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelled := make(chan error, 1)
+	go func() {
+		_, execErr, _ := a.execInSession(ctx, "fp",
+			protocol.Message{Command: "sleep 600 & echo $! > " + pidFile + "; wait"}, io.Discard)
+		cancelled <- execErr
+	}()
+	pid := waitForRemotePID(t, pidFile)
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+
+	// The second request now acquires that same session and blocks on its lock.
+	var out strings.Builder
+	waiting := make(chan error, 1)
+	go func() {
+		_, execErr, _ := a.execInSession(context.Background(), "fp",
+			protocol.Message{Command: "pwd"}, &out)
+		waiting <- execErr
+	}()
+	time.Sleep(300 * time.Millisecond)
+	a.sessMu.Lock()
+	held := a.sessions["fp"] == first
+	a.sessMu.Unlock()
+	if !held {
+		t.Fatal("the session was replaced before the second request could take it; the test proves nothing")
+	}
+
+	cancel()
+
+	select {
+	case err := <-cancelled:
+		if !errors.Is(err, server.ErrSessionCancelled) {
+			t.Fatalf("the cancelled request reported %v, want the cancellation", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the cancelled request never returned")
+	}
+	if !remoteGone(pid, 3*time.Second) {
+		t.Fatalf("device-side process %d survived the cancel", pid)
+	}
+
+	select {
+	case err := <-waiting:
+		if err != nil {
+			t.Fatalf("the request that had already taken the session reported %v; it never ran anything and should have been given a fresh shell", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the waiting request never returned")
+	}
+	if strings.Contains(out.String(), marked) {
+		t.Fatalf("the retried command ran on the cancelled session: %q", out.String())
+	}
+	if strings.TrimSpace(out.String()) == "" {
+		t.Fatalf("the retried command produced no output: %q", out.String())
 	}
 }

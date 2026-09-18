@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"wanctl/internal/protocol"
 )
@@ -111,28 +113,73 @@ const winExitEpilogue = "\nexit $(if($null -ne $LASTEXITCODE){$LASTEXITCODE}else
 // stderr is merged into stdout (a single ordered stream) for simplicity; the
 // controller receives it all as stdout.
 type ShellSession struct {
-	shell  string
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
+	shell string
+	cmd   *exec.Cmd
+	stdin io.WriteCloser
+	// reader is the read half of the output pipe, kept so cancellation can
+	// close it directly. See endOutput.
+	reader *io.PipeReader
 	out    *bufio.Reader
 	token  string
 	mu     sync.Mutex // serializes commands on this session
-	closed bool
+	// closed is atomic because Closed() is called by the agent while it holds
+	// the lock that guards every session on the device. Reading it must never
+	// wait for the command running in this one.
+	closed atomic.Bool
 
 	// container holds the shell and everything it starts, so cancelling a
 	// command is one kernel operation on a named unit rather than a guess at
 	// which processes belong to it. See session_container.go.
-	container     *sessionContainer
-	containerOnce sync.Once
+	container    *sessionContainer
+	containerOff sync.Once
+	// killContainer is the container kill cancelNow performs. It is a field so
+	// a test can make the kill fail without also replacing what cancelNow does
+	// around it, which is the part worth testing.
+	killContainer func() error
 	// gate binds a cancellation to the single request that armed it.
 	gate *cancelGate
+}
+
+// endOutput makes every pending and future read of the session's output fail at
+// once.
+//
+// Cancellation must not depend on the shell's descendants. The shell's stdout is
+// an OS pipe inherited by everything it forks, so a process that left the
+// container — `set -m; sleep 600 & wait` moves the sleep into its own process
+// group, and setsid() leaves outright — still holds the write end after the
+// container is killed. The copier that feeds this reader then never sees EOF,
+// and a Read waiting for the end-of-command marker would wait forever: the
+// command would never return, Closed() would never answer, and the session
+// could never be replaced.
+//
+// Closing the reader here cuts that dependency. The escaped process keeps
+// running — that is its documented privilege — but it no longer holds the
+// session hostage.
+func (s *ShellSession) endOutput(cause error) {
+	if s.reader != nil {
+		s.reader.CloseWithError(cause)
+	}
+}
+
+// cancelNow is what a cancellation does: end the session's processes and stop
+// waiting on their output. The two are separate steps on purpose. Killing the
+// container does not guarantee the output pipe closes, because a descendant
+// that escaped the container still holds it, so the reader is cut here rather
+// than left to a copier that may never see EOF. That is also what makes a kill
+// that *failed* reach the caller immediately instead of when the command it
+// could not stop happens to end.
+func (s *ShellSession) cancelNow() error {
+	s.closed.Store(true)
+	err := s.killContainer()
+	s.endOutput(ErrSessionCancelled)
+	return err
 }
 
 // releaseContainer ends the session's processes and gives back whatever the
 // container holds. Idempotent: a cancel kills the container and Close is still
 // expected afterwards, on Windows to release the job handle.
 func (s *ShellSession) releaseContainer() {
-	s.containerOnce.Do(func() {
+	s.containerOff.Do(func() {
 		if s.container == nil {
 			return
 		}
@@ -167,21 +214,47 @@ func NewShellSession(shell string) (*ShellSession, error) {
 	pr, pw := io.Pipe()
 	cmd.Stdout = pw
 	cmd.Stderr = pw // merge stderr into the single stream
+	// WaitDelay bounds the reaper below. A descendant that left the container
+	// still holds the shell's stdout, so without it cmd.Wait blocks forever on
+	// a copier that will never see EOF, leaking that goroutine and the pipe's
+	// descriptors for the life of the process.
+	cmd.WaitDelay = sessionWaitDelay
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	container, err := captureSessionContainer(cmd)
-	if err != nil {
+
+	// One cleanup path for every failure after Start succeeded: the process is
+	// killed and reaped, and both halves of the output pipe are closed, so no
+	// copier is left blocked writing into a pipe nobody reads.
+	abandon := func(cause error) (*ShellSession, error) {
 		cmd.Process.Kill()
-		return nil, err
+		stdin.Close()
+		pw.Close()
+		pr.Close()
+		cmd.Wait()
+		return nil, cause
 	}
-	go func() { cmd.Wait(); pw.Close() }()
+
+	container, err := captureSession(cmd)
+	if err != nil {
+		return abandon(err)
+	}
+	go func() {
+		cmd.Wait()
+		// Reaping releases the shell's pid, and with it the process-group id
+		// that is the same number. The container must stop using it at exactly
+		// this point, before anything can be given that number again.
+		container.reap()
+		pw.Close()
+	}()
 
 	s.container = container
-	s.gate = newCancelGate(container.Kill)
 	s.cmd = cmd
 	s.stdin = stdin
+	s.reader = pr
 	s.out = bufio.NewReader(pr)
+	s.killContainer = container.Kill
+	s.gate = newCancelGate(s.cancelNow)
 
 	// On Windows, force UTF-8 output once for the life of the session so native
 	// tools (notably wsl.exe) aren't returned with a space between every char.
@@ -195,6 +268,16 @@ func NewShellSession(shell string) (*ShellSession, error) {
 	}
 	return s, nil
 }
+
+// captureSession is captureSessionContainer behind a variable, so a test can
+// fail the containment step and check that a shell which cannot be contained is
+// cleaned up rather than left running with a blocked output copier.
+var captureSession = captureSessionContainer
+
+// sessionWaitDelay is how long the reaper gives output already in flight after
+// the shell exits before it closes the pipes out from under it. It matches the
+// one-shot cancel hooks.
+const sessionWaitDelay = 2 * time.Second
 
 // markerPrefix returns the sentinel line the shell prints after each command.
 func (s *ShellSession) markerPrefix() string { return "<<<WANCTL_END:" }
@@ -255,15 +338,19 @@ func (s *ShellSession) ExecInDirContext(ctx context.Context, command, cwd string
 	if err := ctx.Err(); err != nil {
 		return -1, err
 	}
-	if s.closed {
-		return -1, fmt.Errorf("session closed")
+	// Another request may have cancelled and dropped this session between the
+	// caller acquiring it and reaching here. Nothing has been submitted, so say
+	// so precisely: this is the one failure the caller may retry on a fresh
+	// session.
+	if s.closed.Load() {
+		return -1, ErrSessionUnusable
 	}
 	disarm := s.gate.arm(ctx)
 	code, err := s.runLocked(command, cwd, out)
 	// Disarming happens under the session lock and waits for a cancellation
 	// that is already running, so no cancel can survive into the next request.
 	if fired, killErr := disarm(); fired {
-		s.closed = true
+		s.closed.Store(true)
 		if killErr != nil {
 			return -1, fmt.Errorf("%w, but the device could not stop it: %v", ErrSessionCancelled, killErr)
 		}
@@ -283,7 +370,7 @@ func (s *ShellSession) runLocked(command, cwd string, out io.Writer) (int, error
 }
 
 func (s *ShellSession) execLocked(command string, out io.Writer) (int, error) {
-	if s.closed {
+	if s.closed.Load() {
 		return -1, fmt.Errorf("session closed")
 	}
 	if err := s.writeCommand(command); err != nil {
@@ -306,7 +393,7 @@ func (s *ShellSession) execLocked(command string, out io.Writer) (int, error) {
 			out.Write([]byte(line))
 		}
 		if err != nil {
-			s.closed = true
+			s.closed.Store(true)
 			return -1, fmt.Errorf("shell stream ended: %w", err)
 		}
 	}
@@ -329,31 +416,29 @@ func (s *ShellSession) changeDirLocked(cwd string, out io.Writer) (int, error) {
 	return s.execLocked(changeDirCommand(runtime.GOOS, path), out)
 }
 
-// Closed reports whether the session has been torn down.
-func (s *ShellSession) Closed() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closed
-}
+// Closed reports whether the session has been torn down. It takes no lock: the
+// agent asks this while holding the lock that guards every session on the
+// device, so waiting here for one session's command would stall all of them.
+func (s *ShellSession) Closed() bool { return s.closed.Load() }
 
 // Close terminates the session: the shell and everything still running inside
 // its container. Killing only the shell would leave its children orphaned and
 // still holding the device's resources.
 func (s *ShellSession) Close() {
-	// Kill first, then take the lock. A command still waiting on the shell
-	// holds that lock, and killing the container is exactly what ends its
-	// wait — locking first would make Close hang on the session it is trying
-	// to tear down.
+	// Mark, kill and cut the output before taking the lock. A command still
+	// waiting on the shell holds that lock, and these three things are exactly
+	// what end its wait — locking first would make Close hang on the session it
+	// is trying to tear down.
+	first := !s.closed.Swap(true)
 	s.releaseContainer()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return
-	}
-	s.closed = true
-	s.stdin.Close()
 	if s.container == nil && s.cmd != nil && s.cmd.Process != nil {
 		s.cmd.Process.Kill()
+	}
+	s.endOutput(fmt.Errorf("session closed"))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if first && s.stdin != nil {
+		s.stdin.Close()
 	}
 }
 
