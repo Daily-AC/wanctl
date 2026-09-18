@@ -8,27 +8,44 @@ import (
 // a command, and permission to run it as root. Every test here is a way that
 // separation could quietly fail.
 
-func TestBypassDoesNotCoverElevatedCommands(t *testing.T) {
+// Bypass alone is not consent to elevation: a device left in bypass so it can
+// work unattended, with no elevation channel switched on, refuses exactly as it
+// always did.
+func TestBypassWithoutTheElevationChannelDoesNotCoverElevatedCommands(t *testing.T) {
 	e := &Engine{mode: ModeBypass}
-	if !e.Bypasses(KindExec) {
+	const elevationOff = false
+	if !e.Bypasses(KindExec, elevationOff) {
 		t.Fatal("bypass stopped covering ordinary commands")
 	}
-	if e.Bypasses(KindExecElevated) {
-		t.Fatal("bypass covered an elevated command: a device left in bypass so it can " +
-			"work unattended would be handing out root to anything that can reach it")
+	if e.Bypasses(KindExecElevated, elevationOff) {
+		t.Fatal("bypass with the elevation channel off covered an elevated command: " +
+			"one switch is not the two decisions this needs")
 	}
 	for _, k := range []Kind{KindRead, KindWrite, KindLogs} {
-		if !e.Bypasses(k) {
+		if !e.Bypasses(k, elevationOff) {
 			t.Fatalf("bypass stopped covering %s", k)
 		}
+	}
+}
+
+// The owner's decision of 2026-09-18 (issue #71, option A): 自动放行所有命令 and
+// 提权通道 are two explicit, separately-defaulted-off opt-ins, and having made
+// both is the consent. Requiring a third per-command approval made elevation
+// unusable on exactly the unattended devices bypass mode exists for.
+func TestBypassWithTheElevationChannelCoversElevatedCommands(t *testing.T) {
+	e := &Engine{mode: ModeBypass}
+	if !e.Bypasses(KindExecElevated, true) {
+		t.Fatal("bypass + elevation channel on still refused an elevated command")
 	}
 }
 
 func TestNormalModeBypassesNothing(t *testing.T) {
 	e := &Engine{mode: ModeNormal}
 	for _, k := range []Kind{KindExec, KindExecElevated, KindRead, KindWrite, KindLogs} {
-		if e.Bypasses(k) {
-			t.Fatalf("normal mode bypassed %s", k)
+		for _, elevation := range []bool{false, true} {
+			if e.Bypasses(k, elevation) {
+				t.Fatalf("normal mode bypassed %s (elevation=%v)", k, elevation)
+			}
 		}
 	}
 }

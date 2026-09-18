@@ -69,32 +69,10 @@ func (f *fakeChannel) Run(_ context.Context, command, _ string, out io.Writer) (
 }
 func (f *fakeChannel) Close() error { return nil }
 
-// TestBypassDoesNotAuthorizeElevatedCommands is the acceptance test for the
-// owner's decision on 2026-08-14: a device left in bypass so it can be used
-// unattended must still refuse to run a command as root until someone says so.
-// The plain command in the same session proves bypass is otherwise working.
-func TestBypassDoesNotAuthorizeElevatedCommands(t *testing.T) {
-	base := relayBase(t)
-	ag := startAgent(t, base, policy.DenyApprover{}, policy.ModeBypass)
-	ag.elevator = elevate.NewManager(true, "", &fakeChannel{kind: elevate.KindSu})
-	dr := connectController(t, base)
-	defer dr.Conn.Close()
-
-	if out, code, reason := execOnce(t, dr, "echo plain-ok", ""); code != 0 || !strings.Contains(out, "plain-ok") {
-		t.Fatalf("bypass stopped covering ordinary commands: out=%q code=%d reason=%q", out, code, reason)
-	}
-
-	_, code, reason, _ := execElevated(t, dr, "id", "")
-	if code != -1 {
-		t.Fatalf("bypass mode ran an elevated command (code=%d); root must need its own approval", code)
-	}
-	if !strings.Contains(reason, "elevated command denied") {
-		t.Fatalf("rejection = %q, want it to name the elevated class", reason)
-	}
-	if !strings.Contains(reason, "bypass mode does not cover them") {
-		t.Fatalf("rejection = %q, want it to explain why bypass did not help", reason)
-	}
-}
+// The bypass-mode gate for elevated commands lives in elevate_bypass_test.go:
+// the rule changed on 2026-09-18 (issue #71) from "bypass never covers an
+// elevated command" to "bypass covers it once the elevation channel is on too",
+// and both halves of that are pinned there.
 
 // TestElevatedCommandRunsAndReportsItsChannel is the positive path: approved,
 // executed on a channel, and the exit message names which one.

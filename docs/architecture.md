@@ -90,9 +90,10 @@ Three independent layers; compromising one does not collapse the others:
    rules match a single simple command only — anything with shell operators,
    substitutions, or redirects requires an exact match. File rules bind the
    actual opens to a directory root (no symlink escape). `bypass` mode
-   auto-allows but still logs; elevated exec is deliberately *not* covered by
-   bypass or ordinary exec rules. Headless with no approver subscribed means
-   deny, not hang.
+   auto-allows but still logs; elevated exec is its own class, never covered by
+   an ordinary exec rule, and covered by bypass only on a device whose elevation
+   channel is switched on as well — two separate opt-ins, both off by default.
+   Headless with no approver subscribed means deny, not hang.
 
 Cross-namespace sharing is a relay-side ACL grant `(owner, device, grantee,
 manage)`. A share inherits the owner's *use* of the device: the relay stamps a
@@ -106,7 +107,7 @@ over the device's own, and it is the device's model that decides each request.
 What constrains a grantee is therefore the device, not the grant. Its single
 mode and rule set apply to everyone: left on per-request approval, the owner
 answers for the grantee's commands; put into bypass, the grantee is bypassed
-too. Elevated exec is excluded from bypass for everyone.
+too, elevated exec included if the device's elevation channel is on.
 
 Management — the device console: approvals, rules, mode, trusted controllers —
 is the one thing a share varies, through `acl.manage` (migration 008), off

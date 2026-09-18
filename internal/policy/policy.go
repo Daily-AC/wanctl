@@ -14,6 +14,7 @@ import (
 
 	"mvdan.cc/sh/v3/syntax"
 
+	"wanctl/internal/script"
 	"wanctl/internal/transport"
 )
 
@@ -49,9 +50,12 @@ const (
 	//   - An `exec` rule must not authorize the elevated form of the same
 	//     command. "You may run `pm list packages`" and "you may run it as uid
 	//     2000" are different grants and a device owner approved only one.
-	//   - Bypass mode does not cover it (see Engine.Bypasses). The 自动放行
+	//   - Bypass mode alone does not cover it (see Engine.Bypasses). The 自动放行
 	//     switch exists so an unattended device is usable at all; handing out
-	//     root as a side effect of that would be a decision nobody made.
+	//     root as a side effect of that would be a decision nobody made. The
+	//     device's elevation channel is the second switch, and the two together
+	//     are the decision: on a device where both are on, an elevated command
+	//     is bypassed like any other (owner's call, 2026-09-18, issue #71).
 	KindExecElevated Kind = "exec-elevated"
 )
 
@@ -214,11 +218,22 @@ func (e *Engine) AllowedFileRoot(req Request) (string, bool) {
 	return "", false
 }
 
-// Bypasses reports whether bypass mode alone authorizes this kind of request.
-// Everything does except elevation: a device left in bypass so it can work
-// unattended has not thereby agreed to run commands as root.
-func (e *Engine) Bypasses(kind Kind) bool {
-	return e.Mode() == ModeBypass && kind != KindExecElevated
+// Bypasses reports whether bypass mode authorizes this kind of request.
+//
+// Everything is covered except elevation, which needs the device's elevation
+// channel switched on as well. Those are two separate, off-by-default opt-ins
+// — 自动放行所有命令 and 提权通道 — and the owner has to have made both for an
+// elevated command to ride the blanket allow. A device left in bypass with no
+// elevation channel has not thereby agreed to run commands as root, and is
+// refused exactly as before.
+func (e *Engine) Bypasses(kind Kind, elevationEnabled bool) bool {
+	if e.Mode() != ModeBypass {
+		return false
+	}
+	if kind == KindExecElevated {
+		return elevationEnabled
+	}
+	return true
 }
 
 func ruleMatches(r Rule, req Request) bool { return ruleMatchesShell(r, req, false) }
@@ -253,6 +268,17 @@ func MatchCommand(p, c string) bool { return matchCommand(p, c, false) }
 func matchCommand(p, c string, psShell bool) bool {
 	p = strings.TrimSpace(p)
 	c = strings.TrimSpace(c)
+	// A script:<interp>:<digest> pattern names one script, never a command
+	// line, so it is decided first and only against the script a command
+	// actually carries. Left after the equality test below it was also matched
+	// by a command whose text happens to BE the token — and a file of that name
+	// on PATH then ran under the script's grant, which is a different program
+	// entirely (review of #108, 2026-09-18). There is no prefix form of "this
+	// script" either: a pattern that names one is satisfied by that one.
+	if strings.HasPrefix(p, script.CanonicalPrefix) {
+		tok, ok := script.Canonical(c)
+		return ok && tok == p
+	}
 	if c == p {
 		return true
 	}
@@ -329,7 +355,7 @@ func RuleFor(req Request, scope Scope) Rule {
 	r := Rule{Kind: req.Kind, Scope: scope, Added: time.Now()}
 	switch req.Kind {
 	case KindExec, KindExecElevated:
-		r.Pattern = strings.TrimSpace(req.Cmd)
+		r.Pattern = CommandPattern(req.Cmd)
 		if scope == ScopeDir && req.Cwd != "" {
 			r.Dir = req.Cwd
 		} else {
@@ -346,6 +372,39 @@ func RuleFor(req Request, scope Scope) Rule {
 		r.Scope = ScopeGlobal
 	}
 	return r
+}
+
+// CommandPattern is the pattern to remember for a command: the command itself,
+// or — when it is a `-script` payload — the short stable token naming that
+// script. Remembering the raw transport would store a base64 blob that is both
+// unreadable in the rules list and impossible to retype into `wanctl rules add`,
+// while granting exactly the same thing the token grants.
+func CommandPattern(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if tok, ok := script.Canonical(cmd); ok {
+		return tok
+	}
+	return cmd
+}
+
+// CommandLabel is how a command is shown to whoever is deciding about it: the
+// command itself, or an abbreviated script token. What is shown is a prefix of
+// what CommandPattern stores, so a person can check a card against the rule the
+// device wrote, but nothing is ever compared against the short form — the whole
+// digest is the authorization.
+//
+// Only a command that really is a script is abbreviated, and what gets
+// abbreviated is the token this package derived, never the caller's text.
+// Passing the text through Short shortened anything merely shaped like a token:
+// `script:sh:0123456789abcdef; printf pwned` reached the prompt and the portal
+// card as `script:sh:0123456789abcdef…`, so the human said yes to a command
+// whose second half they were never shown (review of #108, 2026-09-18).
+func CommandLabel(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if tok, ok := script.Canonical(cmd); ok {
+		return script.Short(tok)
+	}
+	return cmd
 }
 
 // Add appends a rule and persists.
