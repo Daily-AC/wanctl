@@ -22,12 +22,14 @@ import (
 //   - The group is signalled at most once in a container's lifetime. A second
 //     kill would be the one that could hit a stranger, and there is never a
 //     reason for it: the first either worked or reported why not.
-//   - No signal is sent after the shell has been reaped. Until then the shell
-//     is at worst a zombie, and the kernel does not reuse a group leader's pid
-//     while its zombie exists, so the number still names this group and nothing
-//     else. reap is called the moment the kernel has waited the shell — not
-//     when cmd.Wait later returns from copying output — under the same lock
-//     the kill takes, so the two cannot interleave.
+//   - No signal is sent after the identity is dropped. The kernel does not
+//     reuse a group leader's pid while its zombie exists, and leftover members
+//     that never called setsid/setpgid keep the group alive after the leader
+//     has been waited (issue #111). The reaper therefore kills once — catching
+//     those leftovers while the number is still ours — then drops the identity
+//     at the kernel wait, not when cmd.Wait later returns from copying output
+//     (issue #110). Both take the same lock Kill takes, so they cannot
+//     interleave with a Close.
 type sessionContainer struct {
 	mu     sync.Mutex
 	pgid   int

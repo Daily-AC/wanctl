@@ -495,6 +495,27 @@ func TestContainerKillsOnceAndNeverAfterReap(t *testing.T) {
 	})
 }
 
+// A background process left in the group must not survive a natural shell
+// exit. The probe from issue #111: `sleep 600 & …; exit` — the shell is
+// waited, Close returns, and without a kill-before-reap the sleep keeps
+// running with PGID == the old shell pid. It never called setsid/setpgid,
+// so it is not in the documented escape list.
+func TestCloseKillsBackgroundProcessAfterNaturalShellExit(t *testing.T) {
+	session, err := NewShellSession("/bin/sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pidFile := filepath.Join(t.TempDir(), "bg.pid")
+	_, _ = session.Exec("sleep 600 </dev/null >/dev/null 2>&1 & echo $! > "+pidFile+"; exit", io.Discard)
+	pid := waitForPIDFile(t, pidFile)
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+
+	session.Close()
+	if !processGone(pid, 3*time.Second) {
+		t.Fatalf("background process %d survived Close after a natural shell exit", pid)
+	}
+}
+
 // cmd.Wait returns only after I/O goroutines finish (or WaitDelay elapses).
 // The kernel has already reaped the shell by then, so the pid — and the
 // process-group id that is the same number — may already belong to someone
@@ -524,12 +545,20 @@ func TestReapHappensAtKernelWaitNotAfterIO(t *testing.T) {
 		session.container.mu.Lock()
 		reaped := session.container.reaped
 		pgid := session.container.pgid
+		wasKilled := session.container.killed
 		session.container.mu.Unlock()
 		if reaped && pgid == 0 {
 			if err := session.container.Kill(); err != nil {
 				t.Fatalf("kill after kernel reap = %v, want a no-op", err)
 			}
-			if session.container.killed {
+			session.container.mu.Lock()
+			pgidAfter := session.container.pgid
+			killedAfter := session.container.killed
+			session.container.mu.Unlock()
+			if pgidAfter != 0 {
+				t.Fatal("kill after kernel reap restored a group id that no longer names this session")
+			}
+			if killedAfter != wasKilled {
 				t.Fatal("kill after kernel reap signalled a group id that no longer names this session")
 			}
 			select {
