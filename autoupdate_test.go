@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/config"
 	wanrelease "wanctl/internal/release"
 )
 
@@ -502,5 +503,38 @@ func TestUpToDatePrimaryDoesNotConsultTheMirror(t *testing.T) {
 	}
 	if len(tu.logs) != 0 {
 		t.Fatalf("being current is not news: %q", tu.logs)
+	}
+}
+
+// The other path an update can take, and the same rule. An agent that updates
+// itself hands its device to the binary now on disk; it must not enroll, and it
+// must not leave a machine registered that was not registered before. The
+// manual path's version of this is GitHub issue #66, and the two share no code,
+// so the invariant is pinned on both.
+//
+// The assertion is the config directory across a full check, download, swap and
+// hand-over: enrollment writes a token there, and starting an agent writes a
+// pid file and a lock.
+func TestAutoUpdateNeverEnrollsTheHost(t *testing.T) {
+	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, runtime.GOARCH, "v2.0.0", nil)
+	defer srv.Close()
+	tu := newTestUpdater(t, srv.URL+"/dl", "v1.0.0", no0)
+	cfg := os.Getenv("WANCTL_CONFIG_DIR")
+	before := configDirEntries(t, cfg)
+
+	if _, done := tu.tick(t.Context()); !done {
+		t.Fatalf("no hand-over; logs = %q", tu.logs)
+	}
+	if got := tu.binary(t); got != "new binary" {
+		t.Fatalf("binary on disk = %q", got)
+	}
+	if got := configDirEntries(t, cfg); !slices.Equal(got, before) {
+		t.Errorf("config dir went from %v to %v; an auto-update writes none of this", before, got)
+	}
+	if tok := config.StoredToken(); tok != "" {
+		t.Errorf("the auto-update enrolled the host: token %q", tok)
+	}
+	if pid := config.ReadPID(); pid != 0 {
+		t.Errorf("the auto-update started an agent: pid file names %d", pid)
 	}
 }
