@@ -1,7 +1,9 @@
 package portal
 
 import (
+	"bytes"
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,6 +16,93 @@ import (
 	"wanctl/internal/delegation"
 	"wanctl/internal/transport"
 )
+
+// The Agent Skill a web AI loads once instead of being handed a connection
+// prompt every conversation. It is a template: the two origins are this
+// instance's, so the served file names the relay and portal the reader can
+// actually reach.
+//
+// It lives beside this file rather than under web/, because everything under
+// web/ is embedded into the asset server and anything there that is not HTML
+// is served verbatim at /assets/ — which for this file would publish the
+// unfilled template, placeholders and all.
+//
+//go:embed webfetch-skill.md
+var webFetchSkill []byte
+
+const (
+	skillRelayPlaceholder  = "@WANCTL_RELAY@"
+	skillPortalPlaceholder = "@WANCTL_PORTAL@"
+)
+
+// errWebFetchOff means the relay serves no WebFetch adapter: it is not built
+// in, or the instance has no seed configured. errWebFetchOrigin means it
+// answers with an origin the portal will not hand to an AI.
+var (
+	errWebFetchOff    = errors.New("web AI access is unavailable on this relay")
+	errWebFetchOrigin = errors.New("invalid WebFetch discovery origin")
+)
+
+// webFetchOrigin consumes the same public discovery document as every other
+// client, through the configured internal relay address, and returns the public
+// relay origin it advertises. Reaching it at all is also how the portal learns
+// that WebFetch is enabled here.
+func (s *Server) webFetchOrigin() (string, error) {
+	resp, err := s.hc.Get(s.relayURL + "/webfetch/v1?format=json")
+	if err != nil {
+		return "", errWebFetchOff
+	}
+	defer resp.Body.Close()
+	var entry struct {
+		Protocol string `json:"protocol"`
+		Template string `json:"start_url_template"`
+	}
+	const suffix = "/webfetch/new/{client_nonce}"
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&entry) != nil || entry.Protocol != "wanctl.webfetch.v1" || !strings.HasSuffix(entry.Template, suffix) {
+		return "", errWebFetchOff
+	}
+	origin := strings.TrimSuffix(entry.Template, suffix)
+	if relayPublicOrigin(origin) != origin {
+		return "", errWebFetchOrigin
+	}
+	return origin, nil
+}
+
+// handleWebFetchSkill serves the skill as Markdown, login-free: the AI that
+// loads it has no portal session, and the file carries no credential — only
+// this instance's two public origins and the protocol every client reads
+// anyway. A relay without WebFetch has nothing to describe, so the route is
+// 404 there rather than handing out instructions that cannot work.
+func (s *Server) handleWebFetchSkill(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	relay, err := s.webFetchOrigin()
+	if errors.Is(err, errWebFetchOrigin) {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	body := bytes.ReplaceAll(webFetchSkill, []byte(skillRelayPlaceholder), []byte(relay))
+	body = bytes.ReplaceAll(body, []byte(skillPortalPlaceholder), []byte(s.requestOrigin(r)))
+	if r.URL.Query().Get("format") == "json" {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]string{
+			"protocol":  "wanctl.webfetch.v1",
+			"skill":     string(body),
+			"skill_url": s.requestOrigin(r) + "/webfetch/skill",
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", `inline; filename="SKILL.md"`)
+	w.Write(body)
+}
 
 // Public, credential-free instructions must be readable by the AI's HTTP client,
 // without the owner's portal session or a live relay request.
@@ -36,26 +125,13 @@ func (s *Server) handleWebFetchConnect(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Consume the same public discovery document as other clients, through the
-	// configured internal relay address. This also checks that WebFetch is on.
-	resp, err := s.hc.Get(s.relayURL + "/webfetch/v1?format=json")
+	origin, err := s.webFetchOrigin()
+	if errors.Is(err, errWebFetchOrigin) {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
 	if err != nil {
 		s.renderStatus(w, http.StatusServiceUnavailable, "webfetch-connect.html", map[string]any{"NS": ns})
-		return
-	}
-	defer resp.Body.Close()
-	var entry struct {
-		Protocol string `json:"protocol"`
-		Template string `json:"start_url_template"`
-	}
-	const suffix = "/webfetch/new/{client_nonce}"
-	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&entry) != nil || entry.Protocol != "wanctl.webfetch.v1" || !strings.HasSuffix(entry.Template, suffix) {
-		s.renderStatus(w, http.StatusServiceUnavailable, "webfetch-connect.html", map[string]any{"NS": ns})
-		return
-	}
-	origin := strings.TrimSuffix(entry.Template, suffix)
-	if relayPublicOrigin(origin) != origin {
-		http.Error(w, "invalid WebFetch discovery origin", http.StatusBadGateway)
 		return
 	}
 	var nonce [24]byte
@@ -66,7 +142,8 @@ func (s *Server) handleWebFetchConnect(w http.ResponseWriter, r *http.Request) {
 	// The authenticated owner gets a unique bootstrap URL, not a grant. The AI
 	// still creates its request and waits for the owner's separate approval.
 	startURL := origin + "/webfetch/new/" + hex.EncodeToString(nonce[:])
-	s.render(w, "webfetch-connect.html", map[string]any{"NS": ns, "Relay": origin, "StartURL": startURL, "HelpURL": s.requestOrigin(r) + "/webfetch/help"})
+	s.render(w, "webfetch-connect.html", map[string]any{"NS": ns, "Relay": origin, "StartURL": startURL,
+		"HelpURL": s.requestOrigin(r) + "/webfetch/help", "SkillURL": s.requestOrigin(r) + "/webfetch/skill"})
 }
 
 type delegationDevice struct {

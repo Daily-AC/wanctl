@@ -45,6 +45,15 @@ generate their own secure random nonce as follows.
    the device's operation rules or enable bypass.
 5. Revoke the delegation from **Settings → Access tokens** when finished.
 
+A chat that accepts an Agent Skill needs none of that per conversation. The
+portal serves one at `/webfetch/skill`: a login-free Markdown file with YAML
+frontmatter (`name: wanctl-webfetch`), filled in with this instance's relay and
+portal origins, linked from the connect page and advertised as `skill_url` in
+discovery. Pasted into a Claude project, a custom GPT or any host with a skill
+setting, it replaces the copied connection prompt: the AI already knows to start
+at this relay's `/webfetch/v1`, and the owner only asks for the work. The route
+carries no credential and grants nothing, and it is 404 where WebFetch is off.
+
 Only owned devices with persistent IDs and recorded fingerprints can be selected
 in this initial version. Ordinary cross-account sharing is unchanged. Device
 renames do not change grants; device removal or certificate rotation invalidates
