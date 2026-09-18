@@ -732,10 +732,10 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 // leaves the agent holding an unacknowledged chunk and a split tail, and
 // retiring the session on the first EOF would 404 those away — including a
 // chunk a poll has already pulled out of the queue but not yet recorded, which
-// is why settled covers a take in flight and not just the fields it writes. A
-// session torn
-// down any other way (credential revocation, dial failure, the idle sweeper) is
-// already gone from the registry and this is a no-op.
+// is why settled covers a take in flight and not just the fields it writes.
+//
+// A session torn down any other way (credential revocation, dial failure, the
+// idle sweeper) is already gone from the registry and this is a no-op.
 //
 // Every site that can make the last of those conditions true calls this
 // afterwards — each poll, each read on the in-process bridge, and the close
