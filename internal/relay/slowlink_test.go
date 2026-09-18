@@ -18,8 +18,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -163,10 +165,11 @@ type faultyCarrier struct {
 	truncateOn map[int]int  // nth data-bearing down poll -> bytes to deliver first
 	dropOn     map[int]bool // nth data-bearing down poll -> fail the request
 
-	mu        sync.Mutex
-	downs     int
-	truncated int
-	dropped   int
+	mu         sync.Mutex
+	downs      int
+	truncated  int
+	dropped    int
+	lastHeader http.Header
 }
 
 func (f *faultyCarrier) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -176,6 +179,7 @@ func (f *faultyCarrier) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp, err
 	}
 	f.mu.Lock()
+	f.lastHeader = resp.Header.Clone()
 	f.downs++
 	n := f.downs
 	cut, truncate := f.truncateOn[n]
@@ -201,6 +205,12 @@ func (f *faultyCarrier) counts() (downs, truncated, dropped int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.downs, f.truncated, f.dropped
+}
+
+func (f *faultyCarrier) advertised() http.Header {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastHeader
 }
 
 func testTLSCert(t *testing.T) tls.Certificate {
@@ -459,6 +469,157 @@ func TestOverlappingPollsCannotTakeDifferentChunks(t *testing.T) {
 	}
 }
 
+// pendingDrains counts how many goroutines are parked inside sideQueue.drain.
+// A poll the carrier abandoned keeps running on the relay, and that is the
+// state this has to observe from the outside.
+func pendingDrains() int {
+	buf := make([]byte, 1<<20)
+	return bytes.Count(buf[:runtime.Stack(buf, true)], []byte("(*sideQueue).drain("))
+}
+
+func awaitPendingDrains(n int) bool {
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if pendingDrains() >= n {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return false
+}
+
+// TestOverlappingDownPollsOnTheWireDoNotLoseAChunk is the overlap from the far
+// side of the wire, which the per-poll fault carrier cannot reach: it fails a
+// poll at the client while deliberately leaving that same request running on
+// the relay, so the retry arrives with the abandoned poll still parked on the
+// queue. Two chunks are then fed one at a time. Before the fix the abandoned
+// poll took the first and the retry took the second, overwriting the first's
+// unacknowledged chunk, and the reader silently resumed at the second.
+func TestOverlappingDownPollsOnTheWireDoNotLoseAChunk(t *testing.T) {
+	r, s, sid := tunnelSession(t)
+	var entered atomic.Int32
+	counted := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/h/down" {
+			entered.Add(1)
+		}
+		r.Handler().ServeHTTP(w, req)
+	})
+	srv := newMemoryServer(t, counted)
+
+	var abandonOnce sync.Once
+	carrier := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/h/down" || req.URL.Query().Get(httpconn.DownAckParam) == "0" {
+			return srv.Transport.RoundTrip(req) // the warm-up poll goes through
+		}
+		abandoned := false
+		abandonOnce.Do(func() {
+			abandoned = true
+			// Detached from the client's context on purpose: the relay never
+			// learns this reader went away and keeps the poll parked.
+			detached := req.Clone(context.Background())
+			go func() {
+				if resp, err := srv.Transport.RoundTrip(detached); err == nil {
+					resp.Body.Close()
+				}
+			}()
+			awaitPendingDrains(1) // it is on the queue before the retry is sent
+		})
+		if abandoned {
+			return nil, errors.New("carrier: connection reset before the response was read")
+		}
+		return srv.Transport.RoundTrip(req)
+	})
+
+	c, err := httpconn.DialWith(t.Context(), srv.URL, sid, "agent", "tok-alice", &http.Client{Transport: carrier})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// One clean exchange, so the reader knows the relay holds unacked chunks.
+	s.toAgent.push([]byte("WARMUP"))
+	buf := make([]byte, 64)
+	if n, err := c.Read(buf); err != nil || string(buf[:n]) != "WARMUP" {
+		t.Fatalf("warm-up read = %q %v, want %q", buf[:n], err, "WARMUP")
+	}
+
+	first := bytes.Repeat([]byte("A"), 4096)
+	second := bytes.Repeat([]byte("B"), 4096)
+	// The reader hands back each chunk as it arrives, so a stream that resumed
+	// at the wrong one is reported as that rather than as a stall.
+	arrived := make(chan []byte, 2)
+	read := make(chan error, 1)
+	go func() {
+		for range 2 {
+			chunk := make([]byte, 4096)
+			if _, err := io.ReadFull(c, chunk); err != nil {
+				read <- err
+				return
+			}
+			arrived <- chunk
+		}
+		read <- nil
+	}()
+	nextChunk := func(want []byte, which string) {
+		t.Helper()
+		select {
+		case got := <-arrived:
+			if !bytes.Equal(got, want) {
+				t.Fatalf("the %s chunk read back as %q, want %q: a chunk the reader never acknowledged was dropped",
+					which, got[:8], want[:8])
+			}
+		case err := <-read:
+			t.Fatalf("reading the %s chunk after an abandoned poll overlapped its retry: %v", which, err)
+		case <-time.After(15 * time.Second):
+			t.Fatalf("timed out on the %s chunk: the stream stalled after an abandoned poll overlapped its retry", which)
+		}
+	}
+
+	if !awaitPendingDrains(1) {
+		t.Fatal("the abandoned poll never reached the queue")
+	}
+	// Wait for the retry to reach the relay as well: parked in drain before the
+	// fix, waiting its turn after it.
+	deadline := time.Now().Add(3 * time.Second)
+	for entered.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if entered.Load() < 3 {
+		t.Fatalf("only %d down polls reached the relay, want the retry as well", entered.Load())
+	}
+	time.Sleep(20 * time.Millisecond) // let the retry settle wherever it waits
+
+	// Feed the chunks one at a time, so they cannot coalesce into one drain.
+	seqAfter := func(n uint64) bool {
+		for time.Now().Before(deadline) {
+			s.toAgent.ackMu.Lock()
+			seq := s.toAgent.seq
+			s.toAgent.ackMu.Unlock()
+			if seq >= n {
+				return true
+			}
+			time.Sleep(time.Millisecond)
+		}
+		return false
+	}
+	s.toAgent.push(first)
+	if !seqAfter(2) {
+		t.Fatal("no poll took the first chunk")
+	}
+	s.toAgent.push(second)
+
+	nextChunk(first, "first")
+	nextChunk(second, "second")
+	select {
+	case err := <-read:
+		if err != nil {
+			t.Fatalf("read after an abandoned poll overlapped its retry: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out reading after an abandoned poll overlapped its retry")
+	}
+}
+
 // A poll the reader abandoned after the relay had already drained it must leave
 // the bytes as the unacked chunk, not drop them: the next poll re-serves them
 // under the same sequence.
@@ -536,6 +697,20 @@ func TestDownPollRetriesOnlyAgainstAnAcknowledgingRelay(t *testing.T) {
 				n, err := c.Read(buf)
 				if err != nil || string(buf[:n]) != "WARMUP" {
 					t.Fatalf("warm-up read = %q %v, want %q", buf[:n], err, "WARMUP")
+				}
+				// Check the relay under test really is the one this case
+				// claims, rather than trusting the wrapper to have hidden the
+				// protocol.
+				advertised := carrier.advertised()
+				gotCap := advertised.Get(httpconn.DownAckCapabilityHeader)
+				gotSeq := advertised.Get(httpconn.DownSeqHeader)
+				if legacy && (gotCap != "" || gotSeq != "") {
+					t.Fatalf("the pre-acknowledgement relay advertised %s=%q %s=%q, want neither",
+						httpconn.DownAckCapabilityHeader, gotCap, httpconn.DownSeqHeader, gotSeq)
+				}
+				if !legacy && (gotCap != "1" || gotSeq == "") {
+					t.Fatalf("the current relay advertised %s=%q %s=%q, want both",
+						httpconn.DownAckCapabilityHeader, gotCap, httpconn.DownSeqHeader, gotSeq)
 				}
 
 				s.toAgent.push([]byte("FIRST"))
