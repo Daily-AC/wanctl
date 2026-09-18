@@ -1,10 +1,11 @@
+//go:build !windows
+
 package agent
 
 import (
 	"context"
 	"net/http/httptest"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -23,9 +24,6 @@ import (
 // controller.
 func sessionCancelRig(t *testing.T) string {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("observes the device-side process with POSIX signals")
-	}
 	srv := httptest.NewServer(relay.New(relay.EnvTokenStore("tok:alice")).Handler())
 	t.Cleanup(srv.Close)
 	base := "ws" + strings.TrimPrefix(srv.URL, "http")
@@ -102,8 +100,10 @@ func startSessionCommand(t *testing.T, dr *transport.DialResult) int {
 	return pid
 }
 
-// The acceptance from #46: a session command dies with the controller, and the
-// session it ran in is still usable afterwards with the cwd it had.
+// The acceptance from #46: a session command dies with the controller within a
+// couple of seconds, and a following exec on the same target still works. It
+// works on a *new* session, which is option (b): the cancelled one is gone, so
+// the cwd and environment earlier commands set are gone with it.
 func TestSessionCommandCancelledWhenControllerDisconnects(t *testing.T) {
 	base := sessionCancelRig(t)
 	dr := reconnect(t, base)
@@ -112,25 +112,33 @@ func TestSessionCommandCancelledWhenControllerDisconnects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out, code, reason := execSession(t, dr, "cd "+dir); code != 0 || reason != "" {
-		t.Fatalf("cd = %d %q out=%q", code, reason, out)
+	if out, code, reason := execSession(t, dr, "cd "+dir+"; export WANCTL_MARK=set"); code != 0 || reason != "" {
+		t.Fatalf("session setup = %d %q out=%q", code, reason, out)
+	}
+	if out, _, _ := execSession(t, dr, "pwd"); strings.TrimSpace(out) != dir {
+		t.Fatalf("session cwd before the cancel = %q, want %q", strings.TrimSpace(out), dir)
 	}
 
 	pid := startSessionCommand(t, dr)
+	start := time.Now()
 	dr.Conn.Close()
 
 	if !remoteGone(pid, 3*time.Second) {
 		t.Fatalf("device-side process %d survived the controller disconnecting", pid)
 	}
+	t.Logf("device-side process ended %s after the controller stream closed", time.Since(start).Round(time.Millisecond))
 
 	next := reconnect(t, base)
 	defer next.Conn.Close()
-	out, code, reason := execSession(t, next, "pwd")
+	out, code, reason := execSession(t, next, "pwd; echo mark=[$WANCTL_MARK]")
 	if code != 0 || reason != "" {
 		t.Fatalf("command after the cancel = %d %q", code, reason)
 	}
-	if got := strings.TrimSpace(out); got != dir {
-		t.Fatalf("session cwd after the cancel = %q, want %q (the shell was not kept)", got, dir)
+	if strings.Contains(out, dir) {
+		t.Fatalf("the next command still sees the cancelled session's cwd %q; the session was not reset", dir)
+	}
+	if !strings.Contains(out, "mark=[]") {
+		t.Fatalf("the next command still sees the cancelled session's environment: %q", out)
 	}
 }
 
@@ -146,8 +154,8 @@ func TestSessionCommandCancelledByCancelFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, code, reason := execSession(t, dr, "cd "+dir); code != 0 || reason != "" {
-		t.Fatalf("cd = %d %q", code, reason)
+	if _, code, reason := execSession(t, dr, "cd "+dir+"; export WANCTL_MARK=set"); code != 0 || reason != "" {
+		t.Fatalf("session setup = %d %q", code, reason)
 	}
 
 	pid := startSessionCommand(t, dr)
@@ -179,11 +187,11 @@ func TestSessionCommandCancelledByCancelFrame(t *testing.T) {
 		t.Fatalf("device-side process %d survived the cancel frame", pid)
 	}
 
-	out, code, reason := execSession(t, dr, "pwd")
+	out, code, reason := execSession(t, dr, "pwd; echo mark=[$WANCTL_MARK]")
 	if code != 0 || reason != "" {
 		t.Fatalf("command after the cancel frame = %d %q", code, reason)
 	}
-	if got := strings.TrimSpace(out); got != dir {
-		t.Fatalf("session cwd after the cancel frame = %q, want %q", got, dir)
+	if strings.Contains(out, dir) || !strings.Contains(out, "mark=[]") {
+		t.Fatalf("the command after the cancel frame ran on the old session: %q", out)
 	}
 }
