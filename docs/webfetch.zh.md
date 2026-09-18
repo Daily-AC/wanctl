@@ -93,7 +93,9 @@ PostgreSQL 只保存凭证哈希。
 ### 发现协议与独立申请
 
 `GET /webfetch/v1`（也可访问 `/webfetch`）是公共、静态、无凭证的发现页。
-它也返回 `owner_start_url`，供没有安全随机数生成器的客户端交给主人操作。
+它也返回 `owner_start_url`，供没有安全随机数生成器的客户端交给主人操作；返回 `skill_url`，
+供能加载 Agent Skill 的宿主使用；还返回一段 `instructions`：原语清单和 dev loop，与 `wanctl help
+--instructions`、MCP 的 instructions 字段出自同一份目录，只保留委托会话真正拥有的四个工具，两处不会各写一份。协议本身的步骤、人工确认点和安全规则仍写在这里。
 返回 `start_url_template: https://RELAY/webfetch/new/{client_nonce}`。
 `GET /webfetch/new/CLIENT_NONCE` 创建待批准申请，返回 `approval_url`、`status_url`
 和 `continuation_prompt`。模板必须先填完再访问，字面占位符会被拒绝且不会创建申请。
