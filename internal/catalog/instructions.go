@@ -7,7 +7,8 @@ import (
 
 // Instructions is the harness's own system prompt: what wanctl is, the whole
 // list of primitives, how they fit into a loop, and the four refusals a caller
-// has to recognise.
+// has to recognise — each of which has to be answered before the same call is
+// worth making again.
 //
 // MCP has a place for exactly this — the `instructions` field of the initialize
 // response — and until now wanctl left it empty, so a host learned the tools
@@ -38,7 +39,7 @@ func Instructions() string {
 		b.WriteString(wrapPlainPrefixed(rule, Width-2, "  ") + "\n")
 	}
 
-	b.WriteString("\nREFUSALS — none of these mean try again:\n")
+	b.WriteString("\nREFUSALS — none of these mean retry as-is:\n")
 	for _, r := range criticalErrors {
 		b.WriteString("  " + r.Text + ": " + r.Do + "\n")
 	}
@@ -66,8 +67,9 @@ var devLoop = []string{
 	"Before working in a project directory, read its AGENTS.md or CLAUDE.md with wanctl_read if one exists and follow it: it outranks how you would proceed.",
 }
 
-// criticalErrors are the four refusals that mean the next move is not "try
-// again", each with the shortest form of what to do instead.
+// criticalErrors are the four refusals that mean the next move is not the same
+// call again: each names the thing that has to change first — an approval, a
+// pin, a human decision, a credential — with the shortest form of what to do.
 //
 // The texts are quoted verbatim because agents match on them, and a test holds
 // every one of them to a failure the catalog actually declares — so a refusal
