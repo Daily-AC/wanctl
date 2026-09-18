@@ -495,6 +495,59 @@ func TestContainerKillsOnceAndNeverAfterReap(t *testing.T) {
 	})
 }
 
+// cmd.Wait returns only after I/O goroutines finish (or WaitDelay elapses).
+// The kernel has already reaped the shell by then, so the pid — and the
+// process-group id that is the same number — may already belong to someone
+// else. The container must drop that number at the kernel wait, not when
+// Wait returns (issue #110).
+func TestReapHappensAtKernelWaitNotAfterIO(t *testing.T) {
+	session := newTestSession(t)
+	pid := session.cmd.Process.Pid
+
+	done := runAsync(session, context.Background(), "exit")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatal("the shell never exited")
+	}
+
+	// Comfortably inside sessionWaitDelay: if reap were tied to cmd.Wait
+	// returning, the container would still name the old pgid here.
+	seen := time.Now()
+	for time.Now().Before(seen.Add(sessionWaitDelay / 4)) {
+		session.container.mu.Lock()
+		reaped := session.container.reaped
+		pgid := session.container.pgid
+		session.container.mu.Unlock()
+		if reaped && pgid == 0 {
+			if err := session.container.Kill(); err != nil {
+				t.Fatalf("kill after kernel reap = %v, want a no-op", err)
+			}
+			if session.container.killed {
+				t.Fatal("kill after kernel reap signalled a group id that no longer names this session")
+			}
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Log("the exiting command's Exec did not return; the session is still closed by Cleanup")
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	session.container.mu.Lock()
+	reaped := session.container.reaped
+	pgid := session.container.pgid
+	session.container.mu.Unlock()
+	t.Fatalf("container still names pgid %d reaped=%v after the kernel reaped pid %d; Kill could hit a stranger", pgid, reaped, pid)
+}
+
 // A shell that could not be contained must be killed, reaped and have both ends
 // of its output pipe closed. Leaving the copier blocked writing into a pipe
 // nobody reads leaks a goroutine and two descriptors per attempt.
