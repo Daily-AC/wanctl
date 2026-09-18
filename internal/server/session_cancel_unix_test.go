@@ -310,6 +310,47 @@ func TestFailedKillIsReportedWhileTheCommandStillRuns(t *testing.T) {
 	}
 }
 
+// Issue #112: a failed kill used to cut only the output reader. A command still
+// blocked in writeCommand — the shell is inside sleep, so a megabyte of comment
+// fills the stdin pipe — never returned, even though Closed() was already true.
+func TestFailedKillUnblocksABlockedStdinWrite(t *testing.T) {
+	session := newTestSession(t)
+	session.killContainer = func() error {
+		return errors.New("no permission to signal the group")
+	}
+
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	// First line records the pid, second parks the shell so it stops reading
+	// stdin, then enough comment to overflow a typical pipe buffer (~64KiB).
+	command := "echo $$ > " + pidFile + "\n/bin/sleep 600\n" + strings.Repeat("# padding\n", 80_000)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := runAsync(session, ctx, command)
+	pid := waitForPIDFile(t, pidFile)
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+
+	// Give writeCommand time to fill the pipe and block. The pid file means
+	// the shell has consumed the first line and is now inside sleep.
+	time.Sleep(200 * time.Millisecond)
+
+	start := time.Now()
+	cancel()
+	r := awaitExec(t, done, 5*time.Second)
+	if took := time.Since(start); took > sessionWaitDelay/2 {
+		t.Fatalf("blocked stdin write took %s to return after a failed kill", took)
+	}
+	if !errors.Is(r.err, ErrSessionCancelled) {
+		t.Fatalf("blocked submit = (%d, %v), want ErrSessionCancelled", r.code, r.err)
+	}
+	if !strings.Contains(r.err.Error(), "no permission to signal the group") {
+		t.Fatalf("blocked submit reported %q without the kill error", r.err)
+	}
+	if !session.Closed() {
+		t.Fatal("Closed() was false after a cancel that could not kill")
+	}
+}
+
 // A watcher can wake after its own request disarmed and after the next request
 // armed. A gate that only asks "is anything armed" reads true in that state and
 // destroys a session nobody cancelled — 50 times in 100 under the scheduling

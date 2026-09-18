@@ -132,6 +132,7 @@ type ShellSession struct {
 	// which processes belong to it. See session_container.go.
 	container    *sessionContainer
 	containerOff sync.Once
+	stdinOff     sync.Once
 	// killContainer is the container kill cancelNow performs. It is a field so
 	// a test can make the kill fail without also replacing what cancelNow does
 	// around it, which is the part worth testing.
@@ -161,16 +162,31 @@ func (s *ShellSession) endOutput(cause error) {
 	}
 }
 
+// cutStdin unblocks a Write still sitting in writeCommand. Closing the reader
+// only ends the output-reading phase; a command large enough to fill the stdin
+// pipe is still stuck in the submit phase, and Close cannot take the session
+// lock to close stdin while that Write holds it.
+func (s *ShellSession) cutStdin() {
+	s.stdinOff.Do(func() {
+		if s.stdin != nil {
+			s.stdin.Close()
+		}
+	})
+}
+
 // cancelNow is what a cancellation does: end the session's processes and stop
-// waiting on their output. The two are separate steps on purpose. Killing the
-// container does not guarantee the output pipe closes, because a descendant
-// that escaped the container still holds it, so the reader is cut here rather
-// than left to a copier that may never see EOF. That is also what makes a kill
-// that *failed* reach the caller immediately instead of when the command it
-// could not stop happens to end.
+// waiting on their output or on a blocked stdin write. Killing the container
+// does not guarantee the output pipe closes, because a descendant that escaped
+// the container still holds it, so the reader is cut here rather than left to a
+// copier that may never see EOF. The stdin write is cut for the same reason: a
+// kill that failed leaves the shell alive, so a Write blocked on a full pipe
+// would never return. Cutting both is also what makes a kill that *failed*
+// reach the caller immediately instead of when the command it could not stop
+// happens to end.
 func (s *ShellSession) cancelNow() error {
 	s.closed.Store(true)
 	err := s.killContainer()
+	s.cutStdin()
 	s.endOutput(ErrSessionCancelled)
 	return err
 }
@@ -425,21 +441,20 @@ func (s *ShellSession) Closed() bool { return s.closed.Load() }
 // its container. Killing only the shell would leave its children orphaned and
 // still holding the device's resources.
 func (s *ShellSession) Close() {
-	// Mark, kill and cut the output before taking the lock. A command still
-	// waiting on the shell holds that lock, and these three things are exactly
-	// what end its wait — locking first would make Close hang on the session it
-	// is trying to tear down.
-	first := !s.closed.Swap(true)
+	// Mark, kill and cut the pipes before taking the lock. A command still
+	// waiting on the shell holds that lock, and these are exactly what end its
+	// wait — locking first would make Close hang on the session it is trying
+	// to tear down. Stdin is cut here rather than under the lock so a Write
+	// blocked in writeCommand can return; that Write is the lock holder.
+	s.closed.Store(true)
 	s.releaseContainer()
 	if s.container == nil && s.cmd != nil && s.cmd.Process != nil {
 		s.cmd.Process.Kill()
 	}
+	s.cutStdin()
 	s.endOutput(fmt.Errorf("session closed"))
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if first && s.stdin != nil {
-		s.stdin.Close()
-	}
 }
 
 // RunOneShot executes a command in a fresh shell whose process working
