@@ -1220,6 +1220,7 @@ wanctl_screenshot{"target":"home-pc"}
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
 | `command denied by device policy` | The device has not allowed this controller to capture its screen. Ask the owner to approve the pending request, then retry. On Android the refusal names an ELEVATED command, which needs its own rule that bypass mode does not cover. |
 | `no screen capture tool on this device` | A Linux device with none of grim / gnome-screenshot / import installed. Install one (the message names them) — retrying will not help. |
+| `screencapture failed: … create image from display` | macOS withheld the screen: the agent has no Screen Recording permission. Open System Settings → Privacy & Security → Screen Recording on that Mac, add the wanctl binary (or the app that launched the agent), turn it on, then restart the agent — retrying without that will not help. |
 | `did not return a PNG` | The device answered with something else, usually an agent too old for desktop capture. Run `wanctl update` on it, then retry. |
 
 ## `wanctl config`
