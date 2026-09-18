@@ -443,9 +443,11 @@ func TestWebFetchLongExecFinishesAndDoesNotBlockAnotherGrant(t *testing.T) {
 }
 
 // The ceiling is per tool: a file transfer of at most 32 KiB is stuck, not slow.
+// exec's own ceiling is four hours, exact at the boundary, and still clamped by
+// the grant — a grant that ends in a minute cannot promise four hours.
 func TestWebFetchTimeoutCeilingIsPerTool(t *testing.T) {
 	f := liveWebFetch(t)
-	session, _ := f.approve(t, testTicket("8"), true)
+	session, request := f.approve(t, testTicket("8"), true)
 	file := url.Values{"rid": {"slow-read"}, "tool": {"read_text"}, "target": {f.device.Target()}, "path": {filepath.Join(f.root, "absent.txt")}, "timeout_seconds": {"900"}}
 	status, refused := fetchDoc(t, session+"/call?"+file.Encode())
 	if status != 400 || refused["error_code"] != "invalid_parameters" {
@@ -453,6 +455,32 @@ func TestWebFetchTimeoutCeilingIsPerTool(t *testing.T) {
 	}
 	if !strings.Contains(refused["error"].(string), "60") {
 		t.Fatalf("the refusal does not state the file ceiling: %v", refused)
+	}
+
+	over := url.Values{"rid": {"over-ceiling"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"true"}, "timeout_seconds": {strconv.Itoa(MaxExecSeconds + 1)}}
+	status, refusedExec := fetchDoc(t, session+"/call?"+over.Encode())
+	if status != 400 || refusedExec["error_code"] != "invalid_parameters" {
+		t.Fatalf("exec accepted %d seconds: %d %v", MaxExecSeconds+1, status, refusedExec)
+	}
+	if !strings.Contains(refusedExec["error"].(string), strconv.Itoa(MaxExecSeconds)) {
+		t.Fatalf("the refusal does not state the exec ceiling: %v", refusedExec)
+	}
+
+	at := url.Values{"rid": {"at-ceiling"}, "tool": {"exec"}, "target": {f.device.Target()}, "command": {"printf webfetch-ok"}, "timeout_seconds": {strconv.Itoa(MaxExecSeconds)}}
+	status, job := fetchDoc(t, session+"/call?"+at.Encode())
+	if status != 200 || job["status"] == "failed" || job["status"] == "error" {
+		t.Fatalf("exec refused its own ceiling of %d seconds: %d %v", MaxExecSeconds, status, job)
+	}
+	deadline, err := time.Parse(time.RFC3339Nano, job["deadline_at"].(string))
+	if err != nil {
+		t.Fatalf("deadline_at=%v %v", job["deadline_at"], err)
+	}
+	// The fixture approves one minute, so four hours must not survive it.
+	if request.ExpiresAt == nil || deadline.Sub(*request.ExpiresAt).Abs() > time.Second {
+		t.Fatalf("deadline_at %s is not the grant expiry %v", deadline, request.ExpiresAt)
+	}
+	if done := awaitJob(t, job); done["status"] != "done" {
+		t.Fatalf("a ceiling-length exec did not finish: %v", done)
 	}
 }
 

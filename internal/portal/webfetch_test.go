@@ -194,7 +194,12 @@ func TestDelegationPageShowsOwnedDevicesAndEscapesUntrustedLabels(t *testing.T) 
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
 	page := rec.Body.String()
-	for _, wanted := range []string{"owned-id", "My Mac", "&lt;img", `value="15" selected`, req.ControllerFingerprint, `id="delegateApprove" disabled`} {
+	// The duration control has to offer both halves: the four presets an owner
+	// picks without thinking, and the free minutes field that is the value
+	// actually submitted. 15 minutes stays the default.
+	wantedDuration := []string{`data-minutes="15"`, `data-minutes="60"`, `data-minutes="240"`, `data-minutes="1440"`,
+		`id="delegateMinutes" name="minutes" type="number"`, `max="1440"`, `value="15"`}
+	for _, wanted := range append(wantedDuration, "owned-id", "My Mac", "&lt;img", req.ControllerFingerprint, `id="delegateApprove" disabled`) {
 		if !strings.Contains(page, wanted) {
 			t.Errorf("page missing %q", wanted)
 		}
@@ -230,6 +235,27 @@ func TestDelegationApprovalBindsOwnerAndDisplayedIdentities(t *testing.T) {
 	}
 }
 
+// A preset and a hand-typed number are the same submission: the approval page
+// writes both into the one minutes field, so all the server sees is the value.
+// 1440 is the ceiling and has to be accepted, not clamped.
+func TestDelegationApprovalAcceptsPresetAndCustomMinutes(t *testing.T) {
+	for _, minutes := range []int{1, 15, 60, 240, 1440, 7, 425} {
+		var relayed any
+		s := delegationPortal(t, delegationFixture(), []delegationDevice{
+			{Name: "mac-id", Owner: "alice", Fingerprint: transport.Fingerprint([]byte("mac"))},
+		}, func(body map[string]any) { relayed = body["minutes"] })
+		body := approvalBody()
+		body["minutes"] = minutes
+		rec := delegationPOST(t, s, "/api/delegations/approve", body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("minutes %d: status = %d: %s", minutes, rec.Code, rec.Body.String())
+		}
+		if relayed != float64(minutes) {
+			t.Fatalf("minutes %d reached the relay as %#v", minutes, relayed)
+		}
+	}
+}
+
 func TestDelegationApprovalRejectsUnconfirmedForeignOrChangedIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -237,7 +263,8 @@ func TestDelegationApprovalRejectsUnconfirmedForeignOrChangedIdentity(t *testing
 		status int
 	}{
 		{"confirmation", func(b map[string]any) { b["confirmed"] = false }, http.StatusBadRequest},
-		{"minutes", func(b map[string]any) { b["minutes"] = 61 }, http.StatusBadRequest},
+		{"minutes above ceiling", func(b map[string]any) { b["minutes"] = 1441 }, http.StatusBadRequest},
+		{"minutes zero", func(b map[string]any) { b["minutes"] = 0 }, http.StatusBadRequest},
 		{"empty", func(b map[string]any) { b["devices"] = []string{} }, http.StatusBadRequest},
 		{"foreign", func(b map[string]any) { b["devices"] = []string{"other-id"} }, http.StatusForbidden},
 		{"shared", func(b map[string]any) { b["devices"] = []string{"shared-id"} }, http.StatusForbidden},

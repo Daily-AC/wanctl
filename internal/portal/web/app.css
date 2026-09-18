@@ -676,8 +676,18 @@ pre code{background:none;padding:0;font-size:1em}
 .delegate-id{margin-top:4px;font-size:11px;color:var(--ink-2);overflow-wrap:anywhere}
 .delegate-device small{font-size:12px;color:var(--ink-2)}
 .auth .delegate-device input,.auth .delegate-confirm input{width:17px;height:17px;flex:none;margin-top:3px;padding:0;accent-color:var(--blue)}
-.delegate-duration{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:12px 0}
-.delegate-duration select{max-width:13rem}
+/* 有效期：四个常用值 + 一个自己填的分钟数。常用值是 pill，因为它们和顶栏那三个
+   一样是次级控件；自己填的那个是输入框，但也收成 pill，好让这一行读成一组而不是
+   「四个按钮外加一个表单控件」。选中的那颗用 --blue 的洗底，本页唯一的强调色。 */
+.delegate-duration{display:grid;gap:9px;margin:16px 0}
+.delegate-duration>label{font-size:13px;color:var(--ink-2)}
+.duration-set{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.duration-set .chip[aria-pressed="true"]{border-color:var(--blue-hi);background:var(--blue-wash);color:var(--blue)}
+.duration-custom{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-2)}
+.auth .duration-custom input{
+  width:5.5rem;flex:none;font-size:12.5px;line-height:1.2;
+  padding:4px 11px;border-radius:999px;text-align:right;
+}
 .delegate-confirm{display:flex;align-items:flex-start;gap:12px;font-size:13px;line-height:1.5}
 .delegate-actions{display:flex;gap:10px;margin-top:8px}
 .delegation form .fine{margin:2px 0}

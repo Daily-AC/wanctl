@@ -34,7 +34,12 @@ generate their own secure random nonce as follows.
 2. The AI returns an `approval_url` and `continuation_prompt`. Open the approval
    link yourself, sign in to wanctl,
    verify the controller and selected device identities, choose your devices
-   and a duration, and approve. Fetching this URL cannot approve a request.
+   and a duration, and approve. The duration offers 15 minutes, 1, 4 and 24
+   hours, or any number of minutes up to 1440; pick one longer than the work,
+   because a job's deadline is clamped to the end of the grant. It is also how
+   long the AI's session URL keeps working, so approve the shortest duration
+   that covers the task and revoke it when the work is done. Fetching this URL
+   cannot approve a request.
 3. Send `continuation_prompt` back to the AI after approval. It includes the
    complete `status_url`: some web chats do not retain previous tool results or
    enable URL reading when a later message only says "approved". The status
@@ -147,7 +152,7 @@ placeholders rather than runnable sample commands. The available tools are:
 
 | Tool | Parameters | Result |
 | --- | --- | --- |
-| `exec` | `command`, optional `cwd`, optional `timeout_seconds` (1–1800, default 300) | One-shot execution, exit code, bounded stdout/stderr |
+| `exec` | `command`, optional `cwd`, optional `timeout_seconds` (1–14400, default 300) | One-shot execution, exit code, bounded stdout/stderr |
 | `read_text` | `path`, optional `offset` (1-based line, default 1), optional `limit` (lines, default 2000) | `content`, `total_lines`, `first_line`, `last_line`, `size_bytes`, `sha256` of the whole file, `truncated`, and `next_offset` or `long_line` |
 | `edit_text` | `path`, `old`, `new`, optional `all`, optional `expected_sha256` | `replaced`, `sha256`, `size_bytes` |
 | `write_text` | `path`, `content` | wanctl file upload, byte count and SHA-256 |
@@ -222,12 +227,13 @@ call may have produced a side effect even without a result: `unknown` means the
 owner must inspect the device before deciding whether to try a new request. This
 is not a claim of exactly-once execution of arbitrary external effects.
 
-Limits: pending requests expire after 10 minutes; approved grants last 1–60
-minutes on up to 16 devices; each grant allows 64 jobs. `exec` allows
-`timeout_seconds` of 1–1800 including queue time (default 300), so a build,
-install or render finishes instead of expiring; `read_text`, `edit_text` and
-`write_text` allow 1–60 (default 30), because a file operation bounded by 32 KiB
-of output and an 8 KiB URL that is slow is stuck. A job's deadline is also
+Limits: pending requests expire after 10 minutes; approved grants last 1–1440
+minutes on up to 16 devices; each grant allows 64 jobs per approved hour,
+rounded up and never fewer than 64, so a 24-hour grant allows 1536. `exec`
+allows `timeout_seconds` of 1–14400 including queue time (default 300), so a
+build, install or render finishes instead of expiring; `read_text`, `edit_text`
+and `write_text` allow 1–60 (default 30), because a file operation bounded by
+32 KiB of output and an 8 KiB URL that is slow is stuck. A job's deadline is also
 clamped to the grant's remaining time, so the
 owner must approve a duration longer than the task. Four operations run
 concurrently per grant and 64 across the adapter; a call beyond that fails
@@ -238,11 +244,14 @@ whatever `limit` asked for; exec captures
 at most 16 KiB each of stdout and stderr and cancels on overflow. `HEAD` cannot
 create or execute tasks.
 
-Browser tickets have an immutable 70-minute envelope. Inactive grants and their
-task contents are removed after at least 24 hours; old browser URLs cannot
-recreate deleted grants. Existing account/device audit is retained separately.
+Browser tickets have an immutable 1450-minute envelope: the longest approvable
+grant plus the 10 minutes a ticket has to reach approval. Inactive grants and
+their task contents are removed after at least 25 hours, which is strictly
+longer than that envelope, so old browser URLs cannot recreate deleted grants.
+Existing account/device audit is retained separately.
 
-Session/status URLs are short-lived bearer credentials. Do not publish an
+Session/status URLs are bearer credentials that live as long as the grant, up to
+a full day. Do not publish an
 active conversation containing them; revoke the grant before sharing a transcript.
 Operational logs record server-generated grant/job IDs and fixed rejection
 categories, never browser tickets, full URLs, commands, file contents or client

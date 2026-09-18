@@ -120,14 +120,37 @@
   if (delegate) {
     var approve = $('#delegateApprove'), reject = $('#delegateReject');
     var delegateError = $('#delegateError');
+    var minutes = $('#delegateMinutes');
+    var maxMinutes = Number(minutes.getAttribute('max'));
+    var presets = $$('#delegate .duration-set .chip');
     var selectedDevices = function () { return $$('#delegate input[name="device"]:checked'); };
-    var updateApprove = function () {
-      approve.disabled = !$('#delegateConfirm').checked || !selectedDevices().length;
+    /* 自己填的分钟数才是提交出去的那个值；四颗 pill 只是往里写数。这样「选预设」
+       和「自己填」走同一条路，服务端只看见一个 minutes。 */
+    var validMinutes = function () {
+      var n = Number(minutes.value);
+      return minutes.value !== '' && n === Math.floor(n) && n >= 1 && n <= maxMinutes;
     };
-    delegate.addEventListener('change', function (event) {
-      if (event.target.name === 'device' || event.target.name === 'minutes') $('#delegateConfirm').checked = false;
+    var updateApprove = function () {
+      presets.forEach(function (b) {
+        b.setAttribute('aria-pressed', b.dataset.minutes === minutes.value ? 'true' : 'false');
+      });
+      approve.disabled = !$('#delegateConfirm').checked || !selectedDevices().length || !validMinutes();
+    };
+    /* 改设备或改时长都作废那次确认：勾的是「我核对过这一份」，不是「我核对过指纹」。 */
+    var changed = function (target) {
+      if (target === minutes) {
+        delegateError.textContent = validMinutes() ? ''
+          : lang === 'en' ? 'Choose 1 to ' + maxMinutes + ' minutes.' : '请填 1 到 ' + maxMinutes + ' 分钟。';
+      }
+      if (target === minutes || target.name === 'device') $('#delegateConfirm').checked = false;
       updateApprove();
+    };
+    delegate.addEventListener('change', function (event) { changed(event.target); });
+    delegate.addEventListener('input', function (event) { changed(event.target); });
+    presets.forEach(function (button) {
+      button.onclick = function () { minutes.value = button.dataset.minutes; changed(minutes); };
     });
+    updateApprove();
     var decide = function (path, body) {
       approve.disabled = reject.disabled = true;
       delegateError.textContent = '';
