@@ -37,7 +37,7 @@
       noneOnDevice: 'Nothing waiting on this device.',
       cantReach: 'Cannot reach this device — it may be offline.',
       cantList: 'Cannot reach the relay, so the device list is unavailable. Nothing has been removed.',
-      kind: { exec: 'command', read: 'read a file', write: 'write a file' },
+      kind: { exec: 'command', 'exec-elevated': 'ELEVATED command', read: 'read a file', write: 'write a file', logs: 'read the event log' },
       wantsTo: function (d) { return d; },
       from: 'from', cwd: 'in',
       kName: 'name', kFP: 'fingerprint', kDevice: 'device', kController: 'controller',
@@ -155,7 +155,7 @@
       noneOnDevice: '这台设备没有待审批。',
       cantReach: '连不上这台设备，它可能不在线。',
       cantList: '连不上中继，暂时列不出设备。什么都没有丢。',
-      kind: { exec: '命令', read: '读取文件', write: '写入文件' },
+      kind: { exec: '命令', 'exec-elevated': '提权命令', read: '读取文件', write: '写入文件', logs: '读取事件日志' },
       wantsTo: function (d) { return d; },
       from: '来自', cwd: '工作目录',
       kName: '名称', kFP: '指纹', kDevice: '设备', kController: '控制端',
@@ -510,7 +510,9 @@
      一个组件，两处挂载：主屏顶部（跨设备聚合）与设备下钻的待审批页
      （过滤到这一台）。 */
   function askCard(p, dev, readOnly, hideHost) {
-    var isExec = p.kind === 'exec';
+    // 提权命令也是命令：卡片要把命令本身画出来，否则待审批里只剩一个 '—'，
+    // 人没法批（issue #71）。
+    var isExec = p.kind === 'exec' || p.kind === 'exec-elevated';
     var kv = '<dt>' + esc(t().from) + '</dt><dd>' + esc(cut(p.peer || '—', 40)) + '</dd>';
     if (p.cwd) kv += '<dt>' + esc(t().cwd) + '</dt><dd>' + esc(p.cwd) + '</dd>';
     // 层级按后果排。三个次级动作等重，作用域写在标签旁边让后果看得见。

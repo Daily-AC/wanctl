@@ -2,7 +2,9 @@ package script
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -213,4 +215,123 @@ func BomlessNonASCIIPowerShell(remotePath string, data []byte) bool {
 		}
 	}
 	return false
+}
+
+// Canonical turns a command produced by Command back into a stable name for the
+// script it carries: `script:sh:<64 hex>` or `script:powershell:<64 hex>`, where
+// the hex is the full SHA-256 of the bytes the device will actually run.
+//
+// It exists for the policy layer. `-script` deliberately hands the device a
+// base64 blob (see above), and a remembered allow-rule built from that blob is
+// a 24 KB line nobody can read in a rules list, on an approval card, or on a
+// `wanctl rules add` command line. The token is exactly as narrow a grant as
+// the blob was — same script bytes, same token; one byte different, different
+// token — but it fits on a screen and can be typed.
+//
+// The whole digest is in the token because the token IS the authorization: a
+// truncated one turns "find a second script with this hash" into a birthday
+// search over the truncation, which for 64 bits an attacker preparing a benign
+// and a malicious variant can run at around 2^32 work — get the benign one
+// approved, reuse the grant. Short is for eyes only; see Short.
+//
+// ok is false for anything that is not one of the two transports, which is the
+// signal to treat the command as the ordinary command line it is.
+func Canonical(command string) (string, bool) {
+	interp, enc, ok := transportPayload(command)
+	if !ok {
+		return "", false
+	}
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		return "", false
+	}
+	sum := sha256.Sum256(raw)
+	return CanonicalPrefix + string(interp) + ":" + hex.EncodeToString(sum[:]), true
+}
+
+// shortHex is how much of a token's digest is shown to a human. It is a label,
+// never a comparison: nothing matches on a prefix.
+const shortHex = 16
+
+// Short abbreviates a Canonical token for a prompt or an approval card, where
+// 64 hex characters are a wall rather than information. The visible part is a
+// prefix of the real one, so a person can check the card against the rule the
+// device wrote, and the trailing … says out loud that this is not the whole
+// thing and is not what goes in `--pattern`.
+//
+// Only something this package could have produced is abbreviated: the prefix,
+// an interpreter we know, and exactly one SHA-256 in lowercase hex. Everything
+// else comes back untouched. Callers must pass Canonical's own return value
+// rather than an arbitrary command, and this check is the second lock on that:
+// `script:sh:0123456789abcdef; printf pwned` is a shell command wearing a
+// token's clothes, and abbreviating it would show a human the first half and
+// hide the part that runs (review of #108, 2026-09-18).
+func Short(token string) string {
+	rest, ok := strings.CutPrefix(token, CanonicalPrefix)
+	if !ok {
+		return token
+	}
+	interp, digest, ok := strings.Cut(rest, ":")
+	if !ok {
+		return token
+	}
+	switch Interp(interp) {
+	case POSIX, PowerShell:
+	default:
+		return token
+	}
+	if len(digest) != hex.EncodedLen(sha256.Size) || !isLowerHex(digest) {
+		return token
+	}
+	return CanonicalPrefix + interp + ":" + digest[:shortHex] + "…"
+}
+
+// isLowerHex reports whether s is what hex.EncodeToString produces, so nothing
+// carrying a shell operator, a space or an upper-case byte can pass for a
+// digest.
+func isLowerHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// CanonicalPrefix marks a rule pattern that names a script rather than a
+// command line. Rule matching keys off it, so it is part of the on-disk format.
+const CanonicalPrefix = "script:"
+
+// transportPayload recognises the two command shapes Command emits and returns
+// the interpreter and the base64 payload. The match is exact on everything
+// except the payload: these strings are generated, never typed, so a command
+// that merely resembles one is not one.
+//
+// The length check is not decoration. The prefix and the suffix share the
+// quote, so `printf %s ' | base64 -d | sh` satisfies HasPrefix and HasSuffix at
+// once while being shorter than the two together — and slicing it panicked the
+// agent from inside the text of a refusal, which any paired controller could
+// reach without being allowed to run anything at all.
+func transportPayload(command string) (Interp, string, bool) {
+	c := strings.TrimSpace(command)
+	const (
+		posixPre  = "printf %s '"
+		posixPost = "' | base64 -d | sh"
+		psPre     = "powershell -NoProfile -NonInteractive -EncodedCommand '"
+		psPost    = "'"
+	)
+	switch {
+	case wrapped(c, posixPre, posixPost):
+		return POSIX, c[len(posixPre) : len(c)-len(posixPost)], true
+	case wrapped(c, psPre, psPost):
+		return PowerShell, c[len(psPre) : len(c)-len(psPost)], true
+	}
+	return "", "", false
+}
+
+// wrapped reports whether c starts with pre, ends with post, and is long enough
+// to hold both without them overlapping.
+func wrapped(c, pre, post string) bool {
+	return len(c) >= len(pre)+len(post) && strings.HasPrefix(c, pre) && strings.HasSuffix(c, post)
 }

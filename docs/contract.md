@@ -955,13 +955,14 @@ mean anything where a device runs.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
-| — | `--kind exec\|read\|write\|logs` | string | no | What the rule governs. `wanctl rules add` only. |
-| — | `--pattern P` | string | no | For exec, a command prefix with an optional trailing *. For file kinds, a directory. `wanctl rules add` only. |
-| — | `--dir D` | string | no | For an exec rule scoped to a working directory. `wanctl rules add` only. |
+| — | `--kind exec\|exec-elevated\|read\|write\|logs` | string | no | What the rule governs. `exec-elevated` is its own class: an `exec` rule never authorizes the elevated form of the same command, and on a device where bypass mode is on but the elevation channel is off this is the only way to pre-authorize one. `wanctl rules add` only. |
+| — | `--pattern P` | string | no | For exec and exec-elevated, a command prefix with an optional trailing *; for a command sent with --script, the `script:<interp>:<sha256>` token the device names it by (a refusal prints it in full; approval cards abbreviate it). For file kinds, a directory. `wanctl rules add` only. |
+| — | `--dir D` | string | no | For an exec or exec-elevated rule scoped to a working directory. `wanctl rules add` only. |
 
 ```
 wanctl rules
   wanctl rules add --kind exec --pattern "git *"
+  wanctl rules add --kind exec-elevated --pattern "pm install *"
 ```
 
 ```
@@ -1179,12 +1180,13 @@ is one — a controller allowed to run commands could run the capture tool
 itself. On a desktop in BYPASS mode that means a capture is auto-approved like
 any other command, with no separate prompt — if the device's owner does not
 want that, the device should not be in bypass. Android is gated as an ELEVATED
-command, because there a capture really does need su or the device's own adb,
-and elevated commands need their own rule that bypass mode does not cover.
-Same pairing and identity rules as wanctl_exec: 'PAIRING REQUIRED' carries a
-URL to relay VERBATIM to the user, and 'DEVICE IDENTITY CONFIRMATION REQUIRED'
-means call wanctl_trust_server with the target and fingerprint it gives you,
-then retry.
+command, because there a capture really does need su or the device's own adb:
+that class needs its own rule or an approval, unless the phone is BOTH in
+bypass mode and has its elevation channel switched on, in which case it is
+auto-approved like any other command. Same pairing and identity rules as
+wanctl_exec: 'PAIRING REQUIRED' carries a URL to relay VERBATIM to the user,
+and 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call wanctl_trust_server
+with the target and fingerprint it gives you, then retry.
 
 **On the command line.**
 
@@ -1218,7 +1220,7 @@ wanctl_screenshot{"target":"home-pc"}
 |---|---|
 | `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
-| `command denied by device policy` | The device has not allowed this controller to capture its screen. Ask the owner to approve the pending request, then retry. On Android the refusal names an ELEVATED command, which needs its own rule that bypass mode does not cover. |
+| `command denied by device policy` | The device has not allowed this controller to capture its screen. Ask the owner to approve the pending request, then retry. On Android the refusal names an ELEVATED command, which needs its own exec-elevated rule or an approval; bypass mode alone covers it only on a phone whose elevation channel is also switched on. |
 | `no screen capture tool on this device` | A Linux device with none of grim / gnome-screenshot / import installed. Install one (the message names them) — retrying will not help. |
 | `screencapture failed: … create image from display` | macOS withheld the screen: the agent has no Screen Recording permission. Open System Settings → Privacy & Security → Screen Recording on that Mac, add the wanctl binary (or the app that launched the agent), turn it on, then restart the agent — retrying without that will not help. |
 | `did not return a PNG` | The device answered with something else, usually an agent too old for desktop capture. Run `wanctl update` on it, then retry. |

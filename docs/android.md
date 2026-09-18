@@ -245,13 +245,48 @@ token and does not close the socket. A client that simply waits sees a bare
 `i/o timeout` and no hint that a dialog is open, which is why the agent gives
 up after a short grace period and reports the dialog instead.
 
-**Elevated commands are their own policy class.** 自动放行所有命令 does not
-cover them: that switch says "this device is unattended", not "hand out root",
-so an elevated command on a bypass-mode device is still refused until it has a
-rule of its own or a human approves it in the portal. An `exec` rule never
-authorizes the elevated form of the same command either. The event log records
-which channel ran each one, so `wanctl logs` can answer *what has run as root on
-this phone*.
+**Elevated commands are their own policy class, and it takes both switches to
+bypass them.** The rule is:
+
+| 自动放行所有命令 | 提权通道 | an elevated command |
+|---|---|---|
+| on | on | runs, logged with `decision: bypass` and the channel that ran it |
+| on | off | refused — there is no channel, and bypass alone is not consent to root |
+| off | either | needs an approval, or an `exec-elevated` rule |
+
+Both switches are off by default and both are a deliberate act, so a device
+where the owner has flipped both has said "unattended" *and* "elevation", which
+is the decision. A device in bypass with no elevation channel is refused exactly
+as before. That is the owner's call of 2026-09-18 ([#71](https://github.com/Daily-AC/wanctl/issues/71)); before it,
+elevation on an unattended phone could not be authorized anywhere at all.
+
+On a normal-mode device an elevated miss goes through the same approval path as
+an ordinary one — the portal device console, the device's own prompt — and
+"allow + remember" writes an `exec-elevated` rule. You can also write that rule
+ahead of time:
+
+```sh
+wanctl rules add --kind exec-elevated --pattern "pm install *"
+```
+
+An `exec` rule never authorizes the elevated form of the same command, and an
+`exec-elevated` rule never authorizes the plain one.
+
+A command sent with `--script` crosses the wire as a base64 blob, so the device
+names it by a stable token instead: `script:sh:<64 hex>`, the SHA-256 of the
+script's bytes. That token is what the remembered rule stores, what a refusal
+prints, and what goes in `--pattern` to pre-authorize one script. It is exactly
+as narrow as the blob was — change a byte, get a different token — and the
+digest is carried whole, because the token *is* the authorization and a
+truncated one could be collided against. Approval prompts and the portal card
+show the first 16 hex characters followed by `…`, which is a label to read, not
+a pattern to copy; the full token is in `wanctl rules` on the device. Only a
+command that really is a script is ever abbreviated — a command that merely
+looks like a token is shown in full, because a prompt that hides half of what
+it is asking about is worse than no prompt.
+
+The event log records which channel ran each elevated command, so `wanctl logs`
+can answer *what has run as root on this phone*.
 
 With the switch off, the channels are not even probed — a rooted device raises
 no root-manager consent dialog for a feature nobody turned on.

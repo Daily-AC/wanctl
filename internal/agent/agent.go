@@ -329,9 +329,10 @@ func (a *Agent) gateDataCapability(cap dataCapability, peerFP string, checks ...
 // approver and optionally remember a rule. Returns whether the op may proceed
 // and a short decision string for the audit log.
 func (a *Agent) gate(req policy.Request, checks ...func() bool) (bool, string) {
-	// Bypasses, not Mode()==bypass: elevated commands are excluded from the
-	// blanket allow on purpose (policy.KindExecElevated).
-	if a.engine.Bypasses(req.Kind) {
+	// Bypasses, not Mode()==bypass: an elevated command rides the blanket allow
+	// only on a device whose elevation channel is also switched on. Two opt-ins,
+	// both off by default, are the consent (policy.KindExecElevated).
+	if a.engine.Bypasses(req.Kind, a.elevationEnabled()) {
 		return true, "bypass"
 	}
 	if a.engine.Allowed(req) {
@@ -352,6 +353,14 @@ func (a *Agent) gate(req policy.Request, checks ...func() bool) (bool, string) {
 		return true, "remembered:" + string(d.Scope)
 	}
 	return true, "approved"
+}
+
+// elevationEnabled reports whether this device's elevation channel is switched
+// on — the 提权通道 switch in the Android app, off by default. It is the second
+// of the two opt-ins that let bypass mode cover an elevated command; an agent
+// built without an elevator has no channel and therefore no second opt-in.
+func (a *Agent) elevationEnabled() bool {
+	return a.elevator != nil && a.elevator.Enabled()
 }
 
 // gateFile returns the policy root that must constrain the actual filesystem
@@ -893,8 +902,12 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
 		reason := "command denied by device policy: " + m.Command
 		if kind == policy.KindExecElevated {
-			reason = "elevated command denied by device policy: " + m.Command +
-				" (elevated commands need their own rule; bypass mode does not cover them)"
+			// CommandPattern, not CommandLabel: this text is read by whoever
+			// will go and write the rule, so it carries the whole token rather
+			// than the abbreviation a card shows.
+			reason = "elevated command denied by device policy: " + policy.CommandPattern(m.Command) +
+				" (elevated commands need their own rule; bypass mode does not cover them" +
+				" until this device's elevation channel is switched on)"
 		}
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: reason})
 		return nil
@@ -952,6 +965,13 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 			code, err = pairCode, pairErr
 		} else if handled, builtinCode, builtinErr := server.RunBuiltin(m.Command, out); handled {
 			code, err = builtinCode, builtinErr
+		} else if verb, needsElevate := androidverb.NeedsElevation(runtime.GOOS, m.Command); needsElevate {
+			// The verb dispatcher only runs on the elevated path, so without
+			// --elevate this would reach the shell and come back as exit 127
+			// with the device blamed for a flag the caller left off (#71).
+			// Android only: on a desktop these are just words, and one of them
+			// may well name a program the caller means to run.
+			code, err = -1, fmt.Errorf("%q is a wanctl verb and only runs elevated: add --elevate (and turn on 提权通道 on the device)", verb)
 		} else if m.OneShot {
 			code, err = server.RunOneShotContext(ctx, a.opts.Shell, m.Command, m.Cwd, out)
 		} else {
