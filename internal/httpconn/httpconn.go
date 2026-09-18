@@ -9,9 +9,24 @@
 // forwards them promptly:
 //
 //	up:   POST /h/up?session=&role=     — one request per Write, body = bytes.
-//	down: GET  /h/down?session=&role=   — long-poll: returns available bytes
+//	down: GET  /h/down?session=&role=&ack= — long-poll: returns available bytes
 //	      (200), 204 if none within the poll window (client re-polls), or 410 when
 //	      the session is closed (-> io.EOF).
+//
+// The down direction is acknowledged. Every data-bearing 200 carries a
+// monotonic X-Wanctl-Down-Seq, and the next poll reports the highest sequence
+// the reader has fully received in ack=. The relay holds a delivered chunk
+// until it is acked and re-sends it otherwise, because an HTTP response that
+// only half arrives would otherwise punch a hole in the middle of the
+// end-to-end TLS stream — which the TLS layer reports, several minutes into a
+// slow push, as "tls: bad record MAC" (issue #57).
+//
+// Re-polling after a response the carrier failed to deliver is safe only
+// against a relay that does hold that chunk. A relay from before this protocol
+// dequeues before it answers, so the same retry would resume at the chunk after
+// the lost bytes and skip them silently. The relay therefore marks every
+// /h/down answer with X-Wanctl-Down-Ack, and a reader that has not seen it on
+// this session fails the read instead of retrying.
 package httpconn
 
 import (
@@ -22,6 +37,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -39,6 +55,8 @@ type conn struct {
 	readM    sync.Mutex
 	leftover []byte
 	eof      bool
+	ackSeq   uint64 // highest down-poll sequence fully received
+	ackable  bool   // the relay has answered this session with the ack protocol
 
 	writeM     sync.Mutex
 	pending    []byte
@@ -51,23 +69,68 @@ type conn struct {
 const (
 	writeBatchBytes = 256 << 10
 	writeFlushDelay = 5 * time.Millisecond
+
+	// DownSeqHeader carries the sequence number of a data-bearing down-poll
+	// response; DownAckParam is the query parameter the next poll reports the
+	// last fully received sequence in. A poll without DownAckParam is a
+	// pre-acknowledgement client and the relay serves it the old way.
+	DownSeqHeader = "X-Wanctl-Down-Seq"
+	DownAckParam  = "ack"
+
+	// DownAckCapabilityHeader is how a relay says it holds a delivered chunk
+	// until it is acked. A relay without it dequeues before it answers, so a
+	// poll it failed to deliver is bytes that no longer exist anywhere and
+	// re-polling would resume at the chunk after them. Retrying is therefore
+	// gated on having seen this (or a sequence header) on this session.
+	DownAckCapabilityHeader = "X-Wanctl-Down-Ack"
+
+	// downPollAttempts bounds how many times one Read retries a down poll that
+	// the carrier failed to deliver. The relay still holds the chunk, so a
+	// retry is a re-send rather than a hole; the bound is what stops a
+	// permanently broken link from spinning forever.
+	downPollAttempts = 6
+	downRetryDelay   = 250 * time.Millisecond
 )
 
 // Dial constructs a net.Conn for a session/role. base is the relay's HTTP origin
 // (http:// or https://, or ws(s):// which is normalized). No network I/O happens
 // here; the first Read long-polls the down channel.
 func Dial(ctx context.Context, base, session, role, token string) (net.Conn, error) {
+	return DialWith(ctx, base, session, role, token, nil)
+}
+
+// DialWith is Dial with an explicit *http.Client for the up/down requests. A nil
+// client uses the package default. Tests use it to inject a carrier that drops,
+// delays or truncates responses.
+func DialWith(ctx context.Context, base, session, role, token string, hc *http.Client) (net.Conn, error) {
 	httpBase, err := config.RelayHTTPOrigin(base)
 	if err != nil {
 		return nil, err
+	}
+	if hc == nil {
+		hc = defaultClient()
 	}
 	return &conn{
 		base:    httpBase,
 		session: session,
 		role:    role,
 		token:   token,
-		hc:      &http.Client{Timeout: 60 * time.Second},
+		hc:      hc,
 	}, nil
+}
+
+func defaultClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	// A down poll parks on the relay for its whole poll window before
+	// answering, so only the wait for response *headers* can be bounded
+	// tightly. The previous blanket http.Client.Timeout bounded the entire
+	// exchange, so on a slow link it fired while a response body was still
+	// downloading and cut the body in half (issue #57).
+	tr.ResponseHeaderTimeout = 45 * time.Second
+	// The whole request still has a bound, generous enough that a full
+	// maxDrainBytes response downloads well inside it on the 60 KB/s link from
+	// issue #57 (about 34 s) even after the poll parked on the relay first.
+	return &http.Client{Transport: tr, Timeout: 5 * time.Minute}
 }
 
 func (c *conn) Read(p []byte) (int, error) {
@@ -84,13 +147,34 @@ func (c *conn) Read(p []byte) (int, error) {
 	if c.eof {
 		return 0, io.EOF
 	}
-	q := url.Values{"session": {c.session}, "role": {c.role}}
-	downURL := c.base + "/h/down?" + q.Encode()
+	failures := 0
+	// retry reports whether a carrier failure is worth another poll. It is
+	// worth one only against a relay that has shown it holds the chunk until
+	// it is acked; against any other, polling again resumes after bytes that
+	// are already gone, which is a silent hole in the stream rather than the
+	// loud failure the caller needs. Pre-acknowledgement relays therefore keep
+	// the old behaviour: an undelivered poll fails the read.
+	retry := func(err error) error {
+		if !c.ackable {
+			return fmt.Errorf("down poll failed and cannot be retried: %w (this relay has not answered with %s, so it does not hold undelivered bytes)", err, DownAckCapabilityHeader)
+		}
+		failures++
+		if failures >= downPollAttempts {
+			return fmt.Errorf("down poll failed %d times in a row: %w", failures, err)
+		}
+		time.Sleep(downRetryDelay)
+		return nil
+	}
 	for {
 		if c.isClosed() {
 			return 0, io.EOF
 		}
-		req, err := http.NewRequest("GET", downURL, nil)
+		q := url.Values{
+			"session":    {c.session},
+			"role":       {c.role},
+			DownAckParam: {strconv.FormatUint(c.ackSeq, 10)},
+		}
+		req, err := http.NewRequest("GET", c.base+"/h/down?"+q.Encode(), nil)
 		if err != nil {
 			return 0, err
 		}
@@ -100,15 +184,46 @@ func (c *conn) Read(p []byte) (int, error) {
 			if c.isClosed() {
 				return 0, io.EOF
 			}
-			return 0, err
+			if giveUp := retry(err); giveUp != nil {
+				return 0, giveUp
+			}
+			continue
+		}
+		// Headers arrive before the body, so a response whose body is cut short
+		// still proves what the relay speaks.
+		if resp.Header.Get(DownAckCapabilityHeader) == "1" {
+			c.ackable = true
+		}
+		seq, seqErr := strconv.ParseUint(resp.Header.Get(DownSeqHeader), 10, 64)
+		if seqErr == nil && seq > 0 {
+			c.ackable = true
 		}
 		switch resp.StatusCode {
 		case http.StatusNoContent:
 			resp.Body.Close()
+			failures = 0
 			continue // no data this round; poll again
 		case http.StatusOK:
-			body, _ := io.ReadAll(resp.Body)
+			body, readErr := io.ReadAll(resp.Body)
 			resp.Body.Close()
+			if readErr != nil {
+				// The body was cut short. Do not advance the ack and do not
+				// hand the partial body on: the relay re-sends the whole
+				// chunk on the next poll. Accepting a truncated body here is
+				// what made a multi-minute push die with "tls: bad record
+				// MAC" (issue #57).
+				if giveUp := retry(readErr); giveUp != nil {
+					return 0, giveUp
+				}
+				continue
+			}
+			failures = 0
+			if seqErr == nil && seq > 0 {
+				if seq <= c.ackSeq {
+					continue // a re-send of a chunk already consumed
+				}
+				c.ackSeq = seq
+			}
 			if len(body) == 0 {
 				continue
 			}
