@@ -392,7 +392,20 @@ func CommandPattern(cmd string) string {
 // what CommandPattern stores, so a person can check a card against the rule the
 // device wrote, but nothing is ever compared against the short form — the whole
 // digest is the authorization.
-func CommandLabel(cmd string) string { return script.Short(CommandPattern(cmd)) }
+//
+// Only a command that really is a script is abbreviated, and what gets
+// abbreviated is the token this package derived, never the caller's text.
+// Passing the text through Short shortened anything merely shaped like a token:
+// `script:sh:0123456789abcdef; printf pwned` reached the prompt and the portal
+// card as `script:sh:0123456789abcdef…`, so the human said yes to a command
+// whose second half they were never shown (review of #108, 2026-09-18).
+func CommandLabel(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if tok, ok := script.Canonical(cmd); ok {
+		return script.Short(tok)
+	}
+	return cmd
+}
 
 // Add appends a rule and persists.
 func (e *Engine) Add(r Rule) error {

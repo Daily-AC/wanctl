@@ -280,7 +280,10 @@ as narrow as the blob was — change a byte, get a different token — and the
 digest is carried whole, because the token *is* the authorization and a
 truncated one could be collided against. Approval prompts and the portal card
 show the first 16 hex characters followed by `…`, which is a label to read, not
-a pattern to copy; the full token is in `wanctl rules` on the device.
+a pattern to copy; the full token is in `wanctl rules` on the device. Only a
+command that really is a script is ever abbreviated — a command that merely
+looks like a token is shown in full, because a prompt that hides half of what
+it is asking about is worse than no prompt.
 
 The event log records which channel ran each elevated command, so `wanctl logs`
 can answer *what has run as root on this phone*.
