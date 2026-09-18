@@ -124,7 +124,12 @@ operation or result is exposed.
 ### Discovery and independent requests
 
 `GET /webfetch/v1` (also `/webfetch`) is public, static and credential-free.
-It also advertises `owner_start_url` for clients without a secure random generator.
+It also advertises `owner_start_url` for clients without a secure random generator,
+`skill_url` for hosts that load an Agent Skill, and an `instructions` block: the
+primitives and the dev loop rendered from the same catalog `wanctl help
+--instructions` and the MCP server's instructions field render from, narrowed to
+the four tools a delegated session has, so the two surfaces cannot drift. The
+protocol's own procedure, human checkpoints and security rules stay here.
 It returns `start_url_template: https://RELAY/webfetch/new/{client_nonce}`.
 `GET /webfetch/new/CLIENT_NONCE` creates a pending request and returns its
 `approval_url`, `status_url` and `continuation_prompt`. Templates must be filled

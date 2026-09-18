@@ -23,9 +23,12 @@ func fetchPage(t *testing.T, raw string) (int, map[string]any) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, after, ok := strings.Cut(string(body), "<pre>")
+	// Anchor on the section, not on the first <pre>: the page also prints the
+	// harness instructions in one, above the protocol response.
+	_, section, ok := strings.Cut(string(body), "<h2>Protocol response</h2>")
+	_, after, opened := strings.Cut(section, "<pre>")
 	encoded, _, closed := strings.Cut(after, "</pre>")
-	if !ok || !closed {
+	if !ok || !opened || !closed {
 		t.Fatalf("missing readable error/document: HTTP %d", resp.StatusCode)
 	}
 	var data map[string]any
