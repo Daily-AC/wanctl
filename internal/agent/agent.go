@@ -11,6 +11,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -917,6 +918,10 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 	// goes away mid-command (Ctrl-C) or sends a cancel frame cancels it, and
 	// the per-platform cancel hook kills the shell and its children instead of
 	// leaving an orphan running to completion on the device (#37).
+	//
+	// A persistent session cancels the same way, and the session goes with it:
+	// the shell is fed through stdin, so stopping one command in it and keeping
+	// the rest is not something the device can promise (#46, ADR 0011).
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	pending := watchPeer(conn, cancel)
@@ -975,19 +980,21 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 		} else if m.OneShot {
 			code, err = server.RunOneShotContext(ctx, a.opts.Shell, m.Command, m.Cwd, out)
 		} else {
-			sess, serr := a.session(fp)
+			var serr error
+			code, err, serr = a.execInSession(ctx, fp, m, out)
 			if serr != nil {
 				spill.Close()
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: serr.Error()})
 				return pending
 			}
-			code, err = sess.ExecInDir(m.Command, m.Cwd, out)
 		}
 	}
 	if err != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil && !errors.Is(err, server.ErrSessionCancelled) {
 			// Say who ended it: the audit line and a controller that is still
-			// listening must not read this as the command itself failing.
+			// listening must not read this as the command itself failing. A
+			// session cancellation already says so, and may carry a kill that
+			// failed, so it is passed through untouched.
 			err = fmt.Errorf("command cancelled by the controller")
 		}
 		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(ranVia)})
@@ -1194,6 +1201,47 @@ func (a *Agent) serveSessionHTTP(ctx context.Context, base string, open sessiona
 		return
 	}
 	a.handleSession(ctx, nc, open)
+}
+
+// execInSession runs a command on this controller's persistent session. serr is
+// set only when no session could be built at all; anything the command itself
+// reported comes back in err.
+//
+// A session can be cancelled and dropped by another request between this one
+// acquiring it and running, which used to surface as "session closed" for a
+// command that never reached the device. The session says so precisely, and
+// that one error is answered by acquiring a fresh session and running once.
+// Nothing else is retried: every other failure leaves open the possibility that
+// the command did run, and running it twice is worse than reporting it once.
+func (a *Agent) execInSession(ctx context.Context, fp string, m protocol.Message, out io.Writer) (code int, err, serr error) {
+	for attempt := 0; ; attempt++ {
+		sess, sessErr := a.session(fp)
+		if sessErr != nil {
+			return -1, nil, sessErr
+		}
+		code, err = sess.ExecInDirContext(ctx, m.Command, m.Cwd, out)
+		if sess.Closed() {
+			// Cancelling a session command destroys the session by design
+			// (#46). Drop it so the next command on this target builds a fresh
+			// shell rather than finding a dead one.
+			a.dropSession(fp, sess)
+		}
+		if errors.Is(err, server.ErrSessionUnusable) && attempt == 0 {
+			continue
+		}
+		return code, err, nil
+	}
+}
+
+// dropSession forgets a session and tears it down, so the next command for this
+// controller starts a new shell.
+func (a *Agent) dropSession(fp string, sess *server.ShellSession) {
+	a.sessMu.Lock()
+	if a.sessions[fp] == sess {
+		delete(a.sessions, fp)
+	}
+	a.sessMu.Unlock()
+	sess.Close()
 }
 
 func (a *Agent) session(fp string) (*server.ShellSession, error) {
