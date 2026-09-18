@@ -907,6 +907,69 @@ func TestGracefulCloseWaitsForBothDirections(t *testing.T) {
 	}
 }
 
+// The queue looks empty for as long as a poll has a chunk in its hands but has
+// not yet recorded it as unacknowledged: it has left the channel and reached no
+// field. A poll on the other direction that checks both sides during that
+// window used to find the session finished and retire it, and the chunk the
+// first poll then recorded could never be re-sent — its retry got a 404.
+//
+// This is a logical race, not a data race, so it is provoked rather than
+// injected: the empty direction is polled in a tight loop while the other one
+// works through two megabytes. The reviewer's probe hit it on the first
+// attempt for both ways a session ends.
+func TestRetirementWaitsForAPollHoldingAChunk(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4))
+	for _, viaBridge := range []bool{false, true} {
+		name := "peer posts /h/close"
+		if viaBridge {
+			name = "websocket leg ends"
+		}
+		t.Run(name, func(t *testing.T) {
+			for attempt := 1; attempt <= 100; attempt++ {
+				r, s, sid := tunnelSession(t)
+				s.toAgent.push(bytes.Repeat([]byte("A"), 1<<20))
+				s.toAgent.push(bytes.Repeat([]byte("B"), 1<<20))
+				if viaBridge {
+					r.httpSessionConn(sid, s, "client").(io.Closer).Close()
+				} else {
+					closeReq := httptest.NewRequest("POST", "/h/close?session="+sid, nil)
+					closeReq.Header.Set("Authorization", "Bearer tok-alice")
+					r.Handler().ServeHTTP(httptest.NewRecorder(), closeReq)
+				}
+
+				// The agent takes the backlog while the controller, which has
+				// nothing left to read, keeps asking.
+				agentPoll := make(chan *httptest.ResponseRecorder, 1)
+				go func() { agentPoll <- downPoll(t, r, sid, "agent", 0) }()
+				var first *httptest.ResponseRecorder
+				for first == nil {
+					select {
+					case first = <-agentPoll:
+					default:
+						downPoll(t, r, sid, "client", 0)
+					}
+				}
+
+				// Treat the agent's response as lost: it was never acknowledged,
+				// so the relay owes it again.
+				if r.session(sid) == nil {
+					s.toAgent.ackMu.Lock()
+					held, seq := len(s.toAgent.unacked), s.toAgent.seq
+					s.toAgent.ackMu.Unlock()
+					t.Fatalf("attempt %d: the session was retired while a poll held a chunk (its answer was %d with %d bytes, seq %d, now recorded as %d unacknowledged bytes that can never be re-sent)",
+						attempt, first.Code, first.Body.Len(), seq, held)
+				}
+				retry := downPoll(t, r, sid, "agent", 0)
+				if retry.Code != http.StatusOK || retry.Body.Len() != first.Body.Len() {
+					t.Fatalf("attempt %d: re-poll for the unacknowledged chunk = %d with %d bytes, want 200 with %d",
+						attempt, retry.Code, retry.Body.Len(), first.Body.Len())
+				}
+				r.closeHTTPSession(sid, s)
+			}
+		})
+	}
+}
+
 // A gracefully closed session stays reachable so the far side can finish
 // reading it. That is not permission to write to it again: keeping the session
 // registered used to leave /h/up wide open, and push picking between a writable
