@@ -25,8 +25,9 @@ import (
 //   - No signal is sent after the shell has been reaped. Until then the shell
 //     is at worst a zombie, and the kernel does not reuse a group leader's pid
 //     while its zombie exists, so the number still names this group and nothing
-//     else. reap is called the moment cmd.Wait returns, under the same lock the
-//     kill takes, so the two cannot interleave.
+//     else. reap is called the moment the kernel has waited the shell — not
+//     when cmd.Wait later returns from copying output — under the same lock
+//     the kill takes, so the two cannot interleave.
 type sessionContainer struct {
 	mu     sync.Mutex
 	pgid   int
