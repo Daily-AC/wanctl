@@ -663,3 +663,22 @@ func TestFitReadCutsManyLinesAtTheResponseCapWithoutLosingOne(t *testing.T) {
 		t.Fatalf("the rest of the file starts at line %s, next_offset says %v", number, out["next_offset"])
 	}
 }
+
+// A host that can load an Agent Skill should not have to be told the protocol
+// again every conversation, so discovery names the file that carries it.
+func TestDiscoveryPointsAtTheSkillFile(t *testing.T) {
+	var doc map[string]any
+	if err := json.Unmarshal(getDiscovery(t, staticHandler(t), "?format=json").Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["skill_url"] != "https://portal.example/webfetch/skill" {
+		t.Errorf("skill_url = %v", doc["skill_url"])
+	}
+	// It is the portal that serves the owner's surfaces, not the relay.
+	if doc["help_url"] != "https://portal.example/webfetch/help" {
+		t.Errorf("help_url = %v", doc["help_url"])
+	}
+	if body := getDiscovery(t, staticHandler(t), "").Body.String(); !strings.Contains(body, "https://portal.example/webfetch/skill") {
+		t.Error("the HTML discovery page never links the skill file")
+	}
+}

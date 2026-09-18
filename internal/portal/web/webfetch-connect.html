@@ -49,6 +49,13 @@
   <textarea id="webfetchPrompt" readonly rows="6" aria-label="Connection prompt" data-lbl-en="Connection prompt" data-lbl-zh="接入提示词" style="width:100%;box-sizing:border-box;resize:vertical">Use your URL-reading tool to GET {{.StartURL}}. Return the real approval_url and complete continuation_prompt, then wait for my approval. After approval, use the same URL-reading tool to GET the call URLs for tasks I request. Keep the full status_url and exec call_url_template in your reply for later turns. Help: {{.HelpURL}}. Do not simulate responses or approve on my behalf. Do not run device commands before approval.</textarea>
   <p><button type="button" class="btn soft" id="webfetchCopy" data-en="Copy a new connection prompt" data-zh="复制新的接入提示词">Copy a new connection prompt</button></p>
   {{end}}
+
+  {{if .SkillURL}}
+  <h2 data-en="Install as a skill" data-zh="装成技能">Install as a skill</h2>
+  <p class="fine" data-en="If your AI accepts an Agent Skill, open the file below and paste it into that skill setting — a Claude project, a custom GPT, or whatever your chat calls it. Then you can just say what you want done on a device, with no prompt to copy each conversation."
+     data-zh="如果你的 AI 支持 Agent Skill，打开下面这份文件，把内容粘贴进它的技能设置——Claude 的项目、自定义 GPT，或你那个聊天里对应的地方。装好之后直接说要在哪台设备做什么就行，不用每个对话都复制提示词。">If your AI accepts an Agent Skill, open the file below and paste it into that skill setting — a Claude project, a custom GPT, or whatever your chat calls it. Then you can just say what you want done on a device, with no prompt to copy each conversation.</p>
+  <p class="fine"><a href="/webfetch/skill" id="webfetchSkillLink">{{.SkillURL}}</a></p>
+  {{end}}
   {{else}}
   <p class="lead" data-en="Web AI access is unavailable on this relay. Ask the instance administrator to enable or update WebFetch, then try again."
      data-zh="当前中继尚无法提供网页 AI 接入，请联系管理员启用或升级 WebFetch 后重试。">Web AI access is unavailable on this relay. Ask the instance administrator to enable or update WebFetch, then try again.</p>

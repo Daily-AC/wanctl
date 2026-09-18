@@ -70,9 +70,12 @@ func securityRules() map[string]any {
 func discovery(publicOrigin, portalOrigin string) map[string]any {
 	return map[string]any{
 		"title": "wanctl WebFetch", "status": "start",
-		"entry_url":           publicOrigin + "/webfetch/v1",
-		"start_url_template":  publicOrigin + "/webfetch/new/{client_nonce}",
-		"owner_start_url":     portalOrigin + "/webfetch/connect",
+		"entry_url":          publicOrigin + "/webfetch/v1",
+		"start_url_template": publicOrigin + "/webfetch/new/{client_nonce}",
+		"owner_start_url":    portalOrigin + "/webfetch/connect",
+		// The same instructions as an Agent Skill file, for a client whose host
+		// can load one once instead of being told the protocol every conversation.
+		"skill_url":           portalOrigin + "/webfetch/skill",
 		"client_nonce_format": "48 lowercase hexadecimal characters from 24 fresh cryptographically random bytes",
 		"summary":             "Run commands and read or write text files on the human's own devices, using only your URL-reading tool. You lead; the human acts twice.",
 		"procedure": []string{

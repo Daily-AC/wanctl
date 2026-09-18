@@ -968,7 +968,7 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, status int, da
 		return
 	}
 	var links []struct{ Name, URL string }
-	for _, key := range []string{"help_url", "entry_url", "owner_start_url", "approval_url", "status_url", "next_url", "result_url"} {
+	for _, key := range []string{"help_url", "skill_url", "entry_url", "owner_start_url", "approval_url", "status_url", "next_url", "result_url"} {
 		if value, ok := data[key].(string); ok {
 			links = append(links, struct{ Name, URL string }{key, value})
 		}
