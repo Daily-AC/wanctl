@@ -42,7 +42,7 @@
   <p data-en="Approved device access is not pairing. If a result carries error_code pairing_required, it also carries execution_started: false — nothing ran. Show the human pairing_url and wait until they say they approved it; never fetch that link yourself. Then submit the same operation again under a NEW rid. The refused job stays failed. Device permission rules still apply, and if the grant expires or is revoked, stop and report it."
      data-zh="批准了设备访问不等于完成配对。若结果的 error_code 是 pairing_required，它同时带有 execution_started: false——什么都没有执行。把 pairing_url 交给主人并等他确认批准，不要自己去访问那个链接。之后用新的 rid 重新提交同一个操作，被拒绝的那次任务保持 failed。设备原有权限规则继续生效；授权过期或被吊销时，停止并报告。">Approved device access is not pairing. If a result carries error_code pairing_required, it also carries execution_started: false — nothing ran. Show the human pairing_url and wait until they say they approved it; never fetch that link yourself. Then submit the same operation again under a NEW rid. The refused job stays failed. Device permission rules still apply, and if the grant expires or is revoked, stop and report it.</p>
 
-  <p><a href="/webfetch/connect" data-en="Connect web AI" data-zh="连接网页 AI">Connect web AI</a>{{if .Relay}} · <a href="{{.Relay}}/webfetch/v1" data-en="Protocol entry" data-zh="协议入口">Protocol entry</a>{{end}}</p>
+  <p><a href="/webfetch/connect" data-en="Connect web AI" data-zh="连接网页 AI">Connect web AI</a> · <a href="/webfetch/skill" data-en="Skill file" data-zh="技能文件">Skill file</a>{{if .Relay}} · <a href="{{.Relay}}/webfetch/v1" data-en="Protocol entry" data-zh="协议入口">Protocol entry</a>{{end}}</p>
 </main>
 <script src="/assets/auth.js?v={{.V}}"></script>
 </body>

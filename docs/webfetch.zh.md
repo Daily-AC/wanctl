@@ -34,6 +34,13 @@
    配对不会改变设备操作规则，也不会开启 bypass。
 5. 用完后，在“设置 → 访问令牌”吊销授权。
 
+支持 Agent Skill 的聊天不必每个对话都走这一遍。门户在 `/webfetch/skill` 提供一份：无需登录的
+Markdown 文件，带 YAML frontmatter（`name: wanctl-webfetch`），其中的中继与门户地址已替换成本
+实例自己的，连接页有入口，发现页也以 `skill_url` 公布。把它粘贴进 Claude 项目、自定义 GPT 或
+任何有技能设置的宿主，就替代了每次复制的接入提示词：AI 已经知道从本中继的 `/webfetch/v1`
+开始，主人只需说要做什么。该地址不含任何凭据、不授予任何权限；它和 `/webfetch/help` 一样只依据
+配置作答，公开访问不会转成一次中继请求。
+
 首版只允许选择有固定 ID 和已登记指纹的自有设备。原有跨账号共享不变。设备改名不改变授权；
 设备移除或证书变化会使授权失效。临时授权只有设备使用权，没有控制台或设备管理权。
 
@@ -90,7 +97,9 @@ PostgreSQL 只保存凭证哈希。
 ### 发现协议与独立申请
 
 `GET /webfetch/v1`（也可访问 `/webfetch`）是公共、静态、无凭证的发现页。
-它也返回 `owner_start_url`，供没有安全随机数生成器的客户端交给主人操作。
+它也返回 `owner_start_url`，供没有安全随机数生成器的客户端交给主人操作；返回 `skill_url`，
+供能加载 Agent Skill 的宿主使用；还返回一段 `instructions`：原语清单和 dev loop，与 `wanctl help
+--instructions`、MCP 的 instructions 字段出自同一份目录，只保留委托会话真正拥有的四个工具，两处不会各写一份。协议本身的步骤、人工确认点和安全规则仍写在这里。
 返回 `start_url_template: https://RELAY/webfetch/new/{client_nonce}`。
 `GET /webfetch/new/CLIENT_NONCE` 创建待批准申请，返回 `approval_url`、`status_url`
 和 `continuation_prompt`。模板必须先填完再访问，字面占位符会被拒绝且不会创建申请。

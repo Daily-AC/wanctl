@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"time"
 
+	"wanctl/internal/catalog"
 	"wanctl/internal/delegation"
 	"wanctl/internal/protocol"
 )
@@ -70,11 +71,20 @@ func securityRules() map[string]any {
 func discovery(publicOrigin, portalOrigin string) map[string]any {
 	return map[string]any{
 		"title": "wanctl WebFetch", "status": "start",
-		"entry_url":           publicOrigin + "/webfetch/v1",
-		"start_url_template":  publicOrigin + "/webfetch/new/{client_nonce}",
-		"owner_start_url":     portalOrigin + "/webfetch/connect",
+		"entry_url":          publicOrigin + "/webfetch/v1",
+		"start_url_template": publicOrigin + "/webfetch/new/{client_nonce}",
+		"owner_start_url":    portalOrigin + "/webfetch/connect",
+		// The same instructions as an Agent Skill file, for a client whose host
+		// can load one once instead of being told the protocol every conversation.
+		"skill_url":           portalOrigin + "/webfetch/skill",
 		"client_nonce_format": "48 lowercase hexadecimal characters from 24 fresh cryptographically random bytes",
 		"summary":             "Run commands and read or write text files on the human's own devices, using only your URL-reading tool. You lead; the human acts twice.",
+		// The primitives and the dev loop are not written here. They are
+		// rendered from the same catalog the CLI's `wanctl help --instructions`
+		// and the MCP server's instructions field render from, narrowed to the
+		// four tools a delegated session actually has, so a rule cannot be
+		// fixed on one surface and stay wrong on this one (issue #100).
+		"instructions": catalog.DelegatedInstructions(),
 		"procedure": []string{
 			"1. Generate a client_nonce in client_nonce_format and substitute it into start_url_template. Never fetch the literal template.",
 			"2. GET that complete URL. Check that the response echoes your client_nonce; a different value means you read a cached response, so start over with a new nonce.",
