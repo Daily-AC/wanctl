@@ -91,15 +91,15 @@ type accessLease struct {
 
 func (r *Relay) beginAccessLease(sid, target string, access delegation.Access, token string) *accessLease {
 	l := &accessLease{r: r, sid: sid, target: target, token: token, access: access, done: make(chan struct{})}
-	if !access.Delegated {
-		return l
-	}
 	r.leaseMu.Lock()
 	if r.leases == nil {
 		r.leases = make(map[string]*accessLease)
 	}
 	r.leases[sid] = l
 	r.leaseMu.Unlock()
+	if !access.Delegated {
+		return l
+	}
 	// Expiry must not wait for a slow database or upstream revalidation.
 	deadline := time.AfterFunc(time.Until(access.ExpiresAt), l.close)
 	go func() {
@@ -168,17 +168,53 @@ func (l *accessLease) close() {
 		closers := l.closers
 		l.closers = nil
 		l.mu.Unlock()
-		if l.access.Delegated {
-			l.r.leaseMu.Lock()
-			if l.r.leases[l.sid] == l {
-				delete(l.r.leases, l.sid)
-			}
-			l.r.leaseMu.Unlock()
+		l.r.leaseMu.Lock()
+		if l.r.leases[l.sid] == l {
+			delete(l.r.leases, l.sid)
 		}
+		l.r.leaseMu.Unlock()
 		for _, f := range closers {
 			f()
 		}
 	})
+}
+
+// Reused channels revalidate the original relay credential AND current device
+// sharing rights. The agent authenticates through its instance channel; no
+// controller-supplied permission assertion or raw token reaches the device.
+func (r *Relay) handleAgentWorkspaceCheck(w http.ResponseWriter, req *http.Request) {
+	if !requireMethod(w, req, http.MethodGet) {
+		return
+	}
+	ns, device, ok := r.authAgentInstance(w, req)
+	if !ok {
+		return
+	}
+	r.leaseMu.Lock()
+	l := r.leases[req.URL.Query().Get("session")]
+	r.leaseMu.Unlock()
+	if l == nil || l.target != ns+"/"+device || l.access.Delegated {
+		http.Error(w, "workspace access inactive", http.StatusForbidden)
+		return
+	}
+	select {
+	case <-l.done:
+		http.Error(w, "workspace access inactive", http.StatusForbidden)
+		return
+	default:
+	}
+	a, ok := ResolveAccess(r.ts, l.token)
+	if !ok || a.Delegated || a.Namespace != l.access.Namespace {
+		http.Error(w, "workspace access inactive", http.StatusForbidden)
+		return
+	}
+	key, auth, _, allowed := r.dialAccessAllowed(a, l.target)
+	if !allowed || key != l.target || !auth.Capabilities.Has(sessionauth.UseCapabilities) {
+		http.Error(w, "workspace access inactive", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // An agent revalidates after a potentially long policy approval. Merely closing
@@ -194,7 +230,7 @@ func (r *Relay) handleAgentDelegationCheck(w http.ResponseWriter, req *http.Requ
 	r.leaseMu.Lock()
 	l := r.leases[req.URL.Query().Get("session")]
 	r.leaseMu.Unlock()
-	if l == nil || l.target != ns+"/"+device || l.access.GrantID != req.URL.Query().Get("grant") ||
+	if l == nil || !l.access.Delegated || l.target != ns+"/"+device || l.access.GrantID != req.URL.Query().Get("grant") ||
 		l.access.ControllerFingerprint != req.URL.Query().Get("controller_fp") || !l.valid() {
 		http.Error(w, "delegation inactive", http.StatusForbidden)
 		return

@@ -52,7 +52,7 @@ func workspaceResult(ref client.WorkspaceRef, r *protocol.WorkspaceResult) *mcpa
 
 func mcpWorkspace(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
 	sess := sessions.get(ctx)
-	c, hint := sess.client()
+	c, hint := workspaceClient(ctx, sess)
 	if hint != nil {
 		return hint, nil
 	}
@@ -79,9 +79,11 @@ func mcpWorkspace(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Call
 		action = "open"
 	case "exit":
 		action = "close"
+	case "attach":
+		action = "status"
 	case "status", "cancel":
 	default:
-		return mcpapi.NewToolResultError("action must be enter, status, cancel, or exit"), nil
+		return mcpapi.NewToolResultError("action must be enter, attach, status, cancel, or exit"), nil
 	}
 	r, err := c.Workspace(ctx, ref, action, protocol.Message{Path: reqStr(req, "root", ""), RequestID: reqStr(req, "request_id", "")})
 	if err != nil {
@@ -100,7 +102,7 @@ func mcpWorkspaceExec(ctx context.Context, req mcpapi.CallToolRequest, immediate
 		return hint, nil
 	}
 	sess := sessions.get(ctx)
-	c, hint := sess.client()
+	c, hint := workspaceClient(ctx, sess)
 	if hint != nil {
 		return hint, nil
 	}
@@ -141,7 +143,7 @@ func mcpWorkspacePoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.
 		return mcpapi.NewToolResultError("job_id is the request_id returned by workspace exec"), nil
 	}
 	sess := sessions.get(ctx)
-	c, hint := sess.client()
+	c, hint := workspaceClient(ctx, sess)
 	if hint != nil {
 		return hint, nil
 	}

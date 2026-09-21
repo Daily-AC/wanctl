@@ -139,6 +139,7 @@ func (r *Relay) Handler() http.Handler {
 	mux.HandleFunc("/agent/notify-policy", r.handleAgentNotifyPolicy)
 	mux.HandleFunc("/agent/events", r.handleAgentEvent)
 	mux.HandleFunc("/agent/delegation-check", r.handleAgentDelegationCheck)
+	mux.HandleFunc("/agent/workspace-check", r.handleAgentWorkspaceCheck)
 	mux.HandleFunc("/dial", r.handleDial)
 	mux.HandleFunc("/session/", r.handleSession)
 	mux.HandleFunc("/peers", r.handlePeers)

@@ -14,6 +14,25 @@ import (
 
 type sessionAudit struct {
 	grantID, credentialID, sessionID string
+	workspaceCheck                   func() bool
+}
+
+func (a *Agent) workspaceSessionActive(ctx context.Context, auth sessionauth.Open, fp string) bool {
+	if ctx.Err() != nil || auth.GrantID != "" || !auth.ValidFor(a.DeviceID()) || !a.known.Has(fp) {
+		return false
+	}
+	query := url.Values{"device": {a.DeviceID()}, "inst": {a.inst}, "session": {auth.Session}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpBase(a.opts.RelayURL)+"/agent/workspace-check?"+query.Encode(), nil)
+	if err != nil {
+		return false
+	}
+	admission.SetBearer(req, a.opts.Token)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusNoContent
 }
 
 func auditSession(auth sessionauth.Open) sessionAudit {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -48,19 +49,14 @@ func (c *Client) PrepareWorkspace(ctx context.Context, target string) (Workspace
 }
 
 func (c *Client) Workspace(ctx context.Context, ref WorkspaceRef, action string, req protocol.Message) (*protocol.WorkspaceResult, error) {
-	conn, err := c.connect(ctx, ref.Target)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	defer wsconn.CloseOnCancel(ctx, conn)()
 	req.Kind, req.Action, req.WorkspaceID = protocol.KindWorkspace, action, ref.ID
-	if err := protocol.WriteMessage(conn, req); err != nil {
-		return nil, err
-	}
-	res, err := protocol.ReadMessage(conn)
+	res, err := c.workspaceRoundTrip(ctx, ref, req)
 	if err != nil {
-		return nil, fmt.Errorf("workspace result unknown: %w; workspace=%s request_id=%s; query this reference before resubmitting", err, ref.String(), req.RequestID)
+		var lost *workspaceExchangeError
+		if errors.As(err, &lost) {
+			return nil, fmt.Errorf("workspace result unknown: %w; workspace=%s request_id=%s; query this reference before resubmitting", err, ref.String(), req.RequestID)
+		}
+		return nil, err
 	}
 	if res.Kind == protocol.KindError && strings.Contains(res.Reason, "unknown request") {
 		return nil, &UnsupportedError{Target: ref.Target, Kind: protocol.KindWorkspace}
@@ -68,11 +64,39 @@ func (c *Client) Workspace(ctx context.Context, ref WorkspaceRef, action string,
 	if res.Kind == protocol.KindError && action == "exec_script" && strings.Contains(res.Reason, "unknown workspace action") {
 		return nil, fmt.Errorf("device agent does not support persistent workspace scripts; update the device agent")
 	}
-	if res.Kind == protocol.KindReject || res.Kind == protocol.KindError {
+	if res.Kind == protocol.KindReject {
+		return nil, rejectError(res)
+	}
+	if res.Kind == protocol.KindError {
 		return nil, fmt.Errorf("%s", res.Reason)
 	}
 	if res.Kind != protocol.KindWorkspace || res.Workspace == nil || res.Workspace.ID != ref.ID {
 		return nil, fmt.Errorf("invalid workspace response; nothing may fall back to legacy exec")
 	}
+	if action == "close" && c.workspaceLink != nil {
+		c.workspaceLink.Drop()
+	}
 	return res.Workspace, nil
+}
+
+func (c *Client) workspaceRoundTrip(ctx context.Context, ref WorkspaceRef, req protocol.Message) (protocol.Message, error) {
+	// Cancellation and exit must get through even if the shared connection is
+	// waiting on a human approval. They use an independently authenticated leg.
+	if c.workspaceLink != nil && req.Action != "cancel" && req.Action != "close" {
+		return c.workspaceLink.exchange(ctx, c, ref, req)
+	}
+	conn, err := c.connect(ctx, ref.Target)
+	if err != nil {
+		return protocol.Message{}, err
+	}
+	defer conn.Close()
+	defer wsconn.CloseOnCancel(ctx, conn)()
+	if err := protocol.WriteMessage(conn, req); err != nil {
+		return protocol.Message{}, &workspaceExchangeError{err}
+	}
+	res, err := protocol.ReadMessage(conn)
+	if err != nil {
+		return protocol.Message{}, &workspaceExchangeError{err}
+	}
+	return res, nil
 }

@@ -254,6 +254,9 @@ func (w *workspace) reserve(m protocol.Message) (bool, error) {
 
 func (w *workspace) finishLocked(id string, code int, err error) {
 	j := w.jobs[id]
+	if j.done {
+		return
+	}
 	if !j.done {
 		close(j.finished)
 	}
@@ -291,7 +294,15 @@ func (a *Agent) startWorkspaceCommand(w *workspace, fp, peer string, m protocol.
 			return err
 		}
 	}
-	ok, decision := a.gate(policy.Request{Kind: policy.KindExec, Cmd: m.Command, Cwd: cwd, Peer: fp})
+	stillPending := func() bool {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.stateLocked() == "open" && w.active == m.RequestID && !w.jobs[m.RequestID].done
+	}
+	ok, decision := a.gate(policy.Request{Kind: policy.KindExec, Cmd: m.Command, Cwd: cwd, Peer: fp}, stillPending, audit.workspaceCheck)
+	if ok && audit.workspaceCheck != nil && !audit.workspaceCheck() {
+		ok, decision = false, "workspace access inactive"
+	}
 	a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peer, Detail: "[workspace " + w.id + " request " + m.RequestID + "] " + m.Command, Cwd: cwd, Decision: decision})
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -425,7 +436,10 @@ func (a *Agent) handleWorkspace(conn io.ReadWriter, fp, peer string, m *protocol
 	var w *workspace
 	var err error
 	if m.Action == "open" {
-		ok, decision, _ := a.gateFile(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp})
+		ok, decision, _ := a.gateFile(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp}, audit.workspaceCheck)
+		if ok && audit.workspaceCheck != nil && !audit.workspaceCheck() {
+			ok, decision = false, "workspace access inactive"
+		}
 		a.logSessionEvent(audit, eventlog.Event{Type: "workspace", PeerFP: fp, PeerName: peer, Detail: "open " + m.WorkspaceID + " " + m.Path, Decision: decision})
 		if !ok {
 			return fail(fmt.Errorf("read denied by device policy: %s", m.Path))
@@ -459,6 +473,9 @@ func (a *Agent) handleWorkspace(conn io.ReadWriter, fp, peer string, m *protocol
 			return fail(fmt.Errorf("cancel must name the currently active request_id"))
 		}
 		w.stopping = true
+		if w.jobs[m.RequestID].state == "approving" {
+			w.finishLocked(m.RequestID, -1, context.Canceled)
+		}
 		w.cancel()
 		w.mu.Unlock()
 		// Reliable cancellation destroys the shell (ADR 0011). Keep the

@@ -1133,6 +1133,7 @@ WANCTL_MCP_SEED; wanctl_push and wanctl_pull are withdrawn there, because
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
 | — | `--http ADDR` | string | no | Serve Streamable HTTP on this address (e.g. :8081) instead of stdio. Multi-user: each session derives its own controller identity from WANCTL_MCP_SEED, and wanctl_push/wanctl_pull are withdrawn because 'local' would name a path on the server. |
+| — | `--workspace-session` | boolean | no | Dedicate this stdio process to exactly one AI conversation. Enter a workspace once; subsequent exec/read/edit/write/poll calls are automatically bound and share an authenticated connection. Cannot be combined with --http or shared across conversations. Requires relay and agent support for per-operation workspace authorization. |
 
 ```
 wanctl mcp
@@ -1383,14 +1384,15 @@ login. The reference survives MCP reconnects; it is not a credential and is
 never a global default for an account or a chat. A harness can inject it for
 its own conversation, but MCP cannot redirect a host's unrelated local tools.
 
-Use status to reconnect and inspect; exit explicitly closes the workspace and
-its shell. Network loss does not exit or cancel a received command. Cancel
-must name the active request_id and destroys the shell; collect its result,
-then explicitly exit and enter a new workspace. An expired/closed/invalid
-workspace MUST NOT silently fall back to local tools or another device. A
-device restart loses live shell state. Workspaces are not a filesystem
-sandbox; each operation still uses the existing device policy. Short-lived
-delegated credentials do not support persistent workspaces.
+Use attach to bind an existing workspace after restarting a dedicated
+conversation process; it never creates a shell. Use status to inspect; exit
+explicitly closes the workspace and its shell. Network loss does not exit or
+cancel a received command. Cancel must name the active request_id and destroys
+the shell; collect its result, then explicitly exit and enter a new workspace.
+An expired/closed/invalid workspace MUST NOT silently fall back to local tools
+or another device. A device restart loses live shell state. Workspaces are not
+a filesystem sandbox; each operation still uses the existing device policy.
+Short-lived delegated credentials do not support persistent workspaces.
 
 Limits: 16 open workspaces per device; 128 command IDs (1 MiB total command
 text) and 8 MiB retained output per workspace; each command has the existing
@@ -1401,10 +1403,10 @@ host-tool replacement is included.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
-| `action` | — | string | **yes** | enter \| status \| cancel \| exit. Exit is the explicit end of this remote workspace. |
+| `action` | — | string | **yes** | enter \| attach \| status \| cancel \| exit. Exit is the explicit end of this remote workspace. |
 | `target` | — | string | no | Device to enter. Omit when workspace is supplied. |
 | `root` | — | string | no | Absolute project directory on the device; required for enter. |
-| `workspace` | — | string | no | Exact reference returned by enter. Required for status/cancel/exit; also accepted by enter to recover a lost open response. |
+| `workspace` | — | string | no | Exact reference returned by enter. Required for attach/status/cancel/exit outside conversation mode; also accepted by enter to recover a lost open response. |
 | `request_id` | — | string | no | The active request to cancel, or an existing request whose result status should include. |
 
 ```

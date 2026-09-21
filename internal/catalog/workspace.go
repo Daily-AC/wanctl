@@ -1,15 +1,28 @@
 package catalog
 
+// This contract is enabled only by the explicit stdio conversation mode.
+const WorkspaceSessionInstructions = `WORKSPACE CONVERSATION MODE
+This MCP process belongs to ONE conversation. Never share it across chats.
+Enter once with wanctl_workspace(action="enter", target=..., root=...).
+Exec, read, edit, write and polling then use that workspace automatically.
+Explicitly exit before entering a different workspace. Errors never change
+where work runs. After restarting this MCP process, attach with the saved
+workspace reference; attach does not create a new shell or restore lost state.
+The connection is reused, but device trust, relay authorization and policy
+are rechecked on each operation. Cancel/exit use an independent connection.
+This mode controls these MCP tools, not a host's unrelated local tools.
+Before working, read the project AGENTS.md or CLAUDE.md and follow it.`
+
 func init() {
 	Commands = append(Commands, Command{
 		MCPName: "wanctl_workspace", Group: GroupSession,
 		Summary: "Enter, inspect, cancel, or exit a remote workspace",
-		Desc:    "Enter once with action='enter', target and an absolute project root. Save the returned workspace reference and pass it instead of target to wanctl_exec, wanctl_exec_async, wanctl_exec_poll, wanctl_read, wanctl_edit and wanctl_write. Relative file paths resolve against the project root; shell cwd and environment persist independently. Read AGENTS.md or CLAUDE.md and follow it before working. Each entry owns a separate shell, even under the same login. The reference survives MCP reconnects; it is not a credential and is never a global default for an account or a chat. A harness can inject it for its own conversation, but MCP cannot redirect a host's unrelated local tools.\n\nUse status to reconnect and inspect; exit explicitly closes the workspace and its shell. Network loss does not exit or cancel a received command. Cancel must name the active request_id and destroys the shell; collect its result, then explicitly exit and enter a new workspace. An expired/closed/invalid workspace MUST NOT silently fall back to local tools or another device. A device restart loses live shell state. Workspaces are not a filesystem sandbox; each operation still uses the existing device policy. Short-lived delegated credentials do not support persistent workspaces.\n\nLimits: 16 open workspaces per device; 128 command IDs (1 MiB total command text) and 8 MiB retained output per workspace; each command has the existing 30-minute execution limit. IDs are retained until exit, never evicted and then rerun. These are persistent command shells, not interactive PTYs. A program waiting on stdin is unsupported. No preview port forwarding or automatic host-tool replacement is included.",
+		Desc:    "Enter once with action='enter', target and an absolute project root. Save the returned workspace reference and pass it instead of target to wanctl_exec, wanctl_exec_async, wanctl_exec_poll, wanctl_read, wanctl_edit and wanctl_write. Relative file paths resolve against the project root; shell cwd and environment persist independently. Read AGENTS.md or CLAUDE.md and follow it before working. Each entry owns a separate shell, even under the same login. The reference survives MCP reconnects; it is not a credential and is never a global default for an account or a chat. A harness can inject it for its own conversation, but MCP cannot redirect a host's unrelated local tools.\n\nUse attach to bind an existing workspace after restarting a dedicated conversation process; it never creates a shell. Use status to inspect; exit explicitly closes the workspace and its shell. Network loss does not exit or cancel a received command. Cancel must name the active request_id and destroys the shell; collect its result, then explicitly exit and enter a new workspace. An expired/closed/invalid workspace MUST NOT silently fall back to local tools or another device. A device restart loses live shell state. Workspaces are not a filesystem sandbox; each operation still uses the existing device policy. Short-lived delegated credentials do not support persistent workspaces.\n\nLimits: 16 open workspaces per device; 128 command IDs (1 MiB total command text) and 8 MiB retained output per workspace; each command has the existing 30-minute execution limit. IDs are retained until exit, never evicted and then rerun. These are persistent command shells, not interactive PTYs. A program waiting on stdin is unsupported. No preview port forwarding or automatic host-tool replacement is included.",
 		Params: []Param{
-			{Name: "action", Type: TypeString, Required: true, MCPOnly: true, Desc: "enter | status | cancel | exit. Exit is the explicit end of this remote workspace."},
+			{Name: "action", Type: TypeString, Required: true, MCPOnly: true, Desc: "enter | attach | status | cancel | exit. Exit is the explicit end of this remote workspace."},
 			{Name: "target", Type: TypeString, MCPOnly: true, Desc: "Device to enter. Omit when workspace is supplied."},
 			{Name: "root", Type: TypeString, MCPOnly: true, Desc: "Absolute project directory on the device; required for enter."},
-			{Name: "workspace", Type: TypeString, MCPOnly: true, Desc: "Exact reference returned by enter. Required for status/cancel/exit; also accepted by enter to recover a lost open response."},
+			{Name: "workspace", Type: TypeString, MCPOnly: true, Desc: "Exact reference returned by enter. Required for attach/status/cancel/exit outside conversation mode; also accepted by enter to recover a lost open response."},
 			{Name: "request_id", Type: TypeString, MCPOnly: true, Desc: "The active request to cancel, or an existing request whose result status should include."},
 		},
 		MCPExample: "wanctl_workspace{\"action\":\"enter\",\"target\":\"lab\",\n    \"root\":\"/srv/app\"}", Handler: "mcpWorkspace",
