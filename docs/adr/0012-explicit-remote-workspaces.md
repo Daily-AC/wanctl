@@ -79,3 +79,14 @@ delegation refusal, cancellation, approval/close races and resource bounds.
 
 The learner-oriented explanation is in
 [the Chinese BFS series](../learning/remote-workspace/README.md).
+
+## Immersion follow-up
+
+A real Codex-driven Linux task found that encoded scripts launched child
+shells and lost cwd/environment, and that the controller-side short wait
+added a second connection. Workspace scripts now use a dedicated action and
+device-verified source matching the original encoded policy command, executed
+inside the existing matching shell. The device can wait up to 250 ms for a
+normal MCP exec, bounded at one second at protocol level, while command
+ownership remains independent of the connection. See the
+[trial evidence](../plans/2026-09-21-workspace-immersion.md).

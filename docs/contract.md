@@ -295,7 +295,10 @@ shell and returns JSON with request_id, done, code, output and next_offset. If
 done=false, call wanctl_exec_poll with workspace and job_id=request_id. Even
 after done=true, continue while next_offset < retained_bytes. Network loss
 only stops waiting. One command at a time; busy returns the current
-request_id. No oneshot or elevation in workspace mode.
+request_id. Matching sh/PowerShell scripts execute in the workspace shell
+itself: cd/export persist across calls. Short commands wait up to 250 ms on
+the device and need no extra poll connection. No oneshot or elevation in
+workspace mode.
 
 Run a command on a machine you are not running on, and get back its stdout,
 stderr and exit code. This is the general-purpose primitive: reach for it for
@@ -585,7 +588,10 @@ shell and returns JSON with request_id, done, code, output and next_offset. If
 done=false, call wanctl_exec_poll with workspace and job_id=request_id. Even
 after done=true, continue while next_offset < retained_bytes. Network loss
 only stops waiting. One command at a time; busy returns the current
-request_id. No oneshot or elevation in workspace mode.
+request_id. Matching sh/PowerShell scripts execute in the workspace shell
+itself: cd/export persist across calls. Short commands wait up to 250 ms on
+the device and need no extra poll connection. No oneshot or elevation in
+workspace mode.
 
 Start work that will not finish inside one tool call, and get a job_id back
 immediately. Reach for it BEFORE starting anything whose length you cannot

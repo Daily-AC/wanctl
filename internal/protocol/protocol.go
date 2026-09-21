@@ -86,6 +86,9 @@ type Message struct {
 	WorkspaceID string           `json:"workspace_id,omitempty"`
 	RequestID   string           `json:"request_id,omitempty"`
 	Workspace   *WorkspaceResult `json:"workspace,omitempty"`
+	Script      string           `json:"script,omitempty"`
+	Interp      string           `json:"interp,omitempty"`
+	WaitMillis  int              `json:"wait_ms,omitempty"`
 
 	// hello
 	Role    string `json:"role,omitempty"`

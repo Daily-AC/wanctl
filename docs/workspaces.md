@@ -40,6 +40,15 @@ Execute with `wanctl_exec`:
 
 Each new command needs a new request ID. If omitted, one is generated and
 returned. The result is available as JSON text and MCP structured content.
+For a matching shell language, `script` with `interp` executes inside the
+workspace's shell, so script `cd` and exported variables persist too. The
+device verifies the script against the encoded command used for policy. An
+older workspace agent that lacks this behavior rejects the dedicated script
+action; update that agent instead of assuming state was kept. Other
+interpreters can still be invoked explicitly as ordinary commands.
+
+Short commands wait up to 250 ms on the device before returning. This avoids
+opening another connection to poll a command that already finished.
 `done=false` means the request is still approving/running. `code` is final
 only when `done=true`. Poll with `wanctl_exec_poll`:
 
@@ -116,3 +125,6 @@ These use real loopback servers, authentication, processes and files. They do
 not establish performance gains in an actual web AI or replace Windows and
 Android device testing. See the [architecture decision](adr/0012-explicit-remote-workspaces.md)
 and [Chinese architecture series](learning/remote-workspace/README.md).
+
+An [actual Codex-driven Linux development trial](plans/2026-09-21-workspace-immersion.md)
+records the task, problems found, fixes, timing samples and remaining friction.

@@ -181,6 +181,16 @@ func TestWorkspaceThroughHTTPMCPAcrossFreshSessions(t *testing.T) {
 		return d
 	}
 	run(ref, "set", "export WANCTL_WORKSPACE_LESSON=retained")
+	text, bad = call("wanctl_exec", map[string]any{"workspace": ref, "request_id": "script-env", "script": "export WANCTL_SCRIPT_LESSON=retained\n", "interp": "sh"})
+	if bad {
+		t.Fatal(text)
+	}
+	if decode(text)["done"] != true {
+		t.Fatal("short script did not finish in the initial device response")
+	}
+	if got := run(ref, "script-get", "printf '%s' \"$WANCTL_SCRIPT_LESSON\"")["output"].(string); !strings.Contains(got, "retained") {
+		t.Fatalf("script state lost through MCP: %q", got)
+	}
 	if got := run(ref, "get", "printf '%s' \"$WANCTL_WORKSPACE_LESSON\"")["output"].(string); !strings.Contains(got, "retained") {
 		t.Fatalf("lost state: %q", got)
 	}

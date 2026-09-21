@@ -65,6 +65,9 @@ func (c *Client) Workspace(ctx context.Context, ref WorkspaceRef, action string,
 	if res.Kind == protocol.KindError && strings.Contains(res.Reason, "unknown request") {
 		return nil, &UnsupportedError{Target: ref.Target, Kind: protocol.KindWorkspace}
 	}
+	if res.Kind == protocol.KindError && action == "exec_script" && strings.Contains(res.Reason, "unknown workspace action") {
+		return nil, fmt.Errorf("device agent does not support persistent workspace scripts; update the device agent")
+	}
 	if res.Kind == protocol.KindReject || res.Kind == protocol.KindError {
 		return nil, fmt.Errorf("%s", res.Reason)
 	}
