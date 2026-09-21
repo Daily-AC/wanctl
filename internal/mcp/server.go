@@ -53,6 +53,13 @@ func ServeStdioWorkspaceSession(enabled bool) error {
 	sessions = &sessionStore{stdio: &localFsSession{}}
 	if enabled {
 		binding := newWorkspaceConversation()
+		if raw := os.Getenv("WANCTL_WORKSPACE"); raw != "" {
+			ref, err := client.ParseWorkspace(raw)
+			if err != nil {
+				return fmt.Errorf("WANCTL_WORKSPACE: %w", err)
+			}
+			binding.ref = ref.String()
+		}
 		defer binding.link.Close()
 		return server.ServeStdio(newMCPServer(binding))
 	}
@@ -1801,8 +1808,11 @@ func mcpID(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolResul
 	if r, ok := s.(*remoteSession); ok {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		if r.identity == nil {
+		if r.token == "" {
 			return mcpapi.NewToolResultText("not logged in — call wanctl_login first; identity is derived from your namespace once you do."), nil
+		}
+		if err := r.ensureIdentity(); err != nil {
+			return mcpapi.NewToolResultError("derive identity: " + err.Error()), nil
 		}
 		return mcpapi.NewToolResultText(fmt.Sprintf("fingerprint: %s\nnamespace:   %s", r.identity.Fingerprint, r.namespace)), nil
 	}
