@@ -229,87 +229,113 @@ func TestWorkspaceThroughHTTPMCPAcrossFreshSessions(t *testing.T) {
 		t.Fatal(text)
 	}
 	t.Logf("verified %d fresh authenticated MCP sessions, two isolated workspaces, real files and persistent shell", len(seen))
-	t.Run("stdio_binary", func(t *testing.T) {
-		binary := filepath.Join(t.TempDir(), "wanctl")
-		buildCtx, stopBuild := context.WithTimeout(ctx, 60*time.Second)
-		defer stopBuild()
-		if out, err := exec.CommandContext(buildCtx, "go", "build", "-o", binary, "../..").CombinedOutput(); err != nil {
-			t.Fatalf("build MCP executable: %v %s", err, out)
-		}
-		// Stdio owns an ordinary local controller identity and pin store.
-		known, err := transport.OpenStore("known_servers.json")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := known.Pin("alice/"+ag.DeviceID(), deviceIdentity.Fingerprint, false); err != nil {
-			t.Fatal(err)
-		}
-		t.Setenv("WANCTL_TOKEN", "workspace-test")
-		stdioCtx, stopStdio := context.WithTimeout(ctx, 15*time.Second)
-		defer stopStdio()
-		cmd := exec.CommandContext(stdioCtx, binary, "mcp")
-		input, err := cmd.StdinPipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		output, err := cmd.StdoutPipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		if err := cmd.Start(); err != nil {
-			t.Fatal(err)
-		}
-		defer func() { input.Close(); stopStdio(); cmd.Wait() }()
-		scanner := bufio.NewScanner(output)
-		scanner.Buffer(make([]byte, 4096), 1<<20)
-		send := func(body []byte) map[string]any {
-			t.Helper()
-			if _, err := input.Write(append(body, '\n')); err != nil {
+	for _, bound := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stdio_binary", true: "stdio_conversation"}[bound], func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), "wanctl")
+			buildCtx, stopBuild := context.WithTimeout(ctx, 60*time.Second)
+			defer stopBuild()
+			if out, err := exec.CommandContext(buildCtx, "go", "build", "-o", binary, "../..").CombinedOutput(); err != nil {
+				t.Fatalf("build MCP executable: %v %s", err, out)
+			}
+			// Stdio owns an ordinary local controller identity and pin store.
+			known, err := transport.OpenStore("known_servers.json")
+			if err != nil {
 				t.Fatal(err)
 			}
-			if !scanner.Scan() {
-				t.Fatalf("stdio ended: %v", scanner.Err())
+			if err := known.Pin("alice/"+ag.DeviceID(), deviceIdentity.Fingerprint, false); err != nil {
+				t.Fatal(err)
 			}
-			var d map[string]any
-			if err := json.Unmarshal(scanner.Bytes(), &d); err != nil {
-				t.Fatalf("stdio JSON: %v %s", err, scanner.Text())
+			t.Setenv("WANCTL_TOKEN", "workspace-test")
+			stdioCtx, stopStdio := context.WithTimeout(ctx, 15*time.Second)
+			defer stopStdio()
+			args := []string{"mcp"}
+			if bound {
+				args = append(args, "--workspace-session")
 			}
-			if d["error"] != nil {
-				t.Fatalf("stdio RPC: %v", d["error"])
+			cmd := exec.CommandContext(stdioCtx, binary, args...)
+			input, err := cmd.StdinPipe()
+			if err != nil {
+				t.Fatal(err)
 			}
-			return d
-		}
-		send([]byte(initializeBody))
-		if _, err := io.WriteString(input, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"); err != nil {
-			t.Fatal(err)
-		}
-		seq := 1
-		callStdio := func(name string, args map[string]any) string {
-			t.Helper()
-			seq++
-			body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": seq, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}})
-			d := send(body)["result"].(map[string]any)
-			text := d["content"].([]any)[0].(map[string]any)["text"].(string)
-			if d["isError"] == true {
-				t.Fatalf("stdio %s: %s", name, text)
+			output, err := cmd.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
 			}
-			return text
-		}
-		entered := decode(callStdio("wanctl_workspace", map[string]any{"action": "enter", "target": "lesson-device", "root": root}))
-		ref := entered["workspace"].(string)
-		for _, item := range []struct{ id, cmd string }{{"set", "export WANCTL_STDIO_LESSON=retained"}, {"get", "printf '%s' \"$WANCTL_STDIO_LESSON\""}} {
-			r := decode(callStdio("wanctl_exec", map[string]any{"workspace": ref, "request_id": item.id, "command": item.cmd}))
-			for r["done"] != true {
-				time.Sleep(10 * time.Millisecond)
-				r = decode(callStdio("wanctl_exec_poll", map[string]any{"workspace": ref, "job_id": item.id}))
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
 			}
-			if item.id == "get" && !strings.Contains(r["output"].(string), "retained") {
-				t.Fatalf("stdio lost shell state: %v", r)
+			defer func() { input.Close(); stopStdio(); cmd.Wait() }()
+			scanner := bufio.NewScanner(output)
+			scanner.Buffer(make([]byte, 4096), 1<<20)
+			send := func(body []byte) map[string]any {
+				t.Helper()
+				if _, err := input.Write(append(body, '\n')); err != nil {
+					t.Fatal(err)
+				}
+				if !scanner.Scan() {
+					t.Fatalf("stdio ended: %v", scanner.Err())
+				}
+				var d map[string]any
+				if err := json.Unmarshal(scanner.Bytes(), &d); err != nil {
+					t.Fatalf("stdio JSON: %v %s", err, scanner.Text())
+				}
+				if d["error"] != nil {
+					t.Fatalf("stdio RPC: %v", d["error"])
+				}
+				return d
 			}
-		}
-		callStdio("wanctl_workspace", map[string]any{"action": "exit", "workspace": ref})
-	})
+			send([]byte(initializeBody))
+			if _, err := io.WriteString(input, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"); err != nil {
+				t.Fatal(err)
+			}
+			seq := 1
+			callStdio := func(name string, args map[string]any) string {
+				t.Helper()
+				seq++
+				body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": seq, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}})
+				d := send(body)["result"].(map[string]any)
+				text := d["content"].([]any)[0].(map[string]any)["text"].(string)
+				if d["isError"] == true {
+					t.Fatalf("stdio %s: %s", name, text)
+				}
+				return text
+			}
+			entered := decode(callStdio("wanctl_workspace", map[string]any{"action": "enter", "target": "lesson-device", "root": root}))
+			ref := entered["workspace"].(string)
+			for _, item := range []struct{ id, cmd string }{{"set", "export WANCTL_STDIO_LESSON=retained"}, {"get", "printf '%s' \"$WANCTL_STDIO_LESSON\""}} {
+				args := map[string]any{"request_id": item.id, "command": item.cmd}
+				if !bound {
+					args["workspace"] = ref
+				}
+				r := decode(callStdio("wanctl_exec", args))
+				for r["done"] != true {
+					time.Sleep(10 * time.Millisecond)
+					poll := map[string]any{"job_id": item.id}
+					if !bound {
+						poll["workspace"] = ref
+					}
+					r = decode(callStdio("wanctl_exec_poll", poll))
+				}
+				if item.id == "get" && !strings.Contains(r["output"].(string), "retained") {
+					t.Fatalf("stdio lost shell state: %v", r)
+				}
+			}
+			if bound {
+				callStdio("wanctl_write", map[string]any{"path": "bound.txt", "content": "bound"})
+				if text := callStdio("wanctl_read", map[string]any{"path": "bound.txt"}); !strings.Contains(text, "bound") {
+					t.Fatal(text)
+				}
+				callStdio("wanctl_workspace", map[string]any{"action": "exit"})
+				body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 100, "method": "tools/call", "params": map[string]any{"name": "wanctl_exec", "arguments": map[string]any{"command": "printf should-not-run"}}})
+				if send(body)["result"].(map[string]any)["isError"] != true {
+					t.Fatal("unbound call executed after exit")
+				}
+			} else {
+				callStdio("wanctl_workspace", map[string]any{"action": "exit", "workspace": ref})
+			}
+		})
+	}
 
 }

@@ -67,13 +67,14 @@ func (e *RejectError) Error() string {
 
 // Client is the controller node.
 type Client struct {
-	id        *transport.Identity
-	known     *transport.Store
-	relayURL  string
-	token     string
-	transport string       // "ws" (default) or "http"
-	label     string       // self-description sent at pairing (WANCTL_LABEL)
-	httpc     *http.Client // relay HTTP client
+	id            *transport.Identity
+	known         *transport.Store
+	relayURL      string
+	token         string
+	transport     string       // "ws" (default) or "http"
+	label         string       // self-description sent at pairing (WANCTL_LABEL)
+	httpc         *http.Client // relay HTTP client
+	workspaceLink *WorkspaceLink
 }
 
 // SetLabel overrides the controller's self-description (who/why), shown to the
@@ -483,6 +484,10 @@ func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target, hello
 	if reply.Kind != protocol.KindOK {
 		dr.Conn.Close()
 		return nil, fmt.Errorf("unexpected device reply: %s", reply.Kind)
+	}
+	if helloKind == protocol.KindWorkspaceHello && !reply.WorkspaceReuse {
+		dr.Conn.Close()
+		return nil, fmt.Errorf("device did not negotiate reusable workspace authorization")
 	}
 	return dr.Conn, nil
 }

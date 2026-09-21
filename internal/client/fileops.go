@@ -217,17 +217,33 @@ func (c *Client) fileOp(ctx context.Context, target string, req protocol.Message
 	if req.WorkspaceID == "" && !strings.HasPrefix(req.Path, "/") && !hasWindowsDrive(req.Path) {
 		return nil, fmt.Errorf("path %q must be absolute on the device (~ is not expanded)", req.Path)
 	}
-	conn, err := c.connect(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	defer wsconn.CloseOnCancel(ctx, conn)()
-	if req.WorkspaceID != "" {
+	var res *protocol.FileResult
+	var err error
+	if req.WorkspaceID != "" && c.workspaceLink != nil {
 		req.Kind, req.Action = protocol.KindWorkspace, req.Kind
+		var reply protocol.Message
+		reply, err = c.workspaceRoundTrip(ctx, WorkspaceRef{Target: target, ID: req.WorkspaceID}, req)
+		if err == nil {
+			res, err = fileReply(req, reply)
+		} else {
+			var lost *workspaceExchangeError
+			if errors.As(err, &lost) {
+				err = &ResultLostError{Kind: req.Action, Path: req.Path, Cause: err}
+			}
+		}
+	} else {
+		conn, e := c.connect(ctx, target)
+		if e != nil {
+			return nil, e
+		}
+		defer conn.Close()
+		defer wsconn.CloseOnCancel(ctx, conn)()
+		if req.WorkspaceID != "" {
+			req.Kind, req.Action = protocol.KindWorkspace, req.Kind
+		}
+		res, err = fileOpOver(conn, req)
 	}
 
-	res, err := fileOpOver(conn, req)
 	var lost *ResultLostError
 	if errors.As(err, &lost) {
 		lost.Target = target
@@ -267,6 +283,10 @@ func fileOpOver(rw io.ReadWriter, req protocol.Message) (*protocol.FileResult, e
 		}
 		return nil, &ResultLostError{Kind: kind, Path: req.Path, Cause: err}
 	}
+	return fileReply(req, reply)
+}
+
+func fileReply(req, reply protocol.Message) (*protocol.FileResult, error) {
 	switch reply.Kind {
 	case protocol.KindFileResult:
 		if reply.File == nil {

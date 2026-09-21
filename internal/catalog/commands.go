@@ -482,6 +482,7 @@ var Commands = []Command{
 		Desc:    "Serve the tools in this contract over the Model Context Protocol.\n\nWith no flags it speaks stdio: one process per AI host, single user, backed by this machine's wanctl config. With --http it serves Streamable HTTP for many users at once, deriving a separate controller identity per namespace from WANCTL_MCP_SEED; wanctl_push and wanctl_pull are withdrawn there, because `local` would name a path on the server rather than on the caller's machine.",
 		Params: []Param{
 			{Name: "http", CLI: "--http ADDR", Type: TypeString, CLIOnly: true, Desc: "Serve Streamable HTTP on this address (e.g. :8081) instead of stdio. Multi-user: each session derives its own controller identity from WANCTL_MCP_SEED, and wanctl_push/wanctl_pull are withdrawn because 'local' would name a path on the server."},
+			{Name: "workspace-session", CLI: "--workspace-session", Type: TypeBool, CLIOnly: true, Desc: "Dedicate this stdio process to exactly one AI conversation. Enter a workspace once; subsequent exec/read/edit/write/poll calls are automatically bound and share an authenticated connection. Cannot be combined with --http or shared across conversations. Requires relay and agent support for per-operation workspace authorization."},
 		},
 		CLIExample: "wanctl mcp\n  wanctl mcp --http :8081",
 	},

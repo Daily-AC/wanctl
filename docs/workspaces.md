@@ -2,13 +2,44 @@
 
 This feature is implemented on `feat/remote-workspace-session`. It is not in
 the existing public release or hosted MCP deployment. Both the MCP server and
-device agent need this implementation. The relay byte transport is unchanged.
+device agent need this implementation. The relay byte transport is unchanged;
+the conversation mode below additionally requires the new relay authorization
+endpoint and matching agent support.
 
 A workspace owns a project root and independent persistent command shell.
-The returned reference is explicit so several conversations can use the same
-account without sharing a mutable default directory or shell.
+Default stdio and shared HTTP use explicit references, so several conversations
+can use one account without sharing a mutable default directory or shell.
+
+## One dedicated process per conversation
+
+```sh
+wanctl mcp --workspace-session
+```
+
+Use this only when the host dedicates that MCP process to ONE conversation.
+Do not put multiple conversations through the same process. It cannot be used
+with `--http` and does not redirect the host's unrelated native tools.
+
+Enter once with target and root. Then use the ordinary tools without target
+or workspace arguments, for example `wanctl_read({"path":"README.md"})` and
+`wanctl_exec({"command":"python3 -m unittest"})`. The server injects the binding
+and reuses the authenticated device connection. Workspace enter is the only
+place to choose a different working location, and requires exiting first.
+
+`wanctl_workspace({"action":"exit"})` closes the bound workspace. Subsequent
+data calls are refused until another enter/attach. A network error retains the
+binding. If the MCP process itself restarts, restore it with
+`wanctl_workspace({"action":"attach","workspace":"<saved reference>"})`;
+attach never creates a replacement shell.
+
+Reusing transport does not cache authorization. The device rechecks controller
+trust, original relay credential and current sharing rights for each operation.
+Cancel and exit use separate connections to avoid waiting behind approval.
 
 ## Enter and work
+
+The following explicit-reference form remains the default for shared HTTP and
+stdio processes that can serve more than one conversation.
 
 Call `wanctl_workspace`:
 
@@ -128,3 +159,5 @@ and [Chinese architecture series](learning/remote-workspace/README.md).
 
 An [actual Codex-driven Linux development trial](plans/2026-09-21-workspace-immersion.md)
 records the task, problems found, fixes, timing samples and remaining friction.
+The [conversation-mode follow-up](plans/2026-09-22-workspace-conversation-trial.md)
+records actual work without routing arguments and with reused connections.

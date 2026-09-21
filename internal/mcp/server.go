@@ -44,7 +44,18 @@ import (
 // ServeStdio runs the MCP server over stdio: single user, backed by the local
 // wanctl config dir. Intended for AI hosts that spawn `wanctl mcp` as a child.
 func ServeStdio() error {
+	return ServeStdioWorkspaceSession(false)
+}
+
+// ServeStdioWorkspaceSession enables binding only when the host explicitly
+// dedicates this process to one conversation; it is never an HTTP default.
+func ServeStdioWorkspaceSession(enabled bool) error {
 	sessions = &sessionStore{stdio: &localFsSession{}}
+	if enabled {
+		binding := newWorkspaceConversation()
+		defer binding.link.Close()
+		return server.ServeStdio(newMCPServer(binding))
+	}
 	s := newMCPServer()
 	return server.ServeStdio(s)
 }
@@ -757,13 +768,17 @@ func configuredValue(value string) string {
 // list, the loop they compose into, the refusals to recognise. A host reads
 // them once, before any tool call, which is the only moment at which "read the
 // project's AGENTS.md first" can still change what happens.
-func newMCPServer() *server.MCPServer {
-	s := server.NewMCPServer("wanctl", "1.0.0", server.WithInstructions(catalog.Instructions()))
-	registerMCPTools(s)
+func newMCPServer(bindings ...*workspaceConversation) *server.MCPServer {
+	instructions := catalog.Instructions()
+	if len(bindings) > 0 {
+		instructions = catalog.WorkspaceSessionInstructions
+	}
+	s := server.NewMCPServer("wanctl", "1.0.0", server.WithInstructions(instructions))
+	registerMCPTools(s, bindings...)
 	return s
 }
 
-func registerMCPTools(s *server.MCPServer) {
+func registerMCPTools(s *server.MCPServer, bindings ...*workspaceConversation) {
 	handlers := map[string]server.ToolHandlerFunc{
 		"mcpLogin":       mcpLogin,
 		"mcpStatus":      mcpStatus,
@@ -789,12 +804,28 @@ func registerMCPTools(s *server.MCPServer) {
 		"mcpRules":       mcpRules,
 	}
 	for _, c := range catalog.MCPCommands() {
+		if len(bindings) > 0 && !workspaceSessionTool(c.MCPName) {
+			continue
+		}
 		h, ok := handlers[c.Handler]
 		if !ok {
 			// A catalog entry naming a handler that does not exist would
 			// otherwise register a tool that answers nothing. Fail at startup,
 			// where the first test run catches it.
 			panic("mcp: catalog tool " + c.MCPName + " names unknown handler " + c.Handler)
+		}
+		if len(bindings) > 0 {
+			h = bindings[0].wrap(c.MCPName, h)
+			if workspaceDataTool(c.MCPName) {
+				params := []catalog.Param{}
+				for _, p := range c.Params {
+					if p.Name != "target" && p.Name != "workspace" {
+						params = append(params, p)
+					}
+				}
+				c.Params = params
+				c.Desc = "CONVERSATION MODE: the entered workspace is injected automatically. Do not provide target or workspace.\n\n" + c.Desc
+			}
 		}
 		s.AddTool(mcpapi.NewTool(c.MCPName, toolOptions(c)...), h)
 	}
@@ -1323,7 +1354,7 @@ func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return mcpapi.NewToolResultError("path is required"), nil
 	}
 	sess := sessions.get(ctx)
-	c, hint := sess.client()
+	c, hint := workspaceClient(ctx, sess)
 	if hint != nil {
 		return hint, nil
 	}
@@ -1375,7 +1406,7 @@ func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return mcpapi.NewToolResultError("pass 'old' (non-empty) with 'new', or an 'edits' array of {old,new}"), nil
 	}
 	sess := sessions.get(ctx)
-	c, hint := sess.client()
+	c, hint := workspaceClient(ctx, sess)
 	if hint != nil {
 		return hint, nil
 	}
@@ -1449,7 +1480,7 @@ func mcpWrite(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 		return mcpapi.NewToolResultError("content is required (pass an empty string to write an empty file)"), nil
 	}
 	sess := sessions.get(ctx)
-	c, hint := sess.client()
+	c, hint := workspaceClient(ctx, sess)
 	if hint != nil {
 		return hint, nil
 	}

@@ -528,7 +528,7 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	if err != nil {
 		return
 	}
-	if hello.Kind != protocol.KindHello && hello.Kind != protocol.KindConsoleHello {
+	if hello.Kind != protocol.KindHello && hello.Kind != protocol.KindConsoleHello && hello.Kind != protocol.KindWorkspaceHello {
 		return
 	}
 	if !auth.ValidFor(a.DeviceID()) {
@@ -577,7 +577,14 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 		}, audit)
 		return
 	}
-	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindOK, Name: a.opts.Name})
+	if hello.Kind == protocol.KindWorkspaceHello {
+		audit.workspaceCheck = func() bool { return a.workspaceSessionActive(ctx, auth, fp) }
+		if !audit.workspaceCheck() {
+			a.refuse(conn, fp, hello.Name, "rejected:workspace-access", protocol.Message{Kind: protocol.KindReject, Reason: "workspace connection authorization unavailable; relay and agent must support reusable workspaces"}, audit)
+			return
+		}
+	}
+	protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindOK, Name: a.opts.Name, WorkspaceReuse: hello.Kind == protocol.KindWorkspaceHello})
 	a.logSessionEvent(audit, eventlog.Event{Type: "connect", PeerFP: fp, PeerName: hello.Name, Decision: "accepted"})
 	if hello.Kind == protocol.KindConsoleHello {
 		a.serveConsole(ctx, conn)
@@ -732,6 +739,11 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 		if err != nil {
 			return
 		}
+		if audit.workspaceCheck != nil && (m.Kind != protocol.KindWorkspace || !audit.workspaceCheck()) {
+			a.logSessionEvent(audit, rejectedRequestEvent(fp, peerName, m, "workspace access inactive"))
+			rejectHandshake(conn, protocol.Message{Kind: protocol.KindReject, Reason: "workspace connection access inactive or request outside workspace protocol"})
+			return
+		}
 		if check != nil && !check() {
 			a.logSessionEvent(audit, rejectedRequestEvent(fp, peerName, m, "delegation inactive"))
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "delegation inactive"})
@@ -762,7 +774,7 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 			a.doExecPoll(conn, m)
 		case protocol.KindLogs:
 			ok, decision := a.gateDataCapability(capabilityReadEventLog, fp, check)
-			if ok && check != nil && !check() {
+			if ok && !checksPass([]func() bool{check, audit.workspaceCheck}) {
 				ok, decision = false, "delegation inactive"
 			}
 			a.logSessionEvent(audit, eventlog.Event{
@@ -782,8 +794,8 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 			}
 			protocol.WriteMessage(conn, a.status())
 		case protocol.KindFilePut:
-			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp}, check)
-			if ok && check != nil && !check() {
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp}, check, audit.workspaceCheck)
+			if ok && !checksPass([]func() bool{check, audit.workspaceCheck}) {
 				ok, decision = false, "delegation inactive"
 			}
 			a.logSessionEvent(audit, eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "PUT " + m.Path, Decision: decision})
@@ -793,8 +805,8 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 			}
 			server.HandleFilePut(conn, m, root)
 		case protocol.KindFileGet:
-			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp}, check)
-			if ok && check != nil && !check() {
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp}, check, audit.workspaceCheck)
+			if ok && !checksPass([]func() bool{check, audit.workspaceCheck}) {
 				ok, decision = false, "delegation inactive"
 			}
 			a.logSessionEvent(audit, eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "GET " + m.Path, Decision: decision})
@@ -806,8 +818,8 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 		case protocol.KindFileRead:
 			// Gated exactly like file_get: a read is a read, whether the
 			// controller wants the whole file or twenty lines of it.
-			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp}, check)
-			if ok && check != nil && !check() {
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp}, check, audit.workspaceCheck)
+			if ok && !checksPass([]func() bool{check, audit.workspaceCheck}) {
 				ok, decision = false, "delegation inactive"
 			}
 			a.logSessionEvent(audit, eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "READ " + m.Path, Decision: decision})
@@ -820,8 +832,8 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 			// Gated exactly like file_put. An edit rewrites the file, so the
 			// grant it needs is the write grant, not a lesser one for touching
 			// only part of the contents.
-			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp}, check)
-			if ok && check != nil && !check() {
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp}, check, audit.workspaceCheck)
+			if ok && !checksPass([]func() bool{check, audit.workspaceCheck}) {
 				ok, decision = false, "delegation inactive"
 			}
 			a.logSessionEvent(audit, eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "EDIT " + m.Path, Decision: decision})
@@ -834,8 +846,8 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 			// Gated exactly like file_put, for the same reason as file_edit:
 			// what comes out of it is a whole file with the controller's
 			// content in it, which is a write however small the content was.
-			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp}, check)
-			if ok && check != nil && !check() {
+			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindWrite, Path: m.Path, Peer: fp}, check, audit.workspaceCheck)
+			if ok && !checksPass([]func() bool{check, audit.workspaceCheck}) {
 				ok, decision = false, "delegation inactive"
 			}
 			a.logSessionEvent(audit, eventlog.Event{Type: "file", PeerFP: fp, PeerName: peerName, Detail: "WRITE " + m.Path, Decision: decision})
