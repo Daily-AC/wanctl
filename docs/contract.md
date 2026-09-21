@@ -52,6 +52,7 @@ you do not run on, behind that device owner's policy. A refusal is an answer.
   wanctl_trust_server  pin a device's identity for this controller
   wanctl_rules         show or change this machine's local policy rules
   wanctl_screenshot    capture a device's screen as a PNG
+  wanctl_workspace     enter, inspect, cancel, or exit a remote workspace
 
 DEV LOOP
   wanctl_exec keeps a persistent shell per device: cd once and stay there. Long
@@ -111,6 +112,7 @@ REFUSALS — none of these mean retry as-is:
 | `relay` | — | Run the relay (the public broker) |
 | `portal` | — | Run the web portal |
 | `help` | — | Print this contract |
+| — | `wanctl_workspace` | Enter, inspect, cancel, or exit a remote workspace |
 
 ## `wanctl login` / `wanctl_login`
 
@@ -288,6 +290,13 @@ wanctl_pair{"target":"home-pc"}
 
 *Run a command, or a whole script, on a device*
 
+WORKSPACE MODE: with workspace, execution uses its independent persistent
+shell and returns JSON with request_id, done, code, output and next_offset. If
+done=false, call wanctl_exec_poll with workspace and job_id=request_id. Even
+after done=true, continue while next_offset < retained_bytes. Network loss
+only stops waiting. One command at a time; busy returns the current
+request_id. No oneshot or elevation in workspace mode.
+
 Run a command on a machine you are not running on, and get back its stdout,
 stderr and exit code. This is the general-purpose primitive: reach for it for
 things that are genuinely commands — git, a package manager, a service check —
@@ -340,7 +349,7 @@ background the command on the device instead.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
-| `target` | `--target NS/DEV` | string | **yes** | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS for shared devices. If exactly one device is online for this token, you may pass empty string. |
+| `target` | `--target NS/DEV` | string | no | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS for shared devices. If exactly one device is online for this token, you may pass empty string. Omit when workspace is supplied. |
 | `command` | `<command...>` | string | no | A one-liner for the device's default shell (sh on Unix, powershell on Windows). WARNING: this string is SOURCE CODE for that shell and is parsed there. On Windows that means writing `powershell -Command "...$x..."` gets parsed TWICE — the outer shell expands $x to nothing and the inner script fails with a misleading 'term is not recognized'. Use 'script' instead of nesting an interpreter here. **On the CLI:** The command to run, given as the trailing arguments. It is SOURCE CODE for the device's shell (sh on Unix, powershell on Windows) and is parsed there, so a nested `powershell -Command "...$x..."` is parsed twice and loses its variables to the outer pass; wanctl warns when it sees that shape. Use --script instead of nesting an interpreter. |
 | `script` | `--script <local-file>` | string | no | Script SOURCE to run on the device (not a file path). Sent encoded, so quoting and character-set rules do not apply: $, backticks, nested quotes and non-ASCII text all arrive literally. Requires 'interp'. Use this for multi-statement work; it is the same single call as 'command'. Scripts over ~9KB must be pushed as a file and run by path instead. **On the CLI:** Path to a script FILE on this machine. Its contents are sent base64-encoded and run on the device, so quoting and character-set rules do not apply: $, backticks, nested quotes and non-ASCII text all arrive literally. The interpreter comes from the extension (.ps1 → PowerShell, .sh or none → sh) unless --interp says otherwise. This is the CLI spelling of the MCP `script` argument, which carries the source itself rather than a path. |
 | `interp` | `--interp powershell\|sh` | string | no | Interpreter for 'script': 'powershell' for Windows devices, 'sh' for Unix/macOS/Android. Required when 'script' is set. **On the CLI:** Override the interpreter --script would infer from the file extension: powershell \| sh. |
@@ -348,6 +357,8 @@ background the command on the device instead.
 | `oneshot` | `--oneshot` | boolean | no | Run in a fresh shell with no persistent session state. Default false — successive exec calls share cwd/env like a real terminal. Note that aborting a command (Ctrl-C, or losing the connection) RESETS the shared session: the shell is killed together with every process still in its process group (Unix) or job (Windows), and the next exec starts in the default directory with a default environment. A process that detached itself from that group or job — setsid, setpgid, a shell with job control ('set -m'), or one created through an external service — can survive the abort. Use --oneshot for anything you may want to abort, so there is no shared state to lose. |
 | `elevate` | `--elevate` | boolean | no | Android only. Run with elevated privilege (uid 0 or the adb shell uid 2000) instead of the app sandbox the agent normally lives in. This is what makes `pm`, `am`, `input`, `screencap`, `dumpsys`, `settings`, `wm` and `svc` work at all — without it they fail with permission errors or empty output. Elevated commands need their OWN policy rule on the device; a device in bypass mode still refuses them until a human approves, so expect a 'PAIRING/approval' style rejection the first time. |
 | `via` | `--via su\|adb` | string | no | Pin the elevation channel: 'su' (rooted device) or 'adb' (device's own wireless debugging). Default empty = let the device pick whichever is available. Naming an unavailable channel fails instead of quietly running unprivileged. |
+| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. |
+| `request_id` | — | string | no | Workspace only: unique 1-128 letters/digits/-/_ for this command. Generated if omitted and returned with the result. Reuse the SAME ID and unchanged command/cwd after an uncertain response; never invent a new ID to retry a possibly executed command. |
 
 ```
 wanctl exec --target home-pc "uname -a"
@@ -401,10 +412,11 @@ sha256, whether the 256 KiB cap cut the range short — goes to stderr, so
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
-| `target` | `--target NS/DEV` | string | **yes** | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS for shared devices. |
-| `path` | `<path>` | string | **yes** | Absolute path on the target device. `~` is NOT expanded — spell the home directory out. |
+| `target` | `--target NS/DEV` | string | no | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS for shared devices. Omit when workspace is supplied. |
+| `path` | `<path>` | string | **yes** | Absolute path on the target device. `~` is NOT expanded — spell the home directory out. With workspace, relative paths are based on its project root. |
 | `offset` | `--offset N` | number | no | 1-based line number to start at. Default 1. Use this to page through a file that came back truncated. |
 | `limit` | `--limit N` | number | no | Maximum number of lines to return. Default 2000. The 256 KiB byte cap applies regardless. |
+| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. |
 
 ```
 wanctl read --target home-pc /etc/hosts --offset 1 --limit 200
@@ -476,8 +488,8 @@ both --old and --old-file is an error rather than a precedence rule.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
-| `target` | `--target NS/DEV` | string | **yes** | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS for shared devices. |
-| `path` | `<path>` | string | **yes** | Absolute path on the target device. `~` is NOT expanded. |
+| `target` | `--target NS/DEV` | string | no | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS for shared devices. Omit when workspace is supplied. |
+| `path` | `<path>` | string | **yes** | Absolute path on the target device. `~` is NOT expanded. With workspace, relative paths are based on its project root. |
 | `old` | `--old STR \| --old-file F` | string | no | The exact text to find, copied from a wanctl_read of this file. Must be non-empty, and must match exactly once unless `all` is true. Required unless you pass `edits` instead; giving both forms is refused rather than resolved. |
 | `new` | `--new STR \| --new-file F` | string | no | The text to put in its place. May be an empty string, which deletes `old`. Belongs with `old`, not with `edits`. |
 | `edits` | — | array of {old, new} | no | Several replacements applied to this file in one atomic call, as [{"old":…,"new":…}, …]. Use this instead of repeating the tool: each `old` matches the ORIGINAL text you read, each must occur exactly once, and two entries may not overlap. Keep every `old` as small as it can be while unique — padding with unchanged context is what makes an entry collide with the next one. At most 64 entries. Mutually exclusive with old/new. |
@@ -485,6 +497,7 @@ both --old and --old-file is an error rather than a precedence rule.
 | — | `--new-file F` | string | no | Read the replacement from this local file instead of --new. |
 | `all` | `--all` | boolean | no | Replace every occurrence instead of refusing when `old` appears more than once. Default false. |
 | `expected_sha256` | `--sha SHA256` | string | no | The sha256 wanctl_read reported for this file. When set, the edit is refused if the file no longer hashes to it, so a concurrent change cannot be overwritten silently. Strongly recommended. |
+| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. |
 
 ```
 wanctl edit --target lab /app.conf --old "port = 80" --new "port = 8080"
@@ -539,10 +552,11 @@ over quoting. Giving both is an error rather than a precedence rule.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
-| `target` | `--target NS/DEV` | string | **yes** | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS for shared devices. |
-| `path` | `<path>` | string | **yes** | Absolute path on the target device. `~` is NOT expanded. Parent directories are created if they do not exist. |
+| `target` | `--target NS/DEV` | string | no | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS for shared devices. Omit when workspace is supplied. |
+| `path` | `<path>` | string | **yes** | Absolute path on the target device. `~` is NOT expanded. Parent directories are created if they do not exist. With workspace, relative paths are based on its project root. |
 | `content` | `--content STR \| --content-file F` | string | **yes** | The whole new text of the file, UTF-8. An empty string is allowed and writes an empty file. Nothing is appended: whatever was there before is gone. |
 | — | `--content-file F` | string | no | Read the content from this local file instead of --content. Giving both is an error, not a precedence rule. |
+| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. |
 
 ```
 wanctl write --target lab /etc/app/config.toml --content-file ./config.toml
@@ -566,6 +580,13 @@ wanctl_write{"target":"lab","path":"/srv/run.sh",
 
 *Start a background job and return its id at once*
 
+WORKSPACE MODE: with workspace, execution uses its independent persistent
+shell and returns JSON with request_id, done, code, output and next_offset. If
+done=false, call wanctl_exec_poll with workspace and job_id=request_id. Even
+after done=true, continue while next_offset < retained_bytes. Network loss
+only stops waiting. One command at a time; busy returns the current
+request_id. No oneshot or elevation in workspace mode.
+
 Start work that will not finish inside one tool call, and get a job_id back
 immediately. Reach for it BEFORE starting anything whose length you cannot
 honestly predict — a package install, a build, a large download, a dev server
@@ -587,9 +608,11 @@ started through this tool once.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
-| `target` | — | string | **yes** | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS. |
+| `target` | — | string | no | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS. Omit when workspace is supplied. |
 | `command` | — | string | **yes** | Shell command to run in the device's default shell (sh on Unix, powershell on Windows). |
 | `cwd` | — | string | no | Working directory on the device for this command (also the policy scope). |
+| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. |
+| `request_id` | — | string | no | Workspace only: unique 1-128 letters/digits/-/_ for this command. Generated if omitted and returned with the result. Reuse the SAME ID and unchanged command/cwd after an uncertain response; never invent a new ID to retry a possibly executed command. |
 
 ```
 wanctl_exec_async{"target":"lab","command":"npm run dev","cwd":"/srv"}
@@ -604,6 +627,11 @@ wanctl_exec_async{"target":"lab","command":"npm run dev","cwd":"/srv"}
 ## `wanctl_exec_poll`
 
 *Fetch a background job's new output and status*
+
+WORKSPACE MODE: pass workspace instead of target and job_id equal to the
+request_id returned by workspace exec. JSON carries done, code, error, output
+and next_offset; reuse the offset to consume each page once. A closed device
+process has lost its ledger; do not silently start another command.
 
 Collect what a background job has produced since you last looked. Call it
 after wanctl_exec_async and keep calling until state is 'done', which is also
@@ -624,9 +652,10 @@ than waiting for the first.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
-| `target` | — | string | **yes** | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS — the same device the job was started on. |
+| `target` | — | string | no | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS — the same device the job was started on. Omit when workspace is supplied. |
 | `job_id` | — | string | **yes** | The job id returned by wanctl_exec_async. |
 | `offset` | — | number | no | Bytes of output already seen; return only output past this point. Use the previous poll's next_offset. Default 0 = from the start. |
+| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. |
 
 ```
 wanctl_exec_poll{"target":"home-pc","job_id":"j-7f2","offset":4096}
@@ -1332,5 +1361,48 @@ contains.
 wanctl help exec
   wanctl help wanctl_read
   wanctl help --markdown > docs/contract.md
+```
+
+## `wanctl_workspace`
+
+*Enter, inspect, cancel, or exit a remote workspace*
+
+Enter once with action='enter', target and an absolute project root. Save the
+returned workspace reference and pass it instead of target to wanctl_exec,
+wanctl_exec_async, wanctl_exec_poll, wanctl_read, wanctl_edit and
+wanctl_write. Relative file paths resolve against the project root; shell cwd
+and environment persist independently. Read AGENTS.md or CLAUDE.md and follow
+it before working. Each entry owns a separate shell, even under the same
+login. The reference survives MCP reconnects; it is not a credential and is
+never a global default for an account or a chat. A harness can inject it for
+its own conversation, but MCP cannot redirect a host's unrelated local tools.
+
+Use status to reconnect and inspect; exit explicitly closes the workspace and
+its shell. Network loss does not exit or cancel a received command. Cancel
+must name the active request_id and destroys the shell; collect its result,
+then explicitly exit and enter a new workspace. An expired/closed/invalid
+workspace MUST NOT silently fall back to local tools or another device. A
+device restart loses live shell state. Workspaces are not a filesystem
+sandbox; each operation still uses the existing device policy. Short-lived
+delegated credentials do not support persistent workspaces.
+
+Limits: 16 open workspaces per device; 128 command IDs (1 MiB total command
+text) and 8 MiB retained output per workspace; each command has the existing
+30-minute execution limit. IDs are retained until exit, never evicted and then
+rerun. These are persistent command shells, not interactive PTYs. A program
+waiting on stdin is unsupported. No preview port forwarding or automatic
+host-tool replacement is included.
+
+| Parameter | CLI | Type | Required | Meaning |
+|---|---|---|---|---|
+| `action` | — | string | **yes** | enter \| status \| cancel \| exit. Exit is the explicit end of this remote workspace. |
+| `target` | — | string | no | Device to enter. Omit when workspace is supplied. |
+| `root` | — | string | no | Absolute project directory on the device; required for enter. |
+| `workspace` | — | string | no | Exact reference returned by enter. Required for status/cancel/exit; also accepted by enter to recover a lost open response. |
+| `request_id` | — | string | no | The active request to cancel, or an existing request whose result status should include. |
+
+```
+wanctl_workspace{"action":"enter","target":"lab",
+    "root":"/srv/app"}
 ```
 

@@ -73,8 +73,11 @@ type Agent struct {
 	notifyPolicy agentNotifyPolicy
 	notifyClient *http.Client
 
-	sessMu   sync.Mutex
-	sessions map[string]*server.ShellSession
+	sessMu           sync.Mutex
+	sessions         map[string]*server.ShellSession
+	workspaceMu      sync.Mutex
+	workspaces       map[string]*workspace
+	workspacesClosed bool
 	// consoles counts live console sessions. An update that swapped the binary
 	// under an owner who is mid-approval would drop the connection they are
 	// answering on.
@@ -158,6 +161,7 @@ func (a *Agent) Close() {
 	if a.stop != nil {
 		a.stop()
 	}
+	a.closeWorkspaces()
 	a.wg.Wait()
 }
 
@@ -733,9 +737,12 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "delegation inactive"})
 			return
 		}
-		if check != nil && (m.Kind == protocol.KindExecAsync || m.Kind == protocol.KindExecPoll || (m.Kind == protocol.KindExec && !m.OneShot)) {
+		if check != nil && (m.Kind == protocol.KindWorkspace || m.Kind == protocol.KindExecAsync || m.Kind == protocol.KindExecPoll || (m.Kind == protocol.KindExec && !m.OneShot)) {
 			a.logSessionEvent(audit, rejectedRequestEvent(fp, peerName, m, "delegated execution requires a synchronous one-shot command"))
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "delegated execution requires a synchronous one-shot command"})
+			continue
+		}
+		if m.Kind == protocol.KindWorkspace && a.handleWorkspace(conn, fp, peerName, &m, caps, audit) {
 			continue
 		}
 		if required := requiredCapability(m.Kind); required != 0 && !caps.Has(required) {
@@ -1485,6 +1492,9 @@ func (a *Agent) runConsolePrompt(ctx context.Context) {
 // the devices most in need of an unattended update are the ones that never get
 // one.
 func (a *Agent) Busy() bool {
+	if a.workspacesBusy() {
+		return true
+	}
 	a.sessMu.Lock()
 	for _, sess := range a.sessions {
 		if !sess.Closed() {
