@@ -771,6 +771,7 @@ func registerMCPTools(s *server.MCPServer) {
 		"mcpPeers":       mcpPeers,
 		"mcpPair":        mcpPair,
 		"mcpExec":        mcpExec,
+		"mcpWorkspace":   mcpWorkspace,
 		"mcpRead":        mcpRead,
 		"mcpEdit":        mcpEdit,
 		"mcpWrite":       mcpWrite,
@@ -1235,6 +1236,12 @@ func execSource(req mcpapi.CallToolRequest) (string, *mcpapi.CallToolResult) {
 }
 
 func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	if reqStr(req, "workspace", "") != "" {
+		return mcpWorkspaceExec(ctx, req, false)
+	}
+	if _, _, hint := workspaceRoute(req); hint != nil {
+		return hint, nil
+	}
 	target := reqStr(req, "target", "")
 	command, errRes := execSource(req)
 	if errRes != nil {
@@ -1307,6 +1314,10 @@ func errorTextOf(res *mcpapi.CallToolResult) string {
 // somebody else; read and edit name a path on the target device, which is the
 // thing the caller was authorized to drive in the first place.
 func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	target, workspaceID, routeError := workspaceRoute(req)
+	if routeError != nil {
+		return routeError, nil
+	}
 	path := reqStr(req, "path", "")
 	if path == "" {
 		return mcpapi.NewToolResultError("path is required"), nil
@@ -1317,10 +1328,11 @@ func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return hint, nil
 	}
 	res, err := c.ReadFile(ctx, client.ReadRequest{
-		Target: reqStr(req, "target", ""),
-		Path:   path,
-		Offset: reqInt(req, "offset"),
-		Limit:  reqInt(req, "limit"),
+		Target:      target,
+		WorkspaceID: workspaceID,
+		Path:        path,
+		Offset:      reqInt(req, "offset"),
+		Limit:       reqInt(req, "limit"),
 	})
 	if err != nil {
 		return fileOpErrorResult(sess, err), nil
@@ -1344,6 +1356,10 @@ func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 }
 
 func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	target, workspaceID, routeError := workspaceRoute(req)
+	if routeError != nil {
+		return routeError, nil
+	}
 	path := reqStr(req, "path", "")
 	old := reqStr(req, "old", "")
 	edits, errRes := reqEdits(req)
@@ -1364,7 +1380,8 @@ func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return hint, nil
 	}
 	request := client.EditRequest{
-		Target:      reqStr(req, "target", ""),
+		Target:      target,
+		WorkspaceID: workspaceID,
 		Path:        path,
 		All:         reqBool(req, "all"),
 		ExpectedSHA: reqStr(req, "expected_sha256", ""),
@@ -1417,6 +1434,10 @@ func reqEdits(req mcpapi.CallToolRequest) ([]protocol.FileEdit, *mcpapi.CallTool
 // look, edit to change, write to put a whole file there — with no base64, no
 // local temp file and no heredoc through a shell.
 func mcpWrite(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	target, workspaceID, routeError := workspaceRoute(req)
+	if routeError != nil {
+		return routeError, nil
+	}
 	path := reqStr(req, "path", "")
 	content, given := req.GetArguments()["content"].(string)
 	if path == "" {
@@ -1433,9 +1454,10 @@ func mcpWrite(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 		return hint, nil
 	}
 	res, err := c.WriteFile(ctx, client.WriteRequest{
-		Target:  reqStr(req, "target", ""),
-		Path:    path,
-		Content: content,
+		Target:      target,
+		WorkspaceID: workspaceID,
+		Path:        path,
+		Content:     content,
 	})
 	if err != nil {
 		return fileOpErrorResult(sess, err), nil
@@ -1528,6 +1550,12 @@ func fileOpErrorResult(sess sessionAPI, err error) *mcpapi.CallToolResult {
 }
 
 func mcpExecAsync(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	if reqStr(req, "workspace", "") != "" {
+		return mcpWorkspaceExec(ctx, req, true)
+	}
+	if _, _, hint := workspaceRoute(req); hint != nil {
+		return hint, nil
+	}
 	target := reqStr(req, "target", "")
 	command := reqStr(req, "command", "")
 	if command == "" {
@@ -1548,6 +1576,12 @@ func mcpExecAsync(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Call
 }
 
 func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	if reqStr(req, "workspace", "") != "" {
+		return mcpWorkspacePoll(ctx, req)
+	}
+	if _, _, hint := workspaceRoute(req); hint != nil {
+		return hint, nil
+	}
 	target := reqStr(req, "target", "")
 	jobID := reqStr(req, "job_id", "")
 	if jobID == "" {

@@ -35,7 +35,12 @@
       {
         "name": "target",
         "type": "string",
-        "required": true
+        "required": false
+      },
+      {
+        "name": "workspace",
+        "type": "string",
+        "required": false
       }
     ]
   },
@@ -68,6 +73,11 @@
         "required": false
       },
       {
+        "name": "request_id",
+        "type": "string",
+        "required": false
+      },
+      {
         "name": "script",
         "type": "string",
         "required": false
@@ -75,10 +85,15 @@
       {
         "name": "target",
         "type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "via",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "workspace",
         "type": "string",
         "required": false
       }
@@ -98,9 +113,19 @@
         "required": false
       },
       {
+        "name": "request_id",
+        "type": "string",
+        "required": false
+      },
+      {
         "name": "target",
         "type": "string",
-        "required": true
+        "required": false
+      },
+      {
+        "name": "workspace",
+        "type": "string",
+        "required": false
       }
     ]
   },
@@ -120,7 +145,12 @@
       {
         "name": "target",
         "type": "string",
-        "required": true
+        "required": false
+      },
+      {
+        "name": "workspace",
+        "type": "string",
+        "required": false
       }
     ]
   },
@@ -277,7 +307,12 @@
       {
         "name": "target",
         "type": "string",
-        "required": true
+        "required": false
+      },
+      {
+        "name": "workspace",
+        "type": "string",
+        "required": false
       }
     ]
   },
@@ -355,6 +390,36 @@
     ]
   },
   {
+    "name": "wanctl_workspace",
+    "params": [
+      {
+        "name": "action",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "request_id",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "root",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "workspace",
+        "type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "wanctl_write",
     "params": [
       {
@@ -370,7 +435,12 @@
       {
         "name": "target",
         "type": "string",
-        "required": true
+        "required": false
+      },
+      {
+        "name": "workspace",
+        "type": "string",
+        "required": false
       }
     ]
   }
