@@ -8,12 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"wanctl/internal/eventlog"
 	"wanctl/internal/limits"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
+	"wanctl/internal/script"
 	"wanctl/internal/server"
 	"wanctl/internal/sessionauth"
 )
@@ -42,13 +44,15 @@ type workspace struct {
 }
 
 type workspaceJob struct {
-	command, cwd string
-	state        string
-	output       []byte
-	total        int64
-	code         int
-	err          string
-	done         bool
+	command, cwd   string
+	script, interp string
+	finished       chan struct{}
+	state          string
+	output         []byte
+	total          int64
+	code           int
+	err            string
+	done           bool
 }
 
 func validWorkspaceID(id string) bool {
@@ -225,8 +229,8 @@ func (w *workspace) reserve(m protocol.Message) (bool, error) {
 		return false, fmt.Errorf("request_id must be 1-128 letters, digits, '-' or '_'")
 	}
 	if j := w.jobs[m.RequestID]; j != nil {
-		if j.command != m.Command || j.cwd != m.Cwd {
-			return false, fmt.Errorf("request_id conflict: different command or cwd; nothing was started")
+		if j.command != m.Command || j.cwd != m.Cwd || j.script != m.Script || j.interp != m.Interp {
+			return false, fmt.Errorf("request_id conflict: different execution input; nothing was started")
 		}
 		return false, nil
 	}
@@ -239,17 +243,20 @@ func (w *workspace) reserve(m protocol.Message) (bool, error) {
 	if len(w.jobs) >= maxWorkspaceRequests {
 		return false, fmt.Errorf("workspace request ledger full (%d); close and open a new workspace; old IDs are never silently reused", maxWorkspaceRequests)
 	}
-	if len(m.Command)+len(m.Cwd) > maxWorkspaceInput-w.inputBytes {
+	if len(m.Command)+len(m.Cwd)+len(m.Script) > maxWorkspaceInput-w.inputBytes {
 		return false, fmt.Errorf("workspace command ledger byte limit reached; close and open a new workspace")
 	}
-	w.inputBytes += len(m.Command) + len(m.Cwd)
-	w.jobs[m.RequestID] = &workspaceJob{command: m.Command, cwd: m.Cwd, state: "approving"}
+	w.inputBytes += len(m.Command) + len(m.Cwd) + len(m.Script)
+	w.jobs[m.RequestID] = &workspaceJob{command: m.Command, cwd: m.Cwd, script: m.Script, interp: m.Interp, finished: make(chan struct{}), state: "approving"}
 	w.active = m.RequestID
 	return true, nil
 }
 
 func (w *workspace) finishLocked(id string, code int, err error) {
 	j := w.jobs[id]
+	if !j.done {
+		close(j.finished)
+	}
 	j.code, j.done, j.state = code, true, "done"
 	if err != nil {
 		j.err = err.Error()
@@ -265,6 +272,10 @@ func (a *Agent) startWorkspaceCommand(w *workspace, fp, peer string, m protocol.
 	}
 	if m.OneShot || m.Elevate || m.Via != "" {
 		return fmt.Errorf("workspace exec does not support oneshot or elevation")
+	}
+	source, err := a.workspaceSource(m)
+	if err != nil {
+		return err
 	}
 	fresh, err := w.reserve(m)
 	if err != nil || !fresh {
@@ -302,13 +313,68 @@ func (a *Agent) startWorkspaceCommand(w *workspace, fp, peer string, m protocol.
 		if m.Cwd != "" {
 			changeDir = cwd
 		}
-		code, runErr := w.shell.ExecInDirContext(ctx, m.Command, changeDir, workspaceWriter{w, m.RequestID})
+		code, runErr := w.shell.ExecInDirContext(ctx, source, changeDir, workspaceWriter{w, m.RequestID})
 		w.mu.Lock()
 		w.finishLocked(m.RequestID, code, runErr)
 		w.mu.Unlock()
 		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peer, Detail: "[workspace " + w.id + " request " + m.RequestID + "] " + m.Command, Cwd: cwd, Decision: "finished", Exit: &code})
 	}()
 	return nil
+}
+
+// Scripts must execute in the existing shell to preserve cd/export. Keep the
+// exact encoded command for the existing policy/hash contract, and verify on
+// the DEVICE that it authorizes precisely the source we are about to submit.
+func (a *Agent) workspaceSource(m protocol.Message) (string, error) {
+	if m.Script == "" {
+		if m.Interp != "" || m.Action == "exec_script" {
+			return "", fmt.Errorf("workspace script source and interp are required")
+		}
+		return m.Command, nil
+	}
+	if m.Action != "exec_script" {
+		return "", fmt.Errorf("persistent scripts require the exec_script workspace action")
+	}
+	in, err := script.ParseInterp(m.Interp)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := script.Command(in, []byte(m.Script))
+	if err != nil {
+		return "", err
+	}
+	if encoded != m.Command {
+		return "", fmt.Errorf("workspace script does not match the command presented for authorization")
+	}
+	shell := a.opts.Shell
+	if shell == "" {
+		shell = server.DefaultShell()
+	}
+	if (in == script.PowerShell) != isPowerShell(shell) {
+		return "", fmt.Errorf("script interpreter does not match this workspace shell; invoke another interpreter explicitly as a command")
+	}
+	return script.SessionSource(in, []byte(m.Script))
+}
+
+// Wait beside the process, not by reconnecting from the controller. This
+// removes an entire network handshake/poll from normal short commands while
+// preserving asynchronous execution and reconnection for longer work.
+func (w *workspace) wait(id string, milliseconds int) {
+	if milliseconds <= 0 {
+		return
+	}
+	w.mu.Lock()
+	j := w.jobs[id]
+	w.mu.Unlock()
+	if j == nil {
+		return
+	}
+	timer := time.NewTimer(time.Duration(min(milliseconds, 1000)) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-j.finished:
+	case <-timer.C:
+	}
 }
 
 func (w *workspace) stop() {
@@ -381,10 +447,11 @@ func (a *Agent) handleWorkspace(conn io.ReadWriter, fp, peer string, m *protocol
 	}
 	switch m.Action {
 	case "open", "status", "poll":
-	case "exec":
+	case "exec", "exec_script":
 		if err := a.startWorkspaceCommand(w, fp, peer, *m, audit); err != nil {
 			return fail(err)
 		}
+		w.wait(m.RequestID, m.WaitMillis)
 	case "cancel":
 		w.mu.Lock()
 		if m.RequestID == "" || w.active != m.RequestID {

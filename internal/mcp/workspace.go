@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"wanctl/internal/client"
 	"wanctl/internal/protocol"
@@ -110,25 +109,24 @@ func mcpWorkspaceExec(ctx context.Context, req mcpapi.CallToolRequest, immediate
 	if rid == "" {
 		rid = client.NewRequestID()
 	}
-	r, err := c.Workspace(ctx, ref, "exec", protocol.Message{
+	action := "exec"
+	source, interp := reqStr(req, "script", ""), reqStr(req, "interp", "")
+	if source != "" {
+		action = "exec_script"
+	} else {
+		interp = ""
+	}
+	wait := 250
+	if immediate {
+		wait = 0
+	}
+	r, err := c.Workspace(ctx, ref, action, protocol.Message{
 		Command: command, RequestID: rid, Cwd: reqStr(req, "cwd", ""),
+		Script: source, Interp: interp, WaitMillis: wait,
 		OneShot: reqBool(req, "oneshot"), Elevate: reqBool(req, "elevate"), Via: reqStr(req, "via", ""),
 	})
 	if err != nil {
 		return mcpapi.NewToolResultError(errorTextOf(dialErrorResult(sess, err)) + fmt.Sprintf("\nworkspace=%s request_id=%s", ref.String(), rid)), nil
-	}
-	// Short commands usually finish before this bounded wait. A host timeout
-	// only stops waiting: it never cancels the device-owned request.
-	if !immediate && !r.Done {
-		t := time.NewTimer(100 * time.Millisecond)
-		defer t.Stop()
-		select {
-		case <-ctx.Done():
-		case <-t.C:
-			if latest, e := c.Workspace(ctx, ref, "poll", protocol.Message{RequestID: rid}); e == nil {
-				r = latest
-			}
-		}
 	}
 	return workspaceResult(ref, r), nil
 }

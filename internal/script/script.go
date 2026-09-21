@@ -96,11 +96,11 @@ func Command(interp Interp, script []byte) (string, error) {
 		// means the script's encoding is stated rather than guessed, which is
 		// the whole BOM class of bug gone: strip a UTF-8 BOM if present (it
 		// would otherwise survive as a stray U+FEFF token) and transcode.
-		src := bytes.TrimPrefix(script, []byte{0xEF, 0xBB, 0xBF})
-		if !utf8.Valid(src) {
-			return "", fmt.Errorf("script is not valid UTF-8; convert it before sending (PowerShell needs UTF-16LE, which wanctl derives from UTF-8)")
+		src, err := SessionSource(interp, script)
+		if err != nil {
+			return "", err
 		}
-		enc := base64.StdEncoding.EncodeToString(utf16LE(psPrologue + string(src)))
+		enc := base64.StdEncoding.EncodeToString(utf16LE(src))
 		// Single quotes so the outer shell treats the blob as a literal even
 		// though base64 can contain '+', '/' and '='.
 		cmd = "powershell -NoProfile -NonInteractive -EncodedCommand '" + enc + "'"
@@ -119,6 +119,24 @@ func Command(interp Interp, script []byte) (string, error) {
 			"  wanctl exec -target <dev> '<interpreter> <remote>'", len(cmd), maxCommand)
 	}
 	return cmd, nil
+}
+
+// SessionSource is the exact source normally carried by Command's encoded
+// transport. Workspaces submit it to their existing matching interpreter,
+// preserving cwd/env without changing normalization or policy hash semantics.
+func SessionSource(interp Interp, source []byte) (string, error) {
+	switch interp {
+	case POSIX:
+		return string(source), nil
+	case PowerShell:
+		src := bytes.TrimPrefix(source, []byte{0xEF, 0xBB, 0xBF})
+		if !utf8.Valid(src) {
+			return "", fmt.Errorf("script is not valid UTF-8; convert it before sending (PowerShell needs UTF-16LE, which wanctl derives from UTF-8)")
+		}
+		return psPrologue + string(src), nil
+	default:
+		return "", fmt.Errorf("unknown interpreter %q", interp)
+	}
 }
 
 // utf16LE encodes s as UTF-16 little-endian, the encoding PowerShell's

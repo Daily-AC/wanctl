@@ -14,6 +14,7 @@ import (
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/relay"
+	"wanctl/internal/script"
 	"wanctl/internal/transport"
 )
 
@@ -110,6 +111,35 @@ func TestWorkspaceEndToEnd(t *testing.T) {
 			if !strings.Contains(r.Output, "alpha") || !strings.Contains(r.Output, "child") {
 				t.Fatalf("state did not persist: %+v", r)
 			}
+			// Recommended multiline scripts must share the same shell state as
+			// commands; the former base64 pipe spawned a child and lost it.
+			src := "cd ..\nexport WANCTL_LESSON=from_script\n"
+			encoded, err := script.Command(script.POSIX, []byte(src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			scriptReq := protocol.Message{RequestID: "script-state", Command: encoded, Script: src, Interp: "sh", WaitMillis: 1000}
+			r, err = c.Workspace(context.Background(), a, "exec_script", scriptReq)
+			if err != nil || !r.Done || r.Code != 0 {
+				t.Fatalf("script/short wait: %+v %v", r, err)
+			}
+			r = runWorkspace(t, c, a, "script-persist", "printf '%s\\n' \"$WANCTL_LESSON\"; pwd")
+			if !strings.Contains(r.Output, "from_script") || strings.Contains(r.Output, "/child") {
+				t.Fatalf("script lost cwd/env: %+v", r)
+			}
+			scriptReq.RequestID = "forged-script"
+			scriptReq.Script = "printf forged"
+			if _, err := c.Workspace(context.Background(), a, "exec_script", scriptReq); err == nil || !strings.Contains(err.Error(), "authorization") {
+				t.Fatalf("source/auth mismatch allowed: %v", err)
+			}
+			scriptReq.RequestID = "script-state"
+			scriptReq.Script = ""
+			scriptReq.Interp = ""
+			if _, err := c.Workspace(context.Background(), a, "exec", scriptReq); err == nil || !strings.Contains(err.Error(), "conflict") {
+				t.Fatalf("execution mode changed under same ID: %v", err)
+			}
+			// Restore the terminal location for the remaining disconnect probe.
+			runWorkspace(t, c, a, "return-child", "cd child")
 			r = runWorkspace(t, c, b, "isolated", "printf '%s\n' \"${WANCTL_LESSON-unset}\"; pwd")
 			realB, _ := filepath.EvalSymlinks(rootB)
 			if !strings.Contains(r.Output, "unset") || (!strings.Contains(r.Output, realB) && !strings.Contains(r.Output, rootB)) {
