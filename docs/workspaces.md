@@ -1,7 +1,9 @@
-# Remote workspaces over MCP
+# Remote workspaces over CLI and MCP
 
 This feature is implemented on `feat/remote-workspace-session`. It is not in
-the existing public release or hosted MCP deployment. Both the MCP server and
+the public release or the normal hosted `/mcp` endpoint. A separate temporary
+acceptance deployment is described in the [CLI/web trial](plans/2026-09-22-cli-web-acceptance.md).
+Both the MCP server and
 device agent need this implementation. The relay byte transport is unchanged;
 the conversation mode below additionally requires the new relay authorization
 endpoint and matching agent support.
@@ -9,6 +11,46 @@ endpoint and matching agent support.
 A workspace owns a project root and independent persistent command shell.
 Default stdio and shared HTTP use explicit references, so several conversations
 can use one account without sharing a mutable default directory or shell.
+
+## CLI
+
+```sh
+wanctl workspace enter --target lab --root /srv/app
+# Copy the workspace value from the JSON result, without changing it:
+export WANCTL_WORKSPACE='<returned reference>'
+wanctl read AGENTS.md
+wanctl exec --request-id setup 'export MODE=test; cd src'
+wanctl exec 'printf "%s\n" "$MODE"; pwd'
+wanctl write notes.txt --content 'a project-root-relative file'
+wanctl edit notes.txt --old 'a project' --new 'the project'
+wanctl exec --async --request-id tests 'python3 -m unittest'
+wanctl workspace poll --request-id tests --offset 0
+wanctl workspace status
+wanctl workspace exit
+unset WANCTL_WORKSPACE
+```
+
+Each invocation is a new CLI process; the device keeps the shell alive.
+`--workspace REF` is the explicit alternative to the environment variable.
+The binding is inherited by this terminal/harness's children only. Nothing
+is saved as an account-wide current workspace. Supplying both a bound workspace
+and `--target` is rejected. A stale binding never falls back to legacy exec.
+
+Normal workspace `exec` waits, drains output pages, and propagates the remote
+exit code. It prints the workspace and request ID to stderr before submitting.
+Ctrl-C stops waiting; use `workspace poll` to resume or `workspace cancel
+--request-id ID` to stop the command and invalidate its shell. `--async`
+returns one JSON response immediately. A CLI poll prints one JSON page; keep
+using `next_offset` until `done=true` and all retained bytes are consumed.
+Workspace output is the shell's merged textual output, not a binary pipe.
+
+`workspace attach --workspace REF` inspects an existing workspace; a child
+process cannot change its parent's environment, so set `WANCTL_WORKSPACE`
+explicitly when binding a new terminal. To recover an uncertain open, use
+`workspace enter --workspace REF --root /the/same/root`. References require the
+same controller identity. CLI and local stdio sharing a config directory can
+resume each other's workspaces. Hosted OAuth MCP derives a separate controller
+identity and creates its own workspaces, even under the same user account.
 
 ## One dedicated process per conversation
 
@@ -19,6 +61,12 @@ wanctl mcp --workspace-session
 Use this only when the host dedicates that MCP process to ONE conversation.
 Do not put multiple conversations through the same process. It cannot be used
 with `--http` and does not redirect the host's unrelated native tools.
+
+If this process inherits `WANCTL_WORKSPACE`, it starts bound to that reference.
+This also supports hosts that restart the MCP subprocess: the host retains the
+reference in its own conversation environment. The first device operation still
+checks access and workspace availability; startup never creates a replacement.
+Default stdio and HTTP do not read this environment variable as a binding.
 
 Enter once with target and root. Then use the ordinary tools without target
 or workspace arguments, for example `wanctl_read({"path":"README.md"})` and

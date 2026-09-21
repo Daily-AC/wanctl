@@ -60,9 +60,9 @@ func wrapPlainPrefixed(s string, width int, prefix string) string {
 // reach for, in what order, and what not to do instead. Every line here was a
 // mistake an agent made in the field before it was written down.
 var devLoop = []string{
-	"wanctl_exec keeps a persistent shell per device: cd once and stay there. Long work goes to wanctl_exec_async, then wanctl_exec_poll until it is done.",
+	"For project work, enter wanctl_workspace and carry its reference on each call: cwd/env persist there. Use exec_async then exec_poll for long work.",
 	"Read with wanctl_read, patch with wanctl_edit (several {old,new} in ONE call), write files with wanctl_write. Never cat/sed/echo a file through a shell.",
-	"Over-long exec output returns its TAIL; the rest waits in a device file.",
+	"Workspace output is paged and bounded; legacy exec returns its TAIL and a log.",
 	"Before working in a project directory, read its AGENTS.md or CLAUDE.md with wanctl_read if one exists and follow it: it outranks how you would proceed.",
 }
 

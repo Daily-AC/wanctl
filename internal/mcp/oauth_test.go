@@ -13,6 +13,17 @@ import (
 
 const testSeed = "seed-for-mcp-oauth-tests-0123456789abcdef"
 
+func TestOAuthIDBeforeAnyDeviceCall(t *testing.T) {
+	h := newOAuthHandler(t, &oauthProbe{live: true})
+	access := bearer(t, "alice", "token", "chat", time.Hour)
+	sid := openSession(t, h, access)
+	rr, result := rpc(t, h, access, sid, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wanctl_id","arguments":{}}}`)
+	body, _ := json.Marshal(result)
+	if rr.Code != http.StatusOK || !strings.Contains(string(body), "fingerprint: SHA256:") || strings.Contains(string(body), "not logged in") {
+		t.Fatalf("OAuth identity before first device call: %d %s", rr.Code, body)
+	}
+}
+
 type oauthProbe struct {
 	live    bool
 	revoked []string

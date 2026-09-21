@@ -52,14 +52,14 @@ you do not run on, behind that device owner's policy. A refusal is an answer.
   wanctl_trust_server  pin a device's identity for this controller
   wanctl_rules         show or change this machine's local policy rules
   wanctl_screenshot    capture a device's screen as a PNG
-  wanctl_workspace     enter, inspect, cancel, or exit a remote workspace
+  wanctl_workspace     enter, resume or exit a persistent workspace
 
 DEV LOOP
-  wanctl_exec keeps a persistent shell per device: cd once and stay there. Long
-  work goes to wanctl_exec_async, then wanctl_exec_poll until it is done.
+  For project work, enter wanctl_workspace and carry its reference on each call:
+  cwd/env persist there. Use exec_async then exec_poll for long work.
   Read with wanctl_read, patch with wanctl_edit (several {old,new} in ONE call),
   write files with wanctl_write. Never cat/sed/echo a file through a shell.
-  Over-long exec output returns its TAIL; the rest waits in a device file.
+  Workspace output is paged and bounded; legacy exec returns its TAIL and a log.
   Before working in a project directory, read its AGENTS.md or CLAUDE.md with
   wanctl_read if one exists and follow it: it outranks how you would proceed.
 
@@ -112,7 +112,7 @@ REFUSALS — none of these mean retry as-is:
 | `relay` | — | Run the relay (the public broker) |
 | `portal` | — | Run the web portal |
 | `help` | — | Print this contract |
-| — | `wanctl_workspace` | Enter, inspect, cancel, or exit a remote workspace |
+| `workspace` | `wanctl_workspace` | Enter, inspect, cancel, or exit a remote workspace |
 
 ## `wanctl login` / `wanctl_login`
 
@@ -360,8 +360,9 @@ background the command on the device instead.
 | `oneshot` | `--oneshot` | boolean | no | Run in a fresh shell with no persistent session state. Default false — successive exec calls share cwd/env like a real terminal. Note that aborting a command (Ctrl-C, or losing the connection) RESETS the shared session: the shell is killed together with every process still in its process group (Unix) or job (Windows), and the next exec starts in the default directory with a default environment. A process that detached itself from that group or job — setsid, setpgid, a shell with job control ('set -m'), or one created through an external service — can survive the abort. Use --oneshot for anything you may want to abort, so there is no shared state to lose. |
 | `elevate` | `--elevate` | boolean | no | Android only. Run with elevated privilege (uid 0 or the adb shell uid 2000) instead of the app sandbox the agent normally lives in. This is what makes `pm`, `am`, `input`, `screencap`, `dumpsys`, `settings`, `wm` and `svc` work at all — without it they fail with permission errors or empty output. Elevated commands need their OWN policy rule on the device; a device in bypass mode still refuses them until a human approves, so expect a 'PAIRING/approval' style rejection the first time. |
 | `via` | `--via su\|adb` | string | no | Pin the elevation channel: 'su' (rooted device) or 'adb' (device's own wireless debugging). Default empty = let the device pick whichever is available. Naming an unavailable channel fails instead of quietly running unprivileged. |
-| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. |
-| `request_id` | — | string | no | Workspace only: unique 1-128 letters/digits/-/_ for this command. Generated if omitted and returned with the result. Reuse the SAME ID and unchanged command/cwd after an uncertain response; never invent a new ID to retry a possibly executed command. |
+| `workspace` | `--workspace REF` | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. **On the CLI:** Remote workspace reference; defaults to WANCTL_WORKSPACE in this caller's environment. Mutually exclusive with target. An unavailable workspace never falls back to legacy execution. |
+| `request_id` | `--request-id ID` | string | no | Workspace only: unique 1-128 letters/digits/-/_ for this command. Generated if omitted and returned with the result. Reuse the SAME ID and unchanged command/cwd after an uncertain response; never invent a new ID to retry a possibly executed command. |
+| — | `--async` | boolean | no | Workspace only: submit and return JSON immediately. Collect output with workspace poll --request-id ID. Without this flag exec waits, prints output and propagates the remote exit code; Ctrl-C stops waiting without cancelling the remote command. |
 
 ```
 wanctl exec --target home-pc "uname -a"
@@ -419,7 +420,7 @@ sha256, whether the 256 KiB cap cut the range short — goes to stderr, so
 | `path` | `<path>` | string | **yes** | Absolute path on the target device. `~` is NOT expanded — spell the home directory out. With workspace, relative paths are based on its project root. |
 | `offset` | `--offset N` | number | no | 1-based line number to start at. Default 1. Use this to page through a file that came back truncated. |
 | `limit` | `--limit N` | number | no | Maximum number of lines to return. Default 2000. The 256 KiB byte cap applies regardless. |
-| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. |
+| `workspace` | `--workspace REF` | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. **On the CLI:** Remote workspace reference; defaults to WANCTL_WORKSPACE in this caller's environment. Mutually exclusive with target. An unavailable workspace never falls back to legacy execution. |
 
 ```
 wanctl read --target home-pc /etc/hosts --offset 1 --limit 200
@@ -500,7 +501,7 @@ both --old and --old-file is an error rather than a precedence rule.
 | — | `--new-file F` | string | no | Read the replacement from this local file instead of --new. |
 | `all` | `--all` | boolean | no | Replace every occurrence instead of refusing when `old` appears more than once. Default false. |
 | `expected_sha256` | `--sha SHA256` | string | no | The sha256 wanctl_read reported for this file. When set, the edit is refused if the file no longer hashes to it, so a concurrent change cannot be overwritten silently. Strongly recommended. |
-| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. |
+| `workspace` | `--workspace REF` | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. **On the CLI:** Remote workspace reference; defaults to WANCTL_WORKSPACE in this caller's environment. Mutually exclusive with target. An unavailable workspace never falls back to legacy execution. |
 
 ```
 wanctl edit --target lab /app.conf --old "port = 80" --new "port = 8080"
@@ -559,7 +560,7 @@ over quoting. Giving both is an error rather than a precedence rule.
 | `path` | `<path>` | string | **yes** | Absolute path on the target device. `~` is NOT expanded. Parent directories are created if they do not exist. With workspace, relative paths are based on its project root. |
 | `content` | `--content STR \| --content-file F` | string | **yes** | The whole new text of the file, UTF-8. An empty string is allowed and writes an empty file. Nothing is appended: whatever was there before is gone. |
 | — | `--content-file F` | string | no | Read the content from this local file instead of --content. Giving both is an error, not a precedence rule. |
-| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. |
+| `workspace` | `--workspace REF` | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. **On the CLI:** Remote workspace reference; defaults to WANCTL_WORKSPACE in this caller's environment. Mutually exclusive with target. An unavailable workspace never falls back to legacy execution. |
 
 ```
 wanctl write --target lab /etc/app/config.toml --content-file ./config.toml
@@ -617,7 +618,7 @@ started through this tool once.
 | `target` | — | string | no | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS. Omit when workspace is supplied. |
 | `command` | — | string | **yes** | Shell command to run in the device's default shell (sh on Unix, powershell on Windows). |
 | `cwd` | — | string | no | Working directory on the device for this command (also the policy scope). |
-| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. |
+| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. **On the CLI:** Remote workspace reference; defaults to WANCTL_WORKSPACE in this caller's environment. Mutually exclusive with target. An unavailable workspace never falls back to legacy execution. |
 | `request_id` | — | string | no | Workspace only: unique 1-128 letters/digits/-/_ for this command. Generated if omitted and returned with the result. Reuse the SAME ID and unchanged command/cwd after an uncertain response; never invent a new ID to retry a possibly executed command. |
 
 ```
@@ -661,7 +662,7 @@ than waiting for the first.
 | `target` | — | string | no | Device ID or unique name/alias (DEVICE\|ALIAS), or NS/DEVICE\|NS/ALIAS — the same device the job was started on. Omit when workspace is supplied. |
 | `job_id` | — | string | **yes** | The job id returned by wanctl_exec_async. |
 | `offset` | — | number | no | Bytes of output already seen; return only output past this point. Use the previous poll's next_offset. Default 0 = from the start. |
-| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. |
+| `workspace` | — | string | no | Remote workspace reference from wanctl_workspace. Mutually exclusive with target. Always carry it across turns/reconnects; never replace it with a guessed device. Relative file paths and explicit cwd are resolved on the device against its project root. **On the CLI:** Remote workspace reference; defaults to WANCTL_WORKSPACE in this caller's environment. Mutually exclusive with target. An unavailable workspace never falls back to legacy execution. |
 
 ```
 wanctl_exec_poll{"target":"home-pc","job_id":"j-7f2","offset":4096}
@@ -1370,7 +1371,7 @@ wanctl help exec
   wanctl help --markdown > docs/contract.md
 ```
 
-## `wanctl_workspace`
+## `wanctl workspace` / `wanctl_workspace`
 
 *Enter, inspect, cancel, or exit a remote workspace*
 
@@ -1401,13 +1402,42 @@ rerun. These are persistent command shells, not interactive PTYs. A program
 waiting on stdin is unsupported. No preview port forwarding or automatic
 host-tool replacement is included.
 
+**On the command line.**
+
+Use `workspace enter --target DEVICE --root /absolute/project` to create a
+workspace. Lifecycle commands return JSON. Save its workspace value verbatim,
+then pass --workspace REF to exec/read/edit/write or export WANCTL_WORKSPACE
+in this terminal or harness environment. No account-wide default is saved.
+`workspace attach` checks an existing reference; it does not change the parent
+shell environment. `workspace poll --request-id ID [--offset N]` returns one
+JSON output page. Cancel requires the active request ID and invalidates its
+shell. Exit closes it; unset WANCTL_WORKSPACE afterwards. Never silently
+discard an unavailable reference.
+
+A reference is owned by the controller identity: CLI and local stdio with the
+same config can resume each other's workspaces. Hosted OAuth MCP has a
+different controller identity and must enter its own workspace even for the
+same account. Files on the device remain shared according to the existing
+permissions.
+
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
-| `action` | — | string | **yes** | enter \| attach \| status \| cancel \| exit. Exit is the explicit end of this remote workspace. |
-| `target` | — | string | no | Device to enter. Omit when workspace is supplied. |
-| `root` | — | string | no | Absolute project directory on the device; required for enter. |
-| `workspace` | — | string | no | Exact reference returned by enter. Required for attach/status/cancel/exit outside conversation mode; also accepted by enter to recover a lost open response. |
-| `request_id` | — | string | no | The active request to cancel, or an existing request whose result status should include. |
+| `action` | `enter\|attach\|status\|poll\|cancel\|exit` | string | **yes** | enter \| attach \| status \| cancel \| exit. Exit is the explicit end of this remote workspace. **On the CLI:** Lifecycle action (first positional argument). Poll collects one output page; it does not wait for completion. |
+| `target` | `--target DEVICE` | string | no | Device to enter. Omit when workspace is supplied. |
+| `root` | `--root PATH` | string | no | Absolute project directory on the device; required for enter. |
+| `workspace` | `--workspace REF` | string | no | Exact reference returned by enter. Required for attach/status/cancel/exit outside conversation mode; also accepted by enter to recover a lost open response. **On the CLI:** Exact reference returned by enter. Defaults to WANCTL_WORKSPACE. Enter accepts it to recover an uncertain open; attach only inspects it. |
+| `request_id` | `--request-id ID` | string | no | The active request to cancel, or an existing request whose result status should include. |
+| — | `--offset N` | number | no | Poll only: byte offset returned as next_offset by the previous result. |
+
+```
+wanctl workspace enter --target lab --root /srv/app
+  export WANCTL_WORKSPACE='<workspace from the JSON result>'
+  wanctl exec 'export MODE=test; cd src'
+  wanctl exec 'printf "%s\n" "$MODE"; pwd'
+  wanctl read README.md
+  wanctl workspace exit
+  unset WANCTL_WORKSPACE
+```
 
 ```
 wanctl_workspace{"action":"enter","target":"lab",
