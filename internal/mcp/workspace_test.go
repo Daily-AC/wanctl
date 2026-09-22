@@ -118,6 +118,8 @@ func TestWorkspaceThroughHTTPMCPAcrossFreshSessions(t *testing.T) {
 		return resp.Header, decoded
 	}
 	seen := map[string]bool{}
+	var outputChecks wireOutputChecker
+	var lastResult map[string]any
 	call := func(name string, args map[string]any) (string, bool) {
 		t.Helper()
 		head, _ := post("", []byte(initializeBody))
@@ -126,12 +128,18 @@ func TestWorkspaceThroughHTTPMCPAcrossFreshSessions(t *testing.T) {
 			t.Fatal("expected a fresh MCP session")
 		}
 		seen[sid] = true
+		if outputChecks == nil {
+			_, listed := post(sid, []byte(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`))
+			outputChecks = outputSchemasFromWire(t, listed["result"].(map[string]any)["tools"].([]any))
+		}
 		body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}})
 		_, reply := post(sid, body)
 		if e := reply["error"]; e != nil {
 			t.Fatalf("RPC error: %v", e)
 		}
 		result := reply["result"].(map[string]any)
+		outputChecks.check(t, name, result)
+		lastResult = result
 		isError, _ := result["isError"].(bool)
 		var text strings.Builder
 		for _, item := range result["content"].([]any) {
@@ -212,6 +220,7 @@ func TestWorkspaceThroughHTTPMCPAcrossFreshSessions(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(root, "hello.txt")); err != nil || string(b) != "workspace" {
 		t.Fatalf("actual file=%q %v", b, err)
 	}
+	checkOutputModes(t, call, func() map[string]any { return lastResult }, "alice/"+ag.DeviceID(), ref, root)
 	text, bad = call("wanctl_exec", map[string]any{"command": "printf wrong-device"})
 	if !bad {
 		t.Fatalf("missing routing silently used a device: %s", text)
@@ -290,12 +299,15 @@ func TestWorkspaceThroughHTTPMCPAcrossFreshSessions(t *testing.T) {
 			if _, err := io.WriteString(input, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"); err != nil {
 				t.Fatal(err)
 			}
+			listed := send([]byte(`{"jsonrpc":"2.0","id":99,"method":"tools/list"}`))
+			stdioOutputChecks := outputSchemasFromWire(t, listed["result"].(map[string]any)["tools"].([]any))
 			seq := 1
 			callStdio := func(name string, args map[string]any) string {
 				t.Helper()
 				seq++
 				body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": seq, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}})
 				d := send(body)["result"].(map[string]any)
+				stdioOutputChecks.check(t, name, d)
 				text := d["content"].([]any)[0].(map[string]any)["text"].(string)
 				if d["isError"] == true {
 					t.Fatalf("stdio %s: %s", name, text)
