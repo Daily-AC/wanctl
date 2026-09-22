@@ -1,23 +1,23 @@
 # 用 BFS 理解 wanctl 远程工作区
 
-这组文档面向想理解系统架构、同时参与产品判断的开发者。按广度优先顺序读：先认识整个系统，再理解各部分如何合作；不要求先学 Go、PTY 或网络协议细节。
+课程面向维护 wanctl 或接入 AI 宿主的开发者，沿用系统宏观架构、广度优先的阅读方式。课程目标见 [MISSION.md](MISSION.md)，原始资料见 [RESOURCES.md](RESOURCES.md)。
 
-## 要改变的体验
+正式阅读入口：[wanctl Docs 架构课程](https://wc.z10.dev/docs/remote-workspace-course/)。仓库内仍可按以下顺序阅读正文：
 
-AI 进入一台设备的项目后，后续命令和文件操作持续落在这个远端工作区。网络断开时显示远端不可用，显式退出后才结束这次远端工作。宿主能否把它自己的本地工具一并切换，是另一个集成边界。
+1. [全景：一次远程修改，谁负责哪一段](01-system-map.md)
+2. [边界：接上 MCP，哪些工具会去远端](02-integration-boundaries.md)
+3. [状态：断掉一条连接，会丢掉什么](03-state-and-lifetime.md)
+4. [流程：每一步要把什么交给下一步](04-workflows.md)
+5. [故障与权限：结果不明时，先做什么](05-failures-and-authority.md)
+6. [交付：什么证据才说明这套架构可用](06-delivery-and-evidence.md)
+7. [接入：CLI、MCP 与 OAuth 各保存什么](07-cli-mcp-oauth.md)
 
-## 阅读顺序
+每篇包含一个学习目标、架构图、具体判断和可跳过的自检。自检只给即时反馈，不记录个人成绩。另有 [术语速查](reference/terms.md) 和 [架构卡片](reference/architecture-card.md)。开发过程与历史验收仍保存在 docs/plans，课程正文不再承担发布流水账。
 
-1. [全景：系统里有谁，各自负责什么](01-system-map.md)
-2. [边界：MCP 能完成哪一段体验](02-integration-boundaries.md)
-3. [状态：身份、工作区、连接和任务](03-state-and-lifetime.md)
-4. [流程：进入、干活、查看、退出](04-workflows.md)
-5. [故障与权限：断网时为什么不能猜](05-failures-and-authority.md)
-6. [从架构到交付：怎样判断第一版可用](06-delivery-and-evidence.md)
-7. [接入层：CLI、MCP 与 OAuth 怎样配合](07-cli-mcp-oauth.md)
+生成 Docs 和可独立打开、打印的教学 HTML：
 
-每一篇只展开系统中的一层。读完第一篇，就能解释总体方案；读完后续篇章，能够判断为什么需要这些组件、少一个会发生什么。
+```sh
+uv run tools/docsite/build.py --course-export docs/learning/remote-workspace
+```
 
-## 文档与代码的关系
-
-以下区分始终适用：目标体验是产品方向；设计是打算建立的契约；实现和验证以第六篇的交付记录为准。架构图里的能力不等于已上线。
+生成的 lessons/*.html、reference/*.html 和 assets/site/ 不进版本控制。正文、课程清单与共享组件是维护入口。

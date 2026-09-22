@@ -13,3 +13,7 @@
 site/_shell-*.html
 # 文档站是构建产物：tools/docsite/build.py 从 docs/*.md 生成，别提交。
 /site/docs/
+# Teach HTML exports are generated from the course Markdown and shared assets.
+/docs/learning/remote-workspace/lessons/
+/docs/learning/remote-workspace/reference/*.html
+/docs/learning/remote-workspace/assets/site/

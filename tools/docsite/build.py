@@ -8,18 +8,21 @@ The markdown in `docs/` is the only source. Nothing here forks an article's
 text; if a body has to change to render well, the change goes into the markdown
 and every other consumer (the portal, GitHub) gets it too.
 
-Two sets go in:
+Three sets go in:
 
-  * `docs/portal/*.md` — six user guides written in Chinese, grouped and
+  * `docs/portal/*.md` — user guides written in Chinese, grouped and
     ordered by `docs/portal/manifest.json`. Their bodies are
     deployment-neutral: they say `relay.example.com` / `portal.example.com`,
     and this script substitutes the real origins the same way
     `scripts/sync-portal-docs.py` does. A body that still contains a
     placeholder afterwards aborts the build, so a half-configured run cannot
     publish `example.com` to a live site.
-  * `docs/*.md` — seven technical documents written in English. Their titles
+  * `docs/*.md` — technical documents written in English. Their titles
     come from their own H1, which is then removed from the body: the template
     renders the title, so leaving it in would print it twice.
+  * `docs/learning/remote-workspace/` — Chinese architecture lessons and
+    references, ordered by course.json. --course-export also produces HTML
+    lessons with relative links and local assets for offline reading.
 
 Every article is a **pair**. Next to each source file sits its translation,
 same stem with a language suffix before `.md`:
@@ -50,8 +53,8 @@ slugify to the same id, the translation's copy is suffixed and the source
 language keeps the canonical anchor.
 
 A missing translation is not fatal: the source body is rendered in both modes
-with a one-line note in the other language. Nothing relies on that path today —
-all thirteen articles are translated.
+with a one-line note in the other language. The architecture course currently
+uses this fallback; its English navigation does not imply translated lessons.
 
 **The parity check** is what keeps a pair from drifting. Before rendering, the
 two bodies are compared and any mismatch fails the build:
@@ -68,12 +71,14 @@ Editing an article therefore means editing both halves. That is the point: a
 translation that silently drops a command is worse than no translation.
 
     uv run tools/docsite/build.py [--out DIR]
-        [--relay-origin https://…] [--portal-origin https://…]
+        [--relay-origin https://…] [--portal-origin https://…] [--course-export DIR]
 """
 
 import argparse
+import hashlib
 import html
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -87,6 +92,7 @@ from markdown.treeprocessors import Treeprocessor
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 DOCS = ROOT / "docs"
 PORTAL = DOCS / "portal"
+COURSE = DOCS / "learning" / "remote-workspace"
 
 DEFAULT_RELAY = "https://wanctl-relay.z10.dev"
 DEFAULT_PORTAL = "https://wanctl.z10.dev"
@@ -98,6 +104,7 @@ PORTAL_GROUPS_EN = {
     "quickstart": "Quickstart",
     "control": "Control devices",
     "ai": "AI access",
+    "learning": "Architecture course",
     "advanced": "Approvals & advanced",
 }
 
@@ -354,6 +361,17 @@ def load(relay_origin, portal_origin, errors):
             assemble(a["slug"], src, "zh", a["title"], read_body(src, origins))
         )
 
+    course = json.loads((COURSE / "course.json").read_text(encoding="utf-8"))
+    for kind in ("lessons", "references"):
+        for entry in course[kind]:
+            src = COURSE / entry["source"]
+            title, body = take_h1(src, read_body(src, origins))
+            article = assemble(entry["slug"], src, "zh", title, body)
+            if article["only"]:
+                article["titles"]["en"] = entry["en"]
+            article["course_export"] = ("lessons" if kind == "lessons" else "reference") + "/" + entry["html"]
+            by_slug[course["group"]]["articles"].append(article)
+
     for g in TECH_GROUPS:
         group = {"id": g["id"], "en": g["en"], "zh": g["zh"], "articles": []}
         groups.append(group)
@@ -538,7 +556,7 @@ def render(article):
 MD_LINK = re.compile(r'href="([^"]*)"')
 
 
-def resolve_links(article, lang, slugs, ids, errors):
+def resolve_links(article, lang, slugs, ids, errors, source_slugs=None):
     """Point every internal link at its page on this site, and prove it resolves.
 
     A link that cannot be resolved is a build failure, not a 404 discovered by a
@@ -554,7 +572,9 @@ def resolve_links(article, lang, slugs, ids, errors):
         href = m.group(1)
         target = href
 
-        if href.startswith(("http://", "https://", "mailto:")):
+        if href.startswith(SITE + BASE + "/"):
+            href = href[len(SITE):]
+        elif href.startswith(("http://", "https://", "mailto:")):
             return m.group(0)
 
         # The portal's own in-app link shape, `#docs/<slug>`. On this site that
@@ -574,7 +594,8 @@ def resolve_links(article, lang, slugs, ids, errors):
 
         elif ".md" in href:
             path, _, frag = href.partition("#")
-            stem = pathlib.PurePosixPath(path).stem
+            source = (article["src"].parent / urllib.parse.unquote(path)).resolve()
+            stem = (source_slugs or {}).get(source, pathlib.PurePosixPath(path).stem)
             if stem not in slugs:
                 errors.append("%s: link to %s, which is not on the docs site" % (here, path))
                 return m.group(0)
@@ -854,7 +875,67 @@ def article_page(groups, group, article, prev, nxt):
         "</div>",
         FOOT,
     ]
-    return "\n".join(p for p in body if p)
+    page = "\n".join(p for p in body if p)
+    if group["id"] == "learning":
+        for name in ("course.css", "course.js"):
+            digest = hashlib.sha256((COURSE / "assets" / name).read_bytes()).hexdigest()[:12]
+            url = "%s/_course/%s?v=%s" % (BASE, name, digest)
+            if name.endswith(".css"):
+                page = page.replace("</head>", '<link rel="stylesheet" href="%s">\n</head>' % url, 1)
+            else:
+                before, closing, after = page.rpartition("</body>")
+                page = before + '<script src="%s"></script>\n' % url + closing + after
+    return page
+
+
+def export_course(destination, pages, articles):
+    """Produce Teach's standalone HTML lessons from the same authored Markdown.
+
+    Shared site styles/fonts are copied only into the generated export, never
+    maintained as a second source. Do not delete the teaching workspace: it
+    also holds the mission, resources, authoring files and optional reader work.
+    """
+    destination = pathlib.Path(destination)
+    exports = {a["slug"]: a["course_export"] for a in articles if "course_export" in a}
+    assets = destination / "assets"
+    assets.mkdir(parents=True, exist_ok=True)
+    for name in ("course.css", "course.js"):
+        target = assets / name
+        source = COURSE / "assets" / name
+        if target.resolve() != source.resolve():
+            shutil.copy2(source, target)
+    shared = assets / "site"
+    shared.mkdir(exist_ok=True)
+    for name in ("app.css", "docs.css", "docs.js", "mark.svg"):
+        shutil.copy2(ROOT / "site" / "assets" / name, shared / name)
+    shutil.copytree(ROOT / "site" / "assets" / "fonts", shared / "fonts", dirs_exist_ok=True)
+    for slug, relative in exports.items():
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        def local_link(match):
+            attr, url = match.groups()
+            path, sep, query = url.partition("?")
+            if path.startswith("/assets/"):
+                mapped = assets / "site" / path[len("/assets/"):]
+            elif path.startswith(BASE + "/_course/"):
+                mapped = assets / path.rsplit("/", 1)[-1]
+            elif path.startswith(BASE + "/"):
+                route, anchor_sep, anchor = path.partition("#")
+                other = route[len(BASE) + 1:].strip("/")
+                if other not in exports:
+                    return '%s="%s%s"' % (attr, SITE, url)
+                mapped = destination / exports[other]
+                local = os.path.relpath(mapped, target.parent)
+                return '%s="%s%s"' % (attr, local, anchor_sep + anchor if anchor_sep else "")
+            elif path.startswith("/"):
+                return '%s="%s%s"' % (attr, SITE, url)
+            else:
+                return match.group(0)
+            return '%s="%s%s"' % (attr, os.path.relpath(mapped, target.parent), sep + query if sep else "")
+
+        page = re.sub(r'(href|src)="([^"]+)"', local_link, pages[slug])
+        target.write_text(page, encoding="utf-8")
 
 
 def index_page(groups):
@@ -909,6 +990,7 @@ def main():
                     help="substituted for relay.example.com (default: %s)" % DEFAULT_RELAY)
     ap.add_argument("--portal-origin", default=DEFAULT_PORTAL,
                     help="substituted for portal.example.com (default: %s)" % DEFAULT_PORTAL)
+    ap.add_argument("--course-export", help="also export standalone Teach lesson/reference HTML and shared assets into this directory")
     args = ap.parse_args()
 
     parity = []
@@ -927,11 +1009,12 @@ def main():
     for a in articles:
         render(a)
     ids = {a["slug"]: a["ids"] for a in articles}
+    source_slugs = {a["src"].resolve(): a["slug"] for a in articles}
 
     errors = []
     for a in articles:
         for l in LANGS:
-            resolve_links(a, l, slugs, ids, errors)
+            resolve_links(a, l, slugs, ids, errors, source_slugs)
     if errors:
         print("broken links:", file=sys.stderr)
         for e in errors:
@@ -958,7 +1041,9 @@ def main():
     out.mkdir(parents=True)
 
     (out / "index.html").write_text(index_page(groups), encoding="utf-8")
+    shutil.copytree(COURSE / "assets", out / "_course", ignore=shutil.ignore_patterns("site"))
     n = 0
+    pages = {}
     for g in groups:
         for a in g["articles"]:
             i = articles.index(a)
@@ -966,10 +1051,13 @@ def main():
             nxt = articles[i + 1] if i + 1 < len(articles) else None
             d = out / a["slug"]
             d.mkdir()
-            d.joinpath("index.html").write_text(
-                article_page(groups, g, a, prev, nxt), encoding="utf-8"
-            )
+            page = article_page(groups, g, a, prev, nxt)
+            pages[a["slug"]] = page
+            d.joinpath("index.html").write_text(page, encoding="utf-8")
             n += 1
+
+    if args.course_export:
+        export_course(args.course_export, pages, articles)
 
     print("%s: index + %d articles × 2 bodies, parity ok, %d links checked, 0 broken"
           % (out.relative_to(ROOT) if out.is_relative_to(ROOT) else out, n,
