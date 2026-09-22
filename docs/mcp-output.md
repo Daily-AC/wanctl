@@ -43,6 +43,10 @@ same bounded display text. A reported `spill_path` is on the device and exists
 only when the device reports a copy. The schema does not promise a full log
 when no such copy exists.
 
+Devices can report `spill_bytes` even for short output that needed no copy.
+Only `spill_path` identifies an actual reported copy; a zero `spill_kept`
+without a path does not by itself imply output was lost.
+
 Ordinary device shell execution merges stdout and stderr into the stdout
 channel. Separate stderr metadata describes only separate frames actually
 received; an empty stderr field does not mean the command produced no errors.
