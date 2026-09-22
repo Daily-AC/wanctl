@@ -63,9 +63,13 @@ displayed the suspicious-instructions warning. Its explanation was:
 
 > 向控制器信任存储写入一个设备指纹，以确认目标设备的首次联系身份。
 
-The corrected request was left pending owner approval, as required by the
-chosen permission mode. Removing the warning is verified; it does not by
-itself claim that a trust write or the full development task has completed.
+The corrected request was initially left pending owner approval. The owner
+then explicitly authorized the single target/fingerprint pair. After the
+displayed tool arguments were checked, **Allow once** was selected. The raw
+tool result returned `confirmed device identity` with the exact authorized
+values. That verifies the real trust write, not just removal of a warning.
+The permission mode remains ask-before-writes; no conversation-wide or global
+approval was selected. The full development task remains a separate acceptance.
 
 Local evidence and the final browser comparison are retained under
 `artifacts/trust-diagnosis-20260922/`. The broader remote-workspace development
