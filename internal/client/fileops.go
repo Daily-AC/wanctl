@@ -14,17 +14,19 @@ import (
 
 // ReadRequest asks a device for a line range of one text file.
 type ReadRequest struct {
-	Target string
-	Path   string // absolute on the device
-	Offset int    // 1-based first line; 0 means line 1
-	Limit  int    // max lines; 0 means protocol.DefaultReadLines
+	WorkspaceID string
+	Target      string
+	Path        string // absolute, or relative to WorkspaceID on the device
+	Offset      int    // 1-based first line; 0 means line 1
+	Limit       int    // max lines; 0 means protocol.DefaultReadLines
 }
 
 // EditRequest asks a device to replace text inside one file. It takes either a
 // single Old/New pair or a batch of Edits, never both.
 type EditRequest struct {
+	WorkspaceID string
 	Target      string
-	Path        string // absolute on the device
+	Path        string // absolute, or relative to WorkspaceID on the device
 	Old         string // non-empty, unless Edits is used instead
 	New         string // may be empty, which deletes Old
 	All         bool   // replace every occurrence instead of refusing on more than one
@@ -37,9 +39,10 @@ type EditRequest struct {
 
 // WriteRequest asks a device to create or completely replace one text file.
 type WriteRequest struct {
-	Target  string
-	Path    string // absolute on the device; missing parent directories are created
-	Content string // the whole new text of the file, UTF-8
+	WorkspaceID string
+	Target      string
+	Path        string // absolute, or relative to WorkspaceID on the device; missing parent directories are created
+	Content     string // the whole new text of the file, UTF-8
 }
 
 // WriteResult is what a device reports after a write.
@@ -93,6 +96,8 @@ func (e *UnsupportedError) Error() string {
 // kind they never chose.
 func unsupportedWhat(kind string) string {
 	switch kind {
+	case protocol.KindWorkspace:
+		return "workspaces"
 	case protocol.KindFileWrite:
 		return "write"
 	default:
@@ -142,10 +147,11 @@ func (e *ResultLostError) Error() string {
 // ReadFile returns a line range of a file on the target device.
 func (c *Client) ReadFile(ctx context.Context, req ReadRequest) (*ReadResult, error) {
 	res, err := c.fileOp(ctx, req.Target, protocol.Message{
-		Kind:   protocol.KindFileRead,
-		Path:   req.Path,
-		Offset: int64(req.Offset),
-		Limit:  req.Limit,
+		WorkspaceID: req.WorkspaceID,
+		Kind:        protocol.KindFileRead,
+		Path:        req.Path,
+		Offset:      int64(req.Offset),
+		Limit:       req.Limit,
 	})
 	if err != nil {
 		return nil, err
@@ -174,6 +180,7 @@ func (c *Client) EditFile(ctx context.Context, req EditRequest) (*EditResult, er
 	}
 	res, err := c.fileOp(ctx, req.Target, protocol.Message{
 		Kind:        protocol.KindFileEdit,
+		WorkspaceID: req.WorkspaceID,
 		Path:        req.Path,
 		Old:         req.Old,
 		New:         req.New,
@@ -193,9 +200,10 @@ func (c *Client) EditFile(ctx context.Context, req EditRequest) (*EditResult, er
 // and for anything else edit the part that changes.
 func (c *Client) WriteFile(ctx context.Context, req WriteRequest) (*WriteResult, error) {
 	res, err := c.fileOp(ctx, req.Target, protocol.Message{
-		Kind:    protocol.KindFileWrite,
-		Path:    req.Path,
-		Content: req.Content,
+		WorkspaceID: req.WorkspaceID,
+		Kind:        protocol.KindFileWrite,
+		Path:        req.Path,
+		Content:     req.Content,
 	})
 	if err != nil {
 		return nil, err
@@ -206,17 +214,36 @@ func (c *Client) WriteFile(ctx context.Context, req WriteRequest) (*WriteResult,
 // fileOp dials the target, sends one file_read/file_edit request and returns the
 // device's result.
 func (c *Client) fileOp(ctx context.Context, target string, req protocol.Message) (*protocol.FileResult, error) {
-	if !strings.HasPrefix(req.Path, "/") && !hasWindowsDrive(req.Path) {
+	if req.WorkspaceID == "" && !strings.HasPrefix(req.Path, "/") && !hasWindowsDrive(req.Path) {
 		return nil, fmt.Errorf("path %q must be absolute on the device (~ is not expanded)", req.Path)
 	}
-	conn, err := c.connect(ctx, target)
-	if err != nil {
-		return nil, err
+	var res *protocol.FileResult
+	var err error
+	if req.WorkspaceID != "" && c.workspaceLink != nil {
+		req.Kind, req.Action = protocol.KindWorkspace, req.Kind
+		var reply protocol.Message
+		reply, err = c.workspaceRoundTrip(ctx, WorkspaceRef{Target: target, ID: req.WorkspaceID}, req)
+		if err == nil {
+			res, err = fileReply(req, reply)
+		} else {
+			var lost *workspaceExchangeError
+			if errors.As(err, &lost) {
+				err = &ResultLostError{Kind: req.Action, Path: req.Path, Cause: err}
+			}
+		}
+	} else {
+		conn, e := c.connect(ctx, target)
+		if e != nil {
+			return nil, e
+		}
+		defer conn.Close()
+		defer wsconn.CloseOnCancel(ctx, conn)()
+		if req.WorkspaceID != "" {
+			req.Kind, req.Action = protocol.KindWorkspace, req.Kind
+		}
+		res, err = fileOpOver(conn, req)
 	}
-	defer conn.Close()
-	defer wsconn.CloseOnCancel(ctx, conn)()
 
-	res, err := fileOpOver(conn, req)
 	var lost *ResultLostError
 	if errors.As(err, &lost) {
 		lost.Target = target
@@ -250,8 +277,16 @@ func fileOpOver(rw io.ReadWriter, req protocol.Message) (*protocol.FileResult, e
 		// the fix it names is useless and the claim it makes is false. Only an
 		// explicit `unknown request` reply proves the device did not run this,
 		// and every other ending is an unknown result carrying its own cause.
-		return nil, &ResultLostError{Kind: req.Kind, Path: req.Path, Cause: err}
+		kind := req.Kind
+		if kind == protocol.KindWorkspace {
+			kind = req.Action
+		}
+		return nil, &ResultLostError{Kind: kind, Path: req.Path, Cause: err}
 	}
+	return fileReply(req, reply)
+}
+
+func fileReply(req, reply protocol.Message) (*protocol.FileResult, error) {
 	switch reply.Kind {
 	case protocol.KindFileResult:
 		if reply.File == nil {

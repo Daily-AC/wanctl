@@ -190,6 +190,11 @@ func (s *ShellSession) releaseContainer() {
 
 // NewShellSession starts a persistent shell process.
 func NewShellSession(shell string) (*ShellSession, error) {
+	return NewShellSessionInDir(shell, "")
+}
+
+// NewShellSessionInDir starts in a directory without submitting shell source.
+func NewShellSessionInDir(shell, cwd string) (*ShellSession, error) {
 	if shell == "" {
 		shell = DefaultShell()
 	}
@@ -206,6 +211,7 @@ func NewShellSession(shell string) (*ShellSession, error) {
 		cmd = exec.Command(shell, "-s")
 	}
 	hideConsole(cmd)
+	cmd.Dir = cwd
 	prepareSessionContainer(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

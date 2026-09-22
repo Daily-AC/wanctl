@@ -159,6 +159,11 @@ try {
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
   Move-Item -Force $binaryPath $dest
   Write-Host "verified and installed: $dest"
+  Write-Host 'Next steps (installation does not start a device agent):'
+  Write-Host '  wanctl login   Sign in to control your authorized devices; then run wanctl peers.'
+  Write-Host '  wanctl start   Bring this device online for remote control (signs in if needed).'
+  Write-Host '  wanctl service install   Manage the device agent as a service and start it at login.'
+  Write-Host '  wanctl help    List all commands; wanctl help <command> shows details.'
 } finally {
   Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
 }

@@ -172,6 +172,8 @@ func main() {
 		err = cmdAgent(ctx, os.Args[2:])
 	case "exec":
 		err = cmdExec(ctx, os.Args[2:])
+	case "workspace":
+		err = cmdWorkspace(ctx, os.Args[2:])
 	case "screenshot":
 		err = cmdScreenshot(ctx, os.Args[2:])
 	case "push":
@@ -255,7 +257,7 @@ func main() {
 var relayCommands = map[string]bool{
 	"start": true, "login": true,
 	"exec": true, "screenshot": true, "push": true, "pull": true,
-	"read": true, "edit": true, "write": true,
+	"read": true, "edit": true, "write": true, "workspace": true,
 	"peers": true, "pair": true, "friends": true, "share": true,
 	"docs": true, "admin": true,
 }
@@ -624,14 +626,16 @@ func lockHeldMessage(recordedPID, self int) string {
 }
 
 func cmdExec(ctx context.Context, args []string) error {
-	// Ctrl-C is handled here rather than left to the default disposition: the
-	// device has to be told to kill the command, which the client does when
-	// this context is cancelled. The process still ends with the shell's
-	// conventional 128+SIGINT below, so callers see no change in exit code.
+	// Legacy exec forwards Ctrl-C to the device. Workspace exec only stops
+	// waiting: its device-owned request can be polled or explicitly cancelled.
+	// Both controller paths use the shell's conventional 128+SIGINT exit code.
 	ctx, stopSignals := signal.NotifyContext(ctx, os.Interrupt)
 	defer stopSignals()
 	fs := withHelp(flag.NewFlagSet("exec", flag.ExitOnError))
 	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
+	workspace := workspaceFlag(fs)
+	requestID := fs.String("request-id", "", "workspace command ID; reuse unchanged after an uncertain result")
+	async := fs.Bool("async", false, "workspace only: return JSON immediately; collect with workspace poll")
 	oneShot := fs.Bool("oneshot", false, "fresh shell, no session state")
 	cwd := fs.String("cwd", "", "working directory on the device (also the policy scope)")
 	scriptPath := fs.String("script", "", "run a local script file on the device instead of a command string;\n"+
@@ -651,10 +655,17 @@ func cmdExec(ctx context.Context, args []string) error {
 		*elevateFlag = true
 	}
 	commandArgs := fs.Args()
+	ref, routeErr := workspaceRoute(*target, *workspace)
+	if routeErr != nil {
+		return routeErr
+	}
+	if ref.ID == "" && (*requestID != "" || *async) {
+		return fmt.Errorf("--request-id and --async require a workspace")
+	}
 
 	var c *client.Client
 	var err error
-	if *target == "" && len(commandArgs) > 0 {
+	if ref.ID == "" && *target == "" && len(commandArgs) > 0 {
 		c, err = client.New()
 		if err != nil {
 			return err
@@ -671,12 +682,14 @@ func cmdExec(ctx context.Context, args []string) error {
 		if command != "" {
 			return fmt.Errorf("give either -script or a command, not both")
 		}
-		var err error
-		if command, err = buildScriptCommand(*scriptPath, *interp); err != nil {
-			return err
+		if ref.ID == "" {
+			var err error
+			if command, err = buildScriptCommand(*scriptPath, *interp); err != nil {
+				return err
+			}
 		}
 	}
-	if command == "" {
+	if command == "" && *scriptPath == "" {
 		return fmt.Errorf("no command given (pass a command string, or -script <file>)")
 	}
 	// The command is source for the device's shell, so it gets parsed there
@@ -696,6 +709,20 @@ func cmdExec(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
+	}
+	if ref.ID != "" {
+		code, err := execWorkspace(ctx, c, ref, protocol.Message{
+			Command: command, RequestID: *requestID, Cwd: *cwd,
+			OneShot: *oneShot, Elevate: *elevateFlag, Via: *via,
+		}, *scriptPath, *interp, *async, os.Stdout, os.Stderr)
+		if ctx.Err() != nil {
+			fmt.Fprintln(os.Stderr, "wanctl: stopped waiting; the remote command may still be running. Use workspace poll with the request_id above, or workspace cancel to stop it")
+			os.Exit(130)
+		}
+		if err != nil {
+			return err
+		}
+		os.Exit(code)
 	}
 	code, err := c.Exec(ctx, client.ExecRequest{
 		Target: *target, Command: command, OneShot: *oneShot, Cwd: *cwd,
@@ -888,6 +915,7 @@ func cmdPull(ctx context.Context, args []string) error {
 func cmdRead(ctx context.Context, args []string) error {
 	fs := withHelp(flag.NewFlagSet("read", flag.ExitOnError))
 	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
+	workspace := workspaceFlag(fs)
 	offset := fs.Int("offset", 0, "1-based line number to start at (default 1)")
 	limit := fs.Int("limit", 0, "maximum number of lines to return (default 2000)")
 	rest := parseAroundPositionals(fs, args)
@@ -895,12 +923,16 @@ func cmdRead(ctx context.Context, args []string) error {
 		return fmt.Errorf("usage: wanctl read [--target NS/DEV] <path> [--offset N] [--limit N]")
 	}
 	path := rest[0]
+	ref, err := workspaceRoute(*target, *workspace)
+	if err != nil {
+		return err
+	}
 	c, err := client.New()
 	if err != nil {
 		return err
 	}
 	res, err := c.ReadFile(ctx, client.ReadRequest{
-		Target: *target, Path: path, Offset: *offset, Limit: *limit,
+		Target: ref.Target, WorkspaceID: ref.ID, Path: path, Offset: *offset, Limit: *limit,
 	})
 	if err != nil {
 		return err
@@ -931,6 +963,7 @@ func cmdRead(ctx context.Context, args []string) error {
 func cmdEdit(ctx context.Context, args []string) error {
 	fs := withHelp(flag.NewFlagSet("edit", flag.ExitOnError))
 	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
+	workspace := workspaceFlag(fs)
 	old := fs.String("old", "", "the exact text to find; must match once unless -all")
 	oldFile := fs.String("old-file", "", "read the text to find from this local file instead of -old")
 	newText := fs.String("new", "", "the text to put in its place (empty deletes)")
@@ -949,12 +982,16 @@ func cmdEdit(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	ref, err := workspaceRoute(*target, *workspace)
+	if err != nil {
+		return err
+	}
 	c, err := client.New()
 	if err != nil {
 		return err
 	}
 	res, err := c.EditFile(ctx, client.EditRequest{
-		Target: *target, Path: rest[0],
+		Target: ref.Target, WorkspaceID: ref.ID, Path: rest[0],
 		Old: oldText, New: replacement, All: *all, ExpectedSHA: *sha,
 	})
 	if err != nil {
@@ -970,6 +1007,7 @@ func cmdEdit(ctx context.Context, args []string) error {
 func cmdWrite(ctx context.Context, args []string) error {
 	fs := withHelp(flag.NewFlagSet("write", flag.ExitOnError))
 	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
+	workspace := workspaceFlag(fs)
 	content := fs.String("content", "", "the whole new text of the file")
 	contentFile := fs.String("content-file", "", "read the content from this local file instead of -content")
 	rest := parseAroundPositionals(fs, args)
@@ -980,11 +1018,15 @@ func cmdWrite(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	ref, err := workspaceRoute(*target, *workspace)
+	if err != nil {
+		return err
+	}
 	c, err := client.New()
 	if err != nil {
 		return err
 	}
-	res, err := c.WriteFile(ctx, client.WriteRequest{Target: *target, Path: rest[0], Content: text})
+	res, err := c.WriteFile(ctx, client.WriteRequest{Target: ref.Target, WorkspaceID: ref.ID, Path: rest[0], Content: text})
 	if err != nil {
 		return err
 	}
