@@ -56,6 +56,17 @@ The candidate binary is deployed only to the isolated preview MCP service.
 The browser connector must refresh its tool definitions before retesting;
 server deployment alone does not update ChatGPT's cached description.
 
+After deployment, the connector was refreshed and its displayed descriptor was
+checked against the new source. A new chat submitted the same target and
+fingerprint under the same ask-before-writes mode. The approval card no longer
+displayed the suspicious-instructions warning. Its explanation was:
+
+> 向控制器信任存储写入一个设备指纹，以确认目标设备的首次联系身份。
+
+The corrected request was left pending owner approval, as required by the
+chosen permission mode. Removing the warning is verified; it does not by
+itself claim that a trust write or the full development task has completed.
+
 Local evidence and the final browser comparison are retained under
 `artifacts/trust-diagnosis-20260922/`. The broader remote-workspace development
 acceptance remains separate from a successful approval-card diagnosis.
