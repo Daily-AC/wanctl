@@ -1,6 +1,6 @@
 # Connect an AI over MCP
 
-MCP is how an AI calls wanctl directly — no skill to read, no command line to assemble. `wanctl_peers`, `wanctl_exec` and the rest simply appear in its tool list. The same 17 tools arrive two ways, and only one thing decides which: **can that AI start a `wanctl` process on its own machine?**
+MCP is how an AI calls wanctl directly — no skill to read, no command line to assemble. `wanctl_peers`, `wanctl_exec` and the rest simply appear in its tool list. These tools arrive two ways, and only one thing decides which: **can that AI start a `wanctl` process on its own machine?**
 
 | | Use | Typically |
 | --- | --- | --- |
@@ -39,7 +39,7 @@ Any other host takes the same URL in its "MCP server / HTTP" field. It needs no 
 
 ## Web AI that keeps no session (ChatGPT, claude.ai)
 
-A web AI like ChatGPT or claude.ai opens a brand-new MCP session for every single tool call. The per-session login below cannot survive that: the call right after a successful login reports LOGIN REQUIRED. There is a second path for them.
+A web AI like ChatGPT or claude.ai may recreate its MCP session between tool calls. The per-session login below cannot survive that: the call right after a successful login reports LOGIN REQUIRED. There is a second path for them.
 
 In its custom connector, give it the same endpoint URL and set authentication to **OAuth** (not "no authentication"); it works out the rest of the discovery itself. On save it sends you to the portal: you sign in with GitHub as usual, the page names the client that is asking and the host your authorization will be delivered to, and you click **Allow**. No code to copy, nothing to paste back.
 
@@ -47,7 +47,7 @@ The authorization belongs to the connector rather than to a session, so every ne
 
 > This path needs the operator to have given the relay a database, `WANCTL_PUBLIC_ORIGIN` and `WANCTL_PORTAL`, all three. Without any one of them the endpoint keeps only the session login below, and an AI's connector finds no authorization server to discover.
 
-## Logging in the first time
+## Without OAuth: logging in the first time
 
 Tell the AI to log in to wanctl. It calls `wanctl_login`, and you follow it:
 
@@ -61,15 +61,23 @@ The first time it then reaches a device, that device's **Waiting** page raises a
 
 ## When the session drops
 
-A hosted login lives only in the relay's memory. Restart the relay, or reset the connection, and the AI gets `LOGIN REQUIRED`.
+The code-based session login above lives only in relay memory; OAuth connectors do not depend on it. Restart the relay, or reset the connection, and the AI gets `LOGIN REQUIRED`.
 
 A successful login also handed the AI a **rebind credential** starting with `wrb1.`, good for seven days. It keeps that itself and uses it to recover on the spot, without sending you back to the browser. Losing it costs nothing — the three steps above work again.
 
 ## What it can and cannot touch
 
-- **The token never lands on disk.** A hosted session's credential lives in the relay's memory and is written nowhere.
+- **Identity follows the connection mode.** Code-based credentials live in relay session memory; OAuth uses persistent, revocable authorization.
 - **File transfer is upload-only.** `wanctl_push` and `wanctl_pull` are off on the hosted endpoint — that "local path" would be a path on the server, not yours. Send files to a device with `wanctl_push_blob`.
 - **Rotating the seed logs everyone out.** If the operator changes the relay's MCP seed, every session and every rebind credential dies immediately.
 - **Say so when you are done.** Ask the AI to call `wanctl_logout`; that session's credential and its rebind credential expire together. Withdrawing a device's trust is done on that device's page.
 
-> The first time a hosted session reaches a device it gets a device-identity confirmation. It answers that one itself, calling `wanctl_trust_server` to record the fingerprint it just saw, and retries — you are not asked. What does reach you is the alarm afterwards: if that device's fingerprint ever changes, the connection fails closed and the AI reports both the recorded and the presented fingerprint and stops, instead of recording the new one. If the device really was reinstalled, unbind it once in the portal: that drops the recorded fingerprint, and the next call starts over at first contact. (The operator turns this on with the opt-in on the relay — see "Enable the hosted MCP endpoint" in the self-hosting guide. Without it the session stays blocked on first contact and that AI has to move to the local stdio setup.)
+## v0.12.0: persistent remote workspaces
+
+Call `wanctl_workspace` with `action=enter`, a target device and an absolute project root. Pass the returned `workspace` reference to subsequent read, write, edit, exec and poll calls. The device retains the shell directory, environment and request results. Each chat keeps its own reference; OAuth preserves identity, not a shared current directory.
+
+When a local host dedicates one MCP process to one conversation, `wanctl mcp --workspace-session` can bind that process automatically. The CLI uses `wanctl workspace enter`, then `--workspace` or that terminal's `WANCTL_WORKSPACE`. CLI and stdio MCP can continue each other's workspace when using the same local controller identity; hosted OAuth has a separate identity.
+
+After a disconnect, query the original request ID instead of repeating an uncertain operation with a new ID. Finish with `wanctl_workspace action=exit`. Workspaces do not survive an agent restart. Upgrade the controller, relay and device agent. See the [workspace guide](https://github.com/Daily-AC/wanctl/blob/main/docs/workspaces.md).
+
+> First-contact trust follows the host's approval flow. When the operator enables this capability, `wanctl_trust_server` can record an independently checked fingerprint. Continue under sufficient existing authorization; otherwise obtain the required confirmation. A changed fingerprint must stop the connection for investigation, never silently overwrite the old pin. Without the operator opt-in, use the local stdio trust flow.
