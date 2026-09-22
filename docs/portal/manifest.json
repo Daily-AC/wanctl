@@ -19,6 +19,11 @@
       "slug": "advanced",
       "title": "审批与高级",
       "position": 40
+    },
+    {
+      "slug": "learning",
+      "title": "架构课程",
+      "position": 35
     }
   ],
   "articles": [
@@ -70,6 +75,13 @@
       "group": "advanced",
       "position": 20,
       "file": "advanced__friends-and-invites.md"
+    },
+    {
+      "slug": "remote-workspace-course",
+      "title": "远程工作区架构课程",
+      "group": "learning",
+      "position": 10,
+      "file": "learning__remote-workspace.md"
     }
   ]
 }
