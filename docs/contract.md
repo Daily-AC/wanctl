@@ -65,7 +65,7 @@ DEV LOOP
 
 REFUSALS — none of these mean retry as-is:
   PAIRING REQUIRED: give the URL in the message to the user, then retry.
-  DEVICE IDENTITY CONFIRMATION REQUIRED: call wanctl_trust_server, retry.
+  DEVICE IDENTITY CONFIRMATION REQUIRED: authorize trust, then pin.
   DEVICE IDENTITY MISMATCH: refused, nothing sent; report both fingerprints.
   LOGIN REQUIRED: call wanctl_login; a saved rebind restores it instantly.
 ```
@@ -228,10 +228,11 @@ failing.
 Each entry is a stable device ID with its display label and whether this
 session has pinned that device's identity yet ('identity: pinned' / 'identity:
 unpinned'). Unpinned means first contact is still ahead of you: expect DEVICE
-IDENTITY CONFIRMATION REQUIRED on the first real call to it and answer that
-yourself with wanctl_trust_server. Structured content carries the same devices
-and aliases fields as before, plus an identity map keyed by the canonical
-namespace/device.
+IDENTITY CONFIRMATION REQUIRED on the first real call to it and resolve
+first-contact trust with wanctl_trust_server under the user's authorization
+and the host's approval requirements. Structured content carries the same
+devices and aliases fields as before, plus an identity map keyed by the
+canonical namespace/device.
 
 A device the user swears exists but that is missing here is not reachable by
 this token — it is offline, or in another namespace, or shared to you and
@@ -262,11 +263,11 @@ every other tool raises the same refusals on its own.
 Three answers, each with its own next move. '✓ already trusted' means go
 ahead. 'PAIRING REQUIRED' carries a URL valid for five minutes — relay it to
 the user VERBATIM, never paraphrased or shortened, wait for them to approve,
-then retry. 'DEVICE IDENTITY CONFIRMATION REQUIRED' is first contact and is
-yours to answer rather than the user's: call wanctl_trust_server with the
-target and fingerprint from that result, then call this again. Do not ask
-permission for that step; your MCP client's own approval prompt is the human
-checkpoint.
+then retry. 'DEVICE IDENTITY CONFIRMATION REQUIRED' is first contact:
+wanctl_trust_server records the target and fingerprint. This changes the
+controller's trust store. Honor the user's authorization and the host's
+approval requirements; compare any independently verified fingerprint the user
+supplied. Retry only after the pin succeeds.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
@@ -316,9 +317,9 @@ that shell and is parsed there, which is why a nested `powershell -Command
 If the device has not approved this controller yet, the result is isError=true
 with a 'PAIRING REQUIRED' message carrying a URL — surface that URL to the
 user VERBATIM, do not paraphrase it, and retry once they approve. 'DEVICE
-IDENTITY CONFIRMATION REQUIRED' is first contact instead: call
-wanctl_trust_server with the target and fingerprint it gives you and retry,
-without asking the user.
+IDENTITY CONFIRMATION REQUIRED' is first contact instead: resolve the pin with
+wanctl_trust_server under the user's authorization and the host's approval
+requirements, then retry after it succeeds.
 
 DEV LOOP — how these primitives fit together, because most work is a loop and
 not one call: wanctl_exec keeps a persistent shell per device, so cwd and
@@ -400,9 +401,10 @@ read it with wanctl_exec (sed/cut) instead; do not page on, because the same
 line would come back every time. Errors: 'not a UTF-8 text file' means the
 file is binary — use wanctl_pull or wanctl_exec instead, do not retry. Same
 pairing/policy rules as wanctl_exec: 'PAIRING REQUIRED' carries a URL to relay
-VERBATIM to the user, 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call
-wanctl_trust_server and retry, and 'read denied by device policy' means the
-device's owner has not granted read access to that path.
+VERBATIM to the user, 'DEVICE IDENTITY CONFIRMATION REQUIRED' means resolve
+first-contact trust with wanctl_trust_server under the user's authorization
+and the host's approval requirements, then retry, and 'read denied by device
+policy' means the device's owner has not granted read access to that path.
 
 Before working inside a project directory, read its AGENTS.md or CLAUDE.md
 with wanctl_read if one exists, and follow it: those are the project's own
@@ -894,9 +896,10 @@ List what this session has already decided to trust, which is how you tell
 first contact from a changed identity before acting on either. 'servers' (the
 default) is the devices whose identity this session has pinned: a target that
 is missing from that list will raise DEVICE IDENTITY CONFIRMATION REQUIRED on
-the next call and you answer it with wanctl_trust_server, while a target that
-IS in the list and raises DEVICE IDENTITY MISMATCH has changed under you and
-is a matter for the user, not for another tool call.
+the next call and an authorized wanctl_trust_server call can record
+first-contact trust, while a target that IS in the list and raises DEVICE
+IDENTITY MISMATCH has changed under you and is a matter for the user, not for
+another tool call.
 
 'clients' is the other direction — controllers this machine has allowed to
 drive it — and only means anything in stdio mode on a machine that is also
@@ -919,14 +922,16 @@ wanctl_trust{"which":"servers"}
 
 *Pin a device's identity for this controller*
 
-Pin what a device presented on first contact, so that a later change in its
-identity can be detected. Call it as soon as any tool returns DEVICE IDENTITY
-CONFIRMATION REQUIRED, passing the target and fingerprint copied VERBATIM out
-of that result, then retry the call that failed. Do not stop to ask the user
-to confirm the fingerprint first: your MCP client's own approval prompt is
-already the human checkpoint, and on first contact there is nothing to compare
-the fingerprint against anyway. This records what the device presented right
-now; that is its whole purpose, and it is a one-time step per device.
+Record an authorized first-contact device fingerprint in this controller's
+trust store so later identity changes can be detected. This is a
+security-relevant WRITE, not a read or a device permission grant. DEVICE
+IDENTITY CONFIRMATION REQUIRED supplies the target and presented fingerprint;
+copy them VERBATIM and compare any independently verified fingerprint supplied
+by the user. Honor the user's existing authorization and the host's approval
+requirements. If first-contact trust is not authorized, obtain confirmation
+before calling. The host may auto-review or deny a call instead of showing a
+confirmation prompt. Report denied approvals without bypassing them. After an
+authorized pin succeeds, retry the original operation.
 
 'DEVICE IDENTITY MISMATCH' is the opposite situation, and this tool is the
 wrong answer to it. There the device presented something other than what is
@@ -936,9 +941,10 @@ stop. Re-pinning is a decision a human makes at a terminal with `wanctl trust
 server --replace`.
 
 The handler refuses outright unless the operator has set
-WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1. The hosted endpoint sets it; a local
-stdio server usually does not, and there the way forward is to tell the user
-to run `wanctl trust server` themselves rather than to retry.
+WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1. Whether it is enabled depends on the
+deployment; a local stdio server usually does not enable it, and there the way
+forward is to tell the user to run `wanctl trust server` themselves rather
+than to retry.
 
 **On the command line.**
 
@@ -1222,8 +1228,9 @@ that class needs its own rule or an approval, unless the phone is BOTH in
 bypass mode and has its elevation channel switched on, in which case it is
 auto-approved like any other command. Same pairing and identity rules as
 wanctl_exec: 'PAIRING REQUIRED' carries a URL to relay VERBATIM to the user,
-and 'DEVICE IDENTITY CONFIRMATION REQUIRED' means call wanctl_trust_server
-with the target and fingerprint it gives you, then retry.
+and 'DEVICE IDENTITY CONFIRMATION REQUIRED' means resolve first-contact trust
+with wanctl_trust_server under the user's authorization and the host's
+approval requirements, then retry.
 
 **On the command line.**
 
