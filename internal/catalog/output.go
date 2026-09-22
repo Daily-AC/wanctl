@@ -17,8 +17,8 @@ func (c Command) MCPOutputSchema() map[string]any {
 			"stdout_truncated": outputField("boolean", "Whether stdout was shortened for this response."),
 			"stderr_truncated": outputField("boolean", "Whether stderr was shortened for this response."),
 			"spill_path":       outputField("string", "Device output-copy path, only when the device reported one. Not a local path."),
-			"spill_bytes":      outputCount("Total output bytes counted by a spill-aware device; absent when unknown."),
-			"spill_kept":       outputCount("Bytes kept in the device copy; a smaller value than spill_bytes means the copy is incomplete."),
+			"spill_bytes":      outputCount("Total output bytes counted by the device; absent when unknown. A positive count does not imply an output-copy file exists."),
+			"spill_kept":       outputCount("Bytes stored in spill_path, if present. Zero also occurs when no copy was needed or created; compare with spill_bytes only when a path was reported."),
 		}, "target", "done", "code", "stdout", "stderr", "stdout_truncated", "stderr_truncated"))
 	case "wanctl_exec_async":
 		return executionOutputSchema(objectOutput("Accepted background job outside a workspace. Poll to observe completion.", map[string]any{
