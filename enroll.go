@@ -96,8 +96,8 @@ func seedPortalAdmin(fp string) {
 // cmdLogin is the controller-side OAuth entrypoint: opens the portal, exchanges
 // the pasted code for a namespace token, and stores it locally — without
 // starting the device daemon. Used by AI controllers and humans who only need
-// to drive other devices from this machine. Bare `wanctl` (no args) is still
-// the device path (enroll → save → daemon).
+// to drive other devices from this machine. `wanctl start` enrolls and starts
+// the device daemon; bare `wanctl` only prints help.
 func cmdLogin(ctx context.Context, args []string) error {
 	fs := withHelp(flag.NewFlagSet("login", flag.ExitOnError))
 	code := fs.String("code", "", "exchange this enrollment code instead of prompting for one;\n"+
@@ -106,6 +106,7 @@ func cmdLogin(ctx context.Context, args []string) error {
 
 	if tok := os.Getenv("WANCTL_TOKEN"); tok != "" {
 		fmt.Println("已通过 WANCTL_TOKEN 环境变量提供凭证；如需重新授权，先 unset 该变量再运行 wanctl login。")
+		printLoginNextSteps()
 		return nil
 	}
 	if existing := config.StoredToken(); existing != "" {
@@ -129,8 +130,18 @@ func cmdLogin(ctx context.Context, args []string) error {
 	}
 	dir, _ := config.TokenPath()
 	fmt.Printf("✓ 凭证已保存到 %s\n", dir)
-	fmt.Println("现在可以用 wanctl peers / wanctl exec / wanctl push / wanctl pull 控制你授权的设备。")
+	printLoginNextSteps()
 	return nil
+}
+
+func printLoginNextSteps() {
+	fmt.Println("login 只保存登录凭证，不会启动本机的受控服务。")
+	fmt.Println("  控制其他设备：wanctl peers 查看设备，再用 wanctl exec / push / pull。")
+	fmt.Println("  让本机上线供远程控制：wanctl start。")
+	if runtime.GOOS != "android" {
+		fmt.Println("  让系统管理本机受控服务、登录后自动启动：wanctl service install。")
+	}
+	fmt.Println("  完整命令：wanctl help；查看某条命令：wanctl help <command>。")
 }
 
 // openBrowser best-effort opens url in the platform browser. Failure is fine —

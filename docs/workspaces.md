@@ -1,8 +1,7 @@
 # Remote workspaces over CLI and MCP
 
-This feature is implemented on `feat/remote-workspace-session`. It is not in
-the public release or the normal hosted `/mcp` endpoint. A separate temporary
-acceptance deployment is described in the [CLI/web trial](plans/2026-09-22-cli-web-acceptance.md).
+Available starting with v0.12.0. The separate temporary acceptance deployment
+is described in the [CLI/web trial](plans/2026-09-22-cli-web-acceptance.md).
 The [completed ChatGPT web trial](plans/2026-09-22-web-workspace-completion.md)
 records actual development, two-chat isolation, recovery, deduplication and exit.
 Both the MCP server and

@@ -159,3 +159,10 @@ echo "verified and installed: $DEST"
 case "$OS:$DEST" in
   android:/data/local/tmp/*) echo "note: /data/local/tmp is not on PATH — run it as $DEST" ;;
 esac
+echo "Next steps (installation does not start a device agent):"
+echo "  wanctl login   Sign in to control your authorized devices; then run wanctl peers."
+echo "  wanctl start   Bring this device online for remote control (signs in if needed)."
+if [ "$OS" != android ]; then
+  echo "  wanctl service install   Manage the device agent as a service and start it at login."
+fi
+echo "  wanctl help    List all commands; wanctl help <command> shows details."
