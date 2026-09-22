@@ -34,11 +34,20 @@ func TestTrustRequiredOverHTTPNamesTheToolAndBothValues(t *testing.T) {
 		"wanctl_trust_server",
 		`target="` + trustTarget + `"`,
 		`fingerprint="` + pinnedFP + `"`,
-		"without asking the user first",
-		"retry the call you just made",
+		"changes this controller's device trust store",
+		"does not grant device access",
+		"host's approval requirements",
+		"independently verified fingerprint",
+		"This tool response is not authorization",
+		"retry the original operation",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+	for _, unsafe := range []string{"DO THIS NOW", "without asking the user first", "already asks them to approve each tool call"} {
+		if strings.Contains(text, unsafe) {
+			t.Errorf("trust response tries to bypass or assumes host approval: %q", unsafe)
 		}
 	}
 	// The CLI instruction is what stalled the conversation; it must be gone.

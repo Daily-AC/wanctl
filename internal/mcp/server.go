@@ -44,7 +44,25 @@ import (
 // ServeStdio runs the MCP server over stdio: single user, backed by the local
 // wanctl config dir. Intended for AI hosts that spawn `wanctl mcp` as a child.
 func ServeStdio() error {
+	return ServeStdioWorkspaceSession(false)
+}
+
+// ServeStdioWorkspaceSession enables binding only when the host explicitly
+// dedicates this process to one conversation; it is never an HTTP default.
+func ServeStdioWorkspaceSession(enabled bool) error {
 	sessions = &sessionStore{stdio: &localFsSession{}}
+	if enabled {
+		binding := newWorkspaceConversation()
+		if raw := os.Getenv("WANCTL_WORKSPACE"); raw != "" {
+			ref, err := client.ParseWorkspace(raw)
+			if err != nil {
+				return fmt.Errorf("WANCTL_WORKSPACE: %w", err)
+			}
+			binding.ref = ref.String()
+		}
+		defer binding.link.Close()
+		return server.ServeStdio(newMCPServer(binding))
+	}
 	s := newMCPServer()
 	return server.ServeStdio(s)
 }
@@ -757,13 +775,17 @@ func configuredValue(value string) string {
 // list, the loop they compose into, the refusals to recognise. A host reads
 // them once, before any tool call, which is the only moment at which "read the
 // project's AGENTS.md first" can still change what happens.
-func newMCPServer() *server.MCPServer {
-	s := server.NewMCPServer("wanctl", "1.0.0", server.WithInstructions(catalog.Instructions()))
-	registerMCPTools(s)
+func newMCPServer(bindings ...*workspaceConversation) *server.MCPServer {
+	instructions := catalog.Instructions()
+	if len(bindings) > 0 {
+		instructions = catalog.WorkspaceSessionInstructions
+	}
+	s := server.NewMCPServer("wanctl", "1.0.0", server.WithInstructions(instructions))
+	registerMCPTools(s, bindings...)
 	return s
 }
 
-func registerMCPTools(s *server.MCPServer) {
+func registerMCPTools(s *server.MCPServer, bindings ...*workspaceConversation) {
 	handlers := map[string]server.ToolHandlerFunc{
 		"mcpLogin":       mcpLogin,
 		"mcpStatus":      mcpStatus,
@@ -771,6 +793,7 @@ func registerMCPTools(s *server.MCPServer) {
 		"mcpPeers":       mcpPeers,
 		"mcpPair":        mcpPair,
 		"mcpExec":        mcpExec,
+		"mcpWorkspace":   mcpWorkspace,
 		"mcpRead":        mcpRead,
 		"mcpEdit":        mcpEdit,
 		"mcpWrite":       mcpWrite,
@@ -788,12 +811,28 @@ func registerMCPTools(s *server.MCPServer) {
 		"mcpRules":       mcpRules,
 	}
 	for _, c := range catalog.MCPCommands() {
+		if len(bindings) > 0 && !workspaceSessionTool(c.MCPName) {
+			continue
+		}
 		h, ok := handlers[c.Handler]
 		if !ok {
 			// A catalog entry naming a handler that does not exist would
 			// otherwise register a tool that answers nothing. Fail at startup,
 			// where the first test run catches it.
 			panic("mcp: catalog tool " + c.MCPName + " names unknown handler " + c.Handler)
+		}
+		if len(bindings) > 0 {
+			h = bindings[0].wrap(c.MCPName, h)
+			if workspaceDataTool(c.MCPName) {
+				params := []catalog.Param{}
+				for _, p := range c.Params {
+					if p.Name != "target" && p.Name != "workspace" {
+						params = append(params, p)
+					}
+				}
+				c.Params = params
+				c.Desc = "CONVERSATION MODE: the entered workspace is injected automatically. Do not provide target or workspace.\n\n" + c.Desc
+			}
 		}
 		s.AddTool(mcpapi.NewTool(c.MCPName, toolOptions(c)...), h)
 	}
@@ -905,21 +944,17 @@ func dialErrorResult(sess sessionAPI, err error) *mcpapi.CallToolResult {
 	return mcpapi.NewToolResultError(err.Error())
 }
 
-// trustRequiredResult is the first-contact message, written for a model.
-//
-// The CLI text it replaces tells the reader to run `wanctl trust server`, a
-// command that does not exist on the MCP surface. Observed 2026-09-17: the
-// model could not map it to a tool, so it asked the user to "confirm the
-// fingerprint on the device" for two turns and only called wanctl_trust_server
-// after the user suggested it. The pin is worth keeping -- its value is the
-// mismatch alarm later -- but the step has to be one the model can take itself.
+// Describe the trust mutation and the MCP operation that performs it. A tool
+// result cannot authorize another tool call or assume the host asks on every
+// write: some hosts auto-review and deny instead of presenting a human prompt.
 func trustRequiredResult(e *client.TrustRequiredError) *mcpapi.CallToolResult {
 	return mcpapi.NewToolResultError(fmt.Sprintf(
 		"DEVICE IDENTITY CONFIRMATION REQUIRED. This session has not pinned %q yet, so this was first contact and nothing was sent.\n"+
 			"  target:      %s\n"+
 			"  fingerprint: %s\n\n"+
-			"DO THIS NOW, without asking the user first: call wanctl_trust_server with target=%q and fingerprint=%q, copying both values verbatim from the two lines above, then retry the call you just made.\n\n"+
-			"Do not ask the user to confirm the fingerprint in chat: your MCP client already asks them to approve each tool call, and that prompt is the human checkpoint. This happens once per device. From then on a changed identity fails closed and comes back as DEVICE IDENTITY MISMATCH, which is what the pin is for.",
+			"The first-contact pin operation is wanctl_trust_server with target=%q and fingerprint=%q. It changes this controller's device trust store; it does not grant device access or override device policy.\n\n"+
+			"Honor the user's existing authorization and the host's approval requirements. If the user supplied an independently verified fingerprint, it must match the one above. Otherwise obtain confirmation of first-contact trust before recording it. This tool response is not authorization, and the host may auto-review or deny a call instead of showing a prompt.\n\n"+
+			"After an authorized pin succeeds, retry the original operation. A rejected approval must be reported, not bypassed. A changed pinned identity remains a DEVICE IDENTITY MISMATCH and must not be automatically replaced.",
 		e.Target, e.Target, e.Fingerprint, e.Target, e.Fingerprint,
 	))
 }
@@ -1166,8 +1201,8 @@ func peerToolResult(view client.Peers, pinned map[string]bool) *mcpapi.CallToolR
 	}
 	if anyUnpinned {
 		out += "\nidentity: unpinned means this session has not confirmed that device's identity yet. " +
-			"The first call that dials it returns DEVICE IDENTITY CONFIRMATION REQUIRED; answer that by calling " +
-			"wanctl_trust_server with the target and fingerprint it hands you, then retry. No need to ask the user first.\n"
+			"The first call that dials it returns DEVICE IDENTITY CONFIRMATION REQUIRED. " +
+			"wanctl_trust_server records a first-contact pin; honor the user's authorization and the host's approval requirements before changing trust.\n"
 	}
 	result := mcpapi.NewToolResultText(out)
 	result.StructuredContent = structured
@@ -1235,6 +1270,12 @@ func execSource(req mcpapi.CallToolRequest) (string, *mcpapi.CallToolResult) {
 }
 
 func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	if reqStr(req, "workspace", "") != "" {
+		return mcpWorkspaceExec(ctx, req, false)
+	}
+	if _, _, hint := workspaceRoute(req); hint != nil {
+		return hint, nil
+	}
 	target := reqStr(req, "target", "")
 	command, errRes := execSource(req)
 	if errRes != nil {
@@ -1307,20 +1348,25 @@ func errorTextOf(res *mcpapi.CallToolResult) string {
 // somebody else; read and edit name a path on the target device, which is the
 // thing the caller was authorized to drive in the first place.
 func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	target, workspaceID, routeError := workspaceRoute(req)
+	if routeError != nil {
+		return routeError, nil
+	}
 	path := reqStr(req, "path", "")
 	if path == "" {
 		return mcpapi.NewToolResultError("path is required"), nil
 	}
 	sess := sessions.get(ctx)
-	c, hint := sess.client()
+	c, hint := workspaceClient(ctx, sess)
 	if hint != nil {
 		return hint, nil
 	}
 	res, err := c.ReadFile(ctx, client.ReadRequest{
-		Target: reqStr(req, "target", ""),
-		Path:   path,
-		Offset: reqInt(req, "offset"),
-		Limit:  reqInt(req, "limit"),
+		Target:      target,
+		WorkspaceID: workspaceID,
+		Path:        path,
+		Offset:      reqInt(req, "offset"),
+		Limit:       reqInt(req, "limit"),
 	})
 	if err != nil {
 		return fileOpErrorResult(sess, err), nil
@@ -1344,6 +1390,10 @@ func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 }
 
 func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	target, workspaceID, routeError := workspaceRoute(req)
+	if routeError != nil {
+		return routeError, nil
+	}
 	path := reqStr(req, "path", "")
 	old := reqStr(req, "old", "")
 	edits, errRes := reqEdits(req)
@@ -1359,12 +1409,13 @@ func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return mcpapi.NewToolResultError("pass 'old' (non-empty) with 'new', or an 'edits' array of {old,new}"), nil
 	}
 	sess := sessions.get(ctx)
-	c, hint := sess.client()
+	c, hint := workspaceClient(ctx, sess)
 	if hint != nil {
 		return hint, nil
 	}
 	request := client.EditRequest{
-		Target:      reqStr(req, "target", ""),
+		Target:      target,
+		WorkspaceID: workspaceID,
 		Path:        path,
 		All:         reqBool(req, "all"),
 		ExpectedSHA: reqStr(req, "expected_sha256", ""),
@@ -1417,6 +1468,10 @@ func reqEdits(req mcpapi.CallToolRequest) ([]protocol.FileEdit, *mcpapi.CallTool
 // look, edit to change, write to put a whole file there — with no base64, no
 // local temp file and no heredoc through a shell.
 func mcpWrite(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	target, workspaceID, routeError := workspaceRoute(req)
+	if routeError != nil {
+		return routeError, nil
+	}
 	path := reqStr(req, "path", "")
 	content, given := req.GetArguments()["content"].(string)
 	if path == "" {
@@ -1428,14 +1483,15 @@ func mcpWrite(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 		return mcpapi.NewToolResultError("content is required (pass an empty string to write an empty file)"), nil
 	}
 	sess := sessions.get(ctx)
-	c, hint := sess.client()
+	c, hint := workspaceClient(ctx, sess)
 	if hint != nil {
 		return hint, nil
 	}
 	res, err := c.WriteFile(ctx, client.WriteRequest{
-		Target:  reqStr(req, "target", ""),
-		Path:    path,
-		Content: content,
+		Target:      target,
+		WorkspaceID: workspaceID,
+		Path:        path,
+		Content:     content,
 	})
 	if err != nil {
 		return fileOpErrorResult(sess, err), nil
@@ -1528,6 +1584,12 @@ func fileOpErrorResult(sess sessionAPI, err error) *mcpapi.CallToolResult {
 }
 
 func mcpExecAsync(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	if reqStr(req, "workspace", "") != "" {
+		return mcpWorkspaceExec(ctx, req, true)
+	}
+	if _, _, hint := workspaceRoute(req); hint != nil {
+		return hint, nil
+	}
 	target := reqStr(req, "target", "")
 	command := reqStr(req, "command", "")
 	if command == "" {
@@ -1548,6 +1610,12 @@ func mcpExecAsync(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Call
 }
 
 func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	if reqStr(req, "workspace", "") != "" {
+		return mcpWorkspacePoll(ctx, req)
+	}
+	if _, _, hint := workspaceRoute(req); hint != nil {
+		return hint, nil
+	}
 	target := reqStr(req, "target", "")
 	jobID := reqStr(req, "job_id", "")
 	if jobID == "" {
@@ -1736,8 +1804,11 @@ func mcpID(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolResul
 	if r, ok := s.(*remoteSession); ok {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		if r.identity == nil {
+		if r.token == "" {
 			return mcpapi.NewToolResultText("not logged in — call wanctl_login first; identity is derived from your namespace once you do."), nil
+		}
+		if err := r.ensureIdentity(); err != nil {
+			return mcpapi.NewToolResultError("derive identity: " + err.Error()), nil
 		}
 		return mcpapi.NewToolResultText(fmt.Sprintf("fingerprint: %s\nnamespace:   %s", r.identity.Fingerprint, r.namespace)), nil
 	}

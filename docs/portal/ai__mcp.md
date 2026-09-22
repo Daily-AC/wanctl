@@ -1,4 +1,4 @@
-MCP 是 AI 直接调 wanctl 的接口——不用它读 skill、不用它拼命令行，`wanctl_peers`、`wanctl_exec` 这些工具就长在它的工具列表里。同样的 17 个工具有两种接法，选哪种只看一件事：**那个 AI 能不能在它自己那台机器上起一个 `wanctl` 进程。**
+MCP 是 AI 直接调 wanctl 的接口——不用它读 skill、不用它拼命令行，`wanctl_peers`、`wanctl_exec` 这些工具就长在它的工具列表里。这些工具有两种接法，选哪种只看一件事：**那个 AI 能不能在它自己那台机器上起一个 `wanctl` 进程。**
 
 | | 用哪种 | 典型的 |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ claude mcp add --transport http wanctl https://relay.example.com/mcp
 
 ## 网页 AI：连接器鉴权选 OAuth
 
-ChatGPT、claude.ai 这类网页 AI，每调用一次工具就新开一次 MCP 会话。下面那套「一个会话一份登录」在它们身上活不过一次调用：刚登录成功，下一个工具就报 LOGIN REQUIRED。给它们准备的是另一条路。
+ChatGPT、claude.ai 这类网页 AI 可能在工具调用之间重建 MCP 会话。下面那套「一个会话一份登录」在它们身上活不过一次调用：刚登录成功，下一个工具就报 LOGIN REQUIRED。给它们准备的是另一条路。
 
 在它的自定义连接器里，URL 还是填同一个端点，鉴权方式选 **OAuth**（不要选「无鉴权」），剩下的发现步骤它自己走完。保存之后它把你带到门户：照常用 GitHub 登录，页面上写着是哪个客户端在申请、授权后会跳回哪个域名，你点一下「允许」就结束了。没有 code 要复制，也没有来回粘贴。
 
@@ -45,7 +45,7 @@ ChatGPT、claude.ai 这类网页 AI，每调用一次工具就新开一次 MCP �
 
 > 这条路要部署方在 relay 上同时备齐数据库、`WANCTL_PUBLIC_ORIGIN` 和 `WANCTL_PORTAL`。缺任何一样，端点就只保留下面那套会话登录，AI 的连接器也发现不到授权服务器。
 
-## 第一次登录
+## 不使用 OAuth 时：第一次登录
 
 跟 AI 说一句「登录 wanctl」，它会调 `wanctl_login`，然后照着做：
 
@@ -59,15 +59,23 @@ ChatGPT、claude.ai 这类网页 AI，每调用一次工具就新开一次 MCP �
 
 ## 会话断了怎么办
 
-公网端点的登录态只活在 relay 的内存里。relay 重启、连接被重置，AI 就会收到「LOGIN REQUIRED」。
+上面一次性 code 换来的会话登录态只活在 relay 的内存里；OAuth 连接器不依赖这份会话登录。relay 重启、连接被重置，AI 就会收到「LOGIN REQUIRED」。
 
 登录成功的时候，AI 还拿到了一串 `wrb1.` 开头的 **rebind 凭证**（7 天有效）。它自己存着，遇到这种情况直接拿这串恢复，不用再喊你开浏览器。凭证丢了也不要紧，重走一遍上面三步就是了。
 
 ## 它能碰到什么、碰不到什么
 
-- **令牌不落盘。** 公网会话的凭证只在 relay 内存里，没有任何一份写到磁盘上。
+- **身份由连接方式决定。** code 登录凭证只在 relay 会话内存中；OAuth 使用可撤销的持久授权。
 - **传文件只能往上传。** `wanctl_push` / `wanctl_pull` 在公网端点上是关掉的——那个「本地路径」会是服务器上的路径，不是你的。要给设备送文件用 `wanctl_push_blob`。
 - **换种子等于全体登出。** 部署方换掉 relay 的 MCP 种子，所有会话和所有 rebind 凭证立刻作废。
 - **不想给了就说一声。** 让 AI 调 `wanctl_logout`，这个会话的凭证和它的 rebind 凭证一起失效。设备那边的信任要撤，去设备页面上撤。
 
-> 公网端点上第一次连某台设备时，AI 会收到一条「设备身份确认」——它自己调 `wanctl_trust_server` 把这次看到的指纹记下来，然后重试，不用问你。要你出面的是之后那一次：这台设备的指纹要是变了，连接当场断开，AI 会把记下的和这次看到的两个指纹都报给你等你判断，不会自己重记一遍。设备真是重装过的话，你在门户里把它解绑一次，这份记录就跟着清掉，下次连它又回到第一次那步。（这个开关由部署方在 relay 上打开，见自建文档里的「打开托管的 MCP 端点」；没打开就只能改用本机 stdio 接法。）
+## v0.12.0：保持远程工作区
+
+让 AI 调用 `wanctl_workspace`，以 `action=enter`、目标设备和项目绝对路径打开工作区。后续读、写、编辑、执行和轮询都携带返回的 `workspace` 引用，目录、环境变量和命令结果保留在设备上。每个聊天使用自己的引用；OAuth 只保存身份，不共享聊天的当前目录。
+
+本地宿主确定每个对话独占一个 MCP 进程时，可以用 `wanctl mcp --workspace-session` 自动绑定工作区。CLI 使用 `wanctl workspace enter`，再传 `--workspace` 或设置该终端的 `WANCTL_WORKSPACE`。相同本地控制端身份的 CLI 与 stdio MCP 可以接续；网页 OAuth 身份独立。
+
+断连后查询原请求 ID，不要换新 ID 重做未知结果的操作。完成后用 `wanctl_workspace action=exit` 关闭；工作区不跨受控 agent 重启保存。控制端、relay 和受控端均需升级。完整用法见 [工作区文档](https://github.com/Daily-AC/wanctl/blob/main/docs/workspaces.md)。
+
+> 首次设备信任仍遵循宿主的批准流程。部署方开启相应能力后，可以通过 `wanctl_trust_server` 记录已核验的指纹；已有授权够用时继续，否则先获得必要确认。指纹变化时必须停止并核实原因，不能自动覆盖旧指纹。该能力需要部署方显式启用，未启用时使用本地 stdio 的信任流程。
