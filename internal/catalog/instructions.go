@@ -77,7 +77,7 @@ var devLoop = []string{
 // work, and the full explanation is one `wanctl help <command>` away.
 var criticalErrors = []struct{ Text, Do string }{
 	{"PAIRING REQUIRED", "give the URL in the message to the user, then retry."},
-	{"DEVICE IDENTITY CONFIRMATION REQUIRED", "call wanctl_trust_server, retry."},
+	{"DEVICE IDENTITY CONFIRMATION REQUIRED", "authorize trust, then pin."},
 	{"DEVICE IDENTITY MISMATCH", "refused, nothing sent; report both fingerprints."},
 	{"LOGIN REQUIRED", "call wanctl_login; a saved rebind restores it instantly."},
 }
