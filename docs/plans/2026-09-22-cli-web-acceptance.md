@@ -1,5 +1,9 @@
 # CLI and ChatGPT web acceptance, 2026-09-22
 
+**Later update:** the [real web development and isolation trial](2026-09-22-web-workspace-completion.md)
+has now completed after the trust-description fix and owner-approved
+conversation-scoped access. The initial blocked attempt is retained below.
+
 ## Delivery
 
 The feature branch now exposes persistent workspaces through both CLI and MCP.
@@ -10,7 +14,7 @@ on the production binary.
 The local Codex development trial passed. ChatGPT web authenticated with OAuth,
 discovered the workspace tools and completed three read-only calls, but its
 first device trust call was blocked by the platform's safety check. The web
-development task is **not accepted yet**. A working login/tool list is not a
+development task was **not accepted at that point**. A working login/tool list is not a
 substitute for file edits and execution through the web UI.
 
 ## What changed

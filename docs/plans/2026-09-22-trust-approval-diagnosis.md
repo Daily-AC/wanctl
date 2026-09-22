@@ -70,6 +70,8 @@ tool result returned `confirmed device identity` with the exact authorized
 values. That verifies the real trust write, not just removal of a warning.
 The permission mode remains ask-before-writes; no conversation-wide or global
 approval was selected. The full development task remains a separate acceptance.
+It was subsequently completed in the [two-chat web trial](2026-09-22-web-workspace-completion.md)
+after the owner explicitly authorized the acceptance conversations.
 
 Local evidence and the final browser comparison are retained under
 `artifacts/trust-diagnosis-20260922/`. The broader remote-workspace development
