@@ -112,8 +112,8 @@ wanctl exec --target DEVICE "uname -a"
 
 ## Documentation
 
-- [Remote workspaces over MCP](docs/workspaces.md) — development API and validation
-- [远程工作区架构教学](docs/learning/remote-workspace/README.md) — six Chinese articles, breadth-first
+- [Remote workspaces over CLI and MCP](docs/workspaces.md) — usage, recovery and validation
+- [远程工作区架构教学](docs/learning/remote-workspace/README.md) — seven Chinese articles, breadth-first
 - [Command contract](docs/contract.md) — every CLI command and MCP tool, generated from one catalog
 - [Self-hosting](docs/self-hosting.md)
 - [Environment variables](docs/environment.md)
