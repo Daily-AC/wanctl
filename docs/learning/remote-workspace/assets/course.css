@@ -1,0 +1,24 @@
+/* Course components share the existing Docs tokens, fonts and page shell. */
+.course-goal{border-left:3px solid var(--blue);padding:4px 0 4px 18px;margin:26px 0 30px}
+.course-goal p{margin:7px 0 0}
+.course-map{margin:28px 0}
+.course-lanes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--hairline);border-radius:10px;overflow:hidden}
+.course-lanes.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.course-lanes section{padding:18px;min-width:0}
+.course-lanes section+section{border-left:1px solid var(--hairline)}
+.course-lanes strong{color:var(--blue);font-weight:600}
+.course-lanes p{font-size:14px;line-height:1.65;margin:8px 0 0}
+.course-map figcaption{color:var(--ink-2);font-size:13px;margin-top:10px;line-height:1.6}
+.course-check,.course-lifetime{margin:22px 0;padding:22px;border:1px solid var(--hairline);border-radius:10px}
+.course-question{margin-top:0;font-weight:600}
+.course-choices{display:flex;flex-wrap:wrap;gap:9px;margin:14px 0}
+.course-choices button{font:inherit;font-size:14px;line-height:1.5;padding:10px 14px;min-height:44px;background:var(--canvas);color:var(--ink);border:1px solid var(--hairline);border-radius:8px;cursor:pointer}
+.course-choices button:hover{border-color:var(--blue);color:var(--blue)}
+.course-choices button[aria-pressed="true"]{border-color:var(--blue);background:var(--blue-wash);color:var(--blue)}
+.course-choices button:focus-visible,.course-check summary:focus-visible{outline:2px solid var(--blue);outline-offset:4px}
+.course-check summary{cursor:pointer;color:var(--blue);padding:8px 0}
+.course-feedback:empty{display:none}
+.course-feedback,.course-event-result{font-size:15px;line-height:1.65}
+.course-check details p{margin-bottom:0;color:var(--ink-2)}
+@media(max-width:650px){.course-lanes,.course-lanes.two{grid-template-columns:1fr}.course-lanes section+section{border-left:0;border-top:1px solid var(--hairline)}.course-check,.course-lifetime{padding:17px}}
+@media print{.nav,.dnav,.dtoc,.dnav-open,.dscrim,.foot,.pager,.course-choices,.course-feedback{display:none!important}.dpage,.dpage.no-toc{display:block!important;padding:0}.dbody{padding:0!important;max-width:none!important}.course-goal,.course-check,.course-lifetime,.course-map,table{break-inside:avoid}.course-check details{display:block}.course-check details>p{display:block!important}.course-check summary{display:none}.course-lanes{border-color:#888}.dbody article h2{margin-top:22px}.dbody{font-size:11pt}.crumbs{font-size:9pt}.dbody article a{color:inherit;text-decoration:underline}}

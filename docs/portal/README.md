@@ -16,9 +16,23 @@ scripts/sync-portal-docs.py --dry-run   # 先看它打算做什么
 
 ## 每篇文章都是一对
 
-文档站 `wc.z10.dev/docs` 把这里的六篇指南和 `docs/*.md` 那七篇技术文档一起发出去，两种语言都要。所以**每个源文件旁边都躺着一份译文**：文件名同前缀，`.md` 前面加一个语言后缀 —— `quickstart__enroll-device.md`（中文源）配 `quickstart__enroll-device.en.md`，`docs/architecture.md`（英文源）配 `docs/architecture.zh.md`。源文件仍然是那个规范的：`manifest.json` 只点名源文件，所以 `sync-portal-docs.py` 根本看不见译文，门户同步不受影响。译文一律以一个 `# 标题` 开头，那个标题就是它在那门语言下的标题（正文渲染时会把它摘掉），门户指南的英文标题也是这么来的。
+文档站 `wc.z10.dev/docs` 把门户指南和 `docs/*.md` 中的技术文档一起发出去，两种语言都要。所以**每个源文件旁边都躺着一份译文**：文件名同前缀，`.md` 前面加一个语言后缀 —— `quickstart__enroll-device.md`（中文源）配 `quickstart__enroll-device.en.md`，`docs/architecture.md`（英文源）配 `docs/architecture.zh.md`。源文件仍然是那个规范的：`manifest.json` 只点名源文件，所以 `sync-portal-docs.py` 根本看不见译文，门户同步不受影响。译文一律以一个 `# 标题` 开头，那个标题就是它在那门语言下的标题（正文渲染时会把它摘掉），门户指南的英文标题也是这么来的。
 
 **改一篇文章就要改它的两半。** `tools/docsite/build.py` 在渲染前会对每一对做一次结构对齐检查，对不上就让构建失败：代码块的数量、顺序、info 串和内容必须逐字节相同（命令、路径、参数、环境变量、示例输出一律照抄，不翻译）；各级标题的层级序列、链接目标的序列、表格的形状（几张表、几行、几列）也都必须一致。只有散文、标题文字、表格里的散文和链接文字才该变。加新文章时先写源文件，再写译文；漏了译文不会让构建失败，那一篇会在两种语言下都显示源文，并在另一种语言的外壳里加一句「这一页还没有翻译」。
+
+## 架构课程的维护入口
+
+`learning__remote-workspace.md` 是门户中的课程目录，完整正文在
+`docs/learning/remote-workspace/`。文档站用同一份 Markdown 生成课程页面；
+门户目录链接到这些页面，以保留架构图和可跳过的自检。课程正文目前为中文，
+英文界面会明确提示未翻译。不要在数据库或生成的 HTML 中维护第二份正文。
+
+```sh
+uv run tools/docsite/build.py --course-export docs/learning/remote-workspace
+```
+
+该命令同时生成静态 Docs 和可独立阅读的教学 HTML。章节顺序、网址和导出文件名
+在课程的 `course.json` 中维护。
 
 ## 为什么要有这一层
 

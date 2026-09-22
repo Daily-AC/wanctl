@@ -1,43 +1,66 @@
-# 03｜状态：身份、工作区、连接和任务
+# 03｜状态：断掉一条连接，会丢掉什么
 
-系统设计里常见的困难，是几个都叫“会话”的东西实际上活得不一样久。远程工作区需要明确区分四个对象。
+<div class="course-goal"><strong>这一篇的收获</strong><p>遇到断网或重启时，先找到状态的持有者，再判断哪些东西还能继续使用。</p></div>
 
-| 对象 | 回答的问题 | 什么时候结束 |
-|---|---|---|
-| 身份和授权 | 谁可以访问哪台设备 | 注销、撤销或到期 |
-| 工作区 | 正在什么项目里做哪一次工作 | 显式关闭或设备端失效 |
-| 网络连接 | 这次怎样传送请求和结果 | 请求结束或网络中断 |
-| 执行任务 | 那条命令执行到哪里了 | 成功、失败、取消或期限到达 |
+## 不要把所有东西都叫“会话”
 
-## 正常使用与短暂断网
+一次远端工作同时包含几种寿命不同的对象。它们可能同时开始，却不需要一起结束。
 
-```mermaid
-stateDiagram-v2
-  [*] --> 未进入
-  未进入 --> 已进入: 打开工作区
-  已进入 --> 连接中断: 网络故障
-  连接中断 --> 已进入: 重新鉴权并附着
-  已进入 --> 已退出: 显式关闭
-  连接中断 --> 远端失效: 设备端重启或会话已关闭
-  远端失效 --> 已退出: 调用方显式退出
-```
+| 对象 | 保存什么 | 谁持有 |
+| --- | --- | --- |
+| 访问授权 | 可以访问哪些资源、何时失效 | 授权系统与调用方凭据 |
+| 工作区引用 | 这次工作对应哪个设备和工作区 | 调用方或独占对话的适配器 |
+| 网络／MCP 会话 | 当前这段通信的协议状态 | 两端的通信组件 |
+| 远端工作区 | 根目录、shell、执行记录 | 设备端进程 |
+| 执行任务 | 某条命令的进度和输出 | 设备端工作区 |
 
-连接中断并不证明工作结束。设备上的构建可能仍在继续。因此任务应由设备端工作区管理，客户端只订阅结果；重新连接后查询已有任务，而不是重新启动一次。
+MCP 的 HTTP 请求、协议会话和产品里的聊天窗口不是同一个对象。协议允许会话管理，也明确指出断开连接本身不应被当作取消请求。具体工作区如何存活，仍由 wanctl 自己实现。[原始资料：传输与会话管理](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#session-management)
 
-## Shell 为什么能保留目录和环境
+## 先看拥有状态的进程
 
-在一个活着的 shell 里，当前目录和环境变量是该进程的状态。下一条命令交给同一个 shell，就可以沿用它们。不同工作区拥有不同 shell，便不会因为共用登录身份而互相污染。
+当前目录和已导出的环境变量属于一个活着的 shell。把下一条命令交给同一个 shell，就能延续它们。启动同一种 shell 的新进程，得到的仍是另一份状态；子进程中的环境修改也不会自动改回父进程。[原始资料：Bash 执行环境](https://www.gnu.org/software/bash/manual/html_node/Command-Execution-Environment.html)
 
-这里还有一个实际踩到的坑：同一种 shell 不等于同一个 shell 进程。若工具收到脚本后另启动一个子 shell，子进程里的目录和环境修改不会自动传回父进程。本轮实际使用就发现了这个问题，随后改成让匹配语言的脚本在工作区原来的 shell 中执行。是否保持状态，取决于哪一个进程拥有它。
+这也解释了 Python 的边界：shell 可以反复启动 Python 完成复杂逻辑，但每次新启动的 Python 程序不会自动继承上一次 Python 进程的内存变量。持久 Python 内核是另一种需要管理的进程，不是“支持执行 Python”自然附带的能力。[原始资料：Python subprocess](https://docs.python.org/3/library/subprocess.html#subprocess.run)
 
-这不表示所有程序的变量都会保留。每次启动一个新的 Python 程序，它仍然有自己的生命周期。持续运行的 Python REPL 或内核是工作区中另一种进程，后续可以单独支持。
+## 用四种事件检查寿命
 
-## 持久到什么程度
+<div class="course-lifetime">
+<p><strong>概念演示：</strong>选择一种事件，观察工作区状态。这里不会连接设备。</p>
+<div class="course-choices">
+<button type="button" data-event="disconnect">网络断开</button>
+<button type="button" data-event="controller">控制端重启</button>
+<button type="button" data-event="agent">设备端重启</button>
+<button type="button" data-event="exit">显式退出</button>
+</div>
+<p class="course-event-result" role="status" aria-live="polite">先问“谁持有这份状态”，再判断能否恢复。</p>
+</div>
 
-第一版的目标是跨工具调用、跨网络连接保留状态。设备端进程退出或机器重启后，任意 shell 的内存不会自动复原。系统需要诚实地返回“工作区已失效”，不能新建一个空 shell 并假称原状态还在。
+| 事件 | v0.12.1 的判断 |
+| --- | --- |
+| 网络断开 | 设备仍存活时，已受理任务可继续；重连后查原任务 |
+| 保存绑定的控制端进程重启 | 远端状态可能还在，但调用方需要保存的引用来重新附着 |
+| 设备端 agent 重启 | 进程内的 shell 和执行账本丢失，不自动复原；项目文件不因此自动删除 |
+| 显式 exit | 工作区关闭，旧引用不能继续用于工作 |
 
-关闭一个终端，也不应自动把所有工具切回本地。工作区绑定由明确的退出动作结束。网络错误、程序错误和用户退出必须是不同事件。
+这里的“持久”指跨调用和跨连接，不是任意进程重启后的内存快照恢复。[项目契约](https://github.com/Daily-AC/wanctl/blob/v0.12.1/docs/workspaces.md#reconnect-cancel-and-exit)
 
-专属 MCP 进程现在负责保存“这个对话当前在哪个工作区”，并复用它的网络连接。网络短暂断开时，绑定仍在；如果保存绑定的 MCP 进程也重启了，就需要用原标识重新附着。远端 shell 可以仍然活着，因此重新附着不会重新创建它。连接、绑定和 shell 依然是三个不同生命周期。
+## 自检：先判断，再看解释
 
-下一篇把这些对象串进日常操作，观察一项任务怎样完成。
+<div class="course-check" data-correct="1">
+<p class="course-question">连接断开后，设备进程仍正常运行。原 shell 状态能否延续，主要取决于谁还活着？</p>
+<div class="course-choices">
+<button type="button" data-choice="0" aria-pressed="false">调用方进程</button>
+<button type="button" data-choice="1" aria-pressed="false">设备端进程</button>
+<button type="button" data-choice="2" aria-pressed="false">网页的标签</button>
+</div>
+<p class="course-feedback" role="status" aria-live="polite"></p>
+<details><summary>查看解释（可以跳过作答）</summary><p>状态放在设备端工作区及其 shell 中。调用方仍需要有效授权和原引用才能找回它，但网页标签或网络连接的消失不等于远端进程退出。</p></details>
+</div>
+
+## 带着什么进入下一篇
+
+以后遇到“重启后还在吗”，先画出状态的持有者。下一篇把这些状态放进一次完整的修改流程。
+
+如果这一点还不清楚，可以把本篇的问题和你自己的项目场景交给协作 agent，请它换一个例子解释。自检只提供即时反馈，不代表已经掌握；隔一段时间，不看答案再解释一次更有价值。
+
+[术语速查](reference/terms.md) · [架构卡片](reference/architecture-card.md) · [课程目录](../../portal/learning__remote-workspace.md)

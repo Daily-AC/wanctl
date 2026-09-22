@@ -8,6 +8,16 @@ permissions:
   contents: read
 
 jobs:
+  docsite:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install docs renderer
+        run: python3 -m pip install markdown==3.7
+      - name: Build and validate docs and portable lessons
+        run: python3 tools/docsite/test_course.py
+
   test:
     runs-on: ubuntu-latest
     services:

@@ -1,35 +1,48 @@
-# 02｜边界：MCP 能完成哪一段体验
+# 02｜边界：接上 MCP，哪些工具会去远端
 
-第一篇画出了整个系统。这一篇只展开“AI 宿主如何使用工具”，因为它决定能否让 AI 自然地留在远端。
+<div class="course-goal"><strong>这一篇的收获</strong><p>能判断某项操作是否经过 wanctl，以及“整个宿主切换到远端”还需要谁参与。</p></div>
 
-## 接入 MCP 后会发生什么
+## 连接成功以后，先问路径
 
-MCP 让宿主发现工具及参数，调用工具并接收结果。wanctl 可以提供进入工作区、执行命令、读取文件、修改文件和退出等能力。网页 AI 不需要在自己的机器上安装项目依赖，只需通过这些工具操作目标设备。
+MCP 让宿主发现工具、提交参数并接收结果。它建立的是工具调用通道。wanctl 可以在这条通道里提供文件读写、命令执行和工作区管理。[原始资料：MCP 工具](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
 
-一次进入操作建立工作区标识。接下来的操作携带这个标识，设备端就知道它们属于哪个项目和哪一个 shell。稳定连接的适配器可以替模型保存这个标识；无法提供稳定对话上下文的客户端需要显式携带它。
+但宿主可能同时拥有自己的本地文件工具、浏览器和终端。只有真正走到 wanctl 的调用，才受 wanctl 的工作区绑定影响。
 
-## 两种接入程度
+<figure class="course-map"><div class="course-lanes two"><section><strong>wanctl 工具</strong><p>读取、编辑、执行等请求携带工作区引用，交给目标设备处理。</p></section><section><strong>宿主的其他工具</strong><p>仍按宿主自己的实现选择地点。wanctl 无法拦截一个没有经过它的本地文件调用。</p></section></div><figcaption>先确认调用经过哪个入口，才能判断它工作的地点。</figcaption></figure>
 
-| 接入方式 | 谁维护当前工作区 | 可以保证什么 |
-|---|---|---|
-| 通用 MCP | wanctl 工具及调用方持有工作区标识 | 使用 wanctl 工具时，文件和执行落在同一远端工作区 |
-| 专属 MCP 进程 | 一个进程只服务一个对话，内部保存绑定 | 进入一次后，wanctl 的读写和执行不再需要重复填写设备或工作区 |
-| 宿主后端适配 | harness 为每个对话保存工作区绑定 | 宿主原有的读、写、搜索、执行工具也自动使用远端 |
+## 三种接入程度
 
-目前已实现前两种。专属进程模式使用 `wanctl mcp --workspace-session`，前提是宿主确实把这个进程独占地分配给一个对话。共享网页端点仍然无法凭账号推断当前聊天，所以继续显式携带标识。第三种需要具体宿主参与，不能通过启动一个 MCP server 自动获得。
+| 接入方式 | 工作区绑定放在哪里 | 可以得到的体验 |
+| --- | --- | --- |
+| 通用 MCP | 调用方保存引用，每次显式携带 | 多个聊天可各自使用独立工作区 |
+| 专属 stdio MCP | 独占一个对话的 MCP 进程保存绑定 | wanctl 工具可以省去重复填写引用 |
+| 宿主工作区后端 | 宿主为对话统一选择文件和执行后端 | 宿主原有工具也能一起切换工作地点 |
 
-一个 MCP server 无法接管其他工具的执行。例如宿主还有一个直接读本机文件的工具，wanctl 没有机会拦截它。完整的“忘掉远程”需要宿主把相关工具统一接到可切换后端。
+v0.12.1 已提供前两种。第三种需要具体宿主的适配，不能仅靠安装 MCP 自动获得。专属模式的前提是“一段对话独占该 MCP 进程”；共享 HTTP 服务不能把所有聊天当作一个对话。[实现与用法](https://github.com/Daily-AC/wanctl/blob/v0.12.1/docs/workspaces.md)
 
-## 为什么不能只记住账号的默认设备
+## 为什么会想到 VS Code Remote
 
-设想你同时开两个聊天窗口，一个维护 Linux 服务，一个检查 Windows 文件。它们可能使用相同账号，甚至相同的 MCP 连接。若服务器只保存“这个账号当前在 Linux”，第二个窗口切换设备会影响第一个。
+VS Code 把界面相关扩展和工作区相关扩展分开安排：后者可以靠近远端项目运行。值得借鉴的是“界面留在眼前，工作能力靠近文件和运行环境”的分工。[原始资料：VS Code 远程扩展架构](https://code.visualstudio.com/api/advanced-topics/remote-extensions#architecture-and-extension-kinds)
 
-因此，登录身份负责回答“你是谁”，工作区标识回答“这次操作属于哪次工作”。MCP 连接并不总能等同于一次聊天；不能用账号或 OAuth token 代替对话隔离。
+在 wanctl 中，通用 MCP 已经能统一它自己的远端工具；若要让宿主所有原生工具都跟着切换，需要宿主也保存并使用这个工作地点。评审设计时，应明确自己正在承诺哪一种接入程度。
 
-MCP 标准定义了连接层的会话生命周期，但并没有定义某个网页产品的聊天窗口或 harness 对话如何映射到它。[协议中的会话管理](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#session-management)是这里划分边界的参考。
+## 自检：先判断，再看解释
 
-## 对效率的合理预期
+<div class="course-check" data-correct="1">
+<p class="course-question">AI 已进入 wanctl 工作区，却调用了宿主原生的本地读文件工具。谁能决定这次本地读取是否改走远端？</p>
+<div class="course-choices">
+<button type="button" data-choice="0" aria-pressed="false">模型推理层</button>
+<button type="button" data-choice="1" aria-pressed="false">宿主接入层</button>
+<button type="button" data-choice="2" aria-pressed="false">设备执行层</button>
+</div>
+<p class="course-feedback" role="status" aria-live="polite"></p>
+<details><summary>查看解释（可以跳过作答）</summary><p>要改变原生工具的路由，必须由宿主的接入或后端适配层参与。模型可以选择正确工具，但 wanctl 不能拦截没有经过它的调用。</p></details>
+</div>
 
-第一版直接改善目标选择、状态延续和断线后找回结果。批量脚本可以减少模型往返，但工作区本身不会自动把所有调用合并，也不会让模型推理变快。是否更高效，要比较同一任务的完成率、往返次数和耗时。
+## 带着什么进入下一篇
 
-下一篇将身份、连接、工作区和任务放在同一张状态图中，说明它们为何不能共用一个生命周期。
+看到“支持 MCP”时，再补问一句：覆盖的是哪组工具？下一篇讨论这些工具依赖的状态各自活多久。
+
+如果这一点还不清楚，可以把本篇的问题和你自己的项目场景交给协作 agent，请它换一个例子解释。自检只提供即时反馈，不代表已经掌握；隔一段时间，不看答案再解释一次更有价值。
+
+[术语速查](reference/terms.md) · [架构卡片](reference/architecture-card.md) · [课程目录](../../portal/learning__remote-workspace.md)

@@ -1,0 +1,61 @@
+{
+  "group": "learning",
+  "lessons": [
+    {
+      "source": "01-system-map.md",
+      "slug": "learn-system-map",
+      "html": "0001-system-map.html",
+      "en": "System map"
+    },
+    {
+      "source": "02-integration-boundaries.md",
+      "slug": "learn-integration-boundaries",
+      "html": "0002-integration-boundaries.html",
+      "en": "Integration boundaries"
+    },
+    {
+      "source": "03-state-and-lifetime.md",
+      "slug": "learn-state-and-lifetime",
+      "html": "0003-state-and-lifetime.html",
+      "en": "State and lifetimes"
+    },
+    {
+      "source": "04-workflows.md",
+      "slug": "learn-workflows",
+      "html": "0004-workflows.html",
+      "en": "Working with results"
+    },
+    {
+      "source": "05-failures-and-authority.md",
+      "slug": "learn-failures-and-authority",
+      "html": "0005-failures-and-authority.html",
+      "en": "Failures and authority"
+    },
+    {
+      "source": "06-delivery-and-evidence.md",
+      "slug": "learn-delivery-and-evidence",
+      "html": "0006-delivery-and-evidence.html",
+      "en": "Evidence and delivery"
+    },
+    {
+      "source": "07-cli-mcp-oauth.md",
+      "slug": "learn-cli-mcp-oauth",
+      "html": "0007-cli-mcp-oauth.html",
+      "en": "CLI, MCP and OAuth"
+    }
+  ],
+  "references": [
+    {
+      "source": "reference/terms.md",
+      "slug": "learn-terms",
+      "html": "terms.html",
+      "en": "Architecture terms"
+    },
+    {
+      "source": "reference/architecture-card.md",
+      "slug": "learn-architecture-card",
+      "html": "architecture-card.html",
+      "en": "Architecture reference card"
+    }
+  ]
+}
