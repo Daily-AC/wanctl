@@ -14,6 +14,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -780,7 +781,7 @@ func newMCPServer(bindings ...*workspaceConversation) *server.MCPServer {
 	if len(bindings) > 0 {
 		instructions = catalog.WorkspaceSessionInstructions
 	}
-	s := server.NewMCPServer("wanctl", "1.0.0", server.WithInstructions(instructions))
+	s := server.NewMCPServer("wanctl", "1.0.0", server.WithInstructions(instructions), server.WithOutputSchemaValidation())
 	registerMCPTools(s, bindings...)
 	return s
 }
@@ -841,6 +842,13 @@ func registerMCPTools(s *server.MCPServer, bindings ...*workspaceConversation) {
 // toolOptions turns one catalog entry into the mcp-go options that describe it.
 func toolOptions(c catalog.Command) []mcpapi.ToolOption {
 	opts := []mcpapi.ToolOption{mcpapi.WithDescription(c.MCPDescription())}
+	if schema := c.MCPOutputSchema(); schema != nil {
+		raw, err := json.Marshal(schema)
+		if err != nil {
+			panic("mcp: invalid output schema for " + c.MCPName + ": " + err.Error())
+		}
+		opts = append(opts, mcpapi.WithRawOutputSchema(raw))
+	}
 	for _, p := range c.MCPParams() {
 		var props []mcpapi.PropertyOption
 		if p.Required {
@@ -870,6 +878,15 @@ func toolOptions(c catalog.Command) []mcpapi.ToolOption {
 }
 
 // --- helpers ---
+
+// Preserve the existing human-readable content while adding machine-readable
+// fields. Errors keep their existing isError/diagnostic contract; do not turn
+// uncertain writes or failed authorizations into successful-looking objects.
+func structuredResult(text string, data map[string]any) *mcpapi.CallToolResult {
+	result := mcpapi.NewToolResultText(text)
+	result.StructuredContent = data
+	return result
+}
 
 func reqStr(req mcpapi.CallToolRequest, key, def string) string {
 	if v, ok := req.GetArguments()[key].(string); ok {
@@ -1309,16 +1326,17 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return hint, nil
 	}
 	code := res.Code
+	stdoutText, stderrText := tailStream(stdout.Bytes(), res), clampStream(stderr.Bytes())
 	out := fmt.Sprintf("exit: %d\n", code)
 	if stdout.Len() > 0 {
-		s := tailStream(stdout.Bytes(), res)
+		s := stdoutText
 		out += "\n--- stdout ---\n" + s
 		if !strings.HasSuffix(s, "\n") {
 			out += "\n"
 		}
 	}
 	if stderr.Len() > 0 {
-		s := clampStream(stderr.Bytes())
+		s := stderrText
 		out += "\n--- stderr ---\n" + s
 		if !strings.HasSuffix(s, "\n") {
 			out += "\n"
@@ -1327,7 +1345,18 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	if stdout.Len() == 0 && stderr.Len() == 0 {
 		out += "(no output)\n"
 	}
-	return mcpapi.NewToolResultText(out), nil
+	data := map[string]any{
+		"target": target, "done": true, "code": code,
+		"stdout": stdoutText, "stderr": stderrText,
+		"stdout_truncated": stdout.Len() > maxExecStream, "stderr_truncated": stderr.Len() > maxExecStream,
+	}
+	if res.SpillPath != "" {
+		data["spill_path"] = res.SpillPath
+	}
+	if res.SpillBytes > 0 {
+		data["spill_bytes"], data["spill_kept"] = res.SpillBytes, res.SpillKept
+	}
+	return structuredResult(out, data), nil
 }
 
 // errorTextOf pulls the message back out of a tool result so a caller can add
@@ -1386,7 +1415,15 @@ func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	case res.Truncated:
 		head += fmt.Sprintf("TRUNCATED at the 256 KiB cap after a whole number of lines: call again with offset=%d for the rest.\n", res.LastLine+1)
 	}
-	return mcpapi.NewToolResultText(head + "\n--- content ---\n" + res.Content), nil
+	data := map[string]any{
+		"path": path, "content": res.Content, "first_line": res.FirstLine, "last_line": res.LastLine,
+		"total_lines": res.TotalLines, "size_bytes": res.SizeBytes, "sha256": res.SHA256,
+		"truncated": res.Truncated, "long_line": res.LongLine,
+	}
+	if res.Truncated && res.LongLine == 0 {
+		data["next_offset"] = res.LastLine + 1
+	}
+	return structuredResult(head+"\n--- content ---\n"+res.Content, data), nil
 }
 
 func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
@@ -1428,8 +1465,9 @@ func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	if err != nil {
 		return fileOpErrorResult(sess, err), nil
 	}
-	return mcpapi.NewToolResultText(fmt.Sprintf(
-		"replaced %d occurrence(s) in %s\nnew sha256 %s, %d bytes\n", res.Replaced, path, res.SHA256, res.SizeBytes)), nil
+	return structuredResult(fmt.Sprintf(
+		"replaced %d occurrence(s) in %s\nnew sha256 %s, %d bytes\n", res.Replaced, path, res.SHA256, res.SizeBytes),
+		map[string]any{"path": path, "replaced": res.Replaced, "sha256": res.SHA256, "size_bytes": res.SizeBytes}), nil
 }
 
 // reqEdits reads the batch form of the edit argument. A malformed entry is
@@ -1500,8 +1538,9 @@ func mcpWrite(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 	if res.Created {
 		verb = "created"
 	}
-	return mcpapi.NewToolResultText(fmt.Sprintf(
-		"%s %s\nsha256 %s, %d bytes\n", verb, path, res.SHA256, res.SizeBytes)), nil
+	return structuredResult(fmt.Sprintf(
+		"%s %s\nsha256 %s, %d bytes\n", verb, path, res.SHA256, res.SizeBytes),
+		map[string]any{"path": path, "created": res.Created, "sha256": res.SHA256, "size_bytes": res.SizeBytes}), nil
 }
 
 // mcpScreenshot returns what is on the device's screen as image content, which
@@ -1604,9 +1643,9 @@ func mcpExecAsync(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Call
 	if err != nil {
 		return dialErrorResult(sess, err), nil
 	}
-	return mcpapi.NewToolResultText(fmt.Sprintf(
+	return structuredResult(fmt.Sprintf(
 		"started background job %s on %q.\nPoll it with wanctl_exec_poll(target=%q, job_id=%q) until state is 'done'. The job runs for at most 30 minutes and retains at most 8 MiB output; finished results remain available for up to 1h subject to device-wide retention budgets.",
-		id, target, target, id)), nil
+		id, target, target, id), map[string]any{"target": target, "job_id": id}), nil
 }
 
 func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
@@ -1641,7 +1680,18 @@ func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallT
 	} else {
 		out += "\n(no new output since offset)\n"
 	}
-	return mcpapi.NewToolResultText(out), nil
+	state := "running"
+	if !running {
+		state = "done"
+	}
+	data := map[string]any{
+		"target": target, "job_id": jobID, "state": state, "done": !running,
+		"output": clampStream(buf.Bytes()), "next_offset": newOffset, "truncated": buf.Len() > maxExecStream,
+	}
+	if !running {
+		data["code"] = code
+	}
+	return structuredResult(out, data), nil
 }
 
 func mcpPush(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
