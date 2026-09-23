@@ -101,9 +101,93 @@ What limits it now:
 
 - The receiving side downloads one poll at a time, at most 2 MiB each, so a
   leg tops out near 2 MiB per round trip (about 3 MB/s at 0.4 s). Push and
-  pull both sit at 2.4–2.5 MB/s. Raising the drain cap or keeping two polls in
-  flight is the next lever; neither is in this release.
+  pull both sit at 2.4–2.5 MB/s. Addressed below.
 - Spreading concurrent uploads over separate connections was tried and
   measured no gain once the window was 4, so it was not kept. Widening the
   window to 8 or 16 did not help either (16 was slower).
+- Android is not yet measured.
+
+## Receiving side, measured 2026-09-23 21:40 – 09-24 01:00
+
+The link from the 5090 to the edge swung between 0.1 and 7.6 MB/s within
+minutes all evening, so every comparison below interleaves its variants and
+reports medians or ranges from the same minutes.
+
+### Request size decides it
+
+A probe on the 5090 fetched the relay's `/dl` binary through the same HTTP/3
+stack the agent uses, 20 MB per variant, five interleaved rounds:
+
+| requests | median |
+|---|---|
+| 2 MiB, one at a time (the current down poll) | 0.60 MB/s |
+| 2 MiB, one at a time, client QUIC stream window 8 MiB | 0.59 MB/s |
+| 2 MiB, two in flight | 2.49 MB/s |
+| 8 MiB, one at a time | 2.91 MB/s |
+| 16 MiB, one at a time | 4.20 MB/s |
+
+A bigger client window changes nothing, so it was not kept.
+
+### A response of unknown length collapses on this path
+
+A throwaway site behind the same tunnel served synthetic bodies, fetched
+through the relay's edge IP in the same minutes:
+
+| 16 MB body | speed |
+|---|---|
+| with Content-Length | 2.2–2.9 MB/s |
+| without, 256 KB writes flushed | 0.18–0.19 MB/s |
+| without, 32 KB writes flushed | 0.46–0.73 MB/s |
+
+At 2 and 8 MB the two shapes were within noise; the collapse sets in part
+way through a longer body. The relay's down poll never declared a length:
+it called `WriteHeader` before `Write`, so Go sent it chunked.
+
+This is why streaming the down direction (one long framed response per poll,
+the git and rsync way the research recommended) was built and dropped: on the
+real path it ran 0.3–0.9 MB/s where polling ran about 1 MB/s.
+
+### What shipped
+
+- Down-poll responses declare Content-Length.
+- A reader asks for its chunk in `max=`: 2 MiB first, doubling while full
+  chunks arrive inside 4 s, up to 16 MiB, halving after one that took over
+  30 s. An older relay ignores `max=` and serves 2 MiB.
+- A session holding an unacknowledged chunk is kept 10 minutes without a
+  request instead of 60 s, so a slow reader still downloading a large chunk
+  from a proxy's buffer does not lose it; one with a poll in progress is never
+  reaped.
+- The handshake with the device gives up after 60 s. A relay can hand a
+  session to an agent that has just exited, and the controller used to wait
+  for as long as it was let.
+
+### Results (Mac controller on the VM's LAN, so the upload leg costs nothing)
+
+30 MB push, agents swapped in blocks of three, both on the same relay build
+(which declares Content-Length to the old agent too):
+
+| 5090 agent | 9 runs | median |
+|---|---|---|
+| this branch | 7.1–12.2 s | 9.1 s |
+| previous head (2 MiB polls) | 15.2–31.3 s | 28.3 s |
+
+With the link at 7.6 MB/s the old agent still took 30 s: it is bound by 2 MiB
+per round trip, not by the link.
+
+Acceptance on this branch: 30 MB push 7.6 s, 100 MB push 14.9 s, both
+hash-checked. 1-byte push shows no regression: new and old clients
+interleaved at 2.9–4.1 s from the Mac and 3.5–4.9 s from the 5090.
+
+### Still open
+
+- **Pull is bound by the device's upload leg**: 30 MB 32.7 s, 100 MB 59.2 s
+  (about 1–1.7 MB/s). An upload matrix from the 5090 (1 MiB × 4, 1 MiB, 4 MiB,
+  4 MiB × 2, 8 MiB, 16 MiB) showed no variant consistently ahead, so request
+  shape is not the lever there. The next candidate is the tunnel itself:
+  cloudflared in http2 mode is an HTTP/2 server with the default 1 MiB
+  per-connection receive window, which bounds uploads per tunnel connection
+  to 1 MiB per round trip whatever the client does. Unverified.
+- **A controller can still wait forever after the handshake** if its device
+  vanishes mid-session: its own polls keep the session alive, so the relay
+  never reaps it. Seen once, right after swapping the 5090's agent.
 - Android is not yet measured.
