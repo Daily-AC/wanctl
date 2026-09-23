@@ -776,6 +776,33 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
 	}
+	r.hmu.Unlock()
+	// A writer that knows this relay orders writes sends its last bytes with
+	// the close instead of in an /h/up of their own, saving the round trip
+	// that every command otherwise spends at the very end. They are queued
+	// in their place before the queues shut.
+	if seqParam := req.URL.Query().Get(httpconn.UpSeqParam); seqParam != "" {
+		seq, err := strconv.ParseUint(seqParam, 10, 64)
+		if err != nil || seq == 0 {
+			http.Error(w, "bad seq", http.StatusBadRequest)
+			return
+		}
+		req.Body = http.MaxBytesReader(w, req.Body, limits.RelayHTTPUploadBytes)
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		dst := s.toAgent
+		if req.URL.Query().Get("role") == "agent" {
+			dst = s.toClient
+		}
+		if !dst.pushSeq(seq, body) {
+			http.Error(w, "session closed or write out of window", http.StatusGone)
+			return
+		}
+	}
+	r.hmu.Lock()
 	s.closedAt = time.Now()
 	r.hmu.Unlock()
 	// Closing the queues stops new bytes and makes the far side see EOF once
