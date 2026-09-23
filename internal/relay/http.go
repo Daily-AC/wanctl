@@ -187,6 +187,14 @@ func (q *sideQueue) settled() bool {
 	return !q.inflight && q.unacked == nil && q.head == nil && len(q.ch) == 0
 }
 
+// undelivered reports whether a poll is taking bytes out of this direction
+// right now, and whether it holds a chunk its reader has not acknowledged.
+func (q *sideQueue) undelivered() (serving, unacked bool) {
+	q.ackMu.Lock()
+	defer q.ackMu.Unlock()
+	return q.inflight, q.unacked != nil
+}
+
 // acquire admits this poll, waiting for any poll already in flight on this
 // direction to finish. It reports false when the caller's request went away
 // first, in which case nothing was taken from the queue.
@@ -220,6 +228,12 @@ func (q *sideQueue) release() { <-q.turn }
 // context is cancelled after the drain — the response never reaching the reader
 // — leaves the bytes to be re-served to the next poll rather than dropping them.
 func (q *sideQueue) take(ctx context.Context, ack uint64, timeout time.Duration) (data []byte, seq uint64, closed, ok bool) {
+	return q.takeUpTo(ctx, ack, timeout, maxDrainBytes)
+}
+
+// takeUpTo is take with a reader-chosen bound on the chunk, at most
+// maxDrainLimit.
+func (q *sideQueue) takeUpTo(ctx context.Context, ack uint64, timeout time.Duration, limit int) (data []byte, seq uint64, closed, ok bool) {
 	if !q.acquire(ctx) {
 		return nil, 0, false, false
 	}
@@ -238,7 +252,7 @@ func (q *sideQueue) take(ctx context.Context, ack uint64, timeout time.Duration)
 	}
 	q.ackMu.Unlock()
 
-	data, closed = q.drain(ctx, timeout)
+	data, closed = q.drainUpTo(ctx, timeout, limit)
 	if len(data) == 0 {
 		return nil, 0, closed, true
 	}
@@ -289,23 +303,36 @@ func (q *sideQueue) pollDrain(ctx context.Context, timeout time.Duration) (data 
 // in-process bridge, which is why the split has to exist at all.
 const maxDrainBytes = 2 << 20
 
+// maxDrainLimit bounds what a reader may ask one chunk to carry (DownMaxParam).
+// A reader that downloads a full chunk quickly asks for more, because each
+// poll costs a round trip and each response starts on a fresh HTTP stream: on
+// the relay's CDN path, from a mainland home line, 2 MiB responses moved a
+// median 0.6 MB/s and 16 MiB responses 4.2 MB/s (2026-09-23). A reader on a
+// slow link never grows its chunk, so issue #57's link keeps 2 MiB.
+const maxDrainLimit = 16 << 20
+
 // drain returns bytes available within timeout, coalescing queued chunks up to
 // maxDrainBytes. closed is true only when the queue is closed and no more bytes
 // remain. Callers hold the queue's turn.
 func (q *sideQueue) drain(ctx context.Context, timeout time.Duration) (data []byte, closed bool) {
+	return q.drainUpTo(ctx, timeout, maxDrainBytes)
+}
+
+// drainUpTo is drain with a bound of limit bytes instead of maxDrainBytes.
+func (q *sideQueue) drainUpTo(ctx context.Context, timeout time.Duration, limit int) (data []byte, closed bool) {
 	var out []byte
 	// appendCapped takes as much of b as still fits and parks the rest in head.
 	// out is grown by hand so that neither its length nor the memory behind it
 	// can pass the cap, and an idle poll that never sees a byte allocates none.
 	appendCapped := func(b []byte) {
-		if room := maxDrainBytes - len(out); len(b) > room {
+		if room := limit - len(out); len(b) > room {
 			q.ackMu.Lock()
 			q.head = b[room:]
 			q.ackMu.Unlock()
 			b = b[:room]
 		}
 		if need := len(out) + len(b); need > cap(out) {
-			grown := make([]byte, len(out), max(need, min(2*cap(out), maxDrainBytes)))
+			grown := make([]byte, len(out), max(need, min(2*cap(out), limit)))
 			copy(grown, out)
 			out = grown
 		}
@@ -313,7 +340,7 @@ func (q *sideQueue) drain(ctx context.Context, timeout time.Duration) (data []by
 	}
 	// fill drains what is already queued, without waiting.
 	fill := func() {
-		for len(out) < maxDrainBytes {
+		for len(out) < limit {
 			select {
 			case b := <-q.ch:
 				appendCapped(b)
@@ -396,6 +423,13 @@ const (
 	// one is not, so 3× is comfortably clear of a slow but live command.
 	httpSessionIdle = 3 * downPollWait
 	downPollWait    = 20 * time.Second
+	// unackedRetention is how long a session holding an unacknowledged chunk
+	// survives without a request. The relay can finish writing a chunk long
+	// before its reader has it: proxies buffer what it wrote, and a reader on
+	// a shaped link (20-60 KB/s over TLS on TCP) can take minutes to download
+	// a large chunk and poll again. Reaping at httpSessionIdle would delete
+	// bytes it is still receiving.
+	unackedRetention = 10 * time.Minute
 )
 
 func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
@@ -736,7 +770,11 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "bad ack", http.StatusBadRequest)
 			return
 		}
-		data, seq, closed, served = src.take(req.Context(), ack, downPollWait)
+		limit := maxDrainBytes
+		if m, err := strconv.Atoi(req.URL.Query().Get(httpconn.DownMaxParam)); err == nil && m > 0 {
+			limit = min(m, maxDrainLimit)
+		}
+		data, seq, closed, served = src.takeUpTo(req.Context(), ack, downPollWait, limit)
 	} else {
 		// Pre-acknowledgement client: serve it the old fire-and-forget way so
 		// a mixed-version fleet keeps working.
@@ -762,8 +800,18 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 	if seq > 0 {
 		w.Header().Set(httpconn.DownSeqHeader, strconv.FormatUint(seq, 10))
 	}
+	// Declared, not left to chunked encoding. Measured through the relay's
+	// Cloudflare edge and tunnel, a 16 MiB response of unknown length slowed
+	// to 0.2 MB/s part way through while the same bytes with a length moved
+	// 2.2-2.9 MB/s (2026-09-23).
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
+	// The reader cannot poll again before it has the chunk, so its idle time
+	// starts once the chunk is written, not when the poll arrived.
+	r.hmu.Lock()
+	s.lastActive = time.Now()
+	r.hmu.Unlock()
 }
 
 func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
@@ -935,7 +983,16 @@ func (r *Relay) reapHTTP(now time.Time) {
 		}
 	}
 	for sid, s := range r.hsess {
-		if !s.lastActive.IsZero() && now.Sub(s.lastActive) > httpSessionIdle {
+		idle := httpSessionIdle
+		serveC, heldC := s.toClient.undelivered()
+		serveA, heldA := s.toAgent.undelivered()
+		if serveC || serveA {
+			continue // a poll is in progress
+		}
+		if heldC || heldA {
+			idle = unackedRetention
+		}
+		if !s.lastActive.IsZero() && now.Sub(s.lastActive) > idle {
 			delete(r.hsess, sid)
 			dead = append(dead, s)
 		}
