@@ -34,6 +34,7 @@ import (
 	"wanctl/internal/httpconn"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
+	"wanctl/internal/relayhttp"
 	"wanctl/internal/server"
 	"wanctl/internal/sessionauth"
 	"wanctl/internal/transport"
@@ -1140,7 +1141,9 @@ func (a *Agent) deregisterHTTP(base string) {
 func (a *Agent) runHTTP(ctx context.Context) error {
 	base := httpBase(a.opts.RelayURL)
 	fmt.Printf("wanctl agent %q online via %s (http transport)\n  fingerprint: %s\n", a.opts.Name, base, a.id.Fingerprint)
-	hc := &http.Client{Timeout: 35 * time.Second}
+	// The poll loop shares the relay transport with the sessions it spawns, so
+	// the connection it keeps warm (and its HTTP/3 probe) serves them too.
+	hc := &http.Client{Transport: relayhttp.Shared(), Timeout: 35 * time.Second}
 	q := url.Values{"device": {a.DeviceID()}, "device_id": {a.DeviceID()}, "name": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}, "delegation": {"1"}}.Encode()
 	pollURL := base + "/h/poll?" + q
 	// Registration lives or dies by this loop: the relay keeps a device listed
