@@ -470,12 +470,12 @@ func TestOverlappingPollsCannotTakeDifferentChunks(t *testing.T) {
 	}
 }
 
-// pendingDrains counts how many goroutines are parked inside sideQueue.drain.
+// pendingDrains counts how many goroutines are parked inside sideQueue.drainUpTo.
 // A poll the carrier abandoned keeps running on the relay, and that is the
 // state this has to observe from the outside.
 func pendingDrains() int {
 	buf := make([]byte, 1<<20)
-	return bytes.Count(buf[:runtime.Stack(buf, true)], []byte("(*sideQueue).drain("))
+	return bytes.Count(buf[:runtime.Stack(buf, true)], []byte("(*sideQueue).drainUpTo("))
 }
 
 func awaitPendingDrains(n int) bool {

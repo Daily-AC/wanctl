@@ -60,6 +60,7 @@ type conn struct {
 	eof      bool
 	ackSeq   uint64 // highest down-poll sequence fully received
 	ackable  bool   // the relay has answered this session with the ack protocol
+	downMax  int    // bytes this reader asks one down poll to carry
 
 	writeM     sync.Mutex
 	pending    []byte
@@ -116,13 +117,31 @@ const (
 	// gated on having seen this (or a sequence header) on this session.
 	DownAckCapabilityHeader = "X-Wanctl-Down-Ack"
 
+	// DownMaxParam is the most bytes the reader wants in one down-poll
+	// response. A relay that does not know it answers with its own cap.
+	DownMaxParam = "max"
+
 	// downPollAttempts bounds how many times one Read retries a down poll that
 	// the carrier failed to deliver. The relay still holds the chunk, so a
 	// retry is a re-send rather than a hole; the bound is what stops a
 	// permanently broken link from spinning forever.
 	downPollAttempts = 6
 	downRetryDelay   = 250 * time.Millisecond
+
+	// A reader starts by asking for the chunk every relay has always served
+	// and doubles it while full chunks keep arriving quickly: each poll costs
+	// a round trip and a fresh HTTP stream, so bigger chunks move bulk data
+	// several times faster on a CDN path. A chunk that takes long to arrive
+	// halves it again, so one response stays well inside the client's
+	// five-minute request bound on a slow link.
+	downMaxFloor   = 2 << 20
+	downMaxCeiling = 16 << 20
+	downGrowWithin = 4 * time.Second
 )
+
+// downShrinkPast is how long a chunk may take before the next one is halved;
+// a variable so tests need not wait it out.
+var downShrinkPast = 30 * time.Second
 
 // Dial constructs a net.Conn for a session/role. base is the relay's HTTP origin
 // (http:// or https://, or ws(s):// which is normalized). No network I/O happens
@@ -149,6 +168,7 @@ func DialWith(ctx context.Context, base, session, role, token string, hc *http.C
 		token:   token,
 		hc:      hc,
 		upSlots: make(chan struct{}, upWindow),
+		downMax: downMaxFloor,
 	}, nil
 }
 
@@ -216,6 +236,7 @@ func (c *conn) Read(p []byte) (int, error) {
 			"session":    {c.session},
 			"role":       {c.role},
 			DownAckParam: {strconv.FormatUint(c.ackSeq, 10)},
+			DownMaxParam: {strconv.Itoa(c.downMax)},
 		}
 		req, err := http.NewRequest("GET", c.base+"/h/down?"+q.Encode(), nil)
 		if err != nil {
@@ -247,8 +268,10 @@ func (c *conn) Read(p []byte) (int, error) {
 			failures = 0
 			continue // no data this round; poll again
 		case http.StatusOK:
+			started := time.Now()
 			body, readErr := io.ReadAll(resp.Body)
 			resp.Body.Close()
+			c.adjustDownMax(len(body), time.Since(started), readErr)
 			if readErr != nil {
 				// The body was cut short. Do not advance the ack and do not
 				// hand the partial body on: the relay re-sends the whole
@@ -283,6 +306,16 @@ func (c *conn) Read(p []byte) (int, error) {
 			resp.Body.Close()
 			return 0, fmt.Errorf("down poll: relay returned %d", resp.StatusCode)
 		}
+	}
+}
+
+// adjustDownMax sizes the next poll's chunk from how the last one arrived.
+func (c *conn) adjustDownMax(n int, took time.Duration, readErr error) {
+	switch {
+	case readErr != nil || took > downShrinkPast:
+		c.downMax = max(c.downMax/2, downMaxFloor)
+	case n >= c.downMax && took < downGrowWithin:
+		c.downMax = min(c.downMax*2, downMaxCeiling)
 	}
 }
 
