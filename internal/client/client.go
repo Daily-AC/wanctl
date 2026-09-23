@@ -524,11 +524,24 @@ func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target, hello
 	return conn, nil
 }
 
+// deviceHandshakeTimeout bounds the TLS handshake with the device. A relay
+// can hand a session to a device whose agent has just exited — an update or
+// restart, before the relay notices — and nothing then ever answers: the
+// controller re-polled an empty session for as long as anyone let it run.
+// A shaped link needs a few seconds for the handshake's round trips, so this
+// only has to be far past that.
+var deviceHandshakeTimeout = 60 * time.Second
+
 // sendHello completes the TLS handshake and writes the hello, without waiting
 // for the device to answer it.
 func (c *Client) sendHello(ctx context.Context, nc net.Conn, target, helloKind string) (*tls.Conn, error) {
-	dr, err := transport.ClientHandshake(ctx, nc, pinName(target), c.id, c.known)
+	hctx, cancel := context.WithTimeout(ctx, deviceHandshakeTimeout)
+	defer cancel()
+	dr, err := transport.ClientHandshake(hctx, nc, pinName(target), c.id, c.known)
 	if err != nil {
+		if ctx.Err() == nil && hctx.Err() != nil {
+			return nil, fmt.Errorf("device %s did not answer the handshake within %s; it may be restarting, try again", target, deviceHandshakeTimeout)
+		}
 		return nil, err
 	}
 	if dr.FirstSeen {
