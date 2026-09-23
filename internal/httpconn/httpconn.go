@@ -43,6 +43,7 @@ import (
 
 	"wanctl/internal/admission"
 	"wanctl/internal/config"
+	"wanctl/internal/limits"
 	"wanctl/internal/relayhttp"
 )
 
@@ -68,7 +69,11 @@ type conn struct {
 }
 
 const (
-	writeBatchBytes = 256 << 10
+	// writeBatchBytes is as much as the relay accepts in one /h/up. Upload is
+	// one request at a time, so it cannot move more than a batch per round
+	// trip: at the 0.5 s round trip of a CDN edge on another continent, 256 KiB
+	// batches capped a push at about 400 KiB/s whatever the link could carry.
+	writeBatchBytes = int(limits.RelayHTTPUploadBytes)
 	writeFlushDelay = 5 * time.Millisecond
 
 	// DownSeqHeader carries the sequence number of a data-bearing down-poll
@@ -248,6 +253,13 @@ func (c *conn) Write(p []byte) (int, error) {
 		return 0, c.writeErr
 	}
 	c.pending = append(c.pending, p...)
+	if len(c.pending) >= writeBatchBytes {
+		// The timer was armed for bytes that are about to go out in this
+		// batch. Left running, it fires while the batch is in flight and then
+		// posts whatever tail the batch left behind as a request of its own,
+		// which doubled the round trips of every bulk transfer.
+		c.stopFlushTimerLocked()
+	}
 	for len(c.pending) >= writeBatchBytes {
 		if err := c.postPendingLocked(writeBatchBytes); err != nil {
 			c.writeErr = err

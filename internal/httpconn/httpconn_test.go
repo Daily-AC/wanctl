@@ -168,3 +168,40 @@ func bodyLengths(bodies [][]byte) []int {
 	}
 	return lengths
 }
+
+// TestBulkWriteSendsNoTailRequests models a push: the TLS layer hands over one
+// record at a time, records do not divide the batch size, and each upload takes
+// longer than the flush delay. The timer armed before a batch filled must not
+// survive the batch and post its leftover as an extra request.
+func TestBulkWriteSendsNoTailRequests(t *testing.T) {
+	recorder := &uploadRecorder{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/h/up" {
+			time.Sleep(50 * time.Millisecond)
+		}
+		recorder.handler(w, req)
+	}))
+	defer server.Close()
+	connection, err := Dial(t.Context(), server.URL, "session", "client", "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+
+	const record = 16413 // a full TLS 1.3 record with its overhead
+	total := 0
+	for total < 3*writeBatchBytes {
+		if _, err := connection.Write(make([]byte, record)); err != nil {
+			t.Fatal(err)
+		}
+		total += record
+	}
+	if err := connection.(*conn).flushWrites(); err != nil {
+		t.Fatal(err)
+	}
+	lengths := bodyLengths(recorder.snapshot())
+	want := (total + writeBatchBytes - 1) / writeBatchBytes
+	if len(lengths) != want {
+		t.Fatalf("%d bytes went out in %d requests %v, want %d", total, len(lengths), lengths, want)
+	}
+}
