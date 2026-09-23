@@ -56,6 +56,14 @@ type sideQueue struct {
 	// head is the tail of a chunk that was split at the drain cap. It is served
 	// before anything still in ch, so splitting never reorders the stream.
 	head []byte
+	// seqMu orders the writes of a writer that keeps several /h/up in flight
+	// at once. Those requests can arrive in any order, so each carries its
+	// place in the stream and is held here until the ones before it land. A
+	// sequence already delivered is a retry and is acknowledged without being
+	// queued again, which is what makes resending an /h/up safe at all.
+	seqMu   sync.Mutex
+	seqNext uint64 // the sequence expected next; sequences start at 1
+	seqHeld map[uint64][]byte
 	// inflight marks a poll that holds the turn and may be part way through
 	// taking bytes out. Between the receive from ch and the store into unacked
 	// those bytes are in no field at all, so without this the queue looks empty
@@ -64,7 +72,46 @@ type sideQueue struct {
 }
 
 func newSideQueue() *sideQueue {
-	return &sideQueue{ch: make(chan []byte, 256), done: make(chan struct{}), turn: make(chan struct{}, 1)}
+	return &sideQueue{ch: make(chan []byte, 256), done: make(chan struct{}), turn: make(chan struct{}, 1), seqNext: 1}
+}
+
+// maxSeqAhead bounds how far past the next expected write a sequenced /h/up may
+// be, and so how much one direction holds while it waits for a gap to fill:
+// writers keep a handful of batches in flight, never this many.
+const maxSeqAhead = 64
+
+// pushSeq enqueues b as write number seq of this direction, holding it until
+// every earlier write has been queued. It reports false once the queue is
+// closed or when seq is further ahead than any honest writer runs.
+func (q *sideQueue) pushSeq(seq uint64, b []byte) bool {
+	q.seqMu.Lock()
+	defer q.seqMu.Unlock()
+	switch {
+	case seq < q.seqNext:
+		return true // a retry of a write already queued
+	case seq > q.seqNext+maxSeqAhead:
+		return false
+	case seq > q.seqNext:
+		if q.seqHeld == nil {
+			q.seqHeld = map[uint64][]byte{}
+		}
+		cp := make([]byte, len(b))
+		copy(cp, b)
+		q.seqHeld[seq] = cp
+		return true
+	}
+	for {
+		if len(b) > 0 && !q.push(b) {
+			return false
+		}
+		q.seqNext++
+		next, ok := q.seqHeld[q.seqNext]
+		if !ok {
+			return true
+		}
+		delete(q.seqHeld, q.seqNext)
+		b = next
+	}
 }
 
 // push enqueues a copy of b, or reports false once the queue is closed. The
@@ -589,6 +636,10 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Tell the writer this relay orders sequenced writes, so it may keep
+	// several in flight. A relay without this header queues /h/up in arrival
+	// order and a writer must send them one at a time.
+	w.Header().Set(httpconn.UpSeqCapabilityHeader, "1")
 	s := r.sessionForAccess(req.URL.Query().Get("session"), access, req.URL.Query().Get("role"))
 	if s == nil {
 		http.Error(w, "no such session", http.StatusNotFound)
@@ -621,6 +672,19 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 	dst := s.toAgent // role=client writes toward the agent
 	if req.URL.Query().Get("role") == "agent" {
 		dst = s.toClient
+	}
+	if seqParam := req.URL.Query().Get(httpconn.UpSeqParam); seqParam != "" {
+		seq, err := strconv.ParseUint(seqParam, 10, 64)
+		if err != nil || seq == 0 {
+			http.Error(w, "bad seq", http.StatusBadRequest)
+			return
+		}
+		if !dst.pushSeq(seq, body) {
+			http.Error(w, "session closed or write out of window", http.StatusGone)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
 	}
 	if len(body) > 0 && !dst.push(body) {
 		http.Error(w, "session closed", http.StatusGone)
