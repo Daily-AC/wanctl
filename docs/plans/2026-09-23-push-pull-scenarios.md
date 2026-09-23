@@ -81,3 +81,29 @@ Ingress was not isolated; from the 5090 a 1 MiB `/h/up` completes in ~1.2 s.
 | round trips before the first byte | small files | merge resolve into dial, don't wait on close, send hello with the request | client + relay |
 | UDP passes but is worse than TCP (TUN proxies) | some proxied users | `WANCTL_HTTP3=0`; no automatic detection | – |
 | Android, UDP-blocked networks, hosted MCP push | unknown | measure | devices |
+
+## Release candidate, measured 2026-09-23 18:00–18:45
+
+Relay on a build of this branch (`wanctl:h3test` on the VM), 5090 agent on a
+dev build, Mac controller through its proxy node. Evening, link variable.
+
+| criterion | target | measured |
+|---|---|---|
+| 8 MB push | ≤ 10 s | 8.0–8.6 s; 8.5–13.7 s in a worse hour |
+| 8 MB pull | ≤ 10 s | 7.7–8.7 s; 10.3–21.2 s in a worse hour |
+| 100 MB push | ≤ 60 s | 39–42 s; one run at 123 s before pipelining |
+| 100 MB pull | ≤ 60 s | 42 s |
+| 1 byte push | ≤ 3 s | 2.4–3.4 s (median 2.6) |
+| old agent updates itself | yes | BMS v0.10.0 → v0.12.1 at 17:44 unattended, via the edge's `/dl` gzip and plain-HTTP redirect for the Go updater |
+| UDP blocked | falls back, works | 5090 with outbound UDP firewalled: exec, push, 8 MB pull all correct over TCP |
+
+What limits it now:
+
+- The receiving side downloads one poll at a time, at most 2 MiB each, so a
+  leg tops out near 2 MiB per round trip (about 3 MB/s at 0.4 s). Push and
+  pull both sit at 2.4–2.5 MB/s. Raising the drain cap or keeping two polls in
+  flight is the next lever; neither is in this release.
+- Spreading concurrent uploads over separate connections was tried and
+  measured no gain once the window was 4, so it was not kept. Widening the
+  window to 8 or 16 did not help either (16 was slower).
+- Android is not yet measured.
