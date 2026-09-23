@@ -91,7 +91,7 @@ dev build, Mac controller through its proxy node. Evening, link variable.
 |---|---|---|
 | 8 MB push | ≤ 10 s | 8.0–8.6 s; 8.5–13.7 s in a worse hour |
 | 8 MB pull | ≤ 10 s | 7.7–8.7 s; 10.3–21.2 s in a worse hour |
-| 100 MB push | ≤ 60 s | 39–42 s; one run at 123 s before pipelining |
+| 100 MB push | ≤ 60 s | 39–42 s; one run at 123 s in a worse hour |
 | 100 MB pull | ≤ 60 s | 42 s |
 | 1 byte push | ≤ 3 s | 2.4–3.4 s (median 2.6) |
 | old agent updates itself | yes | BMS v0.10.0 → v0.12.1 at 17:44 unattended, via the edge's `/dl` gzip and plain-HTTP redirect for the Go updater |
