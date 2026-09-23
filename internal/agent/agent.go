@@ -1211,16 +1211,20 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 		var msg sessionauth.Open
 		json.NewDecoder(resp.Body).Decode(&msg)
 		resp.Body.Close()
+		ordered := resp.Header.Get(httpconn.UpSeqCapabilityHeader) == "1"
 		if msg.ValidFor(a.DeviceID()) {
-			a.spawn(func() { a.serveSessionHTTP(ctx, base, msg) })
+			a.spawn(func() { a.serveSessionHTTP(ctx, base, msg, ordered) })
 		}
 	}
 }
 
-func (a *Agent) serveSessionHTTP(ctx context.Context, base string, open sessionauth.Open) {
+func (a *Agent) serveSessionHTTP(ctx context.Context, base string, open sessionauth.Open, ordered bool) {
 	nc, err := httpconn.Dial(ctx, base, open.Session, "agent", a.opts.Token)
 	if err != nil {
 		return
+	}
+	if ordered {
+		httpconn.MarkOrdered(nc)
 	}
 	a.handleSession(ctx, nc, open)
 }

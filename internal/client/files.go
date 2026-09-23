@@ -48,7 +48,7 @@ func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io
 	if size < 0 || size > protocol.MaxFileSize {
 		return fmt.Errorf("upload size %d outside supported range 0..%d", size, protocol.MaxFileSize)
 	}
-	conn, err := c.connect(ctx, target)
+	conn, err := c.connectPipelined(ctx, target)
 	if err != nil {
 		return err
 	}
@@ -113,7 +113,7 @@ func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io
 
 // Pull downloads remotePath from the target device into local.
 func (c *Client) Pull(ctx context.Context, target, remotePath, local string) error {
-	conn, err := c.connect(ctx, target)
+	conn, err := c.connectPipelined(ctx, target)
 	if err != nil {
 		return err
 	}

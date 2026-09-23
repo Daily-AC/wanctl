@@ -487,6 +487,7 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "another agent instance registered this device name", http.StatusConflict)
 			return
 		}
+		w.Header().Set(httpconn.UpSeqCapabilityHeader, "1")
 		writeJSON(w, open)
 	case <-changed:
 		if inst != "" && r.httpAgentObsolete(key, inst) {
@@ -563,6 +564,9 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 	if r.audit != nil {
 		r.audit.Audit(auth.OwnerNamespace, auth.Device, "dial")
 	}
+	// Said here as well as on /h/up so the controller's first write, its TLS
+	// ClientHello, need not wait for an /h/up answer to learn it.
+	w.Header().Set(httpconn.UpSeqCapabilityHeader, "1")
 	writeJSON(w, map[string]string{"session": sid})
 }
 
