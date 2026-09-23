@@ -24,6 +24,7 @@ import (
 	"wanctl/internal/config"
 	"wanctl/internal/httpconn"
 	"wanctl/internal/protocol"
+	"wanctl/internal/relayhttp"
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
 )
@@ -121,7 +122,7 @@ func NewWith(id *transport.Identity, known *transport.Store, relayURL, token, tr
 	if tr == "" {
 		tr = "ws"
 	}
-	return &Client{id: id, known: known, relayURL: strings.TrimRight(relayURL, "/"), token: token, transport: tr, httpc: http.DefaultClient}
+	return &Client{id: id, known: known, relayURL: strings.TrimRight(relayURL, "/"), token: token, transport: tr, httpc: &http.Client{Transport: relayhttp.Shared()}}
 }
 
 // Identity exposes this controller's fingerprint.

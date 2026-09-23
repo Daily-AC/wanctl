@@ -43,6 +43,7 @@ import (
 
 	"wanctl/internal/admission"
 	"wanctl/internal/config"
+	"wanctl/internal/relayhttp"
 )
 
 type conn struct {
@@ -120,17 +121,11 @@ func DialWith(ctx context.Context, base, session, role, token string, hc *http.C
 }
 
 func defaultClient() *http.Client {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	// A down poll parks on the relay for its whole poll window before
-	// answering, so only the wait for response *headers* can be bounded
-	// tightly. The previous blanket http.Client.Timeout bounded the entire
-	// exchange, so on a slow link it fired while a response body was still
-	// downloading and cut the body in half (issue #57).
-	tr.ResponseHeaderTimeout = 45 * time.Second
-	// The whole request still has a bound, generous enough that a full
+	// The shared relay transport bounds the wait for response headers; the
+	// whole request still has a bound, generous enough that a full
 	// maxDrainBytes response downloads well inside it on the 60 KB/s link from
 	// issue #57 (about 34 s) even after the poll parked on the relay first.
-	return &http.Client{Transport: tr, Timeout: 5 * time.Minute}
+	return &http.Client{Transport: relayhttp.Shared(), Timeout: 5 * time.Minute}
 }
 
 func (c *conn) Read(p []byte) (int, error) {
