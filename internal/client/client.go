@@ -398,15 +398,47 @@ func (c *Client) connect(ctx context.Context, target string) (*tls.Conn, error) 
 }
 
 func (c *Client) connectKind(ctx context.Context, target, helloKind string) (*tls.Conn, error) {
-	target, err := c.resolve(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	var nc net.Conn
-	if c.transport == "http" {
-		nc, err = c.dialHTTP(ctx, target)
+	var (
+		nc  net.Conn
+		err error
+	)
+	if strings.TrimSpace(target) == "" {
+		// Only /resolve can pick the single online device, so it has to
+		// answer before there is anything to dial.
+		if target, err = c.resolve(ctx, target); err != nil {
+			return nil, err
+		}
+		nc, err = c.dial(ctx, target)
 	} else {
-		nc, err = c.dialWS(ctx, target)
+		// The relay resolves a dial target the same way /resolve does, so the
+		// two requests run side by side and the command saves a round trip.
+		// The resolved name only selects the pinned fingerprint: if the two
+		// ever disagreed, the device that answers would not match the pin and
+		// the handshake below would refuse it.
+		type resolved struct {
+			target string
+			err    error
+		}
+		rc := make(chan resolved, 1)
+		go func() {
+			t, err := c.resolve(ctx, target)
+			rc <- resolved{t, err}
+		}()
+		raw := strings.TrimSpace(target)
+		nc, err = c.dial(ctx, raw)
+		r := <-rc
+		if r.err != nil {
+			if nc != nil {
+				nc.Close()
+			}
+			return nil, r.err
+		}
+		target = r.target
+		if err != nil && target != raw {
+			// A relay from before dial-side resolution only knows the
+			// canonical name, so the saved round trip is given back.
+			nc, err = c.dial(ctx, target)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -415,6 +447,13 @@ func (c *Client) connectKind(ctx context.Context, target, helloKind string) (*tl
 	// reads from a connection that intentionally outlives its dial context.
 	defer wsconn.CloseOnCancel(ctx, nc)()
 	return c.finishHandshake(ctx, nc, target, helloKind)
+}
+
+func (c *Client) dial(ctx context.Context, target string) (net.Conn, error) {
+	if c.transport == "http" {
+		return c.dialHTTP(ctx, target)
+	}
+	return c.dialWS(ctx, target)
 }
 
 func (c *Client) dialWS(ctx context.Context, target string) (net.Conn, error) {

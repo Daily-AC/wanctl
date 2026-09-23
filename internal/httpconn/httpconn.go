@@ -441,19 +441,35 @@ func (c *conn) Close() error {
 		return nil
 	}
 	c.stopFlushTimerLocked()
+	q := url.Values{"session": {c.session}, "role": {c.role}}
+	var tail []byte
 	if c.uploadErr() == nil && len(c.pending) > 0 {
-		c.sendLocked(len(c.pending))
+		if c.upOrdered.Load() {
+			// An ordering relay takes the last bytes with the close itself.
+			tail = append([]byte(nil), c.pending...)
+			c.pending = c.pending[:0]
+			c.upSeq++
+			q.Set(UpSeqParam, strconv.FormatUint(c.upSeq, 10))
+		} else {
+			c.sendLocked(len(c.pending))
+		}
 	}
 	c.closed = true
 	c.writeM.Unlock()
 	// The last writes must land before the close, or the relay would end the
 	// session with the tail of the stream still in flight.
 	c.upWG.Wait()
-	q := url.Values{"session": {c.session}}
-	req, _ := http.NewRequest("POST", c.base+"/h/close?"+q.Encode(), nil)
+	req, _ := http.NewRequest("POST", c.base+"/h/close?"+q.Encode(), bytes.NewReader(tail))
 	if req != nil {
 		admission.SetBearer(req, c.token)
-		if resp, err := c.hc.Do(req); err == nil {
+		resp, err := c.hc.Do(req)
+		switch {
+		case err != nil && tail != nil:
+			c.fail(err)
+		case err == nil:
+			if resp.StatusCode != http.StatusOK && tail != nil {
+				c.fail(fmt.Errorf("close with final bytes: relay returned %d", resp.StatusCode))
+			}
 			resp.Body.Close()
 		}
 	}
