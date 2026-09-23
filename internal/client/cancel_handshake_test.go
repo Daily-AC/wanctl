@@ -127,3 +127,51 @@ func assertStalledOperationCancels(t *testing.T, ready, done <-chan error, cance
 		t.Fatal("controller remained blocked after cancellation")
 	}
 }
+
+// A relay can hand a session to a device whose agent has just exited, and then
+// nothing answers the handshake. The controller has to give up on its own,
+// with an error that says why, rather than wait for as long as it is let.
+func TestSilentDeviceFailsTheHandshake(t *testing.T) {
+	old := deviceHandshakeTimeout
+	deviceHandshakeTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { deviceHandshakeTimeout = old })
+
+	clientIdentity, err := transport.IdentityFromSeed(bytes.Repeat([]byte{2}, 32), "silent-controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const target = "alice/silent-device"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/resolve" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"target": target})
+			return
+		}
+		ws, err := websocket.Accept(w, req, nil)
+		if err != nil {
+			return
+		}
+		defer ws.CloseNow()
+		t.Cleanup(func() { _ = ws.CloseNow() })
+		for { // swallow the ClientHello and everything after it
+			if _, _, err := ws.Read(req.Context()); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := NewWith(clientIdentity, transport.NewMemStore(), "ws"+strings.TrimPrefix(srv.URL, "http"), "test-token", "ws")
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := c.Pair(context.Background(), target)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "did not answer the handshake") {
+			t.Fatalf("pair with a silent device = %v, want the handshake to time out", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("controller kept waiting on a device that never answered")
+	}
+}
