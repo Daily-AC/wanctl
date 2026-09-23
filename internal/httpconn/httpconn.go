@@ -152,6 +152,16 @@ func DialWith(ctx context.Context, base, session, role, token string, hc *http.C
 	}, nil
 }
 
+// MarkOrdered records that the relay announced write ordering before the
+// session carried a byte, on /h/dial or /h/poll, so the first write can go out
+// without waiting for an /h/up answer to say so. It is a no-op on any other
+// net.Conn.
+func MarkOrdered(nc net.Conn) {
+	if c, ok := nc.(*conn); ok {
+		c.upOrdered.Store(true)
+	}
+}
+
 func defaultClient() *http.Client {
 	// The shared relay transport bounds the wait for response headers; the
 	// whole request still has a bound, generous enough that a full
