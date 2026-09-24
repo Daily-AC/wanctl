@@ -11,9 +11,27 @@ type hostCandidate struct {
 	pointToPoint bool
 }
 
+// Overlay addresses are never candidates. Tailscale uses them, and on Windows
+// its adapter is not flagged point-to-point, so they would be advertised. When
+// Tailscale itself is relaying through DERP, a QUIC handshake over it completes
+// but moves tens of kilobytes per second, far slower than the relay fallback.
+// 100.64.0.0/10 is also carrier-grade NAT space, which a peer cannot reach.
+var overlayPrefixes = []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("fd7a:115c:a1e0::/48")}
+
 func usableAddr(ip netip.Addr, allowLoopback bool) bool {
 	ip = ip.Unmap()
-	return ip.IsValid() && ((allowLoopback && ip.IsLoopback()) || (ip.IsGlobalUnicast() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && ip != netip.MustParseAddr("255.255.255.255")))
+	if !ip.IsValid() {
+		return false
+	}
+	if allowLoopback && ip.IsLoopback() {
+		return true
+	}
+	for _, p := range overlayPrefixes {
+		if p.Contains(ip) {
+			return false
+		}
+	}
+	return ip.IsGlobalUnicast() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && ip != netip.MustParseAddr("255.255.255.255")
 }
 
 func validateCandidates(raw []string, allowLoopback bool) []netip.AddrPort {
