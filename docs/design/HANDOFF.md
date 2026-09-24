@@ -4,8 +4,9 @@ last-reviewed: 2026-09-04
 
 ## 0. 已上线
 
-**https://wc.z10.dev**（橙云，分享用）与 **https://wc.lab.z10.dev**（灰云，大陆直连）
-是同一个站，2026-09-04 14:40 上线。发布跑 `tools/deploy.sh`，不用手工 tar。
+**https://wc.z10.dev**，2026-09-04 14:40 上线。发布跑 `tools/deploy.sh`，不用手工 tar。
+2026-09-19 起站点在 VM homelab 的 static-web（`/srv/data/static/wc`），经 Cloudflare Tunnel 服务；
+灰云的 wc.lab.z10.dev 随 `*.lab` 通配一起下线了。§3.10 的 ls/hk 部署是历史。
 状态：首屏与「安全模型」一屏都已获甲方认可（安全模型：「很对味，很干净，很极简」）。
 **09-04 下午重做了首屏的交互呈现**——起因是甲方落地时把那块活 demo 当成了一张图片。
 往下的章节（自部署 / 文档入口）没开工。
@@ -161,7 +162,10 @@ GitHub。机制在 `internal/relay/dist.go` 的 `installerHandler` + `WANCTL_PUB
   **改了标记要重跑 `tools/og.sh`**（分享卡片里也有字标）。
 - 页脚跟着两扇门那屏（浅灰）翻成白底 + 一条发丝线。
 
-## 3.10 部署（09-04，已上线）
+## 3.10 部署（09-04，已上线；09-19 迁到 VM，本节为历史）
+
+> 现状：静态文件在 VM homelab `/srv/data/static/wc`，由 homelab 仓库 `stacks/static` 的 static-web
+> 服务；`tools/deploy.sh` 已改成发到那里。下文的 ls nginx、hk 反代和 wc.lab 都已退役。
 
 按 `fleet-deploy`：静态文件在 **ls** `/srv/www/wc.z10.dev`，**hk 只做 TLS 终止 + 反代**。
 `wc` 是一级子域、`wc.lab` 是二级，两个都命中已有泛域名，**DNS 一条都没加、证书一张都没签**。

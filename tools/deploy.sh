@@ -1,5 +1,7 @@
 #!/bin/sh
-# 把 site/ 发布到 ls 的 /srv/www/wc.z10.dev（hk 只反代，见 fleet-deploy）。
+# 把 site/ 发布到 VM homelab 的 /srv/data/static/wc，由 static-web 容器经
+# Cloudflare Tunnel 服务成 wc.z10.dev（homelab 仓库 stacks/static）。
+# 2026-09-19 服务整体迁到 VM 之前是 ls 的 /srv/www 加 hk 反代，那条路已退役。
 #
 # 为什么要在这里改文件而不是直接 rsync：
 #   Cloudflare 会用它自己的 Browser Cache TTL（免费版默认 4h）改写浏览器看到的
@@ -9,8 +11,9 @@
 #
 # 用法：tools/deploy.sh [--dry-run]
 set -e
-HOST=ls
-DEST=/srv/www/wc.z10.dev
+# 不在家里局域网时 `ssh homelab` 连不上，用 WANCTL_SITE_HOST=homelab-cf。
+HOST=${WANCTL_SITE_HOST:-homelab}
+DEST=/srv/data/static/wc
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
@@ -62,13 +65,14 @@ grep -ohE '(href|src)="/?assets/[A-Za-z0-9._-]+\?v=[0-9a-f]+"' $PAGES \
 
 if [ "$1" = "--dry-run" ]; then echo "dry run，未上传"; exit 0; fi
 
-# macOS 的 tar 默认会带 ._* 影子文件（扩展属性），那些会被公开服务出去
+# macOS 的 tar 默认会带 ._* 影子文件（扩展属性），那些会被公开服务出去。
+# 先解压到旁边的新目录，再整目录换上去：上一版留在 $DEST.prev，回滚是换回来，
+# 换的那一瞬间也不会有访客拿到半套文件。
 COPYFILE_DISABLE=1 tar -C "$STAGE" --no-xattrs -cf - . 2>/dev/null \
-  | ssh "$HOST" "sudo rm -rf $DEST && sudo mkdir -p $DEST && sudo chown \$(whoami) $DEST \
-      && tar -C $DEST -xf - && find $DEST -name '._*' -delete \
-      && printf '已发布 %s 个文件，' \"\$(find $DEST -type f | wc -l)\" && du -sh $DEST | cut -f1 \
-      && sudo chown -R www-data:www-data $DEST"
+  | ssh "$HOST" "set -e; rm -rf $DEST.new && mkdir -p $DEST.new \
+      && tar -C $DEST.new -xf - && find $DEST.new -name '._*' -delete \
+      && rm -rf $DEST.prev && { [ ! -d $DEST ] || mv $DEST $DEST.prev; } && mv $DEST.new $DEST \
+      && printf '已发布 %s 个文件，' \"\$(find $DEST -type f | wc -l)\" && du -sh $DEST | cut -f1"
 
 echo "--- 线上核验 ---"
-ssh "$HOST" 'for u in https://wc.z10.dev/ https://wc.lab.z10.dev/; do
-  printf "%-26s %s\n" "$u" "$(curl -sS -o /dev/null -w "http=%{http_code} t=%{time_total}s" --max-time 25 "$u")"; done'
+printf "%-26s %s\n" https://wc.z10.dev/ "$(curl -sS -o /dev/null -w "http=%{http_code} t=%{time_total}s" --max-time 25 https://wc.z10.dev/)"
