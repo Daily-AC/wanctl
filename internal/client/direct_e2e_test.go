@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -609,5 +610,65 @@ func TestWorkspaceSessionNeverOffersDirect(t *testing.T) {
 	}
 	if deviceSockets.Load() != 0 || controllerSockets.Load() != 0 {
 		t.Fatalf("workspace opened direct sockets: device=%d controller=%d", deviceSockets.Load(), controllerSockets.Load())
+	}
+}
+
+// On the HTTP carrier the controller's writes are batched into /h/up requests
+// and the relay forwards a request only once its body has arrived. A fallback
+// sent together with the first megabyte of file data reached the device only
+// after that megabyte crossed a slow uplink, past the device's hold.
+func TestDirectFallbackIsNotQueuedBehindBulkUpload(t *testing.T) {
+	inner := relay.New(relay.EnvTokenStore("tok:alice")).Handler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/h/up" && r.URL.Query().Get("role") == "client" {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if len(body) > 16<<10 {
+				time.Sleep(4 * time.Second) // a slow uplink, longer than the hold
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	var deviceSockets, controllerSockets atomic.Int32
+	deviceSettings, controllerSettings := loopbackSettings(&deviceSockets), loopbackSettings(&controllerSockets)
+	deviceSettings.Hold = 3 * time.Second
+	controllerSettings.OpenSocket = func(string, *net.UDPAddr) (*net.UDPConn, error) { return nil, net.ErrClosed }
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	a, err := agent.New(agent.Options{RelayURL: srv.URL, Token: "tok", Name: "direct-device", AutoYes: true, Transport: "http", Mode: policy.ModeBypass, Direct: &deviceSettings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(a.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go a.Run(ctx)
+	time.Sleep(300 * time.Millisecond)
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	t.Setenv("WANCTL_RELAY", srv.URL)
+	t.Setenv("WANCTL_TOKEN", "tok")
+	t.Setenv("WANCTL_TRANSPORT", "http")
+	c, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.directSettings = controllerSettings
+	trustServer(t, c, "direct-device")
+
+	payload := bytes.Repeat([]byte("slow-uplink-"), 40000)
+	local := filepath.Join(t.TempDir(), "source.bin")
+	if err := os.WriteFile(local, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	remote := filepath.Join(t.TempDir(), "remote.bin")
+	if err := c.Push(context.Background(), "direct-device", local, remote); err != nil {
+		t.Fatalf("fallback push over a slow uplink: %v", err)
+	}
+	if got, err := os.ReadFile(remote); err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("pushed bytes = %d, %v", len(got), err)
 	}
 }

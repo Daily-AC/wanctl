@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"wanctl/internal/direct"
+	"wanctl/internal/httpconn"
 	"wanctl/internal/protocol"
 )
 
@@ -25,7 +27,7 @@ func (c *Client) filePathFromReply(ctx context.Context, relay net.Conn, requeste
 		return relayPath(relay), nil
 	}
 	if !requested {
-		if err := protocol.WriteMessage(relay, protocol.Message{Kind: protocol.KindDirectFallback}); err != nil {
+		if err := writeFallback(relay); err != nil {
 			return filePath{}, err
 		}
 		return relayPath(relay), nil
@@ -33,12 +35,32 @@ func (c *Client) filePathFromReply(ctx context.Context, relay net.Conn, requeste
 	return c.selectFilePath(ctx, relay, info)
 }
 
+// writeFallback sends direct_fallback on its own. The device's hold is waiting
+// for it, and on the HTTP carrier a push's first file bytes would otherwise join
+// it in one upload that the relay forwards only when complete.
+func writeFallback(relay net.Conn) error {
+	if err := protocol.WriteMessage(relay, protocol.Message{Kind: protocol.KindDirectFallback}); err != nil {
+		return err
+	}
+	carrier := relay
+	for {
+		switch c := carrier.(type) {
+		case *helloConn:
+			carrier = c.Conn
+		case *tls.Conn:
+			carrier = c.NetConn()
+		default:
+			return httpconn.Flush(carrier)
+		}
+	}
+}
+
 // selectFilePath is the sole sender of offer, fallback, and attach for an operation.
 func (c *Client) selectFilePath(ctx context.Context, relay net.Conn, info *protocol.DirectInfo) (filePath, error) {
 	settings := c.directSettings.Effective()
 	fallback := func(reason string) (filePath, error) {
 		fmt.Fprintf(os.Stderr, "direct lane fallback: %s\n", reason)
-		if err := protocol.WriteMessage(relay, protocol.Message{Kind: protocol.KindDirectFallback}); err != nil {
+		if err := writeFallback(relay); err != nil {
 			return filePath{}, err
 		}
 		return relayPath(relay), nil

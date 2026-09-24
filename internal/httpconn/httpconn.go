@@ -182,6 +182,17 @@ func MarkOrdered(nc net.Conn) {
 	}
 }
 
+// Flush hands every byte written so far to an upload now rather than after the
+// batching delay, so a short message does not share a request with the bulk
+// writes that follow it and wait for them to cross the uplink. It is a no-op on
+// any other net.Conn.
+func Flush(nc net.Conn) error {
+	if c, ok := nc.(*conn); ok {
+		return c.flushWrites()
+	}
+	return nil
+}
+
 func defaultClient() *http.Client {
 	// The shared relay transport bounds the wait for response headers; the
 	// whole request still has a bound, generous enough that a full
