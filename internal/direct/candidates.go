@@ -18,6 +18,16 @@ type hostCandidate struct {
 // 100.64.0.0/10 is also carrier-grade NAT space, which a peer cannot reach.
 var overlayPrefixes = []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("fd7a:115c:a1e0::/48")}
 
+func isOverlay(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	for _, p := range overlayPrefixes {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func usableAddr(ip netip.Addr, allowLoopback bool) bool {
 	ip = ip.Unmap()
 	if !ip.IsValid() {
@@ -26,12 +36,7 @@ func usableAddr(ip netip.Addr, allowLoopback bool) bool {
 	if allowLoopback && ip.IsLoopback() {
 		return true
 	}
-	for _, p := range overlayPrefixes {
-		if p.Contains(ip) {
-			return false
-		}
-	}
-	return ip.IsGlobalUnicast() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && ip != netip.MustParseAddr("255.255.255.255")
+	return !isOverlay(ip) && ip.IsGlobalUnicast() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && ip != netip.MustParseAddr("255.255.255.255")
 }
 
 func validateCandidates(raw []string, allowLoopback bool) []netip.AddrPort {
@@ -44,6 +49,9 @@ func validateCandidates(raw []string, allowLoopback bool) []netip.AddrPort {
 			return nil
 		}
 		ap, err := netip.ParseAddrPort(s)
+		if err == nil && ap.Port() != 0 && ap.Addr().Zone() == "" && isOverlay(ap.Addr()) {
+			continue
+		}
 		if err != nil || ap.Port() == 0 || !usableAddr(ap.Addr(), allowLoopback) || ap.Addr().Zone() != "" {
 			return nil
 		}

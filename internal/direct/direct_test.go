@@ -93,6 +93,11 @@ func TestPeerCandidatesValidation(t *testing.T) {
 	if got := validateCandidates(append(valid, bad[0]), false); len(got) != 0 {
 		t.Fatalf("partially accepted invalid list: %v", got)
 	}
+	// Overlay addresses are well formed but never dialled: they are dropped
+	// one by one, so a peer that still advertises them keeps its other paths.
+	if got := validateCandidates(append(valid, "100.116.7.78:2", "[fd7a:115c:a1e0::1]:2"), false); len(got) != 3 {
+		t.Fatalf("overlay entry discarded the list: %v", got)
+	}
 	tooMany := make([]string, 9)
 	for i := range tooMany {
 		tooMany[i] = "192.0.2.1:4"
