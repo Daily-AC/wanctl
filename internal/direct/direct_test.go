@@ -84,7 +84,7 @@ func TestPeerCandidatesValidation(t *testing.T) {
 	if len(got) != 3 || got[1].String() != "192.168.1.3:81" {
 		t.Fatalf("valid = %v", got)
 	}
-	bad := []string{"127.0.0.1:2", "0.0.0.0:2", "224.0.0.1:2", "255.255.255.255:2", "169.254.1.1:2", "[fe80::1]:2", "192.0.2.1:0", "192.0.2.1:65536", "host:4"}
+	bad := []string{"127.0.0.1:2", "0.0.0.0:2", "224.0.0.1:2", "255.255.255.255:2", "169.254.1.1:2", "[fe80::1]:2", "192.0.2.1:0", "192.0.2.1:65536", "host:4", "100.116.7.78:2", "[fd7a:115c:a1e0::1]:2"}
 	for _, candidate := range bad {
 		if got := validateCandidates([]string{candidate}, false); len(got) != 0 {
 			t.Errorf("accepted %q: %v", candidate, got)
