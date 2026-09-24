@@ -895,7 +895,13 @@ func cmdPush(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, "        Windows PowerShell 5.1 will read it as the ANSI code page and mangle that text.")
 		fmt.Fprintln(os.Stderr, "        Add a BOM before pushing, or run it with `wanctl exec -script` instead.")
 	}
-	return c.Push(ctx, *target, fs.Arg(0), fs.Arg(1))
+	if err := c.Push(ctx, *target, fs.Arg(0), fs.Arg(1)); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("push cancelled: %w", err)
+		}
+		return err
+	}
+	return nil
 }
 
 func cmdPull(ctx context.Context, args []string) error {
@@ -912,7 +918,13 @@ func cmdPull(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return c.Pull(ctx, *target, fs.Arg(0), fs.Arg(1))
+	if err := c.Pull(ctx, *target, fs.Arg(0), fs.Arg(1)); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("pull cancelled: %w", err)
+		}
+		return err
+	}
+	return nil
 }
 
 // cmdRead prints a line range of a remote text file. The content goes to
