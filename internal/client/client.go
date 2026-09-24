@@ -22,6 +22,7 @@ import (
 
 	"wanctl/internal/admission"
 	"wanctl/internal/config"
+	"wanctl/internal/direct"
 	"wanctl/internal/httpconn"
 	"wanctl/internal/protocol"
 	"wanctl/internal/relayhttp"
@@ -68,14 +69,17 @@ func (e *RejectError) Error() string {
 
 // Client is the controller node.
 type Client struct {
-	id            *transport.Identity
-	known         *transport.Store
-	relayURL      string
-	token         string
-	transport     string       // "ws" (default) or "http"
-	label         string       // self-description sent at pairing (WANCTL_LABEL)
-	httpc         *http.Client // relay HTTP client
-	workspaceLink *WorkspaceLink
+	id             *transport.Identity
+	known          *transport.Store
+	relayURL       string
+	token          string
+	transport      string       // "ws" (default) or "http"
+	label          string       // self-description sent at pairing (WANCTL_LABEL)
+	httpc          *http.Client // relay HTTP client
+	workspaceLink  *WorkspaceLink
+	directSettings direct.Settings
+	directEnabled  bool
+	pullProgress   func(int64) // test hook; nil in production
 }
 
 // SetLabel overrides the controller's self-description (who/why), shown to the
@@ -122,7 +126,7 @@ func NewWith(id *transport.Identity, known *transport.Store, relayURL, token, tr
 	if tr == "" {
 		tr = "ws"
 	}
-	return &Client{id: id, known: known, relayURL: strings.TrimRight(relayURL, "/"), token: token, transport: tr, httpc: &http.Client{Transport: relayhttp.Shared()}}
+	return &Client{id: id, known: known, relayURL: strings.TrimRight(relayURL, "/"), token: token, transport: tr, httpc: &http.Client{Transport: relayhttp.Shared()}, directSettings: direct.Settings{}.Effective(), directEnabled: os.Getenv("WANCTL_DIRECT") != "0"}
 }
 
 // Identity exposes this controller's fingerprint.

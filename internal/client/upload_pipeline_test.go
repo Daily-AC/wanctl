@@ -75,6 +75,9 @@ func (h *hostileCarrier) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestPipelinedUploadsSurviveReorderingAndLostReplies(t *testing.T) {
+	// This test measures the relay's HTTP upload pipeline, so keep its payload
+	// on that path even when the direct lane is available.
+	t.Setenv("WANCTL_DIRECT", "0")
 	carrier := &hostileCarrier{next: relay.New(relay.EnvTokenStore("tok:alice")).Handler()}
 	srv := httptest.NewServer(carrier)
 	defer srv.Close()
