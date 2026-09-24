@@ -79,7 +79,8 @@ type Client struct {
 	workspaceLink  *WorkspaceLink
 	directSettings direct.Settings
 	directEnabled  bool
-	pullProgress   func(int64) // test hook; nil in production
+	pullProgress   func(int64)                                     // test hook; nil in production
+	fileConnect    func(context.Context, string) (net.Conn, error) // test hook
 }
 
 // SetLabel overrides the controller's self-description (who/why), shown to the

@@ -20,6 +20,19 @@ type filePath struct {
 
 func relayPath(conn net.Conn) filePath { return filePath{rw: conn, close: func() {}} }
 
+func (c *Client) filePathFromReply(ctx context.Context, relay net.Conn, requested bool, info *protocol.DirectInfo) (filePath, error) {
+	if info == nil {
+		return relayPath(relay), nil
+	}
+	if !requested {
+		if err := protocol.WriteMessage(relay, protocol.Message{Kind: protocol.KindDirectFallback}); err != nil {
+			return filePath{}, err
+		}
+		return relayPath(relay), nil
+	}
+	return c.selectFilePath(ctx, relay, info)
+}
+
 // selectFilePath is the sole sender of offer, fallback, and attach for an operation.
 func (c *Client) selectFilePath(ctx context.Context, relay net.Conn, info *protocol.DirectInfo) (filePath, error) {
 	settings := c.directSettings.Effective()
