@@ -388,8 +388,8 @@ go run . portal -addr 127.0.0.1:8725
 并且指纹缺失会让发布直接失败。
 
 **门户**：**没有发新 release、没有换 dist**，所以只重建门户容器。
-详细步骤和「为什么必须 `--no-deps`」记在 ls 上的 `/srv/wanctl-smoke/DEPLOY-NOTES.md`
-（那份是运维真源）。要点：relay 和 portal 共用 `wanctl:local` 这个 tag，
+详细步骤和「为什么必须 `--no-deps`」记在 DEPLOY-NOTES 里（2026-09-19 起运维真源是
+homelab 仓库 `stacks/wanctl/DEPLOY-NOTES.md`，生产在 VM homelab；ls 上那份已封存）。要点：relay 和 portal 共用 `wanctl:local` 这个 tag，
 不加 `--no-deps` 会把 relay 一起重建，踢掉所有设备的 WebSocket。
 旧镜像已打 tag `wanctl:rollback-20260904`。
 
