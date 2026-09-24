@@ -23,24 +23,42 @@ func HandleFilePut(conn *tls.Conn, m protocol.Message, policyRoot string) {
 }
 
 func handleFilePut(conn io.ReadWriter, m protocol.Message, policyRoot string, maxSize int64) {
-	if m.Size < 0 {
-		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "upload size must not be negative"})
-		return
-	}
-	if m.Size > maxSize {
-		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: fmt.Sprintf("upload size %d exceeds limit %d", m.Size, maxSize)})
-		return
-	}
-	upload, err := newPendingUpload(policyRoot, m.Path, os.FileMode(m.Mode).Perm())
+	upload, err := PrepareFilePut(m, policyRoot, maxSize)
 	if err != nil {
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return
 	}
-	defer upload.abort()
-	// Acknowledge; controller now streams FrameData until an EOF control frame.
+	defer upload.Close()
 	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindOK}); err != nil {
 		return
 	}
+	upload.Transfer(conn, m)
+}
+
+// FileUpload owns the policy-bound pending file from approval through commit.
+type FileUpload struct {
+	pending *pendingUpload
+	maxSize int64
+}
+
+func PrepareFilePut(m protocol.Message, policyRoot string, maxSize int64) (*FileUpload, error) {
+	if m.Size < 0 {
+		return nil, fmt.Errorf("upload size must not be negative")
+	}
+	if m.Size > maxSize {
+		return nil, fmt.Errorf("upload size %d exceeds limit %d", m.Size, maxSize)
+	}
+	upload, err := newPendingUpload(policyRoot, m.Path, os.FileMode(m.Mode).Perm())
+	if err != nil {
+		return nil, err
+	}
+	return &FileUpload{pending: upload, maxSize: maxSize}, nil
+}
+
+func (u *FileUpload) Close() { u.pending.abort() }
+
+// Transfer consumes only the data phase; the caller has already sent the ack.
+func (u *FileUpload) Transfer(conn io.ReadWriter, m protocol.Message) {
 	var written int64
 	for {
 		t, payload, err := protocol.ReadFrame(conn)
@@ -49,11 +67,11 @@ func handleFilePut(conn io.ReadWriter, m protocol.Message, policyRoot string, ma
 		}
 		switch t {
 		case protocol.FrameData:
-			if int64(len(payload)) > m.Size-written || int64(len(payload)) > maxSize-written {
+			if int64(len(payload)) > m.Size-written || int64(len(payload)) > u.maxSize-written {
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "upload exceeds declared size or server limit"})
 				return
 			}
-			n, werr := upload.file.Write(payload)
+			n, werr := u.pending.file.Write(payload)
 			if werr != nil {
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: werr.Error()})
 				return
@@ -73,7 +91,7 @@ func handleFilePut(conn io.ReadWriter, m protocol.Message, policyRoot string, ma
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: fmt.Sprintf("upload size mismatch: got %d, want %d", written, m.Size)})
 				return
 			}
-			if err := upload.commit(); err != nil {
+			if err := u.pending.commit(); err != nil {
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 				return
 			}
@@ -200,26 +218,42 @@ func (u *pendingUpload) abort() {
 
 // HandleFileGet streams a regular file beneath policyRoot to the controller.
 func HandleFileGet(conn *tls.Conn, m protocol.Message, policyRoot string) {
+	download, err := PrepareFileGet(m, policyRoot)
+	if err != nil {
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
+		return
+	}
+	defer download.Close()
+	if err := protocol.WriteMessage(conn, download.Meta()); err != nil {
+		return
+	}
+	download.Transfer(conn)
+}
+
+type FileDownload struct {
+	file *os.File
+	size int64
+	mode uint32
+}
+
+func PrepareFileGet(m protocol.Message, policyRoot string) (*FileDownload, error) {
 	f, err := openPolicyFile(policyRoot, m.Path)
 	if err != nil {
-		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
-		return
+		return nil, err
 	}
-	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
-		return
+		f.Close()
+		return nil, err
 	}
-	if err := protocol.WriteMessage(conn, protocol.Message{
-		Kind: protocol.KindFileMeta,
-		Size: info.Size(),
-		Mode: uint32(info.Mode().Perm()),
-	}); err != nil {
-		return
-	}
-	streamFileGet(conn, f)
+	return &FileDownload{file: f, size: info.Size(), mode: uint32(info.Mode().Perm())}, nil
 }
+
+func (d *FileDownload) Meta() protocol.Message {
+	return protocol.Message{Kind: protocol.KindFileMeta, Size: d.size, Mode: d.mode}
+}
+func (d *FileDownload) Close()                  { _ = d.file.Close() }
+func (d *FileDownload) Transfer(conn io.Writer) { streamFileGet(conn, d.file) }
 
 func streamFileGet(conn io.Writer, f io.Reader) {
 	buf := make([]byte, fileChunk)
