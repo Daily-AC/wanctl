@@ -1,7 +1,8 @@
 # Direct lane for push and pull, 2026-09-24
 
-Status: design, revised after two adversarial review rounds (see "Review
-response" at the end). Nothing here is implemented yet.
+Status: implemented on this branch; real-link acceptance in progress. Revised
+after two design reviews, one code review and two real-link runs (see "Review
+response" at the end).
 
 ## Why
 
@@ -125,7 +126,10 @@ TOFU). Nothing below runs until the device has gated the operation.
    - A QUIC connection completed within the budget: it opens the one stream,
      writes `direct_attach`, and from then on never sends `direct_fallback`.
    - Otherwise: it cancels every dial, closes its transports, then sends
-     `direct_fallback` on the relay.
+     `direct_fallback` on the relay and flushes the carrier. On the HTTP
+     carrier, writes within 5 ms share one upload that the relay forwards only
+     when complete; without the flush a push's first megabyte of file data
+     travelled with the fallback and a slow uplink outlasted the device's hold.
 6. **Device** takes whichever signal arrives, through one arbiter (a single
    `select` fed by the relay reader and the direct acceptor):
    - `direct_attach` on an authenticated stream: selection is final. It writes
@@ -277,6 +281,12 @@ it could not enlarge the UDP buffers, that fact is kept for diagnostics.
   and IPv6 (up to 1); then remaining host addresses, private ranges first,
   skipping point-to-point interfaces. This keeps the LAN address a same-LAN
   peer needs ahead of container bridges and VPNs.
+- Overlay addresses are never candidates: `100.64.0.0/10` (Tailscale, and
+  carrier-grade NAT space a peer cannot reach) and Tailscale's
+  `fd7a:115c:a1e0::/48`. On Windows the Tailscale adapter is not flagged
+  point-to-point, and when the tailnet itself is relaying through DERP a
+  handshake over it completes but the transfer runs at tens of kilobytes per
+  second.
 - A `udp6` socket is opened only if a global or unique-local IPv6 address was
   found by either method. On Android 11+ that means the default-route probe
   only; an Android device with unique-local IPv6 but no IPv6 default route
@@ -288,6 +298,8 @@ at most 8 entries, each at most 64 bytes, each parses as `ip:port` with port
 limited broadcast, or link-local; IPv4-mapped IPv6 is normalised to IPv4. A
 list that fails validation is treated as empty (the controller then sends
 `direct_fallback`; the device answers the offer by waiting for fallback).
+Overlay addresses in a peer's list are well formed and are dropped one by one
+instead, so a peer that advertises them keeps its other paths.
 
 ### Punching and dialling
 
@@ -495,3 +507,12 @@ code review:
 | R3-4 | a completed transfer held a slot and file until QUIC connection close | release the file and slot when the data phase ends; close the connection separately |
 | R3-5 | concurrent candidate dials could complete in a different order at the device | accept up to 8 authenticated connections during hold; first `direct_attach` wins and closes the rest |
 | R3-6 | no-answer diagnostic changed old-peer output | print no new line when there is no `DirectInfo`; print a reason only after a direct attempt |
+
+Fourth round, a real run from a controller behind a symmetric NAT to the same
+home device, with both ends traced:
+
+| # | finding | change |
+|---|---|---|
+| R4-1 | the device advertised its Tailscale addresses; with the controller's tailnet path on DERP, the handshake won and a 64 MB pull ran at about 20 KB/s | overlay addresses are never candidates, and are dropped from a peer's list one by one |
+| R4-2 | a push that fell back failed with "direct hold timed out": the fallback shared an HTTP upload with the first file bytes and took longer than the hold to arrive | the controller flushes the carrier after writing the fallback; a test with a throttled relay reproduces the failure |
+| R4-3 | Ctrl-C killed the CLI outright, so a pull never said the local file was incomplete | push and pull cancel their context on SIGINT/SIGTERM and say they were cancelled |
