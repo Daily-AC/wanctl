@@ -871,6 +871,10 @@ func buildScriptCommand(path, interpFlag string) (string, error) {
 }
 
 func cmdPush(ctx context.Context, args []string) error {
+	// Ctrl-C cancels the transfer instead of killing the process, so the
+	// device aborts its pending upload now rather than at an idle timeout.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	fs := withHelp(flag.NewFlagSet("push", flag.ExitOnError))
 	target := fs.String("target", "", "device")
 	fs.Parse(args)
@@ -895,6 +899,9 @@ func cmdPush(ctx context.Context, args []string) error {
 }
 
 func cmdPull(ctx context.Context, args []string) error {
+	// Ctrl-C cancels the transfer, so the CLI can say the local file is incomplete.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	fs := withHelp(flag.NewFlagSet("pull", flag.ExitOnError))
 	target := fs.String("target", "", "device")
 	fs.Parse(args)
