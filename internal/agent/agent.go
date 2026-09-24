@@ -29,6 +29,7 @@ import (
 	"wanctl/internal/androidverb"
 	"wanctl/internal/config"
 	"wanctl/internal/console"
+	"wanctl/internal/direct"
 	"wanctl/internal/elevate"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/httpconn"
@@ -50,11 +51,12 @@ type Options struct {
 	Name      string
 	Shell     string
 	AutoYes   bool
-	Transport string      // "ws" (default) or "http" (proxy-agnostic)
-	Mode      policy.Mode // "normal" (default) or "bypass"
-	PortalFP  string      // deprecated single portal admin fingerprint
-	PortalFPs []string    // pre-trusted portal admin fingerprints, enrolled locally
-	Version   string      // immutable release version reported to controllers
+	Transport string           // "ws" (default) or "http" (proxy-agnostic)
+	Mode      policy.Mode      // "normal" (default) or "bypass"
+	PortalFP  string           // deprecated single portal admin fingerprint
+	PortalFPs []string         // pre-trusted portal admin fingerprints, enrolled locally
+	Version   string           // immutable release version reported to controllers
+	Direct    *direct.Settings // internal direct-lane settings; nil uses production defaults
 }
 
 // Agent is a running controlled node.
@@ -82,10 +84,13 @@ type Agent struct {
 	// consoles counts live console sessions. An update that swapped the binary
 	// under an owner who is mid-approval would drop the connection they are
 	// answering on.
-	consoles atomic.Int64
-	jobs     *jobStore
-	stdin    *bufio.Reader
-	elevator *elevate.Manager
+	consoles       atomic.Int64
+	directActive   atomic.Int32
+	directSettings direct.Settings
+	directEnabled  bool
+	jobs           *jobStore
+	stdin          *bufio.Reader
+	elevator       *elevate.Manager
 
 	// Owned goroutines. Every goroutine the agent starts is registered in wg
 	// and takes its context from stopCtx, so Close can cancel them all and then
@@ -263,6 +268,11 @@ func New(opts Options) (*Agent, error) {
 		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(), stdin: bufio.NewReader(os.Stdin),
 		elevator: elevate.ConfigureDefault(configDirOrEmpty(), os.Getenv),
 	}
+	a.directSettings = direct.Settings{}.Effective()
+	if opts.Direct != nil {
+		a.directSettings = opts.Direct.Effective()
+	}
+	a.directEnabled = os.Getenv("WANCTL_DIRECT") != "0"
 	// Shutdown context for everything the agent starts; Close cancels it and
 	// then joins those goroutines.
 	a.stopCtx, a.stop = context.WithCancel(context.Background())
@@ -595,7 +605,8 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	if auth.GrantID != "" {
 		check = func() bool { return a.delegationActive(ctx, auth, fp) }
 	}
-	a.serveAuthorized(conn, fp, hello.Name, auth.Capabilities, check, audit)
+	directAllowed := a.directEnabled && auth.GrantID == "" && hello.Kind == protocol.KindHello
+	a.serveAuthorized(conn, fp, hello.Name, auth.Capabilities, check, directAllowed, audit)
 }
 
 // unlabeledReason tells the controller how to become answerable, because the
@@ -720,10 +731,10 @@ func watchPeer(conn io.Reader, cancel context.CancelFunc) <-chan peerRead {
 }
 
 func (a *Agent) serve(conn *tls.Conn, fp, peerName string, caps sessionauth.Capabilities) {
-	a.serveAuthorized(conn, fp, peerName, caps, nil)
+	a.serveAuthorized(conn, fp, peerName, caps, nil, false)
 }
 
-func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessionauth.Capabilities, check func() bool, scopes ...sessionAudit) {
+func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessionauth.Capabilities, check func() bool, directAllowed bool, scopes ...sessionAudit) {
 	audit := firstAudit(scopes)
 	// Set while a read started by doExec is still in flight; the next request
 	// comes from it (see watchPeer).
@@ -804,7 +815,15 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "write denied by device policy: " + m.Path})
 				continue
 			}
-			server.HandleFilePut(conn, m, root)
+			if directAllowed && m.Direct != nil && m.Size >= a.directSettings.MinBytes {
+				var closeSession bool
+				pending, closeSession = a.directFilePut(conn, m, root, audit)
+				if closeSession {
+					return
+				}
+			} else {
+				server.HandleFilePut(conn, m, root)
+			}
 		case protocol.KindFileGet:
 			ok, decision, root := a.gateFile(policy.Request{Kind: policy.KindRead, Path: m.Path, Peer: fp}, check, audit.workspaceCheck)
 			if ok && !checksPass([]func() bool{check, audit.workspaceCheck}) {
@@ -815,7 +834,15 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 				protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "read denied by device policy: " + m.Path})
 				continue
 			}
-			server.HandleFileGet(conn, m, root)
+			if directAllowed && m.Direct != nil {
+				var closeSession bool
+				pending, closeSession = a.directFileGet(conn, m, root, audit)
+				if closeSession {
+					return
+				}
+			} else {
+				server.HandleFileGet(conn, m, root)
+			}
 		case protocol.KindFileRead:
 			// Gated exactly like file_get: a read is a read, whether the
 			// controller wants the whole file or twenty lines of it.
