@@ -13,6 +13,14 @@ import (
 
 const fileChunk = 64 << 10
 
+// pipelinedPutBytes is the largest upload sent without waiting for the
+// device's go-ahead. A small file costs less to send than the round trip that
+// waiting for the acknowledgement takes, and a device that refuses it has not
+// written a byte: the gate answers before any data frame is read, and every
+// agent version stops reading at the refusal. A larger file still waits, so a
+// refusal does not cost a whole upload.
+const pipelinedPutBytes = fileChunk
+
 // Push uploads a local file to remotePath on the target device.
 func (c *Client) Push(ctx context.Context, target, local, remotePath string) error {
 	f, err := os.Open(local)
@@ -48,7 +56,7 @@ func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io
 	if size < 0 || size > protocol.MaxFileSize {
 		return fmt.Errorf("upload size %d outside supported range 0..%d", size, protocol.MaxFileSize)
 	}
-	conn, err := c.connect(ctx, target)
+	conn, err := c.connectPipelined(ctx, target)
 	if err != nil {
 		return err
 	}
@@ -63,18 +71,27 @@ func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io
 	}); err != nil {
 		return err
 	}
-	ack, err := protocol.ReadMessage(conn)
-	if err != nil {
-		return err
+	readAck := func() error {
+		ack, err := protocol.ReadMessage(conn)
+		if err != nil {
+			return err
+		}
+		if ack.Kind == protocol.KindError {
+			return fmt.Errorf("remote refused upload: %s", ack.Reason)
+		}
+		if ack.Kind == protocol.KindReject {
+			return rejectError(ack)
+		}
+		if ack.Kind != protocol.KindOK {
+			return fmt.Errorf("unexpected reply: %s", ack.Kind)
+		}
+		return nil
 	}
-	if ack.Kind == protocol.KindError {
-		return fmt.Errorf("remote refused upload: %s", ack.Reason)
-	}
-	if ack.Kind == protocol.KindReject {
-		return rejectError(ack)
-	}
-	if ack.Kind != protocol.KindOK {
-		return fmt.Errorf("unexpected reply: %s", ack.Kind)
+	pipelined := size <= pipelinedPutBytes
+	if !pipelined {
+		if err := readAck(); err != nil {
+			return err
+		}
 	}
 
 	buf := make([]byte, fileChunk)
@@ -95,6 +112,11 @@ func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io
 	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindEOF}); err != nil {
 		return err
 	}
+	if pipelined {
+		if err := readAck(); err != nil {
+			return err
+		}
+	}
 	done, err := protocol.ReadMessage(conn)
 	if err != nil {
 		return err
@@ -113,7 +135,7 @@ func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io
 
 // Pull downloads remotePath from the target device into local.
 func (c *Client) Pull(ctx context.Context, target, remotePath, local string) error {
-	conn, err := c.connect(ctx, target)
+	conn, err := c.connectPipelined(ctx, target)
 	if err != nil {
 		return err
 	}

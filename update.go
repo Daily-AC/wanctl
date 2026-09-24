@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"wanctl/internal/config"
+	"wanctl/internal/relayhttp"
 	wanrelease "wanctl/internal/release"
 )
 
@@ -566,7 +567,11 @@ func downloadSignedUpdate(ctx context.Context, base, dir, goos, goarch, currentV
 	if err != nil {
 		return "", "", err
 	}
-	cl := &http.Client{Timeout: 5 * time.Minute}
+	// The relay transport, not a plain client: a binary is the largest thing
+	// wanctl ever downloads, and on links that shape TLS over TCP to the
+	// relay's CDN a plain client took longer than this timeout for it, so
+	// agents there never updated (2026-09-23).
+	cl := &http.Client{Transport: relayhttp.Shared(), Timeout: 5 * time.Minute}
 	resp, err := cl.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("fetch %s: %w", url, err)
@@ -605,7 +610,7 @@ func fetchLimited(ctx context.Context, url string, limit int64) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	resp, err := (&http.Client{Timeout: time.Minute}).Do(req)
+	resp, err := (&http.Client{Transport: relayhttp.Shared(), Timeout: time.Minute}).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", url, err)
 	}

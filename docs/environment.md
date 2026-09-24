@@ -37,6 +37,7 @@ Variables marked "conditional" are required only for the feature described.
 | `WANCTL_RELAY` | portal | Conditional | persisted config, then build-time default | Public relay URL used by the portal console and `/skills` redirect. Also used by clients and agents, who can persist it with `wanctl config set relay=…`. |
 | `WANCTL_PORTAL_TOKEN` | portal | Conditional | none | Token in `WANCTL_PORTAL_NS`; required only for the live device console. |
 | `WANCTL_TRANSPORT` | portal, agent, controller, MCP | No | `http` | Carrier: proxy-agnostic `http` long-poll or `ws`. |
+| `WANCTL_HTTP3` | portal, agent, controller, MCP | No | enabled | Set to `0` to keep the `http` carrier on HTTP/2. HTTP/3 is used only after a background probe reaches the relay over QUIC and never when a proxy is configured, so a network that drops UDP falls back on its own; this is for one that passes UDP but carries it worse than TCP, such as some TUN-mode proxies. |
 | `WANCTL_CONFIG_DIR` | all stateful roles | No | OS user config directory | Directory for identity, trust, token, label, logs, and process state. The container image sets `/data`. |
 | `WANCTL_LARK_APP_ID` | portal | No | none | Legacy optional Lark approval integration; effective only when the matching secret is also set. |
 | `WANCTL_LARK_APP_SECRET` | portal | No | none | Secret paired with `WANCTL_LARK_APP_ID`. |

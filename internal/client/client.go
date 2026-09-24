@@ -24,6 +24,7 @@ import (
 	"wanctl/internal/config"
 	"wanctl/internal/httpconn"
 	"wanctl/internal/protocol"
+	"wanctl/internal/relayhttp"
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
 )
@@ -121,7 +122,7 @@ func NewWith(id *transport.Identity, known *transport.Store, relayURL, token, tr
 	if tr == "" {
 		tr = "ws"
 	}
-	return &Client{id: id, known: known, relayURL: strings.TrimRight(relayURL, "/"), token: token, transport: tr, httpc: http.DefaultClient}
+	return &Client{id: id, known: known, relayURL: strings.TrimRight(relayURL, "/"), token: token, transport: tr, httpc: &http.Client{Transport: relayhttp.Shared()}}
 }
 
 // Identity exposes this controller's fingerprint.
@@ -397,16 +398,7 @@ func (c *Client) connect(ctx context.Context, target string) (*tls.Conn, error) 
 }
 
 func (c *Client) connectKind(ctx context.Context, target, helloKind string) (*tls.Conn, error) {
-	target, err := c.resolve(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	var nc net.Conn
-	if c.transport == "http" {
-		nc, err = c.dialHTTP(ctx, target)
-	} else {
-		nc, err = c.dialWS(ctx, target)
-	}
+	nc, target, err := c.dialTarget(ctx, target)
 	if err != nil {
 		return nil, err
 	}
@@ -414,6 +406,64 @@ func (c *Client) connectKind(ctx context.Context, target, helloKind string) (*tl
 	// reads from a connection that intentionally outlives its dial context.
 	defer wsconn.CloseOnCancel(ctx, nc)()
 	return c.finishHandshake(ctx, nc, target, helloKind)
+}
+
+// dialTarget opens a relayed connection to target and returns it with the
+// canonical name whose pin the handshake must match.
+func (c *Client) dialTarget(ctx context.Context, target string) (net.Conn, string, error) {
+	var (
+		nc  net.Conn
+		err error
+	)
+	if strings.TrimSpace(target) == "" {
+		// Only /resolve can pick the single online device, so it has to
+		// answer before there is anything to dial.
+		if target, err = c.resolve(ctx, target); err != nil {
+			return nil, "", err
+		}
+		nc, err = c.dial(ctx, target)
+	} else {
+		// The relay resolves a dial target the same way /resolve does, so the
+		// two requests run side by side and the command saves a round trip.
+		// The resolved name only selects the pinned fingerprint: if the two
+		// ever disagreed, the device that answers would not match the pin and
+		// the handshake below would refuse it.
+		type resolved struct {
+			target string
+			err    error
+		}
+		rc := make(chan resolved, 1)
+		go func() {
+			t, err := c.resolve(ctx, target)
+			rc <- resolved{t, err}
+		}()
+		raw := strings.TrimSpace(target)
+		nc, err = c.dial(ctx, raw)
+		r := <-rc
+		if r.err != nil {
+			if nc != nil {
+				nc.Close()
+			}
+			return nil, "", r.err
+		}
+		target = r.target
+		if err != nil && target != raw {
+			// A relay from before dial-side resolution only knows the
+			// canonical name, so the saved round trip is given back.
+			nc, err = c.dial(ctx, target)
+		}
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return nc, target, nil
+}
+
+func (c *Client) dial(ctx context.Context, target string) (net.Conn, error) {
+	if c.transport == "http" {
+		return c.dialHTTP(ctx, target)
+	}
+	return c.dialWS(ctx, target)
 }
 
 func (c *Client) dialWS(ctx context.Context, target string) (net.Conn, error) {
@@ -455,12 +505,43 @@ func (c *Client) dialHTTP(ctx context.Context, target string) (net.Conn, error) 
 	if out.Session == "" {
 		return nil, fmt.Errorf("relay did not assign a session")
 	}
-	return httpconn.Dial(ctx, base, out.Session, "client", c.token)
+	nc, err := httpconn.Dial(ctx, base, out.Session, "client", c.token)
+	if err == nil && resp.Header.Get(httpconn.UpSeqCapabilityHeader) == "1" {
+		httpconn.MarkOrdered(nc)
+	}
+	return nc, err
 }
 
 func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target, helloKind string) (*tls.Conn, error) {
-	dr, err := transport.ClientHandshake(ctx, nc, pinName(target), c.id, c.known)
+	conn, err := c.sendHello(ctx, nc, target, helloKind)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkHelloReply(conn, helloKind); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// deviceHandshakeTimeout bounds the TLS handshake with the device. A relay
+// can hand a session to a device whose agent has just exited — an update or
+// restart, before the relay notices — and nothing then ever answers: the
+// controller re-polled an empty session for as long as anyone let it run.
+// A shaped link needs a few seconds for the handshake's round trips, so this
+// only has to be far past that.
+var deviceHandshakeTimeout = 60 * time.Second
+
+// sendHello completes the TLS handshake and writes the hello, without waiting
+// for the device to answer it.
+func (c *Client) sendHello(ctx context.Context, nc net.Conn, target, helloKind string) (*tls.Conn, error) {
+	hctx, cancel := context.WithTimeout(ctx, deviceHandshakeTimeout)
+	defer cancel()
+	dr, err := transport.ClientHandshake(hctx, nc, pinName(target), c.id, c.known)
+	if err != nil {
+		if ctx.Err() == nil && hctx.Err() != nil {
+			return nil, fmt.Errorf("device %s did not answer the handshake within %s; it may be restarting, try again", target, deviceHandshakeTimeout)
+		}
 		return nil, err
 	}
 	if dr.FirstSeen {
@@ -472,24 +553,66 @@ func (c *Client) finishHandshake(ctx context.Context, nc net.Conn, target, hello
 		dr.Conn.Close()
 		return nil, err
 	}
-	reply, err := protocol.ReadMessage(dr.Conn)
+	return dr.Conn, nil
+}
+
+// checkHelloReply reads the device's answer to a hello.
+func checkHelloReply(conn io.Reader, helloKind string) error {
+	reply, err := protocol.ReadMessage(conn)
 	if err != nil {
-		dr.Conn.Close()
-		return nil, err
+		return err
 	}
 	if reply.Kind == protocol.KindReject {
-		dr.Conn.Close()
-		return nil, rejectError(reply)
+		return rejectError(reply)
 	}
 	if reply.Kind != protocol.KindOK {
-		dr.Conn.Close()
-		return nil, fmt.Errorf("unexpected device reply: %s", reply.Kind)
+		return fmt.Errorf("unexpected device reply: %s", reply.Kind)
 	}
 	if helloKind == protocol.KindWorkspaceHello && !reply.WorkspaceReuse {
-		dr.Conn.Close()
-		return nil, fmt.Errorf("device did not negotiate reusable workspace authorization")
+		return fmt.Errorf("device did not negotiate reusable workspace authorization")
 	}
-	return dr.Conn, nil
+	return nil
+}
+
+// helloConn is a session whose hello is on the wire but unanswered. The
+// request that follows goes out behind the hello instead of a round trip
+// later, and the first read collects the device's answer to the hello before
+// anything else. A device reads its connection in order, so an agent of any
+// version sees hello then request exactly as if the client had waited; one
+// that refuses the hello answers with a reject and hangs up, and that reject
+// is what the first read returns, unwrapped, so errors.As still finds it.
+type helloConn struct {
+	*tls.Conn
+	checked bool
+	err     error
+}
+
+func (h *helloConn) Read(p []byte) (int, error) {
+	if !h.checked {
+		h.checked = true
+		h.err = checkHelloReply(h.Conn, protocol.KindHello)
+	}
+	if h.err != nil {
+		return 0, h.err
+	}
+	return h.Conn.Read(p)
+}
+
+// connectPipelined is connect for an operation whose caller returns the first
+// read error as it is. Callers that interpret a failed read — fileOp turns
+// one into "result unknown" — must use connect, or a refused hello would be
+// reported as a lost result.
+func (c *Client) connectPipelined(ctx context.Context, target string) (net.Conn, error) {
+	nc, target, err := c.dialTarget(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	defer wsconn.CloseOnCancel(ctx, nc)()
+	conn, err := c.sendHello(ctx, nc, target, protocol.KindHello)
+	if err != nil {
+		return nil, err
+	}
+	return &helloConn{Conn: conn}, nil
 }
 
 // rejectError wraps a device-side reject message as a typed *RejectError so
@@ -539,7 +662,7 @@ func (c *Client) Logs(ctx context.Context, target, logType, grep, since string, 
 // LogsTo is the same as Logs but writes the event lines to out instead of
 // os.Stdout — used by the MCP server to capture them.
 func (c *Client) LogsTo(ctx context.Context, target, logType, grep, since string, limit int, out io.Writer) error {
-	conn, err := c.connect(ctx, target)
+	conn, err := c.connectPipelined(ctx, target)
 	if err != nil {
 		return err
 	}
@@ -667,7 +790,7 @@ func (c *Client) ExecTo(ctx context.Context, req ExecRequest, stdout, stderr io.
 // whole output when the caller asked for a spill, and how long that output was.
 func (c *Client) ExecOut(ctx context.Context, req ExecRequest, stdout, stderr io.Writer) (ExecOutcome, error) {
 	failed := ExecOutcome{Code: -1}
-	conn, err := c.connect(ctx, req.Target)
+	conn, err := c.connectPipelined(ctx, req.Target)
 	if err != nil {
 		return failed, err
 	}

@@ -56,6 +56,14 @@ type sideQueue struct {
 	// head is the tail of a chunk that was split at the drain cap. It is served
 	// before anything still in ch, so splitting never reorders the stream.
 	head []byte
+	// seqMu orders the writes of a writer that keeps several /h/up in flight
+	// at once. Those requests can arrive in any order, so each carries its
+	// place in the stream and is held here until the ones before it land. A
+	// sequence already delivered is a retry and is acknowledged without being
+	// queued again, which is what makes resending an /h/up safe at all.
+	seqMu   sync.Mutex
+	seqNext uint64 // the sequence expected next; sequences start at 1
+	seqHeld map[uint64][]byte
 	// inflight marks a poll that holds the turn and may be part way through
 	// taking bytes out. Between the receive from ch and the store into unacked
 	// those bytes are in no field at all, so without this the queue looks empty
@@ -64,7 +72,46 @@ type sideQueue struct {
 }
 
 func newSideQueue() *sideQueue {
-	return &sideQueue{ch: make(chan []byte, 256), done: make(chan struct{}), turn: make(chan struct{}, 1)}
+	return &sideQueue{ch: make(chan []byte, 256), done: make(chan struct{}), turn: make(chan struct{}, 1), seqNext: 1}
+}
+
+// maxSeqAhead bounds how far past the next expected write a sequenced /h/up may
+// be, and so how much one direction holds while it waits for a gap to fill:
+// writers keep a handful of batches in flight, never this many.
+const maxSeqAhead = 64
+
+// pushSeq enqueues b as write number seq of this direction, holding it until
+// every earlier write has been queued. It reports false once the queue is
+// closed or when seq is further ahead than any honest writer runs.
+func (q *sideQueue) pushSeq(seq uint64, b []byte) bool {
+	q.seqMu.Lock()
+	defer q.seqMu.Unlock()
+	switch {
+	case seq < q.seqNext:
+		return true // a retry of a write already queued
+	case seq > q.seqNext+maxSeqAhead:
+		return false
+	case seq > q.seqNext:
+		if q.seqHeld == nil {
+			q.seqHeld = map[uint64][]byte{}
+		}
+		cp := make([]byte, len(b))
+		copy(cp, b)
+		q.seqHeld[seq] = cp
+		return true
+	}
+	for {
+		if len(b) > 0 && !q.push(b) {
+			return false
+		}
+		q.seqNext++
+		next, ok := q.seqHeld[q.seqNext]
+		if !ok {
+			return true
+		}
+		delete(q.seqHeld, q.seqNext)
+		b = next
+	}
 }
 
 // push enqueues a copy of b, or reports false once the queue is closed. The
@@ -140,6 +187,14 @@ func (q *sideQueue) settled() bool {
 	return !q.inflight && q.unacked == nil && q.head == nil && len(q.ch) == 0
 }
 
+// undelivered reports whether a poll is taking bytes out of this direction
+// right now, and whether it holds a chunk its reader has not acknowledged.
+func (q *sideQueue) undelivered() (serving, unacked bool) {
+	q.ackMu.Lock()
+	defer q.ackMu.Unlock()
+	return q.inflight, q.unacked != nil
+}
+
 // acquire admits this poll, waiting for any poll already in flight on this
 // direction to finish. It reports false when the caller's request went away
 // first, in which case nothing was taken from the queue.
@@ -173,6 +228,12 @@ func (q *sideQueue) release() { <-q.turn }
 // context is cancelled after the drain — the response never reaching the reader
 // — leaves the bytes to be re-served to the next poll rather than dropping them.
 func (q *sideQueue) take(ctx context.Context, ack uint64, timeout time.Duration) (data []byte, seq uint64, closed, ok bool) {
+	return q.takeUpTo(ctx, ack, timeout, maxDrainBytes)
+}
+
+// takeUpTo is take with a reader-chosen bound on the chunk, at most
+// maxDrainLimit.
+func (q *sideQueue) takeUpTo(ctx context.Context, ack uint64, timeout time.Duration, limit int) (data []byte, seq uint64, closed, ok bool) {
 	if !q.acquire(ctx) {
 		return nil, 0, false, false
 	}
@@ -191,7 +252,7 @@ func (q *sideQueue) take(ctx context.Context, ack uint64, timeout time.Duration)
 	}
 	q.ackMu.Unlock()
 
-	data, closed = q.drain(ctx, timeout)
+	data, closed = q.drainUpTo(ctx, timeout, limit)
 	if len(data) == 0 {
 		return nil, 0, closed, true
 	}
@@ -242,23 +303,36 @@ func (q *sideQueue) pollDrain(ctx context.Context, timeout time.Duration) (data 
 // in-process bridge, which is why the split has to exist at all.
 const maxDrainBytes = 2 << 20
 
+// maxDrainLimit bounds what a reader may ask one chunk to carry (DownMaxParam).
+// A reader that downloads a full chunk quickly asks for more, because each
+// poll costs a round trip and each response starts on a fresh HTTP stream: on
+// the relay's CDN path, from a mainland home line, 2 MiB responses moved a
+// median 0.6 MB/s and 16 MiB responses 4.2 MB/s (2026-09-23). A reader on a
+// slow link never grows its chunk, so issue #57's link keeps 2 MiB.
+const maxDrainLimit = 16 << 20
+
 // drain returns bytes available within timeout, coalescing queued chunks up to
 // maxDrainBytes. closed is true only when the queue is closed and no more bytes
 // remain. Callers hold the queue's turn.
 func (q *sideQueue) drain(ctx context.Context, timeout time.Duration) (data []byte, closed bool) {
+	return q.drainUpTo(ctx, timeout, maxDrainBytes)
+}
+
+// drainUpTo is drain with a bound of limit bytes instead of maxDrainBytes.
+func (q *sideQueue) drainUpTo(ctx context.Context, timeout time.Duration, limit int) (data []byte, closed bool) {
 	var out []byte
 	// appendCapped takes as much of b as still fits and parks the rest in head.
 	// out is grown by hand so that neither its length nor the memory behind it
 	// can pass the cap, and an idle poll that never sees a byte allocates none.
 	appendCapped := func(b []byte) {
-		if room := maxDrainBytes - len(out); len(b) > room {
+		if room := limit - len(out); len(b) > room {
 			q.ackMu.Lock()
 			q.head = b[room:]
 			q.ackMu.Unlock()
 			b = b[:room]
 		}
 		if need := len(out) + len(b); need > cap(out) {
-			grown := make([]byte, len(out), max(need, min(2*cap(out), maxDrainBytes)))
+			grown := make([]byte, len(out), max(need, min(2*cap(out), limit)))
 			copy(grown, out)
 			out = grown
 		}
@@ -266,7 +340,7 @@ func (q *sideQueue) drain(ctx context.Context, timeout time.Duration) (data []by
 	}
 	// fill drains what is already queued, without waiting.
 	fill := func() {
-		for len(out) < maxDrainBytes {
+		for len(out) < limit {
 			select {
 			case b := <-q.ch:
 				appendCapped(b)
@@ -349,6 +423,13 @@ const (
 	// one is not, so 3× is comfortably clear of a slow but live command.
 	httpSessionIdle = 3 * downPollWait
 	downPollWait    = 20 * time.Second
+	// unackedRetention is how long a session holding an unacknowledged chunk
+	// survives without a request. The relay can finish writing a chunk long
+	// before its reader has it: proxies buffer what it wrote, and a reader on
+	// a shaped link (20-60 KB/s over TLS on TCP) can take minutes to download
+	// a large chunk and poll again. Reaping at httpSessionIdle would delete
+	// bytes it is still receiving.
+	unackedRetention = 10 * time.Minute
 )
 
 func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
@@ -440,6 +521,7 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "another agent instance registered this device name", http.StatusConflict)
 			return
 		}
+		w.Header().Set(httpconn.UpSeqCapabilityHeader, "1")
 		writeJSON(w, open)
 	case <-changed:
 		if inst != "" && r.httpAgentObsolete(key, inst) {
@@ -516,6 +598,9 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 	if r.audit != nil {
 		r.audit.Audit(auth.OwnerNamespace, auth.Device, "dial")
 	}
+	// Said here as well as on /h/up so the controller's first write, its TLS
+	// ClientHello, need not wait for an /h/up answer to learn it.
+	w.Header().Set(httpconn.UpSeqCapabilityHeader, "1")
 	writeJSON(w, map[string]string{"session": sid})
 }
 
@@ -589,6 +674,10 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Tell the writer this relay orders sequenced writes, so it may keep
+	// several in flight. A relay without this header queues /h/up in arrival
+	// order and a writer must send them one at a time.
+	w.Header().Set(httpconn.UpSeqCapabilityHeader, "1")
 	s := r.sessionForAccess(req.URL.Query().Get("session"), access, req.URL.Query().Get("role"))
 	if s == nil {
 		http.Error(w, "no such session", http.StatusNotFound)
@@ -621,6 +710,19 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 	dst := s.toAgent // role=client writes toward the agent
 	if req.URL.Query().Get("role") == "agent" {
 		dst = s.toClient
+	}
+	if seqParam := req.URL.Query().Get(httpconn.UpSeqParam); seqParam != "" {
+		seq, err := strconv.ParseUint(seqParam, 10, 64)
+		if err != nil || seq == 0 {
+			http.Error(w, "bad seq", http.StatusBadRequest)
+			return
+		}
+		if !dst.pushSeq(seq, body) {
+			http.Error(w, "session closed or write out of window", http.StatusGone)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
 	}
 	if len(body) > 0 && !dst.push(body) {
 		http.Error(w, "session closed", http.StatusGone)
@@ -668,7 +770,11 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "bad ack", http.StatusBadRequest)
 			return
 		}
-		data, seq, closed, served = src.take(req.Context(), ack, downPollWait)
+		limit := maxDrainBytes
+		if m, err := strconv.Atoi(req.URL.Query().Get(httpconn.DownMaxParam)); err == nil && m > 0 {
+			limit = min(m, maxDrainLimit)
+		}
+		data, seq, closed, served = src.takeUpTo(req.Context(), ack, downPollWait, limit)
 	} else {
 		// Pre-acknowledgement client: serve it the old fire-and-forget way so
 		// a mixed-version fleet keeps working.
@@ -694,8 +800,18 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 	if seq > 0 {
 		w.Header().Set(httpconn.DownSeqHeader, strconv.FormatUint(seq, 10))
 	}
+	// Declared, not left to chunked encoding. Measured through the relay's
+	// Cloudflare edge and tunnel, a 16 MiB response of unknown length slowed
+	// to 0.2 MB/s part way through while the same bytes with a length moved
+	// 2.2-2.9 MB/s (2026-09-23).
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
+	// The reader cannot poll again before it has the chunk, so its idle time
+	// starts once the chunk is written, not when the poll arrived.
+	r.hmu.Lock()
+	s.lastActive = time.Now()
+	r.hmu.Unlock()
 }
 
 func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
@@ -712,6 +828,33 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
 	}
+	r.hmu.Unlock()
+	// A writer that knows this relay orders writes sends its last bytes with
+	// the close instead of in an /h/up of their own, saving the round trip
+	// that every command otherwise spends at the very end. They are queued
+	// in their place before the queues shut.
+	if seqParam := req.URL.Query().Get(httpconn.UpSeqParam); seqParam != "" {
+		seq, err := strconv.ParseUint(seqParam, 10, 64)
+		if err != nil || seq == 0 {
+			http.Error(w, "bad seq", http.StatusBadRequest)
+			return
+		}
+		req.Body = http.MaxBytesReader(w, req.Body, limits.RelayHTTPUploadBytes)
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		dst := s.toAgent
+		if req.URL.Query().Get("role") == "agent" {
+			dst = s.toClient
+		}
+		if !dst.pushSeq(seq, body) {
+			http.Error(w, "session closed or write out of window", http.StatusGone)
+			return
+		}
+	}
+	r.hmu.Lock()
 	s.closedAt = time.Now()
 	r.hmu.Unlock()
 	// Closing the queues stops new bytes and makes the far side see EOF once
@@ -840,7 +983,16 @@ func (r *Relay) reapHTTP(now time.Time) {
 		}
 	}
 	for sid, s := range r.hsess {
-		if !s.lastActive.IsZero() && now.Sub(s.lastActive) > httpSessionIdle {
+		idle := httpSessionIdle
+		serveC, heldC := s.toClient.undelivered()
+		serveA, heldA := s.toAgent.undelivered()
+		if serveC || serveA {
+			continue // a poll is in progress
+		}
+		if heldC || heldA {
+			idle = unackedRetention
+		}
+		if !s.lastActive.IsZero() && now.Sub(s.lastActive) > idle {
 			delete(r.hsess, sid)
 			dead = append(dead, s)
 		}

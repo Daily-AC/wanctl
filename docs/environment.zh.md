@@ -36,6 +36,7 @@
 | `WANCTL_RELAY` | portal | 视情况 | 持久化配置，其次构建时默认值 | 门户控制台和 `/skills` 跳转所用的公网 relay URL。客户端和 agent 也用它，可以用 `wanctl config set relay=…` 持久化。 |
 | `WANCTL_PORTAL_TOKEN` | portal | 视情况 | 无 | `WANCTL_PORTAL_NS` 里的令牌；只有实时设备控制台才需要。 |
 | `WANCTL_TRANSPORT` | portal、agent、控制端、MCP | 否 | `http` | 载体：与代理无关的 `http` 长轮询，或者 `ws`。 |
+| `WANCTL_HTTP3` | portal、agent、控制端、MCP | 否 | 开启 | 设为 `0` 时 `http` 载体只走 HTTP/2。HTTP/3 要等后台探测经 QUIC 连通 relay 后才启用，配置了代理时不用，所以丢 UDP 的网络会自动回落；这个开关留给放行 UDP 但转得比 TCP 还差的网络，比如部分 TUN 模式代理。 |
 | `WANCTL_CONFIG_DIR` | 所有有状态的角色 | 否 | 操作系统的用户配置目录 | 存放身份、信任、令牌、标签、日志和进程状态的目录。容器镜像里设成 `/data`。 |
 | `WANCTL_LARK_APP_ID` | portal | 否 | 无 | 遗留的可选 Lark 审批集成；只有配套的 secret 也设了才生效。 |
 | `WANCTL_LARK_APP_SECRET` | portal | 否 | 无 | 与 `WANCTL_LARK_APP_ID` 配对的 secret。 |
