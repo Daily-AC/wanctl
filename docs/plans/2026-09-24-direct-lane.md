@@ -116,7 +116,10 @@ TOFU). Nothing below runs until the device has gated the operation.
    validation, or it cannot gather anything usable itself, it sends
    `direct_fallback` instead of `direct_offer`.
 4. **Device**, on `direct_offer`: validates the controller's candidates, starts
-   its QUIC listener and punches towards them (at most 5 s of probing).
+   its QUIC listener and punches towards them (at most 5 s of probing). During
+   the hold it may accept up to 8 authenticated connections from concurrent
+   candidate dials. The first connection carrying `direct_attach` is selected;
+   the others are closed.
 5. **Controller** decides, once. Only the controller selects the path, and it
    sends exactly one of two signals per operation:
    - A QUIC connection completed within the budget: it opens the one stream,
@@ -176,7 +179,8 @@ its transports, then writes `direct_fallback`.
 stream it first registers the worker with the agent's lifecycle (`enter`, the
 same gate `spawn` uses; if shutdown has begun it writes `error` on the stream
 and closes). Only then does it write `ok` on the stream. The worker holds one of
-the `directMaxActive` slots until it finishes.
+the `directMaxActive` slots until the data phase ends and its result is written.
+The file and slot are released then; the QUIC connection can close separately.
 
 **What the relay session is for after selection.** Nothing in the transfer
 depends on it. On the device the request loop goes on reading it (through the
@@ -194,8 +198,9 @@ lane.
 
 **Limits on a running transfer.** At most `directMaxActive` (4) operations
 holding or transferring per agent. A selected transfer is aborted after 30 s
-without a file byte moving in either direction; QUIC keepalives do not count
-as progress. There is no total-duration cap.
+without file data being written to the pending upload (push) or read from the
+file and sent (pull). Frame headers, control messages and QUIC keepalives do
+not count as progress. There is no total-duration cap.
 
 ### After selection
 
@@ -294,9 +299,16 @@ selection or its 2.5 s budget; the device stops at selection or 5 s after
 `direct_offer`. With 8 candidates that is at most a few hundred probes, some
 tens of kilobytes, only to addresses the authenticated peer supplied.
 
-The controller also calls `Transport.Dial` to every peer candidate at once;
-the first handshake to complete wins, the rest are cancelled and their
-connections closed.
+The controller also calls `Transport.Dial` to every peer candidate at once.
+While those dials run, it consumes the non-QUIC packet queue. A packet with
+the STUN magic cookie (`0x2112A442` at bytes 4–8) is not a probe. On the first
+64-byte probe from an address, the controller starts an additional QUIC dial
+to that exact address, even if an initial dial to the candidate is already in
+flight. A peer-reflexive source not in the candidate list is eligible only if
+it passes the same unicast-address validation; at most 8 additional addresses
+are dialled. This avoids waiting for an Initial PTO after the device's NAT
+mapping opens. The first handshake to complete wins; all other dials are
+cancelled and their connections closed.
 
 QUIC configuration, both sides: `KeepAlivePeriod` 5 s (Windows removes an idle
 UDP flow after 60 s), `MaxIdleTimeout` 15 s, `MaxIncomingStreams` 1,
@@ -331,9 +343,12 @@ signalling. The reviewer's verdict on it is recorded below.
 
 ### Exposure of the listener
 
-The listener exists from `direct_offer` until selection or `directHold`, accepts
-one authenticated connection and one stream, and is then closed to further
-connections. Before the certificate check, quic-go processes Initial packets
+The listener exists from `direct_offer` until selection or `directHold`. It
+accepts at most 8 authenticated connections during the hold because concurrent
+candidate dials can complete in a different order on the two sides. The first
+one carrying `direct_attach` wins the one data stream; the other connections
+are closed and the listener is closed to further connections. Before the
+certificate check, quic-go processes Initial packets
 from anyone who can reach the socket, and the source address it sees is not
 yet validated. The transport's `VerifySourceAddress` returns false (no Retry)
 when the source IP, after normalising IPv4-mapped IPv6, equals the IP of one of
@@ -376,10 +391,12 @@ The relay is unchanged.
 
 ## Observability
 
-The CLI's final line says which path carried the data (`... (31457280 bytes,
-direct)` / `relay`), and on a fallback one stderr line says why (no answer,
-no candidates, punching timed out) or, on failure, which path broke and
-whether the outcome is unknown. The device logs one event per negotiation:
+The CLI's final line adds `, direct` only when direct carried the data;
+the relay line is unchanged. A missing `DirectInfo` prints nothing, preserving
+old-peer and disabled-lane output. Once a direct attempt has started, a
+fallback prints one stderr line saying why (no valid candidates, UDP socket
+unavailable, or punching timed out); a failure says which path broke and,
+for push, whether the outcome is unknown. The device logs one event per negotiation:
 `direct` with `established:<candidate type>` (host / ipv6 / reflexive) or
 `fallback:<reason>`.
 
@@ -420,6 +437,12 @@ the agent's HTTP/3 settings under several request shapes, interleaved.
 Precedents for the socket arrangement: Syncthing (`quic_listen.go`, STUN on the
 QUIC transport) and go-libp2p (`p2p/transport/quic/transport.go`, `holePunch`).
 
+The first branch build was tried between an office Mac controller and a home
+Windows agent: three of four negotiations fell back with `punching timed out`,
+while one pull went direct. A standalone probe on the same pair punched in
+1.2 s and completed its QUIC handshake in 80 ms, but started QUIC only after
+receiving a probe. This is the real-link finding addressed by R3-1 below.
+
 ## Review response
 
 One adversarial review of the first draft (read-only, against this code and
@@ -438,7 +461,7 @@ verification. Findings and what changed:
 | 7 | pull had no size check and left partial files | temp file, size check, rename; device sends error on read failure |
 | 8 | candidate lists could aim probes anywhere | count, size and address validation; bounded probe schedule |
 | 9 | unauthenticated Initials reach the listener | stated; lifetime bound; Retry for unlisted sources |
-| 10 | quic-go allows 100 streams by default | `MaxIncomingStreams` 1, no uni streams, one connection |
+| 10 | quic-go allows 100 streams by default | `MaxIncomingStreams` 1, no uni streams, one selected data stream |
 | 11 | fallback bound ignored gathering time | budget re-derived; acceptance bound 3.5 s |
 | 12 | STUN replies could arrive before the queue exists | synchronous enabling call before the first request |
 | 13 | dual-stack sockets flaky | separate v4 and v6 sockets; explicit close |
@@ -460,3 +483,15 @@ were settled; they are now the "State rules" section.
 | R2-7 | Retry exemption described as verification | described as an optimisation; IP-only match defined |
 | R2-8 | device could answer with no candidates | no candidates, no `direct` |
 | R2-9 | Android IPv6 enable condition not closed | default-route probe only; ULA-only Android uses IPv4 |
+
+Third round, after a real office-to-home run and an independent adversarial
+code review:
+
+| # | finding | change |
+|---|---|---|
+| R3-1 | Initials sent before the device punched were dropped; the next PTO often missed the 2.5 s budget | consume incoming probes and start one additional dial per validated source address, capped at 8 |
+| R3-2 | unsolicited `DirectInfo` bypassed controller `WANCTL_DIRECT=0` | send `direct_fallback` and keep relay data when the request did not advertise direct |
+| R3-3 | trickled JSON control bytes reset the no-progress clock | reset only after push file bytes are written or pull file bytes are sent |
+| R3-4 | a completed transfer held a slot and file until QUIC connection close | release the file and slot when the data phase ends; close the connection separately |
+| R3-5 | concurrent candidate dials could complete in a different order at the device | accept up to 8 authenticated connections during hold; first `direct_attach` wins and closes the rest |
+| R3-6 | no-answer diagnostic changed old-peer output | print no new line when there is no `DirectInfo`; print a reason only after a direct attempt |
