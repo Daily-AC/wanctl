@@ -36,7 +36,7 @@ func (a *Agent) directFilePut(conn *tls.Conn, m protocol.Message, root string, a
 		return nil, false
 	}
 	return a.directFile(conn, m.Size, protocol.Message{Kind: protocol.KindOK}, audit, upload.Close,
-		func(rw io.ReadWriter) { upload.Transfer(rw, m) })
+		func(rw io.ReadWriter, progress func(int)) { upload.TransferWithProgress(rw, m, progress) })
 }
 
 func (a *Agent) directFileGet(conn *tls.Conn, m protocol.Message, root string, audit sessionAudit) (<-chan peerRead, bool) {
@@ -47,7 +47,7 @@ func (a *Agent) directFileGet(conn *tls.Conn, m protocol.Message, root string, a
 	}
 	meta := download.Meta()
 	return a.directFile(conn, meta.Size, meta, audit, download.Close,
-		func(rw io.ReadWriter) { download.Transfer(rw) })
+		func(rw io.ReadWriter, progress func(int)) { download.TransferWithProgress(rw, progress) })
 }
 
 func (a *Agent) directEvent(audit sessionAudit, detail string) {
@@ -55,7 +55,7 @@ func (a *Agent) directEvent(audit sessionAudit, detail string) {
 }
 
 func (a *Agent) directFile(conn *tls.Conn, size int64, first protocol.Message, audit sessionAudit,
-	closeFile func(), transfer func(io.ReadWriter)) (<-chan peerRead, bool) {
+	closeFile func(), transfer func(io.ReadWriter, func(int))) (<-chan peerRead, bool) {
 	owned := true
 	defer func() {
 		if owned {
@@ -64,7 +64,7 @@ func (a *Agent) directFile(conn *tls.Conn, size int64, first protocol.Message, a
 	}()
 	relay := func() (<-chan peerRead, bool) {
 		if err := protocol.WriteMessage(conn, first); err == nil {
-			transfer(conn)
+			transfer(conn, nil)
 		}
 		return nil, false
 	}
@@ -140,7 +140,7 @@ func (a *Agent) directFile(conn *tls.Conn, size int64, first protocol.Message, a
 				epOwned = false
 				releaseSlot()
 				a.directEvent(audit, "fallback:controller")
-				transfer(conn)
+				transfer(conn, nil)
 				return nil, false
 			default:
 				a.directEvent(audit, "fallback:unexpected request")
@@ -229,38 +229,29 @@ func waitDirectAttach(ctx context.Context, conn *quic.Conn, out chan<- directAtt
 }
 
 func (a *Agent) runDirectTransfer(ep *direct.Endpoint, conn *quic.Conn, stream *quic.Stream,
-	closeFile func(), transfer func(io.ReadWriter)) {
+	closeFile func(), transfer func(io.ReadWriter, func(int))) {
 	defer a.leave()
-	defer a.directActive.Add(-1)
 	defer ep.Close()
-	defer closeFile()
 	defer conn.CloseWithError(0, "")
+	released := false
+	defer func() {
+		if !released {
+			closeFile()
+			a.directActive.Add(-1)
+		}
+	}()
 	watchdog := time.AfterFunc(a.directSettings.NoProgress, func() { conn.CloseWithError(1, "no file progress") })
 	defer watchdog.Stop()
 	stop := context.AfterFunc(a.shutdown(), func() { conn.CloseWithError(1, "agent shutdown") })
 	defer stop()
-	transfer(progressRW{rw: stream, progress: func() { watchdog.Reset(a.directSettings.NoProgress) }})
+	transfer(stream, func(n int) {
+		if n > 0 {
+			watchdog.Reset(a.directSettings.NoProgress)
+		}
+	})
 	_ = stream.Close()
+	closeFile()
+	a.directActive.Add(-1)
+	released = true
 	<-conn.Context().Done()
-}
-
-type progressRW struct {
-	rw       io.ReadWriter
-	progress func()
-}
-
-func (p progressRW) Read(b []byte) (int, error) {
-	n, err := p.rw.Read(b)
-	if n > 0 {
-		p.progress()
-	}
-	return n, err
-}
-
-func (p progressRW) Write(b []byte) (int, error) {
-	n, err := p.rw.Write(b)
-	if n > 0 {
-		p.progress()
-	}
-	return n, err
 }
