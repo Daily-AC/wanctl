@@ -498,45 +498,68 @@ func (e *Endpoint) Dial(ctx context.Context, offer *protocol.DirectInfo) (*quic.
 		conn *quic.Conn
 		err  error
 	}
-	out := make(chan outcome, len(peers))
+	out := make(chan outcome, len(peers)+8)
 	var wg sync.WaitGroup
-	started := 0
-	for _, ap := range peers {
+	startDial := func(ap netip.AddrPort) bool {
 		sock := e.socketFor(ap)
 		if sock == nil {
-			continue
+			return false
 		}
-		started++
 		wg.Add(1)
 		go func(sock *socket, ap netip.AddrPort) {
 			defer wg.Done()
 			conn, err := sock.tr.Dial(dialCtx, net.UDPAddrFromAddrPort(ap), verifyTLSConfig(e.cert, offer.CertSHA256, false), quicConfig())
 			out <- outcome{conn, err}
 		}(sock, ap)
+		return true
+	}
+	started := 0
+	for _, ap := range peers {
+		if startDial(ap) {
+			started++
+		}
 	}
 	if started == 0 {
 		return nil, errors.New("direct: no matching UDP transport")
 	}
 	var winner *quic.Conn
 	var last error
-	for i := 0; i < started; i++ {
+	triggered := map[netip.AddrPort]bool{}
+	extras := 0
+dialLoop:
+	for winner == nil {
 		select {
 		case result := <-out:
-			if result.conn != nil && winner == nil {
+			if result.conn != nil {
 				winner = result.conn
 				cancel()
-			} else if result.conn != nil {
-				result.conn.CloseWithError(0, "")
 			}
 			if result.err != nil {
 				last = result.err
 			}
+		case pkt := <-e.packets:
+			if extras >= 8 || len(pkt.data) != 64 || pkt.data[0]&0xc0 != 0 || binary.BigEndian.Uint32(pkt.data[4:8]) == stunCookie {
+				continue
+			}
+			from, ok := pkt.from.(*net.UDPAddr)
+			if !ok || from.Port < 1 || from.Port > 65535 || from.Zone != "" {
+				continue
+			}
+			ip, ok := netip.AddrFromSlice(from.IP)
+			if !ok {
+				continue
+			}
+			ap := netip.AddrPortFrom(ip.Unmap(), uint16(from.Port))
+			if triggered[ap] || len(validateCandidates([]string{ap.String()}, e.settings.AllowLoopback)) != 1 {
+				continue
+			}
+			triggered[ap] = true
+			if startDial(ap) {
+				extras++
+			}
 		case <-ctx.Done():
 			cancel()
-			i = started
-		}
-		if winner != nil {
-			break
+			break dialLoop
 		}
 	}
 	cancel()
