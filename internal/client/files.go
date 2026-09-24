@@ -32,10 +32,15 @@ func (c *Client) Push(ctx context.Context, target, local, remotePath string) err
 	if err != nil {
 		return err
 	}
-	if err := c.pushReader(ctx, target, remotePath, f, info.Size(), uint32(info.Mode().Perm())); err != nil {
+	usedDirect, err := c.pushReaderPath(ctx, target, remotePath, f, info.Size(), uint32(info.Mode().Perm()))
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "pushed %s -> %s (%d bytes)\n", local, remotePath, info.Size())
+	if usedDirect {
+		fmt.Fprintf(os.Stderr, "pushed %s -> %s (%d bytes, direct)\n", local, remotePath, info.Size())
+	} else {
+		fmt.Fprintf(os.Stderr, "pushed %s -> %s (%d bytes)\n", local, remotePath, info.Size())
+	}
 	return nil
 }
 
@@ -53,84 +58,112 @@ func (c *Client) PushBytes(ctx context.Context, target, remotePath string, data 
 // device's file-put policy gate. Shared by Push (local file) and PushBytes
 // (in-memory blob).
 func (c *Client) pushReader(ctx context.Context, target, remotePath string, r io.Reader, size int64, mode uint32) error {
+	_, err := c.pushReaderPath(ctx, target, remotePath, r, size, mode)
+	return err
+}
+
+func (c *Client) pushReaderPath(ctx context.Context, target, remotePath string, r io.Reader, size int64, mode uint32) (bool, error) {
 	if size < 0 || size > protocol.MaxFileSize {
-		return fmt.Errorf("upload size %d outside supported range 0..%d", size, protocol.MaxFileSize)
+		return false, fmt.Errorf("upload size %d outside supported range 0..%d", size, protocol.MaxFileSize)
 	}
 	conn, err := c.connectPipelined(ctx, target)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer conn.Close()
 	defer wsconn.CloseOnCancel(ctx, conn)()
 
-	if err := protocol.WriteMessage(conn, protocol.Message{
+	request := protocol.Message{
 		Kind: protocol.KindFilePut,
 		Path: remotePath,
 		Size: size,
 		Mode: mode,
-	}); err != nil {
-		return err
 	}
-	readAck := func() error {
+	if c.directEnabled && size >= c.directSettings.Effective().MinBytes {
+		request.Direct = &protocol.DirectInfo{}
+	}
+	if err := protocol.WriteMessage(conn, request); err != nil {
+		return false, err
+	}
+	readAck := func() (protocol.Message, error) {
 		ack, err := protocol.ReadMessage(conn)
 		if err != nil {
-			return err
+			return protocol.Message{}, err
 		}
 		if ack.Kind == protocol.KindError {
-			return fmt.Errorf("remote refused upload: %s", ack.Reason)
+			return protocol.Message{}, fmt.Errorf("remote refused upload: %s", ack.Reason)
 		}
 		if ack.Kind == protocol.KindReject {
-			return rejectError(ack)
+			return protocol.Message{}, rejectError(ack)
 		}
 		if ack.Kind != protocol.KindOK {
-			return fmt.Errorf("unexpected reply: %s", ack.Kind)
+			return protocol.Message{}, fmt.Errorf("unexpected reply: %s", ack.Kind)
 		}
-		return nil
+		return ack, nil
 	}
-	pipelined := size <= pipelinedPutBytes
+	pipelined := size <= pipelinedPutBytes && request.Direct == nil
+	path := relayPath(conn)
 	if !pipelined {
-		if err := readAck(); err != nil {
-			return err
+		ack, err := readAck()
+		if err != nil {
+			return false, err
 		}
+		if ack.Direct != nil {
+			path, err = c.selectFilePath(ctx, conn, ack.Direct)
+			if err != nil {
+				return false, err
+			}
+		}
+	}
+	defer path.close()
+	rw := path.rw
+	wrap := func(err error, unknown bool) (bool, error) {
+		if !path.direct {
+			return false, err
+		}
+		if unknown {
+			return true, fmt.Errorf("direct push result unknown; device may have committed: %w", err)
+		}
+		return true, fmt.Errorf("direct push failed: %w", err)
 	}
 
 	buf := make([]byte, fileChunk)
 	for {
 		n, rerr := r.Read(buf)
 		if n > 0 {
-			if err := protocol.WriteFrame(conn, protocol.FrameData, buf[:n]); err != nil {
-				return err
+			if err := protocol.WriteFrame(rw, protocol.FrameData, buf[:n]); err != nil {
+				return wrap(err, false)
 			}
 		}
 		if rerr == io.EOF {
 			break
 		}
 		if rerr != nil {
-			return rerr
+			return wrap(rerr, false)
 		}
 	}
-	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindEOF}); err != nil {
-		return err
+	if err := protocol.WriteMessage(rw, protocol.Message{Kind: protocol.KindEOF}); err != nil {
+		return wrap(err, false)
 	}
 	if pipelined {
-		if err := readAck(); err != nil {
-			return err
+		if _, err := readAck(); err != nil {
+			return false, err
 		}
 	}
-	done, err := protocol.ReadMessage(conn)
+	done, err := protocol.ReadMessage(rw)
 	if err != nil {
-		return err
+		return wrap(err, true)
 	}
 	if done.Kind == protocol.KindError {
-		return fmt.Errorf("remote write failed: %s", done.Reason)
+		return wrap(fmt.Errorf("remote write failed: %s", done.Reason), false)
 	}
 	if done.Kind != protocol.KindOK {
-		return fmt.Errorf("unexpected upload result: %s", done.Kind)
+		return wrap(fmt.Errorf("unexpected upload result: %s", done.Kind), true)
 	}
 	if done.Size != size {
-		return fmt.Errorf("remote write size mismatch: got %d, want %d", done.Size, size)
+		return wrap(fmt.Errorf("remote write size mismatch: got %d, want %d", done.Size, size), true)
 	}
-	return nil
+	return path.direct, nil
 }
 
 // Pull downloads remotePath from the target device into local.
@@ -142,7 +175,11 @@ func (c *Client) Pull(ctx context.Context, target, remotePath, local string) err
 	defer conn.Close()
 	defer wsconn.CloseOnCancel(ctx, conn)()
 
-	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindFileGet, Path: remotePath}); err != nil {
+	request := protocol.Message{Kind: protocol.KindFileGet, Path: remotePath}
+	if c.directEnabled {
+		request.Direct = &protocol.DirectInfo{}
+	}
+	if err := protocol.WriteMessage(conn, request); err != nil {
 		return err
 	}
 	meta, err := protocol.ReadMessage(conn)
@@ -158,6 +195,14 @@ func (c *Client) Pull(ctx context.Context, target, remotePath, local string) err
 	if meta.Kind != protocol.KindFileMeta {
 		return fmt.Errorf("unexpected reply: %s", meta.Kind)
 	}
+	path := relayPath(conn)
+	if meta.Direct != nil {
+		path, err = c.selectFilePath(ctx, conn, meta.Direct)
+		if err != nil {
+			return err
+		}
+	}
+	defer path.close()
 
 	mode := os.FileMode(meta.Mode)
 	if mode == 0 {
@@ -169,15 +214,27 @@ func (c *Client) Pull(ctx context.Context, target, remotePath, local string) err
 	}
 	defer f.Close()
 
-	got, err := receiveFile(conn, f, meta.Size, local)
+	got, err := receiveFile(path.rw, f, meta.Size, local, func(n int64) error {
+		if c.pullProgress != nil {
+			c.pullProgress(n)
+		}
+		return ctx.Err()
+	})
 	if err != nil {
+		if path.direct {
+			return fmt.Errorf("direct pull failed: %w", err)
+		}
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "pulled %s -> %s (%d bytes)\n", remotePath, local, got)
+	if path.direct {
+		fmt.Fprintf(os.Stderr, "pulled %s -> %s (%d bytes, direct)\n", remotePath, local, got)
+	} else {
+		fmt.Fprintf(os.Stderr, "pulled %s -> %s (%d bytes)\n", remotePath, local, got)
+	}
 	return nil
 }
 
-func receiveFile(src io.Reader, dst io.Writer, expected int64, local string) (int64, error) {
+func receiveFile(src io.Reader, dst io.Writer, expected int64, local string, progress ...func(int64) error) (int64, error) {
 	var got int64
 	incomplete := func(err error) (int64, error) { return got, fmt.Errorf("local file %s is incomplete: %w", local, err) }
 	for {
@@ -197,6 +254,11 @@ func receiveFile(src io.Reader, dst io.Writer, expected int64, local string) (in
 			}
 			if got > expected {
 				return incomplete(fmt.Errorf("received %d bytes, expected %d", got, expected))
+			}
+			if len(progress) > 0 && progress[0] != nil {
+				if err := progress[0](got); err != nil {
+					return incomplete(err)
+				}
 			}
 		case protocol.FrameJSON:
 			m, err := protocol.DecodeMessage(payload)
