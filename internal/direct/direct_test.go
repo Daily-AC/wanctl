@@ -143,7 +143,7 @@ func TestPinnedQUICHandshake(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestPinnedQUICHandshake(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	clientUDP, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+	clientUDP, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,12 +164,23 @@ func TestPinnedQUICHandshake(t *testing.T) {
 	defer clientUDP.Close()
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: udp.LocalAddr().(*net.UDPAddr).Port}
 	if conn, err := clientTR.Dial(ctx, addr, verifyTLSConfig(wrong, devicePin, false), quicConfig()); err == nil {
+		defer conn.CloseWithError(0, "")
+	}
+	noAcceptCtx, stopNoAccept := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer stopNoAccept()
+	if conn, err := ln.Accept(noAcceptCtx); err == nil {
 		conn.CloseWithError(0, "")
-		t.Fatal("accepted wrong client certificate")
+		t.Fatal("listener accepted wrong client certificate")
 	}
 	if conn, err := clientTR.Dial(ctx, addr, verifyTLSConfig(controller, wrongPin, false), quicConfig()); err == nil {
 		conn.CloseWithError(0, "")
 		t.Fatal("accepted wrong server certificate")
+	}
+	wrongALPN := verifyTLSConfig(controller, devicePin, false)
+	wrongALPN.NextProtos = []string{"wrong"}
+	if conn, err := clientTR.Dial(ctx, addr, wrongALPN, quicConfig()); err == nil {
+		conn.CloseWithError(0, "")
+		t.Fatal("accepted wrong ALPN")
 	}
 	conn, err := clientTR.Dial(ctx, addr, verifyTLSConfig(controller, devicePin, false), quicConfig())
 	if err != nil {
@@ -181,6 +192,27 @@ func TestPinnedQUICHandshake(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer accepted.CloseWithError(0, "")
+	first, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if _, err := first.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := accepted.AcceptStream(ctx); err != nil {
+		t.Fatal(err)
+	}
+	streamCtx, stopStreams := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer stopStreams()
+	if stream, err := conn.OpenStreamSync(streamCtx); err == nil {
+		stream.CancelWrite(0)
+		t.Fatal("second bidirectional stream opened")
+	}
+	if stream, err := conn.OpenUniStreamSync(streamCtx); err == nil {
+		stream.CancelWrite(0)
+		t.Fatal("unidirectional stream opened")
+	}
 	if quicConfig().Allow0RTT || quicConfig().MaxIncomingUniStreams != -1 || quicConfig().MaxIncomingStreams != 1 {
 		t.Fatal("stream limits or 0-RTT changed")
 	}

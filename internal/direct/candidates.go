@@ -13,7 +13,7 @@ type hostCandidate struct {
 
 func usableAddr(ip netip.Addr, allowLoopback bool) bool {
 	ip = ip.Unmap()
-	return ip.IsValid() && ip.IsGlobalUnicast() && (allowLoopback || !ip.IsLoopback()) && !ip.IsLinkLocalUnicast() && ip != netip.MustParseAddr("255.255.255.255")
+	return ip.IsValid() && ((allowLoopback && ip.IsLoopback()) || (ip.IsGlobalUnicast() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && ip != netip.MustParseAddr("255.255.255.255")))
 }
 
 func validateCandidates(raw []string, allowLoopback bool) []netip.AddrPort {
@@ -46,10 +46,10 @@ func orderCandidates(port uint16, defaults []netip.Addr, reflexive []netip.AddrP
 	for _, ip := range defaults {
 		pairs = append(pairs, netip.AddrPortFrom(ip, port))
 	}
-	return orderCandidatePairs(pairs, reflexive, hosts, port, allowLoopback)
+	return orderCandidatePairs(pairs, reflexive, hosts, port, port, allowLoopback)
 }
 
-func orderCandidatePairs(defaults, reflexive []netip.AddrPort, hosts []hostCandidate, port uint16, allowLoopback bool) []string {
+func orderCandidatePairs(defaults, reflexive []netip.AddrPort, hosts []hostCandidate, port4, port6 uint16, allowLoopback bool) []string {
 	out := make([]string, 0, 8)
 	seen := map[netip.AddrPort]bool{}
 	add := func(ap netip.AddrPort) {
@@ -80,6 +80,10 @@ func orderCandidatePairs(defaults, reflexive []netip.AddrPort, hosts []hostCandi
 	sort.SliceStable(hosts, func(i, j int) bool { return isPrivate(hosts[i].addr) && !isPrivate(hosts[j].addr) })
 	for _, h := range hosts {
 		if !h.pointToPoint {
+			port := port4
+			if h.addr.Is6() {
+				port = port6
+			}
 			add(netip.AddrPortFrom(h.addr, port))
 		}
 	}
