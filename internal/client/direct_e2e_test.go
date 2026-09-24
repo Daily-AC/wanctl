@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http/httptest"
@@ -349,6 +350,55 @@ func TestDirectActiveCapFifthUsesRelay(t *testing.T) {
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != "z" {
 		t.Fatalf("fifth bytes = %q %v", got, err)
+	}
+}
+
+func TestCompletedDirectTransfersReleaseSlotsBeforeConnectionsClose(t *testing.T) {
+	var deviceSockets, controllerSockets atomic.Int32
+	ds, cs := loopbackSettings(&deviceSockets), loopbackSettings(&controllerSockets)
+	ds.Hold, ds.NoProgress = 5*time.Second, 5*time.Second
+	_, c := directFixture(t, ds, cs)
+	for i := 0; i < 4; i++ {
+		conn, err := c.connectPipelined(context.Background(), "direct-device")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		remote := filepath.Join(t.TempDir(), fmt.Sprintf("completed-%d", i))
+		if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindFilePut, Path: remote, Size: 1, Direct: &protocol.DirectInfo{}}); err != nil {
+			t.Fatal(err)
+		}
+		ack, err := protocol.ReadMessage(conn)
+		if err != nil || ack.Direct == nil {
+			t.Fatalf("offer %d = %+v %v", i, ack, err)
+		}
+		path, err := c.selectFilePath(context.Background(), conn, ack.Direct)
+		if err != nil || !path.direct {
+			t.Fatalf("path %d = %+v %v", i, path, err)
+		}
+		t.Cleanup(path.close) // deliberately keep the QUIC connection open until test cleanup
+		if err := protocol.WriteFrame(path.rw, protocol.FrameData, []byte{'x'}); err != nil {
+			t.Fatal(err)
+		}
+		if err := protocol.WriteMessage(path.rw, protocol.Message{Kind: protocol.KindEOF}); err != nil {
+			t.Fatal(err)
+		}
+		result, err := protocol.ReadMessage(path.rw)
+		if err != nil || result.Kind != protocol.KindOK {
+			t.Fatalf("completion %d = %+v %v", i, result, err)
+		}
+	}
+	fifth, err := c.connectPipelined(context.Background(), "direct-device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fifth.Close()
+	if err := protocol.WriteMessage(fifth, protocol.Message{Kind: protocol.KindFilePut, Path: filepath.Join(t.TempDir(), "fifth"), Size: 1, Direct: &protocol.DirectInfo{}}); err != nil {
+		t.Fatal(err)
+	}
+	ack, err := protocol.ReadMessage(fifth)
+	if err != nil || ack.Direct == nil {
+		t.Fatalf("four completed operations still occupy slots: %+v %v", ack, err)
 	}
 }
 

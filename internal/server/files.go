@@ -59,6 +59,11 @@ func (u *FileUpload) Close() { u.pending.abort() }
 
 // Transfer consumes only the data phase; the caller has already sent the ack.
 func (u *FileUpload) Transfer(conn io.ReadWriter, m protocol.Message) {
+	u.TransferWithProgress(conn, m, nil)
+}
+
+// TransferWithProgress reports only file bytes actually written to the pending upload.
+func (u *FileUpload) TransferWithProgress(conn io.ReadWriter, m protocol.Message, progress func(int)) {
 	var written int64
 	for {
 		t, payload, err := protocol.ReadFrame(conn)
@@ -81,6 +86,9 @@ func (u *FileUpload) Transfer(conn io.ReadWriter, m protocol.Message) {
 				return
 			}
 			written += int64(len(payload))
+			if n > 0 && progress != nil {
+				progress(n)
+			}
 		case protocol.FrameJSON:
 			control, err := protocol.DecodeMessage(payload)
 			if err != nil || control.Kind != protocol.KindEOF {
@@ -254,14 +262,24 @@ func (d *FileDownload) Meta() protocol.Message {
 }
 func (d *FileDownload) Close()                  { _ = d.file.Close() }
 func (d *FileDownload) Transfer(conn io.Writer) { streamFileGet(conn, d.file) }
+func (d *FileDownload) TransferWithProgress(conn io.Writer, progress func(int)) {
+	streamFileGetProgress(conn, d.file, progress)
+}
 
 func streamFileGet(conn io.Writer, f io.Reader) {
+	streamFileGetProgress(conn, f, nil)
+}
+
+func streamFileGetProgress(conn io.Writer, f io.Reader, progress func(int)) {
 	buf := make([]byte, fileChunk)
 	for {
 		n, rerr := f.Read(buf)
 		if n > 0 {
 			if err := protocol.WriteFrame(conn, protocol.FrameData, buf[:n]); err != nil {
 				return
+			}
+			if progress != nil {
+				progress(n)
 			}
 		}
 		if rerr == io.EOF {
