@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 
 	"wanctl/internal/protocol"
@@ -66,7 +67,7 @@ func (c *Client) pushReaderPath(ctx context.Context, target, remotePath string, 
 	if size < 0 || size > protocol.MaxFileSize {
 		return false, fmt.Errorf("upload size %d outside supported range 0..%d", size, protocol.MaxFileSize)
 	}
-	conn, err := c.connectPipelined(ctx, target)
+	conn, err := c.fileConnection(ctx, target)
 	if err != nil {
 		return false, err
 	}
@@ -108,11 +109,9 @@ func (c *Client) pushReaderPath(ctx context.Context, target, remotePath string, 
 		if err != nil {
 			return false, err
 		}
-		if ack.Direct != nil {
-			path, err = c.selectFilePath(ctx, conn, ack.Direct)
-			if err != nil {
-				return false, err
-			}
+		path, err = c.filePathFromReply(ctx, conn, request.Direct != nil, ack.Direct)
+		if err != nil {
+			return false, err
 		}
 	}
 	defer path.close()
@@ -146,7 +145,11 @@ func (c *Client) pushReaderPath(ctx context.Context, target, remotePath string, 
 		return wrap(err, false)
 	}
 	if pipelined {
-		if _, err := readAck(); err != nil {
+		ack, err := readAck()
+		if err != nil {
+			return false, err
+		}
+		if _, err := c.filePathFromReply(ctx, conn, false, ack.Direct); err != nil {
 			return false, err
 		}
 	}
@@ -168,7 +171,7 @@ func (c *Client) pushReaderPath(ctx context.Context, target, remotePath string, 
 
 // Pull downloads remotePath from the target device into local.
 func (c *Client) Pull(ctx context.Context, target, remotePath, local string) error {
-	conn, err := c.connectPipelined(ctx, target)
+	conn, err := c.fileConnection(ctx, target)
 	if err != nil {
 		return err
 	}
@@ -196,11 +199,9 @@ func (c *Client) Pull(ctx context.Context, target, remotePath, local string) err
 		return fmt.Errorf("unexpected reply: %s", meta.Kind)
 	}
 	path := relayPath(conn)
-	if meta.Direct != nil {
-		path, err = c.selectFilePath(ctx, conn, meta.Direct)
-		if err != nil {
-			return err
-		}
+	path, err = c.filePathFromReply(ctx, conn, request.Direct != nil, meta.Direct)
+	if err != nil {
+		return err
 	}
 	defer path.close()
 
@@ -232,6 +233,13 @@ func (c *Client) Pull(ctx context.Context, target, remotePath, local string) err
 		fmt.Fprintf(os.Stderr, "pulled %s -> %s (%d bytes)\n", remotePath, local, got)
 	}
 	return nil
+}
+
+func (c *Client) fileConnection(ctx context.Context, target string) (net.Conn, error) {
+	if c.fileConnect != nil {
+		return c.fileConnect(ctx, target)
+	}
+	return c.connectPipelined(ctx, target)
 }
 
 func receiveFile(src io.Reader, dst io.Writer, expected int64, local string, progress ...func(int64) error) (int64, error) {
