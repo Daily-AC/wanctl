@@ -39,10 +39,13 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"wanctl/internal/admission"
 	"wanctl/internal/config"
+	"wanctl/internal/limits"
+	"wanctl/internal/relayhttp"
 )
 
 type conn struct {
@@ -57,18 +60,48 @@ type conn struct {
 	eof      bool
 	ackSeq   uint64 // highest down-poll sequence fully received
 	ackable  bool   // the relay has answered this session with the ack protocol
+	downMax  int    // bytes this reader asks one down poll to carry
 
 	writeM     sync.Mutex
 	pending    []byte
-	writeErr   error
 	flushTimer *time.Timer
 	flushGen   uint64
 	closed     bool
+	upSeq      uint64 // sequence of the last /h/up handed out
+
+	// upOrdered is set once the relay has said it orders sequenced writes.
+	// Until then uploads go one at a time, as every older relay requires.
+	upOrdered atomic.Bool
+	upSlots   chan struct{} // one token per /h/up allowed in flight
+	upWG      sync.WaitGroup
+
+	errM     sync.Mutex
+	writeErr error // first upload failure; every later Write and Read reports it
 }
 
 const (
-	writeBatchBytes = 256 << 10
+	// writeBatchBytes is as much as the relay accepts in one /h/up. Upload is
+	// one request at a time, so it cannot move more than a batch per round
+	// trip: at the 0.5 s round trip of a CDN edge on another continent, 256 KiB
+	// batches capped a push at about 400 KiB/s whatever the link could carry.
+	writeBatchBytes = int(limits.RelayHTTPUploadBytes)
 	writeFlushDelay = 5 * time.Millisecond
+
+	// upWindow is how many /h/up a writer keeps in flight once the relay
+	// orders them. One at a time moved a batch per round trip, about 1 MiB/s
+	// at the round trip of a CDN edge on another continent.
+	upWindow = 4
+	// upAttempts bounds retries of one /h/up. Retrying is safe only against a
+	// relay that orders writes, because it recognises the repeat by its
+	// sequence and does not queue it twice.
+	upAttempts   = 4
+	upRetryDelay = 250 * time.Millisecond
+
+	// UpSeqParam carries a write's place in its direction's stream, starting
+	// at 1. UpSeqCapabilityHeader is how a relay says it holds out-of-order
+	// writes until the gap fills and drops repeats.
+	UpSeqParam            = "seq"
+	UpSeqCapabilityHeader = "X-Wanctl-Up-Seq"
 
 	// DownSeqHeader carries the sequence number of a data-bearing down-poll
 	// response; DownAckParam is the query parameter the next poll reports the
@@ -84,13 +117,31 @@ const (
 	// gated on having seen this (or a sequence header) on this session.
 	DownAckCapabilityHeader = "X-Wanctl-Down-Ack"
 
+	// DownMaxParam is the most bytes the reader wants in one down-poll
+	// response. A relay that does not know it answers with its own cap.
+	DownMaxParam = "max"
+
 	// downPollAttempts bounds how many times one Read retries a down poll that
 	// the carrier failed to deliver. The relay still holds the chunk, so a
 	// retry is a re-send rather than a hole; the bound is what stops a
 	// permanently broken link from spinning forever.
 	downPollAttempts = 6
 	downRetryDelay   = 250 * time.Millisecond
+
+	// A reader starts by asking for the chunk every relay has always served
+	// and doubles it while full chunks keep arriving quickly: each poll costs
+	// a round trip and a fresh HTTP stream, so bigger chunks move bulk data
+	// several times faster on a CDN path. A chunk that takes long to arrive
+	// halves it again, so one response stays well inside the client's
+	// five-minute request bound on a slow link.
+	downMaxFloor   = 2 << 20
+	downMaxCeiling = 16 << 20
+	downGrowWithin = 4 * time.Second
 )
+
+// downShrinkPast is how long a chunk may take before the next one is halved;
+// a variable so tests need not wait it out.
+var downShrinkPast = 30 * time.Second
 
 // Dial constructs a net.Conn for a session/role. base is the relay's HTTP origin
 // (http:// or https://, or ws(s):// which is normalized). No network I/O happens
@@ -116,21 +167,27 @@ func DialWith(ctx context.Context, base, session, role, token string, hc *http.C
 		role:    role,
 		token:   token,
 		hc:      hc,
+		upSlots: make(chan struct{}, upWindow),
+		downMax: downMaxFloor,
 	}, nil
 }
 
+// MarkOrdered records that the relay announced write ordering before the
+// session carried a byte, on /h/dial or /h/poll, so the first write can go out
+// without waiting for an /h/up answer to say so. It is a no-op on any other
+// net.Conn.
+func MarkOrdered(nc net.Conn) {
+	if c, ok := nc.(*conn); ok {
+		c.upOrdered.Store(true)
+	}
+}
+
 func defaultClient() *http.Client {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	// A down poll parks on the relay for its whole poll window before
-	// answering, so only the wait for response *headers* can be bounded
-	// tightly. The previous blanket http.Client.Timeout bounded the entire
-	// exchange, so on a slow link it fired while a response body was still
-	// downloading and cut the body in half (issue #57).
-	tr.ResponseHeaderTimeout = 45 * time.Second
-	// The whole request still has a bound, generous enough that a full
+	// The shared relay transport bounds the wait for response headers; the
+	// whole request still has a bound, generous enough that a full
 	// maxDrainBytes response downloads well inside it on the 60 KB/s link from
 	// issue #57 (about 34 s) even after the poll parked on the relay first.
-	return &http.Client{Transport: tr, Timeout: 5 * time.Minute}
+	return &http.Client{Transport: relayhttp.Shared(), Timeout: 5 * time.Minute}
 }
 
 func (c *conn) Read(p []byte) (int, error) {
@@ -169,10 +226,17 @@ func (c *conn) Read(p []byte) (int, error) {
 		if c.isClosed() {
 			return 0, io.EOF
 		}
+		// An upload still in flight when this Read started may fail while it
+		// polls. The peer then never sees the bytes this read is waiting for
+		// an answer to, so the failure has to end the wait.
+		if err := c.uploadErr(); err != nil {
+			return 0, err
+		}
 		q := url.Values{
 			"session":    {c.session},
 			"role":       {c.role},
 			DownAckParam: {strconv.FormatUint(c.ackSeq, 10)},
+			DownMaxParam: {strconv.Itoa(c.downMax)},
 		}
 		req, err := http.NewRequest("GET", c.base+"/h/down?"+q.Encode(), nil)
 		if err != nil {
@@ -204,8 +268,10 @@ func (c *conn) Read(p []byte) (int, error) {
 			failures = 0
 			continue // no data this round; poll again
 		case http.StatusOK:
+			started := time.Now()
 			body, readErr := io.ReadAll(resp.Body)
 			resp.Body.Close()
+			c.adjustDownMax(len(body), time.Since(started), readErr)
 			if readErr != nil {
 				// The body was cut short. Do not advance the ack and do not
 				// hand the partial body on: the relay re-sends the whole
@@ -243,19 +309,35 @@ func (c *conn) Read(p []byte) (int, error) {
 	}
 }
 
+// adjustDownMax sizes the next poll's chunk from how the last one arrived.
+func (c *conn) adjustDownMax(n int, took time.Duration, readErr error) {
+	switch {
+	case readErr != nil || took > downShrinkPast:
+		c.downMax = max(c.downMax/2, downMaxFloor)
+	case n >= c.downMax && took < downGrowWithin:
+		c.downMax = min(c.downMax*2, downMaxCeiling)
+	}
+}
+
 func (c *conn) Write(p []byte) (int, error) {
 	c.writeM.Lock()
 	defer c.writeM.Unlock()
 	if c.closed {
 		return 0, io.ErrClosedPipe
 	}
-	if c.writeErr != nil {
-		return 0, c.writeErr
+	if err := c.uploadErr(); err != nil {
+		return 0, err
 	}
 	c.pending = append(c.pending, p...)
+	if len(c.pending) >= writeBatchBytes {
+		// The timer was armed for bytes that are about to go out in this
+		// batch. Left running, it fires while the batch is in flight and then
+		// posts whatever tail the batch left behind as a request of its own,
+		// which doubled the round trips of every bulk transfer.
+		c.stopFlushTimerLocked()
+	}
 	for len(c.pending) >= writeBatchBytes {
-		if err := c.postPendingLocked(writeBatchBytes); err != nil {
-			c.writeErr = err
+		if err := c.sendLocked(writeBatchBytes); err != nil {
 			return 0, err
 		}
 	}
@@ -274,29 +356,26 @@ func (c *conn) flushTimerFired(gen uint64) {
 		return
 	}
 	c.flushTimer = nil
-	if c.closed || c.writeErr != nil || len(c.pending) == 0 {
+	if c.closed || c.uploadErr() != nil || len(c.pending) == 0 {
 		return
 	}
-	if err := c.postPendingLocked(len(c.pending)); err != nil {
-		c.writeErr = err
-	}
+	c.sendLocked(len(c.pending))
 }
 
+// flushWrites hands every pending byte to an upload. Against a relay that
+// orders writes it does not wait for them to land: the down poll that follows
+// can run alongside, and the relay still queues the bytes in order.
 func (c *conn) flushWrites() error {
 	c.writeM.Lock()
 	defer c.writeM.Unlock()
-	if c.writeErr != nil {
-		return c.writeErr
+	if err := c.uploadErr(); err != nil {
+		return err
 	}
 	c.stopFlushTimerLocked()
 	if len(c.pending) == 0 {
 		return nil
 	}
-	if err := c.postPendingLocked(len(c.pending)); err != nil {
-		c.writeErr = err
-		return err
-	}
-	return nil
+	return c.sendLocked(len(c.pending))
 }
 
 func (c *conn) stopFlushTimerLocked() {
@@ -307,27 +386,89 @@ func (c *conn) stopFlushTimerLocked() {
 	}
 }
 
-func (c *conn) postPendingLocked(n int) error {
-	data := c.pending[:n]
-	q := url.Values{"session": {c.session}, "role": {c.role}}
-	req, err := http.NewRequest("POST", c.base+"/h/up?"+q.Encode(), bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	admission.SetBearer(req, c.token)
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return err
-	}
-	io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("up chunk: relay returned %d", resp.StatusCode)
-	}
+// sendLocked takes the first n pending bytes as the next write of this
+// direction. It posts them in the background once the relay orders writes,
+// waiting only for a free slot, and in the foreground otherwise.
+func (c *conn) sendLocked(n int) error {
+	data := make([]byte, n)
+	copy(data, c.pending[:n])
 	copy(c.pending, c.pending[n:])
 	c.pending = c.pending[:len(c.pending)-n]
+	c.upSeq++
+	seq := c.upSeq
+	if !c.upOrdered.Load() {
+		if err := c.post(seq, data); err != nil {
+			c.fail(err)
+			return err
+		}
+		return nil
+	}
+	c.upSlots <- struct{}{}
+	c.upWG.Add(1)
+	go func() {
+		defer c.upWG.Done()
+		defer func() { <-c.upSlots }()
+		if err := c.post(seq, data); err != nil {
+			c.fail(err)
+		}
+	}()
 	return nil
+}
+
+// post delivers one write. Every write names its sequence, which a relay that
+// does not order writes ignores; retries happen only against one that does.
+func (c *conn) post(seq uint64, data []byte) error {
+	q := url.Values{"session": {c.session}, "role": {c.role}, UpSeqParam: {strconv.FormatUint(seq, 10)}}
+	var lastErr error
+	for attempt := 1; attempt <= upAttempts; attempt++ {
+		if attempt > 1 {
+			if !c.upOrdered.Load() {
+				break
+			}
+			time.Sleep(time.Duration(attempt-1) * upRetryDelay)
+		}
+		req, err := http.NewRequest("POST", c.base+"/h/up?"+q.Encode(), bytes.NewReader(data))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/octet-stream")
+		admission.SetBearer(req, c.token)
+		resp, err := c.hc.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.Header.Get(UpSeqCapabilityHeader) == "1" {
+			c.upOrdered.Store(true)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		switch {
+		case resp.StatusCode == http.StatusOK:
+			return nil
+		case resp.StatusCode >= 500:
+			lastErr = fmt.Errorf("up chunk: relay returned %d", resp.StatusCode)
+			continue
+		default:
+			// 4xx is the relay refusing the write, not the carrier losing it.
+			return fmt.Errorf("up chunk: relay returned %d", resp.StatusCode)
+		}
+	}
+	return lastErr
+}
+
+func (c *conn) fail(err error) {
+	c.errM.Lock()
+	defer c.errM.Unlock()
+	if c.writeErr == nil {
+		c.writeErr = err
+	}
+}
+
+func (c *conn) uploadErr() error {
+	c.errM.Lock()
+	defer c.errM.Unlock()
+	return c.writeErr
 }
 
 func (c *conn) isClosed() bool {
@@ -343,21 +484,39 @@ func (c *conn) Close() error {
 		return nil
 	}
 	c.stopFlushTimerLocked()
-	flushErr := c.writeErr
-	if flushErr == nil && len(c.pending) > 0 {
-		flushErr = c.postPendingLocked(len(c.pending))
+	q := url.Values{"session": {c.session}, "role": {c.role}}
+	var tail []byte
+	if c.uploadErr() == nil && len(c.pending) > 0 {
+		if c.upOrdered.Load() {
+			// An ordering relay takes the last bytes with the close itself.
+			tail = append([]byte(nil), c.pending...)
+			c.pending = c.pending[:0]
+			c.upSeq++
+			q.Set(UpSeqParam, strconv.FormatUint(c.upSeq, 10))
+		} else {
+			c.sendLocked(len(c.pending))
+		}
 	}
 	c.closed = true
 	c.writeM.Unlock()
-	q := url.Values{"session": {c.session}}
-	req, _ := http.NewRequest("POST", c.base+"/h/close?"+q.Encode(), nil)
+	// The last writes must land before the close, or the relay would end the
+	// session with the tail of the stream still in flight.
+	c.upWG.Wait()
+	req, _ := http.NewRequest("POST", c.base+"/h/close?"+q.Encode(), bytes.NewReader(tail))
 	if req != nil {
 		admission.SetBearer(req, c.token)
-		if resp, err := c.hc.Do(req); err == nil {
+		resp, err := c.hc.Do(req)
+		switch {
+		case err != nil && tail != nil:
+			c.fail(err)
+		case err == nil:
+			if resp.StatusCode != http.StatusOK && tail != nil {
+				c.fail(fmt.Errorf("close with final bytes: relay returned %d", resp.StatusCode))
+			}
 			resp.Body.Close()
 		}
 	}
-	return flushErr
+	return c.uploadErr()
 }
 
 type addr struct{ s string }
