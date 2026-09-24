@@ -37,18 +37,21 @@ const MaxFileSize int64 = 1 << 30
 
 // Message kinds for FrameJSON control frames.
 const (
-	KindHello     = "hello"      // client -> server, opening greeting
-	KindExec      = "exec"       // client -> server, run a command
-	KindCancel    = "cancel"     // client -> server, abort the command running on this stream
-	KindExecAsync = "exec_async" // client -> server, start a background job, return its id
-	KindExecPoll  = "exec_poll"  // client -> server, fetch a background job's new output + status
-	KindExit      = "exit"       // server -> client, command finished
-	KindError     = "error"      // either direction, fatal request error
-	KindReject    = "reject"     // server -> client, pairing/authz denied
-	KindOK        = "ok"         // generic acknowledgement
-	KindFilePut   = "file_put"   // client -> server, begin upload
-	KindFileGet   = "file_get"   // client -> server, request download
-	KindFileMeta  = "file_meta"  // server -> client, download metadata
+	KindHello          = "hello"           // client -> server, opening greeting
+	KindExec           = "exec"            // client -> server, run a command
+	KindCancel         = "cancel"          // client -> server, abort the command running on this stream
+	KindExecAsync      = "exec_async"      // client -> server, start a background job, return its id
+	KindExecPoll       = "exec_poll"       // client -> server, fetch a background job's new output + status
+	KindExit           = "exit"            // server -> client, command finished
+	KindError          = "error"           // either direction, fatal request error
+	KindReject         = "reject"          // server -> client, pairing/authz denied
+	KindOK             = "ok"              // generic acknowledgement
+	KindFilePut        = "file_put"        // client -> server, begin upload
+	KindFileGet        = "file_get"        // client -> server, request download
+	KindFileMeta       = "file_meta"       // server -> client, download metadata
+	KindDirectOffer    = "direct_offer"    // controller -> device, relay session
+	KindDirectFallback = "direct_fallback" // controller -> device, relay session
+	KindDirectAttach   = "direct_attach"   // controller -> device, direct stream
 
 	// Native file inspection and patching. file_get/file_put move whole files
 	// and file_read/file_edit address their contents: a line range out, a
@@ -78,10 +81,17 @@ const (
 	KindTimeoutSet    = "timeout_set"    // portal -> device, set how long an approval waits (TimeoutSec; 0 = default)
 )
 
+// DirectInfo is one side's part of a direct-lane negotiation.
+type DirectInfo struct {
+	Candidates []string `json:"candidates,omitempty"`
+	CertSHA256 string   `json:"cert_sha256,omitempty"`
+}
+
 // Message is the JSON body of a FrameJSON frame. Fields are reused across kinds;
 // only those relevant to a given Kind are populated.
 type Message struct {
 	Kind           string           `json:"kind"`
+	Direct         *DirectInfo      `json:"direct,omitempty"`
 	Action         string           `json:"action,omitempty"`
 	WorkspaceID    string           `json:"workspace_id,omitempty"`
 	RequestID      string           `json:"request_id,omitempty"`
