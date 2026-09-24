@@ -218,6 +218,10 @@ func HandleFileGet(conn *tls.Conn, m protocol.Message, policyRoot string) {
 	}); err != nil {
 		return
 	}
+	streamFileGet(conn, f)
+}
+
+func streamFileGet(conn io.Writer, f io.Reader) {
 	buf := make([]byte, fileChunk)
 	for {
 		n, rerr := f.Read(buf)
@@ -230,6 +234,7 @@ func HandleFileGet(conn *tls.Conn, m protocol.Message, policyRoot string) {
 			break
 		}
 		if rerr != nil {
+			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: rerr.Error()})
 			return
 		}
 	}

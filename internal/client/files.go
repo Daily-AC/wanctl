@@ -140,6 +140,7 @@ func (c *Client) Pull(ctx context.Context, target, remotePath, local string) err
 		return err
 	}
 	defer conn.Close()
+	defer wsconn.CloseOnCancel(ctx, conn)()
 
 	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindFileGet, Path: remotePath}); err != nil {
 		return err
@@ -168,27 +169,52 @@ func (c *Client) Pull(ctx context.Context, target, remotePath, local string) err
 	}
 	defer f.Close()
 
+	got, err := receiveFile(conn, f, meta.Size, local)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "pulled %s -> %s (%d bytes)\n", remotePath, local, got)
+	return nil
+}
+
+func receiveFile(src io.Reader, dst io.Writer, expected int64, local string) (int64, error) {
 	var got int64
+	incomplete := func(err error) (int64, error) { return got, fmt.Errorf("local file %s is incomplete: %w", local, err) }
 	for {
-		ft, payload, err := protocol.ReadFrame(conn)
+		ft, payload, err := protocol.ReadFrame(src)
 		if err != nil {
-			return err
+			return incomplete(err)
 		}
 		switch ft {
 		case protocol.FrameData:
-			if _, werr := f.Write(payload); werr != nil {
-				return werr
+			n, werr := dst.Write(payload)
+			got += int64(n)
+			if werr != nil {
+				return incomplete(werr)
 			}
-			got += int64(len(payload))
+			if n != len(payload) {
+				return incomplete(io.ErrShortWrite)
+			}
+			if got > expected {
+				return incomplete(fmt.Errorf("received %d bytes, expected %d", got, expected))
+			}
 		case protocol.FrameJSON:
-			m, _ := protocol.DecodeMessage(payload)
+			m, err := protocol.DecodeMessage(payload)
+			if err != nil {
+				return incomplete(err)
+			}
 			if m.Kind == protocol.KindEOF {
-				fmt.Fprintf(os.Stderr, "pulled %s -> %s (%d bytes)\n", remotePath, local, got)
-				return nil
+				if got != expected {
+					return incomplete(fmt.Errorf("received %d bytes, expected %d", got, expected))
+				}
+				return got, nil
 			}
 			if m.Kind == protocol.KindError {
-				return fmt.Errorf("remote read failed: %s", m.Reason)
+				return incomplete(fmt.Errorf("remote read failed: %s", m.Reason))
 			}
+			return incomplete(fmt.Errorf("unexpected download control: %s", m.Kind))
+		default:
+			return incomplete(fmt.Errorf("unexpected download frame: %d", ft))
 		}
 	}
 }
