@@ -400,6 +400,15 @@ The relay is unchanged.
 - Success depends on NAT type. Tailscale reports over 90% direct with basic
   techniques; libp2p's large measurement (arXiv 2510.27500) found 70% given
   address discovery succeeded. Two symmetric NATs will not punch.
+- A controller behind a TUN proxy (Clash, Surge, a full-tunnel VPN) sends the
+  lane's UDP wherever its rules send wanctl. Routed into a proxy node, STUN
+  reports the node's exit or nothing, the device punches towards the node, and
+  the lane falls back; LAN candidates still work. The lane does not bypass the
+  proxy: binding to the physical interface would override the user's routing
+  policy. Such users route wanctl's UDP direct (Clash:
+  `AND,((PROCESS-NAME,wanctl),(NETWORK,UDP)),DIRECT` ahead of any rule that
+  sends wanctl to a proxy). Seen on 2026-09-24 on the author's Mac, where a
+  process rule sent all wanctl traffic into a speed-test group.
 
 ## Observability
 
@@ -417,8 +426,10 @@ for push, whether the outcome is unknown. The device logs one event per negotiat
 Written before implementation; measured on real devices, not tests. "Hash" means
 the tester compares SHA-256 of source and destination.
 
-- Home LAN, Mac and the Windows box: 100 MB push and pull at least 10× faster
-  than v0.13.0 on the same pair, hash equal.
+- Home LAN, Mac and the Windows box: 100 MB push and pull at least 80% of the
+  throughput scp reaches between the same pair on the same network, hash
+  equal. (Revised from "10× v0.13.0": the relay baseline ranged from 70 KB/s to
+  6.7 MB/s on the same pair, so a ratio to it measures the relay, not the lane.)
 - Office Mac to home Windows box: 30 MB push and pull at least 4 MB/s (v0.13.0:
   2.4–2.6), hash equal.
 - UDP blocked on either side: falls back; total time within relay time + 4 s
