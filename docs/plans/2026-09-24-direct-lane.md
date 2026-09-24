@@ -1,7 +1,7 @@
 # Direct lane for push and pull, 2026-09-24
 
-Status: design, revised after one adversarial review (see "Review response" at
-the end). Nothing here is implemented yet.
+Status: design, revised after two adversarial review rounds (see "Review
+response" at the end). Nothing here is implemented yet.
 
 ## Why
 
@@ -99,18 +99,22 @@ TOFU). Nothing below runs until the device has gated the operation.
    - the controller sent `direct: {}`;
    - the file is at least `directMinBytes` (push: declared size; pull: size of the
      opened file);
-   - fewer than `directMaxHolds` (4) operations are currently holding.
+   - fewer than `directMaxActive` (4) operations are holding or transferring
+     directly on this agent;
+   - after opening its sockets and gathering (at most 500 ms, see below) it has
+     at least one candidate. With none it closes the sockets and answers as
+     today, without `direct`.
 
-   To answer it opens its sockets, gathers candidates (at most 500 ms, see
-   below), generates a certificate, and sends the ack / `file_meta` with
+   It then generates a certificate and sends the ack / `file_meta` with
    `DirectInfo`. From here the operation is **holding**: for push the pending
    upload is open with nothing written; for pull the policy-bound file is open
    and nothing has been sent.
 3. **Controller**, on receiving `DirectInfo`: opens its sockets, gathers
    candidates (at most 500 ms), generates a certificate, sends `direct_offer`
    on the relay, and starts punching and dialling. The direct budget is 2.5 s
-   from sending `direct_offer`. If it cannot gather anything usable it sends
-   `direct_fallback` instead.
+   from sending `direct_offer`. If the device's list is empty after
+   validation, or it cannot gather anything usable itself, it sends
+   `direct_fallback` instead of `direct_offer`.
 4. **Device**, on `direct_offer`: validates the controller's candidates, starts
    its QUIC listener and punches towards them (at most 5 s of probing).
 5. **Controller** decides, once. Only the controller selects the path, and it
@@ -143,17 +147,60 @@ selected:
 - pull: device writes `FrameData ... eof`, or `error` if reading the source
   fails (today it returns silently; that changes on both paths).
 
+### State rules
+
+These close the questions the second review left open.
+
+**Who reads the relay connection.** Exactly one reader at any time, using the
+pattern `doExec` / `watchPeer` already use (`internal/agent/agent.go:707`,
+`:733`): a one-shot goroutine performs a single `protocol.ReadMessage` and
+delivers it on a channel; whoever holds the channel owns the read.
+
+- While holding, the file handler owns the relay read. It waits for
+  `direct_offer` or `direct_fallback` through one such one-shot read at a time;
+  anything else on the relay is a protocol error (error written, operation
+  aborted, session closed).
+- `direct_fallback` arrives: that read has completed, no read is outstanding,
+  and the handler reads the data phase synchronously, exactly as today.
+- `direct_attach` selects direct, or the hold times out: a relay read is still
+  outstanding. The handler returns its channel to `serveAuthorized` as that
+  loop's pending read, the way `doExec` does. It never starts a second read.
+
+**Who sends the selection.** On the controller, the operation's goroutine alone
+writes `direct_attach` or `direct_fallback`. Dial workers only report
+connections on a channel. When the budget ends it cancels their context, waits
+for all of them to return (closing any connection they report late), closes
+its transports, then writes `direct_fallback`.
+
+**When the device commits to direct.** On `direct_attach` over an authenticated
+stream it first registers the worker with the agent's lifecycle (`enter`, the
+same gate `spawn` uses; if shutdown has begun it writes `error` on the stream
+and closes). Only then does it write `ok` on the stream. The worker holds one of
+the `directMaxActive` slots until it finishes.
+
+**What the relay session is for after selection.** Nothing in the transfer
+depends on it. On the device the request loop goes on reading it (through the
+handed-back read), so its HTTP polls keep it alive; on the controller the
+operation does not read it and closes it when the operation ends, as today.
+A relay failure or the controller closing the relay session does not stop a
+selected direct transfer; the controller cancelling does (below).
+
+**Revocation.** A token or pairing revoked while a selected direct transfer runs
+takes effect for the next operation, not the running one. This is the
+semantics ordinary sessions already have on the WebSocket carrier, where the
+relay re-checks credentials mid-session only for delegated access
+(`internal/relay/delegation_auth.go:143`); delegated sessions never use the
+lane.
+
+**Limits on a running transfer.** At most `directMaxActive` (4) operations
+holding or transferring per agent. A selected transfer is aborted after 30 s
+without a file byte moving in either direction; QUIC keepalives do not count
+as progress. There is no total-duration cap.
+
 ### After selection
 
-- The direct data phase runs in its own goroutine, registered with the agent's
-  lifecycle (`spawn`), under the agent's run context. It does not depend on the
-  relay session. The relay session's request loop carries on reading: the
-  controller's close, or a relay reap, ends it without touching the transfer.
-- The controller keeps its relay session open until the operation ends and then
-  closes it, as today (each CLI push/pull uses one session). If the relay
-  reaps it meanwhile (60 s idle, or 10 min with an unacknowledged down chunk,
-  `internal/relay/http.go:411`, `:975`), nothing reads it again, so nothing
-  breaks.
+- The direct data phase runs in its own goroutine under the agent's run
+  context and the operation context below.
 - One operation context on each side governs dials, listener, connection,
   stream, file and pending upload. Controller cancellation (Ctrl-C, MCP call
   cancelled) closes the QUIC connection with an application error; the device
@@ -173,13 +220,14 @@ carried it and, for push, whether the outcome is unknown: a break after the
 controller wrote `eof` and before the result arrived means the device may have
 committed. The user re-runs.
 
-### Pull writes atomically and checks the size
+### Pull checks the size
 
-On both paths, the controller now writes the pulled bytes to a temporary file
-beside the destination, requires the received count to equal `file_meta.Size`
-at `eof`, renames on success and removes the temporary file on any failure.
-Integrity in transit is QUIC's (on the direct path) or TLS's (on the relay);
-no digest is added to the protocol.
+Pull keeps today's way of writing the destination on both paths (open with
+truncate, write in place), so symlinks, hard links and permissions behave as
+they do now. What changes: at `eof` the controller requires the received count
+to equal `file_meta.Size`, and any failure after the destination was opened
+says the local file is incomplete and names it. Integrity in transit is QUIC's
+(direct) or TLS's (relay); no digest is added to the protocol.
 
 ## The direct path
 
@@ -205,8 +253,7 @@ it could not enlarge the UDP buffers, that fact is kept for diagnostics.
 
 - **host**: every up, non-loopback interface's unicast addresses that pass the
   validation below. On Android 11+, where `net.Interfaces` is refused, the
-  local address of a UDP socket connected (no packet sent) to `1.1.1.1:53` /
-  `[2606:4700:4700::1111]:53` stands in.
+  default-route probe below stands in.
 - **server-reflexive**: STUN Binding (RFC 5389, hand-rolled, no dependency)
   sent to all servers at once on each transport; answers are accepted only if
   the transaction ID matches one we sent and the source address is the server
@@ -218,7 +265,17 @@ it could not enlarge the UDP buffers, that fact is kept for diagnostics.
   `stun.l.google.com:19302`, `global.stun.twilio.com:3478`,
   `stun.cloudflare.com:3478`. (`stun.qq.com` did not answer from three
   networks.)
-- Own candidates are deduplicated and capped at 8, reflexive first.
+- Order and cap: own candidates are deduplicated and capped at 8, in this order:
+  the IPv4 and IPv6 source addresses the OS would use for the default route
+  (the local address of a UDP socket connected, without sending, to
+  `1.1.1.1:53` / `[2606:4700:4700::1111]:53`); server-reflexive IPv4 (up to 2)
+  and IPv6 (up to 1); then remaining host addresses, private ranges first,
+  skipping point-to-point interfaces. This keeps the LAN address a same-LAN
+  peer needs ahead of container bridges and VPNs.
+- A `udp6` socket is opened only if a global or unique-local IPv6 address was
+  found by either method. On Android 11+ that means the default-route probe
+  only; an Android device with unique-local IPv6 but no IPv6 default route
+  uses IPv4 in this version.
 
 Validation, applied to the peer's list before any packet is sent to it:
 at most 8 entries, each at most 64 bytes, each parses as `ip:port` with port
@@ -277,10 +334,13 @@ signalling. The reviewer's verdict on it is recorded below.
 The listener exists from `direct_offer` until selection or `directHold`, accepts
 one authenticated connection and one stream, and is then closed to further
 connections. Before the certificate check, quic-go processes Initial packets
-from anyone who can reach the socket. To keep that cheap, the transport's
-`VerifySourceAddress` requires a Retry from any source that is not one of the
-controller's validated candidates (a peer-reflexive address still gets
-through after one Retry round trip). An Internet sender can therefore make the
+from anyone who can reach the socket, and the source address it sees is not
+yet validated. The transport's `VerifySourceAddress` returns false (no Retry)
+when the source IP, after normalising IPv4-mapped IPv6, equals the IP of one of
+the controller's validated candidates, and true (Retry) otherwise. This is a
+cost optimisation, not a proof of origin: it saves the expected peer a round
+trip and makes everyone else pay one. A peer-reflexive controller address pays
+one extra round trip inside the 2.5 s budget. An Internet sender can make the
 device process Initials and send Retries for at most 30 s per operation; it
 cannot reach application data.
 
@@ -332,14 +392,16 @@ the tester compares SHA-256 of source and destination.
   than v0.13.0 on the same pair, hash equal.
 - Office Mac to home Windows box: 30 MB push and pull at least 4 MB/s (v0.13.0:
   2.4–2.6), hash equal.
-- UDP blocked on either side: falls back; total time within relay time + 3.5 s;
-  hash equal.
+- UDP blocked on either side: falls back; total time within relay time + 4 s
+  (3.5 s of budgets plus margin for sockets, DNS and scheduling); hash equal.
 - 1-byte push and 64 KiB pull latency unchanged versus v0.13.0 (interleaved,
   medians).
 - Old agent with new controller and new agent with old controller: unchanged
   behaviour.
 - Ctrl-C during a direct push leaves no file and no pending upload on the
-  device; during a direct pull leaves no partial local file.
+  device; during a direct pull the CLI says the local file is incomplete.
+- A controller that attaches and then stops sending: the device aborts the
+  operation 30 s after the last file byte.
 - Windows agent in a desktop session, standard user: record whether a firewall
   prompt appears, and whether direct still works after dismissing it.
 - Record which pairs among the available devices (Android phone, a cloud VM,
@@ -382,3 +444,19 @@ verification. Findings and what changed:
 | 13 | dual-stack sockets flaky | separate v4 and v6 sockets; explicit close |
 | 14 | wire schema ambiguous; `direct_done` hit the unknown-kind path | schema frozen above; `direct_done` removed |
 | 15 | small pulls paid STUN and a socket | capability first, candidates only after the device offers |
+
+Second round, on the revision above. Its verdict was not to implement until the
+relay read ownership, revocation, active-transfer limits and pull semantics
+were settled; they are now the "State rules" section.
+
+| # | finding | change |
+|---|---|---|
+| R2-1 | no single owner of the relay read across hold, fallback and attach | one-shot read ownership, handed back to the request loop like `doExec` |
+| R2-2 | direct transfers outlive token revocation; relay-reap description wrong | revocation is per operation, as on WebSocket today; description corrected |
+| R2-3 | hold cap did not cover running transfers; no progress timeout | `directMaxActive` covers both; 30 s without file bytes aborts |
+| R2-4 | temp-file pull changed existing overwrite semantics and is not atomic on Windows | dropped; pull writes in place as today and checks the size |
+| R2-5 | 8-slot cap could crowd out the LAN address | default-route addresses first, fixed order |
+| R2-6 | `ok` could precede worker registration | register with the lifecycle first, then `ok` |
+| R2-7 | Retry exemption described as verification | described as an optimisation; IP-only match defined |
+| R2-8 | device could answer with no candidates | no candidates, no `direct` |
+| R2-9 | Android IPv6 enable condition not closed | default-route probe only; ULA-only Android uses IPv4 |
