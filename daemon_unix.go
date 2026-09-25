@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"syscall"
 )
@@ -43,3 +44,7 @@ func detachSysProcAttr() *syscall.SysProcAttr {
 func terminatePID(pid int) error {
 	return syscall.Kill(pid, syscall.SIGTERM)
 }
+
+// exitWithParent is a no-op: only the Windows logon task runs the supervisor
+// under a parent that can disappear from under it.
+func exitWithParent(context.CancelFunc) {}

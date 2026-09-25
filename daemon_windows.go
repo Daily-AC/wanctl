@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"syscall"
 
@@ -67,4 +68,20 @@ func terminatePID(pid int) error {
 		return err
 	}
 	return p.Kill()
+}
+
+// exitWithParent cancels the supervisor when the process that started it exits.
+// Under the logon task that parent is the headless conhost, and ending the task
+// (`schtasks /end`, part of `service uninstall`) terminates only that conhost:
+// without this the supervisor outlives it and keeps restarting the agent.
+func exitWithParent(cancel context.CancelFunc) {
+	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(os.Getppid()))
+	if err != nil {
+		return
+	}
+	go func() {
+		defer windows.CloseHandle(h)
+		_, _ = windows.WaitForSingleObject(h, windows.INFINITE)
+		cancel()
+	}()
 }
