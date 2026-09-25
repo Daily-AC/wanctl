@@ -49,6 +49,13 @@
       "file": "control__control-device.md"
     },
     {
+      "slug": "best-practices",
+      "title": "怎样用 wanctl 效果最好",
+      "group": "control",
+      "position": 20,
+      "file": "control__best-practices.md"
+    },
+    {
       "slug": "ai-skill",
       "title": "让你的 AI 来控制设备",
       "group": "ai",
