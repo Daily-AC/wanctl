@@ -24,17 +24,34 @@ func cmdSupervise(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	agentArgs := append([]string{"agent", "--managed"}, args...)
+	// The task runs this under a headless console, so anything printed to it
+	// is lost. Write where `wanctl start` and the launchd agent do instead.
+	logPath, err := config.LogPath()
+	if err != nil {
+		return err
+	}
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("open log: %w", err)
+	}
+	defer logf.Close()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	exitWithParent(cancel)
+	return superviseLoop(ctx, self, append([]string{"agent", "--managed"}, args...), logf)
+}
+
+func superviseLoop(ctx context.Context, self string, agentArgs []string, out io.Writer) error {
 	for {
 		cmd := exec.CommandContext(ctx, self, agentArgs...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = out
+		cmd.Stderr = out
 		err := cmd.Run()
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "wanctl supervisor: agent exited: %v; restarting in 3s\n", err)
+			fmt.Fprintf(out, "wanctl supervisor: agent exited: %v; restarting in 3s\n", err)
 		}
 		select {
 		case <-ctx.Done():
