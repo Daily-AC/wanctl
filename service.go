@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode/utf16"
 
 	"wanctl/internal/config"
 )
@@ -322,26 +323,114 @@ func macStatus() error {
 
 const winTaskName = "WanctlAgent"
 
-// xmlEscape keeps an argument from breaking the plist it is embedded in.
+// xmlEscape keeps an argument from breaking the plist or task XML it is
+// embedded in.
 func xmlEscape(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;").Replace(s)
 }
 
-func winInstall(self string, extra []string) error {
-	// ONLOGON task running the agent, recreated (/f) if it exists. Survives the
-	// console closing and re-runs after the user logs in following a reboot. The agent
-	// Scheduled Tasks do not have a restart-on-exit policy. The internal
-	// supervisor keeps the child alive and starts the replaced binary after an
-	// update terminates the old child.
-	// schtasks takes the whole command as one string, so each argument that could
+// winTaskXML renders the logon task that runs the agent. It is registered from
+// XML because the settings that keep an agent alive have no schtasks flag, and
+// the defaults `schtasks /create /sc onlogon` leaves behind each stop it:
+//
+//   - The action is a console program, so every logon opened a console window,
+//     and closing that stray window killed the agent (this took a real device
+//     offline). conhost --headless gives the supervisor a console nobody can
+//     see or close, while keeping it in the interactive session (a "run whether
+//     logged on or not" task would move it to session 0, away from the user's
+//     desktop).
+//   - DisallowStartIfOnBatteries and StopIfGoingOnBatteries default to true, so
+//     a laptop that logs in on battery never starts the agent, and unplugging
+//     one stops it.
+//   - ExecutionTimeLimit defaults to 72 hours, after which the scheduler ends
+//     the task.
+//
+// The logon trigger names the installing user. /sc onlogon registers an
+// any-user trigger, which an unelevated prompt is refused ("Access is denied"),
+// so the install used to need an elevated prompt; the agent only ever runs as
+// this user anyway. Task Scheduler has no restart-on-exit policy; the
+// __supervise loop keeps the agent alive and picks up updated binaries.
+func winTaskXML(user, conhost, self string, extra []string) string {
+	// The arguments reach wanctl as one command line, so each one that could
 	// contain a space needs its own quotes.
-	tr := fmt.Sprintf(`"%s" __supervise`, self)
+	args := fmt.Sprintf(`--headless "%s" __supervise`, self)
 	for _, a := range extra {
-		tr += ` "` + strings.ReplaceAll(a, `"`, `\"`) + `"`
+		args += ` "` + strings.ReplaceAll(a, `"`, `\"`) + `"`
 	}
-	if out, err := run("schtasks", "/create", "/tn", winTaskName, "/tr", tr,
-		"/sc", "onlogon", "/rl", "limited", "/f"); err != nil {
-		return fmt.Errorf("schtasks create: %v\n%s", err, out)
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>wanctl agent (remote device control)</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>%[1]s</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>%[1]s</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>%[2]s</Command>
+      <Arguments>%[3]s</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+`, xmlEscape(user), xmlEscape(conhost), xmlEscape(args))
+}
+
+// utf16File encodes s as UTF-16LE with a byte-order mark, the encoding the
+// task XML declares and schtasks /xml reads.
+func utf16File(s string) []byte {
+	units := utf16.Encode([]rune(s))
+	b := make([]byte, 2, 2+2*len(units))
+	b[0], b[1] = 0xFF, 0xFE
+	for _, u := range units {
+		b = append(b, byte(u), byte(u>>8))
+	}
+	return b
+}
+
+func winInstall(self string, extra []string) error {
+	u, err := user.Current()
+	if err != nil {
+		return fmt.Errorf("current user: %w", err)
+	}
+	sysRoot := os.Getenv("SystemRoot")
+	if sysRoot == "" {
+		sysRoot = `C:\Windows`
+	}
+	conhost := filepath.Join(sysRoot, "System32", "conhost.exe")
+	f, err := os.CreateTemp("", "wanctl-task-*.xml")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	_, err = f.Write(utf16File(winTaskXML(u.Username, conhost, self, extra)))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("write task definition: %w", err)
+	}
+	// Recreated (/f) if it exists. A task an elevated prompt created earlier
+	// can only be replaced from an elevated prompt.
+	if out, err := run("schtasks", "/create", "/tn", winTaskName, "/xml", f.Name(), "/f"); err != nil {
+		return fmt.Errorf("schtasks create: %v\n%s\n(if an existing %s task was installed from an elevated prompt, run this from one too)", err, out, winTaskName)
 	}
 	// Start it now so the user doesn't have to log out/in.
 	run("schtasks", "/run", "/tn", winTaskName)
