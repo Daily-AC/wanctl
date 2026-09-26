@@ -49,18 +49,27 @@ import (
 )
 
 type conn struct {
-	base    string // http(s)://host
-	session string
-	role    string
-	token   string
-	hc      *http.Client
+	base        string // http(s)://host
+	session     string
+	role        string
+	token       string
+	hc          *http.Client
+	laneClients [DownWindowSize]*http.Client
+	laneMu      sync.Mutex
+	laneBusy    [2][DownWindowSize]bool // upload, download; one request per direction per lane
+	laneWake    chan struct{}
 
-	readM    sync.Mutex
-	leftover []byte
-	eof      bool
-	ackSeq   uint64 // highest down-poll sequence fully received
-	ackable  bool   // the relay has answered this session with the ack protocol
-	downMax  int    // bytes this reader asks one down poll to carry
+	readM       sync.Mutex
+	leftover    []byte
+	eof         bool
+	ackSeq      uint64 // highest down-poll sequence fully received
+	ackable     bool   // the relay has answered this session with the ack protocol
+	downMax     int    // bytes this reader asks one down poll to carry
+	downWindow  atomic.Bool
+	batch       *downBatch
+	prefetchWG  sync.WaitGroup
+	closeCtx    context.Context
+	closeCancel context.CancelFunc
 
 	writeM     sync.Mutex
 	pending    []byte
@@ -80,6 +89,7 @@ type conn struct {
 }
 
 const (
+	DownWindowSize = 4
 	// writeBatchBytes is as much as the relay accepts in one /h/up. Upload is
 	// one request at a time, so it cannot move more than a batch per round
 	// trip: at the 0.5 s round trip of a CDN edge on another continent, 256 KiB
@@ -90,7 +100,7 @@ const (
 	// upWindow is how many /h/up a writer keeps in flight once the relay
 	// orders them. One at a time moved a batch per round trip, about 1 MiB/s
 	// at the round trip of a CDN edge on another continent.
-	upWindow = 4
+	upWindow = 2 * DownWindowSize
 	// upAttempts bounds retries of one /h/up. Retrying is safe only against a
 	// relay that orders writes, because it recognises the repeat by its
 	// sequence and does not queue it twice.
@@ -100,8 +110,10 @@ const (
 	// UpSeqParam carries a write's place in its direction's stream, starting
 	// at 1. UpSeqCapabilityHeader is how a relay says it holds out-of-order
 	// writes until the gap fills and drops repeats.
-	UpSeqParam            = "seq"
-	UpSeqCapabilityHeader = "X-Wanctl-Up-Seq"
+	UpSeqParam                 = "seq"
+	UpSeqCapabilityHeader      = "X-Wanctl-Up-Seq"
+	DownWindowCapabilityHeader = "X-Wanctl-Down-Window"
+	DownWantParam              = "want"
 
 	// DownSeqHeader carries the sequence number of a data-bearing down-poll
 	// response; DownAckParam is the query parameter the next poll reports the
@@ -158,18 +170,28 @@ func DialWith(ctx context.Context, base, session, role, token string, hc *http.C
 	if err != nil {
 		return nil, err
 	}
+	explicit := hc != nil
 	if hc == nil {
 		hc = defaultClient()
 	}
-	return &conn{
-		base:    httpBase,
-		session: session,
-		role:    role,
-		token:   token,
-		hc:      hc,
-		upSlots: make(chan struct{}, upWindow),
-		downMax: downMaxFloor,
-	}, nil
+	c := &conn{
+		base:     httpBase,
+		session:  session,
+		role:     role,
+		token:    token,
+		hc:       hc,
+		laneWake: make(chan struct{}),
+		upSlots:  make(chan struct{}, upWindow),
+		downMax:  downMaxFloor,
+	}
+	c.closeCtx, c.closeCancel = context.WithCancel(context.Background())
+	c.laneClients[0] = hc
+	if explicit {
+		for i := 1; i < DownWindowSize; i++ {
+			c.laneClients[i] = hc
+		}
+	}
+	return c, nil
 }
 
 // MarkOrdered records that the relay announced write ordering before the
@@ -182,12 +204,224 @@ func MarkOrdered(nc net.Conn) {
 	}
 }
 
+// MarkWindow records the download-window capability carried by /h/dial or
+// /h/poll, before the first /h/down response can advertise it itself.
+func MarkWindow(nc net.Conn) {
+	if c, ok := nc.(*conn); ok {
+		c.downWindow.Store(true)
+	}
+}
+
 func defaultClient() *http.Client {
 	// The shared relay transport bounds the wait for response headers; the
 	// whole request still has a bound, generous enough that a full
 	// maxDrainBytes response downloads well inside it on the 60 KB/s link from
 	// issue #57 (about 34 s) even after the poll parked on the relay first.
 	return &http.Client{Transport: relayhttp.Shared(), Timeout: 5 * time.Minute}
+}
+
+var sharedLanes struct {
+	sync.Mutex
+	clients [DownWindowSize]*http.Client
+}
+
+func processLane(i int) *http.Client {
+	sharedLanes.Lock()
+	defer sharedLanes.Unlock()
+	if sharedLanes.clients[i] == nil {
+		transport := http.RoundTripper(relayhttp.Shared())
+		if i != 0 {
+			transport = relayhttp.New(nil)
+		}
+		sharedLanes.clients[i] = &http.Client{Transport: transport, Timeout: 5 * time.Minute}
+	}
+	return sharedLanes.clients[i]
+}
+
+func (c *conn) laneClient(i int) *http.Client {
+	c.laneMu.Lock()
+	defer c.laneMu.Unlock()
+	if c.laneClients[i] == nil {
+		c.laneClients[i] = processLane(i)
+	}
+	return c.laneClients[i]
+}
+
+func (c *conn) acquireLane(direction, start int) int {
+	for {
+		c.laneMu.Lock()
+		for j := 0; j < DownWindowSize; j++ {
+			i := (start + j) % DownWindowSize
+			if !c.laneBusy[direction][i] {
+				c.laneBusy[direction][i] = true
+				c.laneMu.Unlock()
+				return i
+			}
+		}
+		wake := c.laneWake
+		c.laneMu.Unlock()
+		<-wake
+	}
+}
+
+func (c *conn) releaseLane(direction, i int) {
+	c.laneMu.Lock()
+	c.laneBusy[direction][i] = false
+	close(c.laneWake)
+	c.laneWake = make(chan struct{})
+	c.laneMu.Unlock()
+}
+
+func (c *conn) closeFailedLane(i int) {
+	if tr, ok := c.laneClient(i).Transport.(interface{ CloseIdleConnections() }); ok {
+		tr.CloseIdleConnections()
+	}
+}
+
+type downResult struct {
+	want    uint64
+	max     int
+	data    []byte
+	seq     uint64
+	status  int
+	ackable bool
+	window  bool
+	retried bool // a response body was cut short before this complete result
+	took    time.Duration
+	err     error
+}
+
+type downBatch struct {
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	results   chan downResult
+	pending   map[uint64]downResult
+	next, end uint64
+}
+
+// downPoll retries the same numbered chunk on a different lane after a
+// carrier failure. A poll without want keeps the legacy single-request shape.
+func (c *conn) downPoll(ctx context.Context, ack, want uint64, limit int, retryable bool) downResult {
+	nextLane := 0
+	hadBodyFailure := false
+	for attempt := 1; attempt <= downPollAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return downResult{want: want, err: err}
+		}
+		q := url.Values{"session": {c.session}, "role": {c.role}, DownAckParam: {strconv.FormatUint(ack, 10)}, DownMaxParam: {strconv.Itoa(limit)}}
+		if want != 0 {
+			q.Set(DownWantParam, strconv.FormatUint(want, 10))
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/h/down?"+q.Encode(), nil)
+		if err != nil {
+			return downResult{want: want, err: err}
+		}
+		admission.SetBearer(req, c.token)
+		lane := 0
+		if want != 0 {
+			lane = c.acquireLane(1, nextLane)
+		}
+		resp, err := c.laneClient(lane).Do(req)
+		result := downResult{want: want, max: limit}
+		if err == nil {
+			result.status = resp.StatusCode
+			result.ackable = resp.Header.Get(DownAckCapabilityHeader) == "1"
+			result.window = resp.Header.Get(DownWindowCapabilityHeader) == "4"
+			result.seq, _ = strconv.ParseUint(resp.Header.Get(DownSeqHeader), 10, 64)
+			if result.seq != 0 {
+				result.ackable = true
+			}
+			if resp.StatusCode == http.StatusOK {
+				startedBody := time.Now()
+				result.data, err = io.ReadAll(resp.Body)
+				result.took = time.Since(startedBody)
+			}
+			resp.Body.Close()
+		}
+		if want != 0 {
+			c.releaseLane(1, lane)
+		}
+		if err == nil {
+			result.retried = hadBodyFailure
+			return result
+		}
+		if result.status == http.StatusOK {
+			hadBodyFailure = true
+		}
+		c.closeFailedLane(lane)
+		if ctx.Err() != nil {
+			return downResult{want: want, err: ctx.Err()}
+		}
+		if !retryable && !result.ackable {
+			return downResult{want: want, err: fmt.Errorf("down poll failed and cannot be retried: %w (this relay has not answered with %s, so it does not hold undelivered bytes)", err, DownAckCapabilityHeader)}
+		}
+		if attempt == downPollAttempts {
+			return downResult{want: want, err: fmt.Errorf("down poll failed %d times in a row: %w", attempt, err)}
+		}
+		retryable = true
+		nextLane = (lane + 1) % DownWindowSize
+		select {
+		case <-time.After(downRetryDelay):
+		case <-ctx.Done():
+			return downResult{want: want, err: ctx.Err()}
+		}
+	}
+	panic("unreachable")
+}
+
+func (c *conn) startBatch() {
+	ctx, cancel := context.WithCancel(c.closeCtx)
+	b := &downBatch{ctx: ctx, cancel: cancel, results: make(chan downResult, DownWindowSize), pending: make(map[uint64]downResult), next: c.ackSeq + 1, end: c.ackSeq + DownWindowSize}
+	c.batch = b
+	ack := c.ackSeq
+	for want := b.next; want <= b.end; want++ {
+		c.launchPoll(b, ack, want)
+	}
+}
+
+func (c *conn) launchPoll(b *downBatch, ack, want uint64) {
+	limit := min(c.downMax, 4<<20)
+	c.prefetchWG.Add(1)
+	b.wg.Add(1)
+	go func() {
+		defer c.prefetchWG.Done()
+		defer b.wg.Done()
+		b.results <- c.downPoll(b.ctx, ack, want, limit, true)
+	}()
+}
+
+func (c *conn) extendBatch() {
+	b := c.batch
+	b.end++
+	c.launchPoll(b, c.ackSeq, b.end)
+}
+
+func (c *conn) stopBatch() {
+	if c.batch == nil {
+		return
+	}
+	b := c.batch
+	b.cancel()
+	b.wg.Wait()
+	c.batch = nil
+}
+
+func (c *conn) nextBatchResult() downResult {
+	b := c.batch
+	for {
+		if r, ok := b.pending[b.next]; ok {
+			delete(b.pending, b.next)
+			b.next++
+			return r
+		}
+		select {
+		case r := <-b.results:
+			b.pending[r.want] = r
+		case <-c.closeCtx.Done():
+			return downResult{err: io.EOF}
+		}
+	}
 }
 
 func (c *conn) Read(p []byte) (int, error) {
@@ -204,107 +438,84 @@ func (c *conn) Read(p []byte) (int, error) {
 	if c.eof {
 		return 0, io.EOF
 	}
-	failures := 0
-	// retry reports whether a carrier failure is worth another poll. It is
-	// worth one only against a relay that has shown it holds the chunk until
-	// it is acked; against any other, polling again resumes after bytes that
-	// are already gone, which is a silent hole in the stream rather than the
-	// loud failure the caller needs. Pre-acknowledgement relays therefore keep
-	// the old behaviour: an undelivered poll fails the read.
-	retry := func(err error) error {
-		if !c.ackable {
-			return fmt.Errorf("down poll failed and cannot be retried: %w (this relay has not answered with %s, so it does not hold undelivered bytes)", err, DownAckCapabilityHeader)
-		}
-		failures++
-		if failures >= downPollAttempts {
-			return fmt.Errorf("down poll failed %d times in a row: %w", failures, err)
-		}
-		time.Sleep(downRetryDelay)
-		return nil
-	}
 	for {
 		if c.isClosed() {
 			return 0, io.EOF
 		}
-		// An upload still in flight when this Read started may fail while it
-		// polls. The peer then never sees the bytes this read is waiting for
-		// an answer to, so the failure has to end the wait.
 		if err := c.uploadErr(); err != nil {
 			return 0, err
 		}
-		q := url.Values{
-			"session":    {c.session},
-			"role":       {c.role},
-			DownAckParam: {strconv.FormatUint(c.ackSeq, 10)},
-			DownMaxParam: {strconv.Itoa(c.downMax)},
+		var r downResult
+		windowed := c.batch != nil
+		if windowed {
+			r = c.nextBatchResult()
+		} else {
+			r = c.downPoll(c.closeCtx, c.ackSeq, 0, c.downMax, c.ackable)
 		}
-		req, err := http.NewRequest("GET", c.base+"/h/down?"+q.Encode(), nil)
-		if err != nil {
-			return 0, err
-		}
-		admission.SetBearer(req, c.token)
-		resp, err := c.hc.Do(req)
-		if err != nil {
+		if r.err != nil {
+			if windowed {
+				c.stopBatch()
+			}
 			if c.isClosed() {
 				return 0, io.EOF
 			}
-			if giveUp := retry(err); giveUp != nil {
-				return 0, giveUp
+			return 0, r.err
+		}
+		if r.ackable {
+			c.ackable = true
+		}
+		if r.window {
+			c.downWindow.Store(true)
+		}
+		switch r.status {
+		case http.StatusNoContent:
+			if windowed {
+				c.stopBatch()
 			}
 			continue
-		}
-		// Headers arrive before the body, so a response whose body is cut short
-		// still proves what the relay speaks.
-		if resp.Header.Get(DownAckCapabilityHeader) == "1" {
-			c.ackable = true
-		}
-		seq, seqErr := strconv.ParseUint(resp.Header.Get(DownSeqHeader), 10, 64)
-		if seqErr == nil && seq > 0 {
-			c.ackable = true
-		}
-		switch resp.StatusCode {
-		case http.StatusNoContent:
-			resp.Body.Close()
-			failures = 0
-			continue // no data this round; poll again
 		case http.StatusOK:
-			started := time.Now()
-			body, readErr := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			c.adjustDownMax(len(body), time.Since(started), readErr)
-			if readErr != nil {
-				// The body was cut short. Do not advance the ack and do not
-				// hand the partial body on: the relay re-sends the whole
-				// chunk on the next poll. Accepting a truncated body here is
-				// what made a multi-minute push die with "tls: bad record
-				// MAC" (issue #57).
-				if giveUp := retry(readErr); giveUp != nil {
-					return 0, giveUp
+			if windowed && r.seq != r.want {
+				c.stopBatch()
+				return 0, fmt.Errorf("down poll: want %d received sequence %d", r.want, r.seq)
+			}
+			if r.retried {
+				c.adjustDownMax(len(r.data), r.took, io.ErrUnexpectedEOF)
+			} else {
+				c.adjustDownMax(len(r.data), r.took, nil)
+			}
+			if r.seq > 0 {
+				if r.seq <= c.ackSeq {
+					continue
 				}
+				c.ackSeq = r.seq
+			}
+			if windowed && len(r.data) < r.max && c.batch != nil {
+				c.stopBatch()
+			}
+			if !windowed && c.downWindow.Load() && len(r.data) == r.max {
+				c.startBatch()
+			} else if windowed && c.batch != nil && len(r.data) == r.max {
+				c.extendBatch()
+			}
+			if len(r.data) == 0 {
 				continue
 			}
-			failures = 0
-			if seqErr == nil && seq > 0 {
-				if seq <= c.ackSeq {
-					continue // a re-send of a chunk already consumed
-				}
-				c.ackSeq = seq
-			}
-			if len(body) == 0 {
-				continue
-			}
-			n := copy(p, body)
-			if n < len(body) {
-				c.leftover = body[n:]
+			n := copy(p, r.data)
+			if n < len(r.data) {
+				c.leftover = r.data[n:]
 			}
 			return n, nil
 		case http.StatusGone, http.StatusNotFound:
-			resp.Body.Close()
+			if windowed {
+				c.stopBatch()
+			}
 			c.eof = true
 			return 0, io.EOF
 		default:
-			resp.Body.Close()
-			return 0, fmt.Errorf("down poll: relay returned %d", resp.StatusCode)
+			if windowed {
+				c.stopBatch()
+			}
+			return 0, fmt.Errorf("down poll: relay returned %d", r.status)
 		}
 	}
 }
@@ -420,6 +631,7 @@ func (c *conn) sendLocked(n int) error {
 func (c *conn) post(seq uint64, data []byte) error {
 	q := url.Values{"session": {c.session}, "role": {c.role}, UpSeqParam: {strconv.FormatUint(seq, 10)}}
 	var lastErr error
+	nextLane := 0
 	for attempt := 1; attempt <= upAttempts; attempt++ {
 		if attempt > 1 {
 			if !c.upOrdered.Load() {
@@ -433,21 +645,43 @@ func (c *conn) post(seq uint64, data []byte) error {
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
 		admission.SetBearer(req, c.token)
-		resp, err := c.hc.Do(req)
+		ordered := c.upOrdered.Load()
+		lane := 0
+		if ordered {
+			lane = c.acquireLane(0, nextLane)
+		}
+		client := c.laneClient(lane)
+		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
+			c.closeFailedLane(lane)
+			if ordered {
+				c.releaseLane(0, lane)
+			}
+			nextLane = (lane + 1) % DownWindowSize
 			continue
 		}
 		if resp.Header.Get(UpSeqCapabilityHeader) == "1" {
 			c.upOrdered.Store(true)
 		}
-		io.Copy(io.Discard, resp.Body)
+		_, bodyErr := io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
+		if ordered {
+			c.releaseLane(0, lane)
+		}
+		if bodyErr != nil {
+			lastErr = bodyErr
+			c.closeFailedLane(lane)
+			nextLane = (lane + 1) % DownWindowSize
+			continue
+		}
 		switch {
 		case resp.StatusCode == http.StatusOK:
 			return nil
 		case resp.StatusCode >= 500:
 			lastErr = fmt.Errorf("up chunk: relay returned %d", resp.StatusCode)
+			c.closeFailedLane(lane)
+			nextLane = (lane + 1) % DownWindowSize
 			continue
 		default:
 			// 4xx is the relay refusing the write, not the carrier losing it.
@@ -499,6 +733,12 @@ func (c *conn) Close() error {
 	}
 	c.closed = true
 	c.writeM.Unlock()
+	c.closeCancel()
+	// A Read may have passed its closed check and still be starting a batch.
+	// Waiting for readM makes every prefetchWG.Add happen before Wait.
+	c.readM.Lock()
+	c.readM.Unlock()
+	c.prefetchWG.Wait()
 	// The last writes must land before the close, or the relay would end the
 	// session with the tail of the stream still in flight.
 	c.upWG.Wait()
