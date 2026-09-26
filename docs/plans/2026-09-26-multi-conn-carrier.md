@@ -187,3 +187,12 @@ without proxy variables (`env -u https_proxy -u HTTPS_PROXY -u all_proxy
    chunks and proves the relay holds no more than 4 chunks and refuses
    `want > ack + 4`.
 8. `go test -race ./...` and the repository's CI script pass.
+
+## Implementation notes
+
+- `sideQueue.assigned` is the authoritative download state. The old `unacked`
+  field remains as a mirror of its oldest entry because existing package tests
+  inspect it directly; replay, retirement, and retention decisions use the map.
+- `DialWith` keeps an explicitly supplied HTTP client on every lane so existing
+  fault-injection callers retain control of requests. Production `Dial` uses
+  four process-shared transports, with lanes 1–3 created lazily.
