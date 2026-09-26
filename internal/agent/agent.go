@@ -1212,19 +1212,23 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 		json.NewDecoder(resp.Body).Decode(&msg)
 		resp.Body.Close()
 		ordered := resp.Header.Get(httpconn.UpSeqCapabilityHeader) == "1"
+		windowed := resp.Header.Get(httpconn.DownWindowCapabilityHeader) == "4"
 		if msg.ValidFor(a.DeviceID()) {
-			a.spawn(func() { a.serveSessionHTTP(ctx, base, msg, ordered) })
+			a.spawn(func() { a.serveSessionHTTP(ctx, base, msg, ordered, windowed) })
 		}
 	}
 }
 
-func (a *Agent) serveSessionHTTP(ctx context.Context, base string, open sessionauth.Open, ordered bool) {
+func (a *Agent) serveSessionHTTP(ctx context.Context, base string, open sessionauth.Open, ordered, windowed bool) {
 	nc, err := httpconn.Dial(ctx, base, open.Session, "agent", a.opts.Token)
 	if err != nil {
 		return
 	}
 	if ordered {
 		httpconn.MarkOrdered(nc)
+	}
+	if windowed {
+		httpconn.MarkWindow(nc)
 	}
 	a.handleSession(ctx, nc, open)
 }
