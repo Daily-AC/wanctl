@@ -312,29 +312,50 @@ func (c *countingTransport) counts() (int, int) {
 	return c.ups, c.downs
 }
 
+type pipelineTransport struct {
+	started chan struct{}
+	release <-chan struct{}
+}
+
+func (p *pipelineTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Path == "/h/up" {
+		io.Copy(io.Discard, r.Body)
+		p.started <- struct{}{}
+		<-p.release
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(nil)), Request: r}, nil
+}
+
 func TestBulkUploadUsesFourLanes(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/h/up" {
-			io.Copy(io.Discard, r.Body)
-			time.Sleep(30 * time.Millisecond)
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	nc, err := Dial(t.Context(), srv.URL, "s", "client", "tok")
+	started := make(chan struct{}, 8)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	backend := &pipelineTransport{started: started, release: release}
+	var counters [4]*countingTransport
+	for i := range counters {
+		counters[i] = &countingTransport{base: backend}
+	}
+	nc, err := DialWith(t.Context(), "http://127.0.0.1", "s", "client", "tok", &http.Client{Transport: counters[0]})
 	if err != nil {
 		t.Fatal(err)
 	}
 	c := nc.(*conn)
-	var counters [4]*countingTransport
 	for i := range counters {
-		counters[i] = &countingTransport{base: http.DefaultTransport}
 		c.laneClients[i] = &http.Client{Transport: counters[i]}
 	}
 	MarkOrdered(nc)
 	if _, err := nc.Write(bytes.Repeat([]byte("x"), 8<<20)); err != nil {
 		t.Fatal(err)
 	}
+	for range 4 {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("bulk uploads did not reach four lanes")
+		}
+	}
+	releaseOnce.Do(func() { close(release) })
 	if err := nc.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -346,26 +367,87 @@ func TestBulkUploadUsesFourLanes(t *testing.T) {
 	}
 }
 
-func TestSmallTrafficStaysOnLaneZero(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/h/down" {
-			w.Header().Set(DownAckCapabilityHeader, "1")
-			w.Header().Set(DownWindowCapabilityHeader, "4")
-			w.Header().Set(DownSeqHeader, "1")
-			w.Write(bytes.Repeat([]byte("y"), 64<<10))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	nc, err := Dial(t.Context(), srv.URL, "s", "client", "tok")
+// A tiny push can overlap TLS, hello, file_put, and data uploads. Their
+// concurrent requests must still stay on the already warm HTTP/2 lane.
+func TestSmallPushPipelineStaysOnLaneZero(t *testing.T) {
+	started := make(chan struct{}, 5)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	backend := &pipelineTransport{started: started, release: release}
+	var counters [4]*countingTransport
+	for i := range counters {
+		counters[i] = &countingTransport{base: backend}
+	}
+	nc, err := DialWith(t.Context(), "http://127.0.0.1", "s", "client", "tok", &http.Client{Transport: counters[0]})
 	if err != nil {
 		t.Fatal(err)
 	}
 	c := nc.(*conn)
+	for i := range counters {
+		c.laneClients[i] = &http.Client{Transport: counters[i]}
+	}
+	MarkOrdered(nc)
+	for _, size := range []int{517, 160, 256, 1, 64 << 10} {
+		if _, err := nc.Write(make([]byte, size)); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.flushWrites(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 4 {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("pipeline uploads did not overlap")
+		}
+	}
+	for i := 1; i < len(counters); i++ {
+		if up, _ := counters[i].counts(); up != 0 {
+			t.Errorf("small pipeline used lane %d for %d uploads", i, up)
+		}
+	}
+	releaseOnce.Do(func() { close(release) })
+	if err := nc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if up, _ := counters[0].counts(); up != 5 {
+		t.Fatalf("lane 0 uploaded %d chunks, want 5", up)
+	}
+}
+
+type smallTrafficTransport struct{ wants atomic.Int32 }
+
+func (s *smallTrafficTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	h := make(http.Header)
+	var body []byte
+	if r.URL.Path == "/h/down" {
+		if r.URL.Query().Has(DownWantParam) {
+			s.wants.Add(1)
+		}
+		h.Set(DownAckCapabilityHeader, "1")
+		h.Set(DownWindowCapabilityHeader, "4")
+		h.Set(DownSeqHeader, "1")
+		body = bytes.Repeat([]byte("y"), 64<<10)
+	} else if r.Body != nil {
+		io.Copy(io.Discard, r.Body)
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(bytes.NewReader(body)), Request: r}, nil
+}
+
+func TestSmallTrafficStaysOnLaneZero(t *testing.T) {
+	backend := &smallTrafficTransport{}
 	var counters [4]*countingTransport
 	for i := range counters {
-		counters[i] = &countingTransport{base: http.DefaultTransport}
+		counters[i] = &countingTransport{base: backend}
+	}
+	nc, err := DialWith(t.Context(), "http://127.0.0.1", "s", "client", "tok", &http.Client{Transport: counters[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := nc.(*conn)
+	for i := range counters {
 		c.laneClients[i] = &http.Client{Transport: counters[i]}
 	}
 	MarkOrdered(nc)
@@ -377,6 +459,9 @@ func TestSmallTrafficStaysOnLaneZero(t *testing.T) {
 	}
 	if err := nc.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if got := backend.wants.Load(); got != 0 {
+		t.Fatalf("64 KiB pull sent %d window polls", got)
 	}
 	for i, counter := range counters {
 		up, down := counter.counts()
