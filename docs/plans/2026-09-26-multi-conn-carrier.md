@@ -199,3 +199,37 @@ without proxy variables (`env -u https_proxy -u HTTPS_PROXY -u all_proxy
 - Uploads smaller than the 1 MiB batch stay on lane 0 even when concurrent;
   only full batches use other lanes, avoiding a new TCP/TLS handshake during
   the overlapping handshake, command, and tiny file data of a small push.
+
+## Acceptance results, 2026-09-26
+
+Mac controller and 5090 device both at home, relay on tchk temporarily running
+this branch (afabbec) from 16:46 to 17:01, then restored to v0.13.0. Mac without
+proxy variables, behind Clash TUN (relay traffic routed DIRECT).
+
+Line ceilings measured in the same window: home to tchk upload 11.1 MB/s on one
+ssh stream and 11.2 MB/s on four (one stream already fills it); tchk to Mac
+download 2.2 MB/s on one stream and 7.0 MB/s on four. The upload ceiling is
+below 13 MB/s, so the bars from criterion 1 become push ≥ 8.4 MB/s and pull
+≥ 6.2 MB/s.
+
+| # | Criterion | Result | Verdict |
+|---|---|---|---|
+| 1 | 256 MB push | 27.0 / 25.6 / 25.6 s, median 10.5 MB/s (v0.13.0: about 3.5 MB/s) | pass |
+| 1 | 256 MB pull | 42.5 / 50.6 / 53.8 s, median 5.3 MB/s; a fourth run 36.7 s (7.3 MB/s). v0.13.0: 2.3–3.5 MB/s | **fails the written bar**; see below |
+| 2 | 30 MB push | 4.8 / 7.7 / 4.4 s, median 4.8 s | pass |
+| 2 | 30 MB pull | 7.6 / 7.2 / 8.6 s, median 7.6 s | **fail** (bar 6 s) |
+| 3 | four legs striped | push: CLI 4, agent 3–4 connections; pull: CLI 4, agent 4 | pass |
+| 4 | small commands | after d1406b8, alternated with the v0.13.0 CLI, 8 runs each: 1-byte push 0.60 vs 0.56 s, 64 KiB pull 0.63 vs 0.73 s. HTTP/2 debug logs show one client connection and no lane transports for both builds; the transient second TCP connection some runs show comes from the concurrent `/resolve` and `/h/dial` and exists in v0.13.0 too | pass |
+| 5 | mixed versions | new CLI + v0.13.0 agent + v0.13.0 relay, new CLI + new agent + v0.13.0 relay, v0.13.0 CLI + new agent + new relay: 30 MB push and pull, hashes equal, no slower than v0.13.0 | pass (old-relay row also covered by the e2e test) |
+| 6 | lost connection | `ss -K` on tchk killed the busiest :443 socket (1 before, 0 after) 9 s into a 256 MB push and a 256 MB pull; both completed in normal time, round-trip hash equal | pass |
+| 7, 8 | relay memory, race and CI | unit tests; CI and `-race` rerun independently on d1406b8 | pass |
+
+Before d1406b8, criterion 4 failed: a 1-byte push took 0.73 s against 0.57 s,
+because the pipelined handshake and command put two small uploads in flight
+and the second opened lane 1.
+
+Pull misses its bar because the bar assumed the upload leg is the ceiling. In
+this setup the ceiling of a pull is the tchk-to-Mac download over Wi-Fi and
+Clash TUN, which four parallel ssh streams measured at 7.0 MB/s in the same
+window; the pull reached 76 % of that. Push, whose download leg is the wired
+5090, reached the upload ceiling.
