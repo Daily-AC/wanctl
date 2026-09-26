@@ -37,12 +37,11 @@ type sideQueue struct {
 	done chan struct{}
 	once sync.Once
 
-	// turn admits one poll at a time. Checking the ack, draining, assigning the
-	// sequence and storing the unacked chunk have to be a single operation:
+	// turn serializes chunk assignment. Checking the ack, draining, assigning
+	// the sequence and storing the chunk have to be a single operation:
 	// two polls that overlap — a reader whose request was cancelled while it
 	// was parked on an empty queue, plus the retry it sent afterwards — would
-	// otherwise each take a chunk, and the second would overwrite the first's
-	// unacked chunk and lose it for good.
+	// otherwise each take a chunk and lose their shared ordering.
 	turn chan struct{}
 
 	// A drained chunk is removed from ch before it is written to an HTTP
@@ -50,9 +49,11 @@ type sideQueue struct {
 	// and the end-to-end TLS stream has a hole in it. Readers that speak the
 	// acknowledged down protocol therefore get the chunk held here until they
 	// report having received it (issue #57).
-	ackMu   sync.Mutex
-	seq     uint64
-	unacked []byte
+	ackMu    sync.Mutex
+	seq      uint64
+	assigned map[uint64][]byte
+	changed  chan struct{}
+	unacked  []byte // mirrors the oldest assigned chunk for existing queue diagnostics
 	// head is the tail of a chunk that was split at the drain cap. It is served
 	// before anything still in ch, so splitting never reorders the stream.
 	head []byte
@@ -65,14 +66,14 @@ type sideQueue struct {
 	seqNext uint64 // the sequence expected next; sequences start at 1
 	seqHeld map[uint64][]byte
 	// inflight marks a poll that holds the turn and may be part way through
-	// taking bytes out. Between the receive from ch and the store into unacked
+	// taking bytes out. Between the receive from ch and the store into assigned
 	// those bytes are in no field at all, so without this the queue looks empty
 	// while a whole chunk is in a poll's hands.
 	inflight bool
 }
 
 func newSideQueue() *sideQueue {
-	return &sideQueue{ch: make(chan []byte, 256), done: make(chan struct{}), turn: make(chan struct{}, 1), seqNext: 1}
+	return &sideQueue{ch: make(chan []byte, 256), done: make(chan struct{}), turn: make(chan struct{}, 1), seqNext: 1, assigned: make(map[uint64][]byte), changed: make(chan struct{})}
 }
 
 // maxSeqAhead bounds how far past the next expected write a sequenced /h/up may
@@ -154,8 +155,8 @@ func (q *sideQueue) close() {
 }
 
 // beginTake and endTake bracket a poll's hold on the queue, so that a chunk
-// which has left ch but not yet reached unacked still counts as being here.
-// They are the same critical section unacked is published in, which is what
+// which has left ch but not yet reached assigned still counts as being here.
+// They are the same critical section assigned is published in, which is what
 // makes settled's answer good until the queue is next touched.
 func (q *sideQueue) beginTake() {
 	q.ackMu.Lock()
@@ -184,7 +185,7 @@ func (q *sideQueue) settled() bool {
 	}
 	q.ackMu.Lock()
 	defer q.ackMu.Unlock()
-	return !q.inflight && q.unacked == nil && q.head == nil && len(q.ch) == 0
+	return !q.inflight && len(q.assigned) == 0 && q.head == nil && len(q.ch) == 0
 }
 
 // undelivered reports whether a poll is taking bytes out of this direction
@@ -192,7 +193,7 @@ func (q *sideQueue) settled() bool {
 func (q *sideQueue) undelivered() (serving, unacked bool) {
 	q.ackMu.Lock()
 	defer q.ackMu.Unlock()
-	return q.inflight, q.unacked != nil
+	return q.inflight, len(q.assigned) != 0
 }
 
 // acquire admits this poll, waiting for any poll already in flight on this
@@ -239,16 +240,15 @@ func (q *sideQueue) takeUpTo(ctx context.Context, ack uint64, timeout time.Durat
 	}
 	defer q.release()
 	q.beginTake()
-	defer q.endTake() // runs after unacked is stored, before the turn is freed
+	defer q.endTake() // runs after the chunk is assigned, before the turn is freed
 
 	q.ackMu.Lock()
-	if q.unacked != nil {
-		if ack < q.seq {
-			data, seq = q.unacked, q.seq
+	q.dropAcked(ack)
+	for k := ack + 1; k <= q.seq; k++ {
+		if b, exists := q.assigned[k]; exists {
 			q.ackMu.Unlock()
-			return data, seq, false, true
+			return b, k, false, true
 		}
-		q.unacked = nil
 	}
 	q.ackMu.Unlock()
 
@@ -259,9 +259,89 @@ func (q *sideQueue) takeUpTo(ctx context.Context, ack uint64, timeout time.Durat
 	q.ackMu.Lock()
 	q.seq++
 	seq = q.seq
-	q.unacked = data
+	q.assign(seq, data)
 	q.ackMu.Unlock()
 	return data, seq, false, true
+}
+
+// dropAcked and assign require ackMu. The legacy unacked field remains a view
+// of the first outstanding chunk for the queue's existing diagnostics.
+func (q *sideQueue) dropAcked(ack uint64) {
+	first := q.seq + 1
+	q.unacked = nil
+	for k, b := range q.assigned {
+		if k <= ack {
+			delete(q.assigned, k)
+		} else if k < first {
+			first = k
+			q.unacked = b
+		}
+	}
+}
+
+func (q *sideQueue) assign(seq uint64, data []byte) {
+	q.assigned[seq] = data
+	if q.unacked == nil {
+		q.unacked = data
+	}
+	close(q.changed)
+	q.changed = make(chan struct{})
+}
+
+// takeWindow serves a numbered poll. A future poll waits for its predecessor
+// without holding turn, so requests arriving out of order cannot deadlock the
+// assignment stream. Replays bypass turn entirely.
+func (q *sideQueue) takeWindow(ctx context.Context, ack, want uint64, timeout time.Duration, limit int) (data []byte, seq uint64, closed, ok bool) {
+	requestCtx := ctx
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		q.ackMu.Lock()
+		q.dropAcked(ack)
+		if b, exists := q.assigned[want]; exists {
+			q.ackMu.Unlock()
+			return b, want, false, true
+		}
+		if want <= q.seq {
+			q.ackMu.Unlock()
+			return nil, 0, false, true // a stale poll whose chunk was acknowledged
+		}
+		if want > q.seq+1 {
+			changed := q.changed
+			q.ackMu.Unlock()
+			select {
+			case <-changed:
+				continue
+			case <-ctx.Done():
+				return nil, 0, false, requestCtx.Err() == nil
+			}
+		}
+		q.ackMu.Unlock()
+		if !q.acquire(ctx) {
+			return nil, 0, false, requestCtx.Err() == nil
+		}
+		q.ackMu.Lock()
+		if want != q.seq+1 {
+			q.ackMu.Unlock()
+			q.release()
+			continue
+		}
+		q.inflight = true
+		q.ackMu.Unlock()
+		data, closed = q.drainUpTo(ctx, timeout, limit)
+		q.ackMu.Lock()
+		if len(data) > 0 {
+			q.seq = want
+			q.assign(want, data)
+		}
+		q.inflight = false
+		q.ackMu.Unlock()
+		q.release()
+		if len(data) == 0 {
+			return nil, 0, closed, true
+		}
+		return data, want, false, true
+	}
 }
 
 // pollDrain serves a reader that cannot acknowledge: a pre-acknowledgement
@@ -522,6 +602,7 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		w.Header().Set(httpconn.UpSeqCapabilityHeader, "1")
+		w.Header().Set(httpconn.DownWindowCapabilityHeader, strconv.Itoa(httpconn.DownWindowSize))
 		writeJSON(w, open)
 	case <-changed:
 		if inst != "" && r.httpAgentObsolete(key, inst) {
@@ -601,6 +682,7 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 	// Said here as well as on /h/up so the controller's first write, its TLS
 	// ClientHello, need not wait for an /h/up answer to learn it.
 	w.Header().Set(httpconn.UpSeqCapabilityHeader, "1")
+	w.Header().Set(httpconn.DownWindowCapabilityHeader, strconv.Itoa(httpconn.DownWindowSize))
 	writeJSON(w, map[string]string{"session": sid})
 }
 
@@ -678,6 +760,7 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 	// several in flight. A relay without this header queues /h/up in arrival
 	// order and a writer must send them one at a time.
 	w.Header().Set(httpconn.UpSeqCapabilityHeader, "1")
+	w.Header().Set(httpconn.DownWindowCapabilityHeader, strconv.Itoa(httpconn.DownWindowSize))
 	s := r.sessionForAccess(req.URL.Query().Get("session"), access, req.URL.Query().Get("role"))
 	if s == nil {
 		http.Error(w, "no such session", http.StatusNotFound)
@@ -744,6 +827,7 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 	// deliver once it has seen this, because a relay without it has already
 	// dequeued the bytes and a retry would skip them.
 	w.Header().Set(httpconn.DownAckCapabilityHeader, "1")
+	w.Header().Set(httpconn.DownWindowCapabilityHeader, strconv.Itoa(httpconn.DownWindowSize))
 	s := r.sessionForAccess(req.URL.Query().Get("session"), access, req.URL.Query().Get("role"))
 	if s == nil {
 		http.Error(w, "no such session", http.StatusNotFound)
@@ -774,7 +858,17 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 		if m, err := strconv.Atoi(req.URL.Query().Get(httpconn.DownMaxParam)); err == nil && m > 0 {
 			limit = min(m, maxDrainLimit)
 		}
-		data, seq, closed, served = src.takeUpTo(req.Context(), ack, downPollWait, limit)
+		if req.URL.Query().Has(httpconn.DownWantParam) {
+			wantParam := req.URL.Query().Get(httpconn.DownWantParam)
+			want, err := strconv.ParseUint(wantParam, 10, 64)
+			if err != nil || want <= ack || want-ack > httpconn.DownWindowSize {
+				http.Error(w, "bad want", http.StatusBadRequest)
+				return
+			}
+			data, seq, closed, served = src.takeWindow(req.Context(), ack, want, downPollWait, min(limit, 4<<20))
+		} else {
+			data, seq, closed, served = src.takeUpTo(req.Context(), ack, downPollWait, limit)
+		}
 	} else {
 		// Pre-acknowledgement client: serve it the old fire-and-forget way so
 		// a mixed-version fleet keeps working.

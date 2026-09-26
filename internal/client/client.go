@@ -509,6 +509,9 @@ func (c *Client) dialHTTP(ctx context.Context, target string) (net.Conn, error) 
 	if err == nil && resp.Header.Get(httpconn.UpSeqCapabilityHeader) == "1" {
 		httpconn.MarkOrdered(nc)
 	}
+	if err == nil && resp.Header.Get(httpconn.DownWindowCapabilityHeader) == "4" {
+		httpconn.MarkWindow(nc)
+	}
 	return nc, err
 }
 
