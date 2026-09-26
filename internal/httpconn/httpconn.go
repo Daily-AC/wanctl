@@ -56,7 +56,7 @@ type conn struct {
 	hc          *http.Client
 	laneClients [DownWindowSize]*http.Client
 	laneMu      sync.Mutex
-	laneBusy    [2][DownWindowSize]bool // upload, download; one request per direction per lane
+	laneBusy    [2][DownWindowSize]int // upload, download; lane 0 can multiplex small uploads
 	laneWake    chan struct{}
 
 	readM       sync.Mutex
@@ -252,8 +252,8 @@ func (c *conn) acquireLane(direction, start int) int {
 		c.laneMu.Lock()
 		for j := 0; j < DownWindowSize; j++ {
 			i := (start + j) % DownWindowSize
-			if !c.laneBusy[direction][i] {
-				c.laneBusy[direction][i] = true
+			if c.laneBusy[direction][i] == 0 {
+				c.laneBusy[direction][i] = 1
 				c.laneMu.Unlock()
 				return i
 			}
@@ -264,9 +264,15 @@ func (c *conn) acquireLane(direction, start int) int {
 	}
 }
 
+func (c *conn) reserveLaneZero(direction int) {
+	c.laneMu.Lock()
+	c.laneBusy[direction][0]++
+	c.laneMu.Unlock()
+}
+
 func (c *conn) releaseLane(direction, i int) {
 	c.laneMu.Lock()
-	c.laneBusy[direction][i] = false
+	c.laneBusy[direction][i]--
 	close(c.laneWake)
 	c.laneWake = make(chan struct{})
 	c.laneMu.Unlock()
@@ -646,18 +652,22 @@ func (c *conn) post(seq uint64, data []byte) error {
 		req.Header.Set("Content-Type", "application/octet-stream")
 		admission.SetBearer(req, c.token)
 		ordered := c.upOrdered.Load()
+		// Small requests share the already warm HTTP/2 lane, even when the
+		// handshake and command pipeline puts several of them in flight.
+		// Only full upload batches justify opening another relay connection.
+		striped := ordered && len(data) == writeBatchBytes
 		lane := 0
-		if ordered {
+		if striped {
 			lane = c.acquireLane(0, nextLane)
+		} else {
+			c.reserveLaneZero(0)
 		}
 		client := c.laneClient(lane)
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
 			c.closeFailedLane(lane)
-			if ordered {
-				c.releaseLane(0, lane)
-			}
+			c.releaseLane(0, lane)
 			nextLane = (lane + 1) % DownWindowSize
 			continue
 		}
@@ -666,9 +676,7 @@ func (c *conn) post(seq uint64, data []byte) error {
 		}
 		_, bodyErr := io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
-		if ordered {
-			c.releaseLane(0, lane)
-		}
+		c.releaseLane(0, lane)
 		if bodyErr != nil {
 			lastErr = bodyErr
 			c.closeFailedLane(lane)

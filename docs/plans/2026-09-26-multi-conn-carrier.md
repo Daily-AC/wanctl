@@ -196,3 +196,6 @@ without proxy variables (`env -u https_proxy -u HTTPS_PROXY -u all_proxy
 - `DialWith` keeps an explicitly supplied HTTP client on every lane so existing
   fault-injection callers retain control of requests. Production `Dial` uses
   four process-shared transports, with lanes 1–3 created lazily.
+- Uploads smaller than the 1 MiB batch stay on lane 0 even when concurrent;
+  only full batches use other lanes, avoiding a new TCP/TLS handshake during
+  the overlapping handshake, command, and tiny file data of a small push.
