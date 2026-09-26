@@ -71,6 +71,11 @@ func TestLaneFailuresReplay32MiB(t *testing.T) {
 	payload := bytes.Repeat([]byte("0123456789abcdef"), 2<<20)
 	var mu sync.Mutex
 	uploads := map[uint64][]byte{}
+	var downMu sync.Mutex
+	downAssigned := map[uint64][]byte{}
+	downNext := uint64(1)
+	downOffset := 0
+	downChanged := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/h/up":
@@ -86,21 +91,46 @@ func TestLaneFailuresReplay32MiB(t *testing.T) {
 			w.Header().Set(DownWindowCapabilityHeader, "4")
 			want, _ := strconv.ParseUint(r.URL.Query().Get(DownWantParam), 10, 64)
 			if want == 0 {
-				want = 1
+				ack, _ := strconv.ParseUint(r.URL.Query().Get(DownAckParam), 10, 64)
+				want = ack + 1
 			}
 			max, _ := strconv.Atoi(r.URL.Query().Get(DownMaxParam))
-			start := 0
-			if want > 1 {
-				start = (2 << 20) + int(want-2)*(4<<20)
+			var chunk []byte
+			for {
+				downMu.Lock()
+				if assigned, ok := downAssigned[want]; ok {
+					chunk = assigned
+					downMu.Unlock()
+					break
+				}
+				if want == downNext {
+					if downOffset < len(payload) {
+						end := min(downOffset+max, len(payload))
+						chunk = payload[downOffset:end]
+						downAssigned[want] = chunk
+						downOffset = end
+						downNext++
+						close(downChanged)
+						downChanged = make(chan struct{})
+					}
+					downMu.Unlock()
+					break
+				}
+				changed := downChanged
+				downMu.Unlock()
+				select {
+				case <-changed:
+				case <-r.Context().Done():
+					return
+				}
 			}
-			if start >= len(payload) {
+			if chunk == nil {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
-			end := min(start+max, len(payload))
 			w.Header().Set(DownSeqHeader, strconv.FormatUint(want, 10))
-			w.Header().Set("Content-Length", strconv.Itoa(end-start))
-			w.Write(payload[start:end])
+			w.Header().Set("Content-Length", strconv.Itoa(len(chunk)))
+			w.Write(chunk)
 		default:
 			w.WriteHeader(http.StatusOK)
 		}
