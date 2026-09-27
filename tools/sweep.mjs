@@ -68,12 +68,12 @@ const STATES = [
     setup: `document.querySelector('#copy').click()`,
   },
   {
-    id: "hero-asleep", site: "site", url: "/", note: "hero scene, phone still dark (opening frame)",
-    setup: `document.querySelector('#phone').classList.add('asleep')`,
+    id: "hero-prompt-copied", site: "site", url: "/", note: "hero: the prompt after Copy (the pill shows what was copied)",
+    setup: `document.querySelector('#copyprompt').click()`,
   },
   {
-    id: "hero-answered", site: "site", url: "/", note: "hero scene after the approval is answered",
-    setup: `window.__demo && window.__demo.act('y')`,
+    id: "pair-trusted", site: "site", url: "/", note: "pairing card after Trust it (the toast replaces the buttons)",
+    setup: `document.querySelector('#pairacts .yes').click()`,
   },
 
   // ── docs site ──
@@ -181,10 +181,9 @@ const PROBE = `(() => {
     over: Math.round(s.getBoundingClientRect().height - vh),
   }));
 
-  /* 5. text below 13px. The phone mock's own type is deliberately tiny. */
+  /* 5. text below 13px. The film is a video, so none of its type is measured here. */
   const small = [];
   for (const el of all) {
-    if (el.closest('.stage')) continue;              // the device render, on purpose
     const own = Array.from(el.childNodes).some(n => n.nodeType === 3 && n.textContent.trim());
     if (!own) continue;
     const fs = parseFloat(getComputedStyle(el).fontSize);
@@ -213,7 +212,6 @@ const PROBE = `(() => {
   };
   const taps = [];
   for (const el of all) {
-    if (el.closest('.stage')) continue;
     if (!el.matches('a, button, [role="button"], input, select, summary')) continue;
     const r = el.getBoundingClientRect();
     const w = Math.max(r.width, reach(el, r, 1, 0) + reach(el, r, -1, 0));

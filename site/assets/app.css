@@ -1,6 +1,6 @@
 /* wanctl product site
    视觉真源 docs/design/DESIGN.md。改这里之前先改那里。
-   场景：上午，光线很足的桌面。笔记本上一条命令刚敲下去，旁边手机亮了一下。
+   首屏是一支白底的片子，页面和它同色；往下每一屏讲一件片子里来不及讲细的事。
    参照 design-dna/apple —— 单一强调色、负字距、除产品投影外零阴影、整幅明暗交替。 */
 
 /* ── fonts ─────────────────────────────────────────────────────────── */
@@ -64,72 +64,44 @@ a:hover{text-decoration:underline}
 .tile{padding:clamp(52px,6.4vw,88px) var(--pad)}
 
 /* ── 两栏章节 ────────────────────────────────────────────────────────
-   规则：海报（首屏、安装）居中，章节走左脊。主体落在哪一侧不是为了不单调，
-   是**位置在说这东西属于谁** —— 首屏已经定了笔记本在左（控制端）、手机在右（你）。
-     · 凭证是你的回答      → 主体在右
-     · 设备表是 peers 的输出 → 主体在左（.flip）
-     · 身份核对是两端之间的链路，不站边 → 保持整幅居中，顺便打断节拍
+   规则：海报（首屏、安装、网页 AI）居中，章节走左脊。
+   信任那一屏的主体（门户里的配对卡）在右：那是你要回答的东西。
    两条纪律：文字列跑到哪边，段落自身永远左对齐（右对齐段落的锯齿左缘不可读）；
-   两行的分栏比例故意不同，不做镜像 50/50。 */
+   分栏比例不做 50/50。 */
 .tile.split{
   display:grid;align-items:center;text-align:left;
   gap:clamp(34px,5vw,78px);
 }
-#decide.split{grid-template-columns:minmax(0,42fr) minmax(0,58fr)}
-#fleet.split{grid-template-columns:minmax(0,61fr) minmax(0,39fr)}
-.split.flip .see{order:-1}
+#trust.split{grid-template-columns:minmax(0,46fr) minmax(0,54fr)}
 .split .say{max-width:36rem}
 .split .lead{margin-left:0;margin-right:0;max-width:40ch}
 .split .panel{margin:0;max-width:100%}
-/* 面板该不该长满自己那一栏，看它有没有东西填。
-   凭证是五行短键值，拉宽只会在每行后面拖出一大片空 —— 封顶，贴外缘站。
-   设备表有右对齐的 meta 列，宽度越大它越像一张真表 —— 让它长满。 */
-#decide .panel{max-width:620px;margin-left:auto}
+/* 配对卡是三行短键值，拉宽只会在每行后面拖出一大片空 —— 封顶，贴外缘站。 */
+#trust .panel{max-width:560px;margin-left:auto}
 
 @media (max-width:900px){
   .tile.split{grid-template-columns:minmax(0,1fr)!important;gap:clamp(26px,4vw,38px)}
-  .split.flip .see{order:0}      /* 窄屏一律先说话再给东西看 */
   .split .say{max-width:none}
   .split .lead{max-width:52ch}
-  #decide .panel{max-width:100%;margin-left:0}
+  #trust .panel{max-width:100%;margin-left:0}
 }
-/* 首屏顶上已经有导航条了，不需要再来一整份上留白 ——
-   省下来的高度给舞台，好让手机上那个蓝按钮落在折线以上（它是要人去点的东西）。 */
+/* 首屏顶上已经有导航条了，不需要再来一整份上留白 —— 省下来的高度给片子。 */
 .tile.hero{
-  padding-top:clamp(32px,3.6vw,52px);
-  /* 首屏就只放首屏。窗口高一点，下一屏那块深色就会从底下探进来半截 ——
-     那半截既读不出内容，又把「一屏一个主体」直接作废。48px 是导航条的高度。
-     svh 而不是 dvh：dvh 会随移动端浏览器工具条的伸缩跳数，svh 取的是工具条
-     展开时的高度，也就是「保证不被切到」的那一档。
+  padding-top:clamp(28px,3vw,40px);padding-bottom:clamp(20px,2vw,28px);
+  /* 首屏就只放首屏。窗口高一点，下一屏那块浅灰就会从底下探进来半截。
+     48px 是导航条的高度。svh 而不是 dvh：dvh 会随移动端浏览器工具条的伸缩跳数，
+     svh 取的是工具条展开时的高度，也就是「保证不被切到」的那一档。
      min-height 不是 height：窗口矮的时候内容照样自己撑开。 */
   min-height:calc(100vh - 48px);
   min-height:calc(100svh - 48px);
   display:flex;flex-direction:column;justify-content:center;
-  /* 密文场（assets/field.js）垫在首屏底下。isolation 让首屏自成一个层叠上下文，
-     画布的 z-index:-1 才是「在这一屏的内容底下」，而不是「在整页底下」。 */
-  position:relative;isolation:isolate;
 }
-/* 首屏底下的两层，都铺满整幅 tile、都不接事件 —— 指针事件挂在 section 上，
-   手机屏里那三个按钮、两个 CTA 照常能按。
-     .backdrop  svg：只有那团蓝光，圆心在首屏正中（field.js 建）。
-                甲方 09-05 拍板的那一处渐变例外，见 DESIGN.md §7.5 / §8。
-     .field     画布，在光上面：那几圈线、沿圈流动的高光弧、划过才显形的字符都画在这里。
-                没有 JS 两层都不存在，白底即原样。 */
-.backdrop{position:absolute;inset:0;z-index:-2;width:100%;height:100%;display:block;pointer-events:none}
-.field{position:absolute;inset:0;z-index:-1;width:100%;height:100%;display:block;pointer-events:none}
-/* 上面那个 flex 会把子元素拉满宽（stretch），段落自身的居中靠 .center 的
-   text-align，不受影响；舞台本来就有 margin:auto。 */
 
-/* 三档配额，不是五段等权。之前每一段的上下内边距都是 88px，于是产品的命题
-   （「你不点头，什么都不会跑」）和一张设备清单拿到完全相同的视觉权重。
-     chapter 命题   —— 双倍空间，标题接近 hero 尺度，下面还有一条通栏的收尾
-     （默认）二级   —— 消解疑虑的那一屏，维持原样
-     minor   清单   —— 压紧，标题降一档；它只是在说「有哪些机器」 */
+/* 三档配额，不是每段等权。
+     chapter 命题   —— 信任：新访客最拿不准的那件事，标题接近 hero 尺度，下面还有一条通栏的收尾
+     （默认）       —— 安装、网页 AI、开源 */
 .tile.chapter{padding-top:clamp(72px,8.6vw,124px);padding-bottom:clamp(58px,6.4vw,88px)}
 .tile.chapter h2{font-size:clamp(34px,4.8vw,52px);line-height:1.06;letter-spacing:-.3px}
-.tile.minor{padding:clamp(38px,4.4vw,60px) var(--pad)}
-.tile.minor h2{font-size:clamp(24px,2.6vw,32px)}
-.tile.minor .lead{font-size:clamp(17px,1.35vw,18px);max-width:36ch}
 .tile.dark{background:var(--dark);color:var(--on-dark)}
 .tile.grey{background:var(--canvas-2)}
 
@@ -150,7 +122,7 @@ h2{
 .center{text-align:center}
 .mono{font-family:var(--mono);letter-spacing:0}
 /* 命令要能被逐字符读准：等宽处一律关连字，别让 -- 连成一道长划。 */
-.mono,.term,.ask .what,.cmdline code,.party .fp,.ledger code,.rows .host{
+.mono,.cmdline code,.cmdline pre,.ways code{
   font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0;
 }
 
@@ -234,198 +206,44 @@ h2{
 .cta-row{display:flex;gap:26px;align-items:center;flex-wrap:wrap;margin-top:24px}
 .center .cta-row{justify-content:center}
 
-/* ── 双屏真实场景：唯一允许有阴影的地方 ────────────────────────────── */
-.stage{
-  position:relative;margin:clamp(22px,2.8vw,34px) auto 0;
-  display:flex;align-items:flex-end;justify-content:center;
-  gap:clamp(12px,2.6vw,44px);
-  /* 首屏是个纵向 flex，横向 auto 外边距让舞台按内容宽收缩 —— 而笔记本是个 container
-     （inline-size containment），它对「内容宽」的贡献是 0，舞台会缩到只剩手机、
-     笔记本被挤成 0 宽。所以舞台明确铺满，两台机器由 justify-content 居中。 */
-  width:100%;
-  /* 舞台的尺子是手机的宽 --pw，笔记本按等高跟着它（DESIGN.md §6：两块屏高度大致相等）。
-     手机取视口宽的 17%，再被两条线封顶：300px（2000 宽的屏上手机 300、舞台 1361，够大了），
-     和折线 —— 手机高是宽的 2.07 倍，舞台顶在 ~400px，(100svh−400)/2.07 就是屏底不过折线的
-     最大宽。1440×900 → 245；1536×864 → 224；1366×768 → 178；1920×1080 → 300。
-     甲方 09-05 下午：184 的手机在 2000 宽的屏上「太小了」—— 之前它是个固定上限。
-     地板 150：再小，屏里那份按 iOS 尺子排的字就读不了了（tools/phone-fit.mjs 量的）。 */
-  --pw:clamp(150px,min(17vw,(100svh - 400px) / 2.07),300px);
+/* ── 片子 ────────────────────────────────────────────────────────────
+   片子通篇纯白底（#fff，四角和底边逐帧取过），跟页面同色，所以不给它框、不给投影：
+   看上去是页面自己在动。宽度按窗口高度算，整块首屏（标题、一句话、复制条、片子）
+   落在折线以上；370px 是除片子以外那几样加起来的高度（导航 48 + 上下内边距 +
+   标题 + 一句话 + 复制条 + 片子底下的声音键，中文比英文高 15px，按中文算），
+   地板 560 给矮窗口，天花板 1200 给大屏 —— 再大，片子里的界面就比页面上的字还大了。
+   上边距几乎为零：片子每一帧顶上自带一截白。 */
+.film{
+  position:relative;margin:6px auto 0;
+  width:min(100%, 1200px, max(560px, (100svh - 370px) * 16 / 9));
+  display:flex;flex-direction:column;align-items:center;
 }
-/* 外壳是真机：两张带透明通道的渲染图（assets/iphone.webp · macbook.webp），屏幕那块
-   在图里是个透明的洞。活界面（.screen）垫在壳底下，壳压在上面且不接事件 ——
-   边框、圆角、灵动岛、刘海都是照片级的，屏里跑的仍然是活的产品界面。
-   DESIGN.md §6 那句「渲染的就是产品自己」不变，变的只是壳从 CSS 画的换成了真的。
-   屏那一层落在哪、圆角多大，是 tools/frames.py 按像素量出来的：矩形比洞每边多出几个
-   源像素（洞边上那一两像素的抗锯齿灰边要压在屏底下，不是压在页面白底上），
-   圆角取「不戳出壳外」和「不露出洞的圆角」之间的中点。**数字别手改，重新量。**
-   <img> 带 width/height，加载前盒子就有尺寸，舞台不会跳。
-   挂在 .laptop / .phone 上而不是 .stage 上：分享卡（tools/og.html）里的手机不在舞台里。 */
-.laptop .shell,.phone .shell{display:block;width:100%;height:auto;position:relative;z-index:1;
-                             pointer-events:none;user-select:none;-webkit-user-drag:none}
-.laptop .screen,.phone .screen{position:absolute;z-index:0;overflow:hidden;display:flex;flex-direction:column}
-
-/* 3.39 = 手机的高宽比 ÷ 笔记本的高宽比：这个宽度下两台机器一样高。放不下时笔记本收缩 */
-.laptop{flex:0 1 calc(var(--pw) * 3.39);min-width:0;position:relative;container-type:inline-size;
-        filter:drop-shadow(3px 5px 30px rgba(0,0,0,.22))}
-/* 上角圆、下角方 —— MacBook 的屏就长那样。圆角量出来的可行区间是 0~52 源像素
-   （壳宽 3984）即壳宽的 0~1.3%，.5cqw 在任何显示宽度下都落在区间里 */
-.laptop .screen{left:8.986%;top:2.055%;width:82.028%;height:86.93%;
-                background:#000;border-radius:.5cqw .5cqw 0 0}
-
-.phone{
-  /* 不再抬离地面：两台机器摆在同一张桌上就该共一条地平线，
-     悬空 16px 是把它们从一张照片变成两张贴图。 */
-  flex:0 0 auto;width:var(--pw);margin-bottom:0;position:relative;
-  filter:drop-shadow(3px 5px 30px rgba(0,0,0,.22));
-  /* 屏里的一切按壳的宽度定尺寸（cqw）：iOS 的状态栏、圆角、安全区都是屏宽的比例，
-     手机放大缩小它们跟着走 —— 桌面 184、手机 230、分享卡 250 用的是同一份数。 */
-  container-type:inline-size;
+.film video{display:block;width:100%;height:auto;aspect-ratio:16/9;background:var(--canvas)}
+/* 开声音：这一屏唯一的控件，在片子正下方、页面的中轴上。
+   压在片子右下角试过：片子是白底，框看不见，那个角跟画面里任何东西都不对齐，
+   按钮像飘着（09-27 截图评审）；手机上那个角干脆就是画面。
+   灰底不是蓝：它是片子的遥控，不是这一页的号召 —— 号召是上面那条复制。
+   图标和字说同一件事：都是按下去会得到的（「开声音」配出声的喇叭）。 */
+.sound{
+  position:relative;margin-top:8px;
+  display:inline-flex;align-items:center;gap:6px;
+  font:inherit;font-size:13px;letter-spacing:-.1px;line-height:1;color:var(--ink);
+  background:var(--canvas-2);border:0;border-radius:999px;padding:8px 13px 8px 10px;
+  cursor:pointer;transition:background .16s var(--ease);
 }
-.phone .screen{
-  left:3.636%;top:1.486%;width:92.727%;height:97.062%;
-  background:var(--canvas-2);border-radius:10.28cqw;
-  transition:background .45s var(--ease);
-}
-/* iOS 的状态栏：时间在灵动岛左边那只「耳朵」的正中，信号 / Wi-Fi / 电量在右边那只，
-   整条跟岛的中线对齐；三栏的中间那栏就是岛的宽度，量出来的。
-   9:41 —— 苹果所有渲染图上的那个时间，也正好是 DESIGN.md 第 1 节那句「上午」。
-   字走系统栈：这是 iOS 自己的字不是我们的，苹果设备上看到的就是 SF；别处退到站点字体。
-   尺寸按 iPhone 17 Pro（402pt 宽）的比例：时间 17pt、图标组 72×12pt、home 条 134×5pt。 */
-.phone .sbar{
-  position:absolute;left:0;right:0;top:6.99cqw;transform:translateY(-50%);
-  display:grid;grid-template-columns:1fr 26.3cqw 1fr;align-items:center;
-  pointer-events:none;transition:opacity .3s var(--ease);
-}
-.phone .clock{
-  grid-column:1;text-align:center;color:var(--ink);
-  font:600 3.9cqw/1 -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',var(--sans);
-  letter-spacing:-.02em;font-variant-numeric:tabular-nums;
-}
-.phone .sys{grid-column:3;justify-self:center;display:block;width:16.5cqw;height:auto;color:var(--ink)}
-.phone .homebar{
-  position:absolute;left:50%;bottom:2.1cqw;transform:translateX(-50%);
-  width:30.7cqw;height:1.15cqw;border-radius:999px;background:var(--ink);
-  transition:opacity .3s var(--ease);
-}
-
-/* 开场时手机是黑的，然后亮一下 —— DESIGN.md 第 1 节那句场景句。
-   醒着是默认状态；.asleep 只由 JS 临时加，所以无 JS / 无头渲染看到的都是醒着的。
-   睡着的时候状态栏和 home 条也一起灭：真机就是这样，黑屏上什么都没有。 */
-.phone.asleep .screen{background:#000}
-.phone.asleep .ask,.phone.asleep .sbar,.phone.asleep .homebar{opacity:0}
-@keyframes phone-attn{0%{transform:translateY(0)}34%{transform:translateY(-5px)}100%{transform:translateY(0)}}
-.phone.attn{animation:phone-attn .5s var(--ease)}
-
-/* 笔记本屏内：终端 */
-/* 字号按笔记本的宽算（.laptop 是 container）：壳 830 宽时 13px，1017 时 16px，508 时 8px */
-.term{
-  flex:1;padding:2.4cqw 2.6cqw;font-family:var(--mono);font-size:1.6cqw;
-  line-height:1.75;color:#e6e6e6;letter-spacing:0;overflow:hidden;text-align:left;
-}
-.term .row{white-space:pre-wrap;word-break:break-word;min-height:1.1em}
-.term .cmd{color:#fff;font-weight:700}
-.term .out{color:#a1a1a6}
-.term .wait{color:#5ac8fa}
-.term .no{color:#ff6961}
-.term .caret{display:inline-block;width:.55em;height:1.05em;vertical-align:-.16em;
-             background:#fff;animation:blink 1.06s steps(2,end) infinite}
-@keyframes blink{50%{opacity:0}}
-
-/* 手机屏内：审批 —— 按 iOS 的尺子画。
-   --pt 是「一个 iOS 点」：iPhone 17 Pro 的屏 402pt 宽，占壳宽的 92.2%，真比例是 .229cqw；
-   这里放大一成到 .255：1440 下（手机 245 宽）17pt 的正文才够 10.6px。字号、按钮高、圆角、
-   留白全用这一把尺，手机放大缩小，屏里的一切跟 iOS 保持同一个比例 ——
-   甲方 09-05 下午那句「按钮比例不对」说的就是之前 13px 的字配 35px 的按钮：字是 iOS 的两倍大。
-   版式是 iOS 的请求页：顶上导航标题（字标 + wanctl），然后是谁在请求（名字、短指纹、一句
-   「想运行一条命令」），请求什么（一张分组卡：设备 / 命令），秒表，最底下三颗 50pt 的胶囊
-   按钮压在 home 条的安全区上。屏底是 iOS 分组页那种浅灰（--canvas-2），卡片和次级按钮是白的
-   —— 都是站点自己的 token，没有新颜色。
-   上内边距 54pt = iOS 自己把内容摆在状态栏底下的那条线，下内边距 34pt = home 条的安全区。
-   装不装得下由 tools/phone-fit.mjs 量。 */
-.phone{--pt:.255cqw}
-.ask{
-  flex:1;display:flex;flex-direction:column;text-align:left;
-  padding:calc(var(--pt)*54) calc(var(--pt)*20) calc(var(--pt)*34);
-  transition:opacity .3s var(--ease);
-}
-@keyframes ask-rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
-.ask.rise{animation:ask-rise .42s var(--ease) both}
-/* 导航标题：字标 + 名字，17pt semibold 居中 —— iOS 内嵌标题的写法。所有状态都有它 */
-.ask .ttl{
-  flex:none;display:flex;align-items:center;justify-content:center;gap:calc(var(--pt)*5);
-  height:calc(var(--pt)*44);font-size:calc(var(--pt)*17);font-weight:600;letter-spacing:-.02em;
-}
-.ask .ttl svg{display:block;width:calc(var(--pt)*19);height:calc(var(--pt)*19);flex:none}
-/* 谁在请求：名字 22pt，底下是它的短指纹（设备端真会显示它，也把首屏和「端到端身份」那一屏
-   系在一起），再一句「想运行一条命令」 */
-.ask .who{margin-top:calc(var(--pt)*10)}
-.ask .name{font-size:calc(var(--pt)*22);font-weight:600;line-height:1.2;letter-spacing:-.02em;overflow-wrap:anywhere}
-.ask .fp{
-  font-family:var(--mono);font-size:calc(var(--pt)*13);line-height:1.3;
-  color:var(--ink-2);letter-spacing:0;word-break:break-all;margin-top:calc(var(--pt)*3);
-}
-.ask .from{font-size:calc(var(--pt)*17);line-height:1.3;color:var(--ink-2);margin-top:calc(var(--pt)*8)}
-/* 请求什么：iOS 的分组卡，两行 —— 设备、命令。标签一栏 74pt，「Command」正好放得下 */
-.ask .card{
-  margin:calc(var(--pt)*14) 0 0;padding:0 calc(var(--pt)*16);
-  background:var(--canvas);border-radius:calc(var(--pt)*20);
-}
-.ask .card .row{display:flex;gap:calc(var(--pt)*12);padding:calc(var(--pt)*11) 0;font-size:calc(var(--pt)*17);line-height:1.3}
-.ask .card .row+.row{border-top:1px solid var(--hairline)}
-.ask .card dt{flex:0 0 calc(var(--pt)*74);margin:0;color:var(--ink-2)}
-.ask .card dd{flex:1;min-width:0;margin:0}
-.ask .card dd.mono{font-family:var(--mono);font-size:calc(var(--pt)*15);letter-spacing:0}
-/* 优先在空格处折行：break-all 会把 --epochs 拦腰断成 --epoc / hs */
-.ask .what{word-break:normal;overflow-wrap:break-word}
-.ask .what .tok,.kv dd.cmd .tok{white-space:nowrap}
-.ask .what .tok.split,.kv dd.cmd .tok.split{white-space:normal;word-break:break-all}
-/* 手机上的那份秒表。移动端终端在折线以下，这一份才是落地时看得见的活体证明。
-   压在按钮上方，卡片和它之间的空由 margin-top:auto 吃掉。 */
-.ask .pend{
-  margin-top:auto;padding:calc(var(--pt)*14) 0;
-  display:flex;align-items:center;justify-content:center;gap:calc(var(--pt)*6);
-  font-size:calc(var(--pt)*15);color:var(--ink-2);letter-spacing:0;font-variant-numeric:tabular-nums;
-}
-.ask .pend .dot{
-  width:calc(var(--pt)*7);height:calc(var(--pt)*7);border-radius:50%;background:var(--blue);flex:none;
-  animation:pend-dot 2s var(--ease) infinite;
-}
-@keyframes pend-dot{0%,100%{opacity:1}50%{opacity:.28}}
-.ask .acts{flex:none;display:flex;flex-direction:column;gap:calc(var(--pt)*10)}
-/* iOS 的按钮：50pt 高的胶囊，17pt semibold 的字 */
-.ask button{
-  font:inherit;font-size:calc(var(--pt)*17);font-weight:600;letter-spacing:-.02em;line-height:1;
-  height:calc(var(--pt)*50);border:0;border-radius:999px;padding:0 calc(var(--pt)*16);cursor:pointer;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  transition:background .18s var(--ease);
-}
-/* 主按钮每 3.4 秒轻呼吸两下：告诉你「该你了」，不靠涟漪不靠阴影 */
-@keyframes breathe{
-  0%{transform:scale(1)}   6%{transform:scale(1.055)}  13%{transform:scale(1)}
-  19%{transform:scale(1.055)}  26%{transform:scale(1)}  100%{transform:scale(1)}
-}
-.ask .yes.breathe{animation:breathe 3.4s var(--ease) 1.1s infinite}
-.ask .yes.breathe:active{animation:none}
-.ask button:active{transform:scale(.95)}
-/* 层级按后果排，不按语气排。
-   「一直允许」是一次持久授权 —— 这个产品里后果最重的动作 —— 之前它是三个里最轻的
-   一行蓝字，而后果最轻的「拒绝」反倒是一块厚灰板。两个次级动作现在等重：
-   浅灰屏底上的两颗白胶囊（iOS 26 起浅底上的次级按钮就是这个样子）。 */
-.ask .yes{background:var(--blue);color:#fff}
-.ask .yes:hover{background:var(--blue-hi)}
-.ask .alt,.ask .no{background:var(--canvas);color:var(--ink)}
-.ask .alt:hover,.ask .no:hover{background:#ececf0}
-.ask .done{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--pt)*12)}
-.ask .tickring{
-  width:calc(var(--pt)*64);height:calc(var(--pt)*64);border-radius:50%;
-  border:2px solid var(--blue);display:grid;place-items:center;color:var(--blue);
-}
-.ask .tickring svg{width:calc(var(--pt)*28);height:calc(var(--pt)*28)}
-.ask .tickring.refused{border-color:var(--ink-2);color:var(--ink-2)}
-.ask .doneword{font-size:calc(var(--pt)*17);color:var(--ink-2);text-align:center;letter-spacing:-.02em;
-               max-width:calc(var(--pt)*300)}
-.ask .idle{flex:1;display:grid;place-items:center;color:var(--ink-2);text-align:center;
-           font-size:calc(var(--pt)*17);padding:0 calc(var(--pt)*8)}
+.sound:hover{background:#e8e8ed}
+.sound:active{transform:scale(.95)}
+/* 按压面撑到 44 高，那块灰底不动 */
+.sound::after{content:"";position:absolute;inset:-7px -3px}
+.sound svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;
+           stroke-linecap:round;stroke-linejoin:round}
+.sound .spk{fill:currentColor;stroke:none}
+.sound .play{fill:currentColor;stroke:none;display:none}
+.sound .off{display:none}
+.sound.is-off .off{display:inline}
+.sound.is-off .on{display:none}
+.sound.is-play .spk,.sound.is-play .off,.sound.is-play .on{display:none}
+.sound.is-play .play{display:inline}
 
 /* ── 被放大的真实界面 ──────────────────────────────────────────────── */
 .panel{
@@ -447,89 +265,49 @@ h2{
 .kv+.kv{border-top:1px solid var(--hairline)}
 .kv dt{flex:0 0 104px;color:var(--ink-2);margin:0}
 .kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+/* 配对卡：门户里那张浮层（internal/portal/web/index.html 的 #pair），文案照抄。
+   按钮按后果排：「信任并继续」是蓝的那颗，「拒绝」是灰的。 */
+.pair .msg{margin:0;padding:18px 26px 8px;font-size:15px;line-height:1.5;color:var(--ink-2)}
+.pair dl{margin:4px 0 0}
+.pair .kv dd{font-size:14px}
+.pair .acts{display:flex;justify-content:flex-end;gap:10px;padding:16px 26px 22px}
+.pair .acts button{
+  font:inherit;font-size:15px;border:0;border-radius:999px;padding:9px 18px;cursor:pointer;
+  transition:background .16s var(--ease);
+}
+.pair .acts button:active{transform:scale(.95)}
+.pair .yes{background:var(--blue);color:#fff}
+.pair .yes:hover{background:var(--blue-hi)}
+.pair .soft{background:var(--canvas-2);color:var(--ink)}
+.pair .soft:hover{background:#e8e8ed}
+/* 按下去之后：按钮让位给门户那句 toast，2.6 秒后回来，可以再按 */
+.pair .toast{display:none;margin:0;padding:16px 26px 22px;font-size:15px;color:var(--blue);text-align:right}
+.pair.refused .toast{color:var(--ink-2)}
+.pair.answered .acts{display:none}
+.pair.answered .toast{display:block}
 
-.rows{list-style:none;margin:0;padding:0}
-.rows li{display:flex;align-items:center;gap:13px;padding:14px 26px;font-size:17px}
-.rows li+li{border-top:1px solid var(--hairline)}
-.rows .dot{width:9px;height:9px;border-radius:50%;background:var(--blue);flex:none}
-.rows .dot.off{background:var(--ink-3)}
-.rows .name{font-weight:600;letter-spacing:-.374px}
-.rows .host{font-family:var(--mono);font-size:14px;color:var(--ink-2);letter-spacing:0}
-.rows .meta{margin-left:auto;font-size:14px;color:var(--ink-2);white-space:nowrap}
-
-/* ── 端到端身份：两端对称，中间那道链路就是主体 ────────────────────
-   默认状态就是终局（headless / 无 JS 下看到的是已钉住的真相）。
-   JS 只在滚进视口时短暂加 .verifying 再摘掉，让它当着你的面钉一次。 */
-.pin .body{padding:30px 26px 28px;text-align:center}
-.party{display:flex;flex-direction:column;gap:5px;align-items:center}
-.party .who{font-size:15px;font-weight:600;letter-spacing:-.374px}
-.party .who em{font-style:normal;font-weight:400;color:var(--ink-2);margin-left:7px}
-.party .fp{
-  font-size:clamp(12px,1.45vw,15px);color:var(--ink);word-break:break-all;
-  transition:color .55s var(--ease);
-}
-.wireline{display:flex;align-items:center;gap:16px;margin:22px 0}
-.wire{
-  flex:1 1 auto;height:2px;border-radius:1px;background:var(--hairline);
-  position:relative;overflow:hidden;
-}
-.wire::after{
-  content:"";position:absolute;inset:0;background:var(--blue);
-  transform:scaleX(1);transition:transform .75s var(--ease);
-}
-/* 两端各自向中间画过来，在徽标处会合 —— 这才是「互相核对」的顺序 */
-.wireline .wire:first-child::after{transform-origin:left}
-.wireline .wire:last-child::after{transform-origin:right}
-.state{
-  flex:none;display:flex;align-items:center;gap:9px;
-  font-size:14px;color:var(--ink-2);white-space:nowrap;
-}
-.state .ring{
-  width:22px;height:22px;flex:none;border-radius:50%;
-  border:1.5px solid var(--blue);color:var(--blue);
-  display:grid;place-items:center;
-  transition:opacity .3s var(--ease) .55s,transform .35s var(--ease) .55s;
-}
-.state b{font-weight:400}
-
-.pin.verifying .party .fp{color:var(--ink-2)}
-.pin.verifying .wire::after{transform:scaleX(0)}
-.pin.verifying .state .ring{opacity:0;transform:scale(.5);transition-delay:0s}
-
-.ledger{
-  background:var(--canvas-2);border-top:1px solid var(--hairline);
-  padding:15px 26px 17px;display:flex;flex-direction:column;gap:5px;text-align:left;
-}
-.ledger .cap{font-size:14px;color:var(--ink-2)}
-.ledger code{font-size:15px;color:var(--ink);white-space:pre;overflow-x:auto;display:block;min-width:0}
-
-/* ── 章节收尾：通栏的两行，讲策略的语义 ──────────────────────────────
-   两列文字撑不满 1440，但这条能 —— 而且它讲的是首屏 demo 每一轮都在演、
-   页面上却从没写出来的那件事。 */
+/* ── 章节收尾：通栏的两行，讲信任之后是什么在管 ──────────────────── */
 .lesson{
   margin-top:clamp(30px,3.2vw,44px);padding-top:clamp(22px,2.3vw,30px);
   border-top:1px solid rgba(255,255,255,.14);grid-column:1 / -1;
 }
 .lesson .claim{margin:0 0 20px;font-size:clamp(19px,1.9vw,24px);font-weight:600;
                letter-spacing:-.374px;color:var(--on-dark)}
-/* 表格自己收窄。撑满 1440 会把判定推到 600px 开外，
-   于是刚在整页上治好的「两边空」在这一小块里原样复发。 */
-.lesson ul{list-style:none;margin:0;padding:0;max-width:860px}
+/* 行和上面那道分隔线一样宽。旧版把表收在 860 以内，因为右边有一列右对齐的判定，
+   撑满会把它推到 600px 开外；现在只有标签和一句话，没有那一列了，收窄只剩下
+   两道长短不一的线（09-27 截图评审）。 */
+.lesson ul{list-style:none;margin:0;padding:0}
 .lesson li{
   display:flex;align-items:baseline;gap:clamp(14px,2vw,28px);
-  padding:13px 0;font-size:15px;
+  padding:14px 0;font-size:17px;
 }
 .lesson li+li{border-top:1px solid rgba(255,255,255,.09)}
 .lesson .k{flex:0 0 clamp(88px,9vw,132px);color:var(--on-dark-2)}
-.lesson code{flex:1 1 auto;min-width:0;color:var(--on-dark);letter-spacing:0;
-             overflow-wrap:break-word}
-.lesson .v{flex:0 0 auto;color:var(--on-dark-2);text-align:right;white-space:nowrap}
+.lesson .d{flex:1 1 auto;min-width:0;color:var(--on-dark)}
 
 @media (max-width:760px){
-  .lesson li{flex-wrap:wrap;gap:4px 14px;padding:12px 0}
-  .lesson .k{flex:0 0 auto}
-  .lesson code{flex:1 0 100%;order:3;font-size:13.5px}
-  .lesson .v{margin-left:auto}
+  .lesson li{flex-direction:column;gap:3px;padding:12px 0}
+  .lesson .k{flex:none}
 }
 
 /* ── 安装 ──────────────────────────────────────────────────────────── */
@@ -555,12 +333,12 @@ h2{
   border:1px solid var(--hairline);border-radius:999px;overflow:hidden;background:var(--canvas);
 }
 .dark .cmdline{background:#000;border-color:#3a3a3c}
-.cmdline code{
-  flex:0 1 auto;min-width:0;overflow-x:auto;white-space:nowrap;
-  font-family:var(--mono);font-size:14px;letter-spacing:0;color:var(--ink);
-  padding:14px 20px;text-align:left;
+.cmdline code,.cmdline pre{
+  flex:0 1 auto;min-width:0;overflow-x:auto;white-space:pre;margin:0;
+  font-family:var(--mono);font-size:14px;letter-spacing:0;line-height:1.7;color:var(--ink);
+  padding:12px 20px;text-align:left;
 }
-.dark .cmdline code{color:var(--on-dark)}
+.dark .cmdline code,.dark .cmdline pre{color:var(--on-dark)}
 .cmdline button{
   flex:none;font:inherit;font-size:15px;background:var(--blue);color:#fff;border:0;
   padding:0 22px;cursor:pointer;transition:background .18s var(--ease);
@@ -573,14 +351,43 @@ h2{
    `.more` 由 app.js 在 scrollWidth > clientWidth 时挂上（issue #25 那一版把它
    挂在 ≤560 上，而 768 下英文那条 GitHub 命令照样有 138px 在框外，遮罩已经
    下线了）。量的是溢出本身，所以不溢出的宽度上它自动不存在。 */
-.cmdline.more code{
+.cmdline.more code,.cmdline.more pre{
   -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);
           mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);
 }
 
+/* 安装是两行（装上、启动），胶囊的 999 圆角在两行高度上会变成一块跑道形，
+   所以它换成大面那一档 18px。首屏那条复制还是一行，留着胶囊。 */
+#install .cmdline{border-radius:18px}
+.cmdline.prompt{margin-top:24px}
+
 .note{
   margin:14px auto 0;max-width:52ch;font-size:15px;color:var(--ink-2);
   line-height:1.45;text-wrap:pretty;
+}
+.note code{font-family:var(--mono);font-size:.92em;letter-spacing:0;color:var(--ink);
+           font-variant-ligatures:none;white-space:nowrap}
+#install .note+.note{margin-top:10px;max-width:60ch}
+
+/* ── 网页 AI：两种接法，一张三列的规格表 ────────────────────────────
+   发丝线分行，不用卡片。地址是要被整条复制走的，点一下就全选。 */
+/* 三列由 ul 定，每行用 subgrid 继承 —— 各行自己一个 grid 的话，中间那列按各自的网址长度
+   撑开，第三列的起点每行差 45px（09-27 截图评审量出来的）。 */
+.ways{list-style:none;margin:clamp(30px,3.6vw,48px) auto 0;padding:0;max-width:1100px;text-align:left;
+      display:grid;grid-template-columns:minmax(0,15rem) auto minmax(0,1fr);
+      column-gap:clamp(18px,2.4vw,34px)}
+.ways li{
+  display:grid;grid-column:1 / -1;grid-template-columns:subgrid;row-gap:6px;align-items:baseline;
+  padding:18px 0;border-top:1px solid var(--hairline);font-size:17px;
+}
+.ways li:last-child{border-bottom:1px solid var(--hairline)}
+.ways .k,.ways .d{color:var(--ink-2)}
+.ways code{font-family:var(--mono);font-size:15px;color:var(--ink);letter-spacing:0;user-select:all;overflow-wrap:anywhere}
+/* 这一句是整页关于「relay 看得见什么」的实话，不是页脚小字：正文字号。 */
+#web .note{max-width:60ch;margin-top:26px;font-size:17px;line-height:1.47}
+@media (max-width:900px){
+  .ways{grid-template-columns:minmax(0,1fr)}
+  .ways li{row-gap:4px}
 }
 
 /* ── 两扇门 ────────────────────────────────────────────────────────
@@ -617,80 +424,39 @@ h2{
 .foot .row .end{margin-left:auto}
 
 @media (max-width:760px){
-  /* 手机上访客自己就是设备主人，先给他那块要按的屏。
-     笔记本在这里退场，跟竖排是同一个断点：两块屏一旦并排放不下，被折线切掉的
-     就是下面那台。以前退场挂在 ≤560，于是 561~760 这 200px 里既竖排又留着笔记本，
-     首屏实测 1055~1062px 高（900 的窗口下多出 158），落地看到的是「一部手机
-     加半台笔记本」—— HANDOFF §3.11 在 ≤560 修掉的正是这一条。
-     故事全在手机屏上：谁在请求、要跑什么、等了多久、那三个按钮。 */
-  .stage{flex-direction:column-reverse;align-items:center;gap:24px}
-  .laptop{display:none}
-  .stage{--pw:min(230px,62vw)}
-  .phone{margin-bottom:0}
-  /* 这里访客拿的就是手机，屏里的字得读得了：iOS 的尺子从 .255 放到 .27cqw，
-     230 宽的手机上 17pt ≈ 10.6px，跟桌面 1440 那一档一样 */
-  .phone{--pt:.27cqw}
+  /* 手机上片子贴满整幅：片子里的界面本来就小，两边那 22px 的留白再让出来。 */
+  .film{width:auto;margin-left:calc(-1 * var(--pad));margin-right:calc(-1 * var(--pad))}
+  /* 手机上首屏不撑满一屏。片子在这个宽度下只有 219px 高，整块首屏约 580px，
+     撑到 844 就是标题上面、声音键下面各空一大截（09-27 截图评审：约 170pt）。
+     下一屏的标题从底下露出来，读得出来，也在叫人往下滑 —— 跟桌面上
+     「半截深色块读不出内容」不是一回事。 */
+  .tile.hero{min-height:0;justify-content:flex-start;padding-top:44px}
   /* 手指用的宽度。链接撑到整条顶栏高之后还剩宽度这一头：中文的「安装」只有 28px
      宽，旁边 13px 就是下一条。左右各加 6px 的透明内边距把按压面做到 40，再用
-     等量的负外边距把整栏拉回去 —— 最右那条链接的墨迹落点一个像素不动（这一栏
-     是 margin-left:auto 靠右站的，右缘就是基准）。760 以下才加：桌面用鼠标，
-     而 1440 那一档是冻着的。 */
+     等量的负外边距把整栏拉回去 —— 最右那条链接的墨迹落点一个像素不动。 */
   .nav .links{margin-right:-6px;gap:calc(clamp(13px,2vw,26px) - 12px)}
   .nav .links a{padding:0 6px}
-  .nav .links a[data-opt]{display:none}
   .kv{flex-direction:column;gap:2px}
   .kv dt{flex:none}
-  .rows li{flex-wrap:wrap;gap:8px 12px}
-  .rows .meta{margin-left:0;width:100%}
   /* 窄屏上这句会换到第二行，margin-left:auto 让它孤零零吊在右边 */
   .foot .row .end{margin-left:0}
-  .party .who em{margin-left:6px}
-  .ledger code{font-size:13.5px;white-space:pre-wrap}
-  .wireline{flex-direction:column;gap:12px;margin:20px 0}
-  .wire{flex:none;width:100%;height:2px}
-  .state{white-space:normal;text-align:left}
-  /* 那两条线在宽屏上是两端之间的链路，细、短、夹着一句话；竖过来之后它们变成两道
-     通栏的亮蓝横杠，成了这一屏最重的东西 —— 而蓝在这套系统里是「点我」的信号，
-     它们不可点。窄屏上链路由上下两端的排列本身说明，横杠减掉。 */
-  .wire{display:none}
-  .wireline{gap:0;margin:18px 0}
-  /* 收尾那两条命令原先在连字符处断开，`--format=csv` 被切成 `--` 和 `format=csv`，
-     读起来像两个参数 —— 和 HANDOFF 3.5 在手机屏里修过的是同一个坑，同一个解法。 */
-  .lesson code .tok{white-space:nowrap}
   /* 左对齐的中文段落在窄屏上不能用 balance：汉字可以在任意两字之间断开，于是 balance
-     为了把几行拉齐会主动把行做短 —— 390 下实测一行只排到 13~14 字，而这一栏放得下 19 字，
-     左对齐时右边就恒定空出一条一指宽的白，一栏看着像浮在另一栏里。
-     居中的海报 lead（首屏、安全模型、安装）**不在此列**：那三处正是 balance 的本行，
-     三行等长居中是它该有的样子，实测也确实比填满好看。宽屏一律不动。 */
+     为了把几行拉齐会主动把行做短，右边恒定空出一条白。居中的海报 lead 不在此列。 */
   .split .lead:lang(zh),
   #relay .lead:lang(zh){text-wrap:pretty}
 }
 
-/* 窄屏放不下一行 51 字的指纹：断成两行等长的，看着是有意为之而不是被挤爆的 */
-@media (max-width:499px){
-  .party .fp{font-size:13.5px;max-width:26ch;margin:0 auto}
-}
-
 @media (max-width:560px){
-  .panel .head .s{margin-left:0}
   .nav{gap:12px}
-  .nav .links a[href="#decide"]{display:none}
-  /* 安全是页内锚点，往下滚一屏就到；在这个宽度上它是这一栏里最先该让位的一条。 */
-  .nav .links a[href="#private"]{display:none}
   .nav .brand{font-size:16px}
-
-  /* ── 手机上的减法 ────────────────────────────────────────────────
-     下面每一条都是「拿掉一件在 390px 上没有职务的东西」，不是加一套手机专用版式。 */
-
-  /* 笔记本的退场已经挪到 ≤760（跟竖排同一个断点，理由记在那边）。
-     中文的 lead 行高 1.6，比英文那三行高出 11px，正好把首屏顶到 850 —— 差 6px。
-     底部内边距收 10px 补回来，两种语言都落在折线以内。 */
-  .tile.hero{padding-bottom:42px}
+  /* 首屏那条复制：左右内边距收紧，390 / 412 上一行放得下（字号不低于 13，sweep 的下限） */
+  .cmdline.prompt code{font-size:13px;padding:11px 13px}
+  .cmdline.prompt button{padding:0 15px}
 
   /* 这里曾经有一块把安装胶囊竖排的规则（#20 / HANDOFF 3.11）：命令摊开换行、
      复制键落到底下通栏、圆角 999 → 18。甲方看了真机之后要求撤回（issue #25）——
      换行之后那条命令不再是「一行装完」，而整页最重的蓝色大块落在了一个次级动作上。
-     手机上照样用桌面那一份：单行、胶囊内横向滚、复制键在右。别再竖排回去。
+     手机上照样用桌面那一份：胶囊内横向滚、复制键在右。别再竖排回去。
 
      撤回之后要补的那个「还有」信号见下面 .cmdline.more —— 它现在不挂在这个
      断点上了。 */
@@ -703,18 +469,17 @@ h2{
   .picker{flex-direction:column;align-items:stretch;gap:10px;margin-top:24px}
   .seg button{flex:1 1 0;padding:10px}
 }
-
 /* ── 顶栏的落链梯 ────────────────────────────────────────────────────
    一条横带装不下的时候，掉的永远是链接，语言开关一步都不让。窄下去的顺序是
-   设备（760）→ 怎么工作、安全（560）→ GitHub（440）→ 文档（360），安装留到最后：
-   访客来这个站就为那一件事。开关也从不掉：中文访客第一个要按的就是它。
-
-   断点不是照着 iPhone 的分辨率排的，是照着「英文那一栏的自然宽度不超过视口的
-   八成」排的 —— 留下的两成给访客自己的字号设置。甲方那台 412px 的安卓把每个字
-   渲宽约 10%（实测：字标 76.4 → 84、GitHub 45.3 → 50），四条链接那一栏 388 胀到
-   427，超出 412 十五个像素，被推出屏幕的正是最右边的开关（issue #25）。
-   自然宽（英文，实测）：安全+安装+文档+GitHub 388、安装+文档+GitHub 322、
-   安装+文档 266、安装 220 —— 每一档除以断点都落在 0.74 以下。 */
+   GitHub（440）→ 文档（360），安装留到最后：访客来这个站就为那一件事。
+   断点照着「英文那一栏的自然宽度不超过视口的八成」排 —— 留下的两成给访客自己的
+   字号设置（甲方那台 412px 的安卓把每个字渲宽约 10%，issue #25）。 */
+/* 320 / 360 上那句一行放不下（sweep 量出藏掉 18~58px）。这句是要人读的，不像安装命令
+   可以横向滚：放它换行，圆角跟着换成大面那一档，免得两行高的胶囊变成跑道。 */
+@media (max-width:400px){
+  .cmdline.prompt{border-radius:18px}
+  .cmdline.prompt code{white-space:normal;overflow-wrap:anywhere}
+}
 @media (max-width:440px){
   .nav .links a[href^="https://github.com"]{display:none}
 }
@@ -774,23 +539,13 @@ h5:lang(zh),
 h6:lang(zh),
 .tile.chapter h2:lang(zh),
 .nav:lang(zh),
-.ask .ttl:lang(zh),
-.ask .name:lang(zh),
-.ask .from:lang(zh),
-.ask .card:lang(zh),
-.ask .pend:lang(zh),
-.ask button:lang(zh),
-.ask .doneword:lang(zh),
-.ask .idle:lang(zh),
+.sound:lang(zh),
 .panel .head .t:lang(zh),
-.rows .name:lang(zh),
-.party .who:lang(zh),
 .lesson .claim:lang(zh),
 .seg button:lang(zh){letter-spacing:0}
 
 /* 行高：正文 1.6（上面 body 那条给的），官网的展示级标题 1.2。
-   文档站的标题不在此列 —— .dbody article h1 是 0,1,2，它的 1.12 该留着。
-   等宽块（.term 1.75 / .ask .card .row 1.3 / .ask .fp 1.3）也不动，它们自己声明着。 */
+   文档站的标题不在此列 —— .dbody article h1 是 0,1,2，它的 1.12 该留着。 */
 h1:lang(zh),h2:lang(zh),.tile.chapter h2:lang(zh){line-height:1.2}
 .lead:lang(zh),.note:lang(zh),.door .d:lang(zh){line-height:1.6}
 
@@ -801,13 +556,12 @@ h1:lang(zh),h2:lang(zh),.tile.chapter h2:lang(zh){line-height:1.2}
 .door .d:lang(zh){text-wrap:pretty}
 
 /* 中文标题只在标点处换行。
-   浏览器允许在任意两个汉字之间断开，于是「你不点头，什么都不会跑。」这一句实测三种
-   换行模式全都难看：balance 断成「什 | 么」、pretty 断成「不 | 会」、默认换行留下孤字
-   「跑。」。word-break:auto-phrase 在 zh-CN 上是**空操作**（实测断点一个都没动，
-   Chrome 的分词换行目前只对日文生效），别加。
+   浏览器允许在任意两个汉字之间断开，于是长句标题在三种换行模式下都可能断在词中间
+   （balance 断成「什 | 么」、pretty 断成「不 | 会」、默认换行留孤字）。
+   word-break:auto-phrase 在 zh-CN 上是**空操作**（Chrome 的分词换行目前只对日文生效），别加。
    办法是把每个分句包成 inline-block：盒子是原子的，断点只能落在分句之间；
    分句自己一行装不下时它照样会在内部换行，不会溢出。
-   只有实测断得难看的标题才包 —— 目前是 #decide 和 #relay 两条。 */
+   只有实测断得难看的句子才包 —— 目前是首屏那句导语、#trust 和 #relay 的标题。 */
 .cl{display:inline-block}
 
 @media (prefers-reduced-motion:reduce){
