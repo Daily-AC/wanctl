@@ -4,24 +4,23 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>wanctl — your machines, your call</title>
-<meta name="description" content="wanctl gives an AI agent your machines across the public internet. Every command stops at the device and waits for you. The relay in the middle only ever sees ciphertext.">
+<meta name="description" content="wanctl lets your AI agent work on your own machines across the internet. Two lines on each machine, one trust click the first time the agent touches it, and every step is recorded. Open source.">
 <link rel="canonical" href="https://wc.z10.dev/">
 <meta name="theme-color" content="#ffffff">
 
-<!-- 分享卡片。图由 tools/og.sh 从 tools/og.html 渲染，用的是站点自己的 CSS，
-     所以卡片上那块屏和首屏上那块永远是同一套样式。改了视觉记得重跑一次。 -->
+<!-- 分享卡片。图由 tools/og.sh 从 tools/og.html 渲染，用的是站点自己的 CSS。改了视觉记得重跑一次。 -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="wanctl">
 <meta property="og:url" content="https://wc.z10.dev/">
 <meta property="og:title" content="wanctl — your machines, your call">
-<meta property="og:description" content="wanctl gives an AI agent your machines across the public internet. Every command stops at the device and waits for you. The relay in the middle only ever sees ciphertext.">
+<meta property="og:description" content="Your AI agent works on your own machines across the internet. Hand wc.z10.dev to your agent.">
 <meta property="og:image" content="https://wc.z10.dev/assets/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="A phone showing an approval request: claude@workstation wants to run python train.py on bench-02. Allow once, always allow this, or refuse.">
+<meta property="og:image:alt" content="The wanctl wordmark, the line Your machines. Your call., and a command-line prompt that reads: Hand wc.z10.dev to your agent.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="wanctl — your machines, your call">
-<meta name="twitter:description" content="An AI agent gets your machines across the public internet. Every command stops at the device and waits for you.">
+<meta name="twitter:description" content="Your AI agent works on your own machines across the internet. Hand wc.z10.dev to your agent.">
 <meta name="twitter:image" content="https://wc.z10.dev/assets/og.png">
 
 <link rel="stylesheet" href="assets/app.css">
@@ -30,16 +29,9 @@
 <body>
 
 <header class="nav">
-  <!-- 字标单独站着。之前那把挂锁是安全类产品最不动脑子的选择，
-       换成另一个弱符号不如把它减掉 —— 字标本身已经有形。 -->
   <a class="brand" href="/"><svg class="mk" viewBox="0 0 32 32" aria-hidden="true"><path d="M5.6 12.4 10.2 21.8 15.2 14.6 19.6 21.8 26.4 7.6" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"/></svg>wanctl</a>
   <nav class="links">
-    <a href="#decide"  data-en="How it works" data-zh="怎么工作">How it works</a>
-    <a href="#fleet" data-opt data-en="Devices" data-zh="设备">Devices</a>
-    <a href="#private" data-en="Security" data-zh="安全">Security</a>
     <a href="#install" data-en="Install" data-zh="安装">Install</a>
-    <!-- 文档站是第二个表面，不是页脚里的一条外链。它在 760px 以下也留着：
-         这一栏里先掉的是 Devices 和 How it works，它们在页面上滚一下就到。 -->
     <a href="/docs/" data-en="Docs" data-zh="文档">Docs</a>
     <a href="https://github.com/Daily-AC/wanctl">GitHub</a>
   </nav>
@@ -48,182 +40,43 @@
 
 <main>
 
-  <!-- 首屏：双屏真实场景。屏幕里跑的是活的产品界面，不是贴图。
-       底下那块画布是密文场（assets/field.js）：relay 看得见的那种字节，
-       鼠标经过会解析、点一下会推出一圈蓝色的波。纯装饰，对读屏器不存在。 -->
+  <!-- 首屏：片子就是主体。片子通篇白底，和页面同色，所以不给它框 —— 看上去是页面自己在动。
+       静音自动循环是甲方 09-27 定的；「开声音」是这一屏唯一的控件，也兼做播放键
+       （减弱动态效果时不自动播，省电模式等拦下自动播放时也是它）。 -->
   <section class="tile hero center">
-    <canvas class="field" id="field" aria-hidden="true"></canvas>
     <h1 data-en="Your machines. Your call." data-zh="你的机器，你说了算。">Your machines. Your call.</h1>
     <p class="lead"
-       data-en="wanctl gives an AI agent your machines across the public internet. Every command stops at the device and waits for you."
-       data-zh="wanctl 把你的机器跨公网交给 AI agent 去用。它发的每一条命令都会停在设备上，等你。">
-      wanctl gives an AI agent your machines across the public internet.
-      Every command stops at the device and waits for you.
+       data-en="wanctl lets your AI agent work on your own machines, across the internet."
+       data-zh="&lt;span class=&quot;cl&quot;&gt;wanctl 让你的 AI Agent 隔着公网，&lt;/span&gt;&lt;span class=&quot;cl&quot;&gt;直接在你自己的机器上干活。&lt;/span&gt;">
+      wanctl lets your AI agent work on your own machines, across the internet.
     </p>
-    <div class="cta-row">
-      <a class="btn" href="#install" data-en="Install" data-zh="安装">Install</a>
-      <a class="link-arrow" href="#decide" data-en="See how it works" data-zh="看看它怎么工作">See how it works</a>
+    <!-- 复制的是一句能直接贴给 Agent 的话，不是这个网址本身：Agent 读完这一页就知道怎么装。 -->
+    <div class="cmdline prompt">
+      <code id="prompt" data-en="› Hand wc.z10.dev to your agent." data-zh="› 把 wc.z10.dev 甩给你的 Agent。">› Hand wc.z10.dev to your agent.</code>
+      <button id="copyprompt" type="button" data-en="Copy" data-zh="复制">Copy</button>
     </div>
 
-    <!-- 两台机器的外壳是真机渲染图（屏那块是透明的洞），活界面垫在壳底下：
-         壳压在上面、不接事件，所以屏里那三个按钮照常能按。屏的位置是量出来的，见 app.css。
-         手机屏里的状态栏和 home 条是 iOS 自己的东西，不是我们的界面 —— 对读屏器不存在。 -->
-    <div class="stage">
-      <div class="laptop">
-        <div class="screen"><div class="term" id="term"></div></div>
-        <img class="shell" src="assets/macbook.webp" width="1400" height="855" alt="" fetchpriority="high">
-      </div>
-      <div class="phone" id="phone">
-        <div class="screen">
-          <div class="sbar" aria-hidden="true">
-            <span class="clock">9:41</span>
-            <svg class="sys" viewBox="0 0 72 12" fill="currentColor" aria-hidden="true">
-              <rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="4.6" y="5.5" width="3" height="6.5" rx=".8"/>
-              <rect x="9.2" y="3" width="3" height="9" rx=".8"/><rect x="13.8" y="0" width="3" height="12" rx=".8"/>
-              <path d="M22.8 4.3A9.5 9.5 0 0 1 36.2 4.3M25.1 6.6A6.2 6.2 0 0 1 33.9 6.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-              <circle cx="29.5" cy="10.3" r="1.6"/>
-              <rect x="43.5" y=".5" width="24" height="11" rx="3" fill="none" stroke="currentColor" stroke-opacity=".35"/>
-              <rect x="45.5" y="2.5" width="20" height="7" rx="1.6"/><path d="M68.8 4.2v3.6a1.9 1.9 0 0 0 0-3.6z" opacity=".4"/>
-            </svg>
-          </div>
-          <div class="ask" id="ask"></div>
-          <span class="homebar" aria-hidden="true"></span>
-        </div>
-        <img class="shell" src="assets/iphone.webp" width="900" height="1864" alt="" fetchpriority="high">
-      </div>
-    </div>
+    <figure class="film">
+      <video id="film" muted loop playsinline preload="auto" poster="assets/film-zh.webp"
+             width="1920" height="1080" aria-label="A 79-second film: an agent in a terminal sets up wanctl, gets trusted on each machine, then fixes and checks things on its own.">
+        <source src="assets/film-zh.mp4" type="video/mp4">
+      </video>
+      <button class="sound" id="sound" type="button" hidden>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path class="spk" d="M3.5 7.5h3l4-3.5v12l-4-3.5h-3z"/><path class="off" d="M13.5 7.5l4 5m0-5l-4 5"/><path class="on" d="M13.4 7.2a4 4 0 0 1 0 5.6M15.6 5a7 7 0 0 1 0 10"/><path class="play" d="M6 4.2v11.6L15.8 10z"/></svg>
+        <span id="soundlbl">Sound on</span>
+      </button>
+    </figure>
   </section>
 
-  <!-- 深色屏：审批凭证。主体在右 —— 那是「你」的回答，落在首屏手机所在的那一侧 -->
-  <section class="tile dark split chapter" id="decide">
-    <div class="say">
-    <!-- 中文标题里的 .cl 是分句盒子：浏览器可以在任意两个汉字之间断行，不包的话这句会
-         被断成「什 / 么」。理由和实测见 app.css 的「中文」一节。 -->
-    <h2 data-en="Nothing runs until you say yes."
-        data-zh="&lt;span class=&quot;cl&quot;&gt;你不点头，&lt;/span&gt;&lt;span class=&quot;cl&quot;&gt;什么都不会跑。&lt;/span&gt;">Nothing runs until you say yes.</h2>
+  <!-- 浅灰屏：安装。片子里说的是「每台两行，贴一次授权码」，这里给的就是那两行。
+       两个维度（系统 × 下载源）各一个分段控件，命令永远只有一份。 -->
+  <section class="tile grey center" id="install">
+    <h2 data-en="Two lines on each machine." data-zh="每台机器，两行。">Two lines on each machine.</h2>
     <p class="lead"
-       data-en="The device decides locally. A rule you signed can let a command through; anything else waits for a person. Every answer is written down."
-       data-zh="策略在设备本地判定。命中你签过的规则就放行，其余一律等人。每一次回答都会被记下来。">
-      The device decides locally. A rule you signed can let a command through;
-      anything else waits for a person. Every answer is written down.
-    </p>
-    </div>
-    <div class="see">
-    <div class="panel">
-      <div class="head">
-        <span class="t" data-en="Signed decision" data-zh="签过的决定">Signed decision</span>
-        <span class="s mono" id="credtime">—</span>
-      </div>
-      <div class="body" id="cred"></div>
-    </div>
-    </div>
-
-    <!-- 通栏收尾：这条是整个产品最常被误解的地方，而且首屏 demo 每次都在演它，
-         之前页面上却一个字都没写。移植自 internal/policy 的 matchCommand。 -->
-    <div class="lesson">
-      <p class="claim"
-         data-en="A rule covers a command, not a machine."
-         data-zh="规则管的是一条命令，不是一台机器。">A rule covers a command, not a machine.</p>
-      <ul>
-        <li>
-          <span class="k" data-en="Signed once" data-zh="签过一次">Signed once</span>
-          <!-- 每个 token 各自 nowrap（窄屏才生效），否则浏览器会在连字符后断行，
-               把 --resume 切成 -- / resume，读起来像两个参数。app.js 在手机屏里
-               用的是同一个办法（cmdHTML）。 -->
-          <code class="mono"><span class="tok">python</span> <span class="tok">train.py</span> <span class="tok">--epochs 3</span> <span class="tok">--resume</span> <span class="tok">--seed 7</span></code>
-          <span class="v" data-en="runs without asking" data-zh="以后直接放行">runs without asking</span>
-        </li>
-        <li>
-          <span class="k" data-en="Anything else" data-zh="换成别的">Anything else</span>
-          <code class="mono"><span class="tok">nvidia-smi</span> <span class="tok">--query-gpu=memory.used</span> <span class="tok">--format=csv</span></code>
-          <span class="v" data-en="asks you again" data-zh="还是会来问你">asks you again</span>
-        </li>
-      </ul>
-    </div>
-  </section>
-
-  <!-- 浅灰屏：设备列表。主体在左 —— 那是 wanctl peers 的输出，
-       控制端看的东西，落在首屏笔记本所在的那一侧 -->
-  <section class="tile grey split flip minor" id="fleet">
-    <div class="say">
-    <h2 data-en="Your fleet, in one list." data-zh="你的机器，一张表看完。">Your fleet, in one list.</h2>
-    <p class="lead"
-       data-en="Laptops, servers, phones and routers. One Go binary runs on all of them, over WebSocket or plain HTTP long-poll."
-       data-zh="笔记本、服务器、手机、路由器。同一个 Go 二进制跑在所有这些上面，走 WebSocket 或普通 HTTP 长轮询。">
-      Laptops, servers, phones and routers. One Go binary runs on all of them,
-      over WebSocket or plain HTTP long-poll.
-    </p>
-    </div>
-    <div class="see">
-    <div class="panel">
-      <div class="head">
-        <span class="t" data-en="Devices" data-zh="设备">Devices</span>
-        <span class="s" id="fleetcount">—</span>
-      </div>
-      <ul class="rows" id="rows"></ul>
-    </div>
-    </div>
-  </section>
-
-  <!-- 深色屏：两方指纹互钉被放大成主体。中转只留下一行元数据。 -->
-  <section class="tile dark center" id="private">
-    <h2 data-en="The relay never sees inside."
-        data-zh="中间那台机器看不见里面。">The relay never sees inside.</h2>
-    <p class="lead"
-       data-en="Controller and device each hold an Ed25519 key and run mutual TLS 1.3 inside the relayed pipe, pinned by fingerprint. The relay moves bytes it cannot open."
-       data-zh="控制端和设备各持一把 Ed25519 密钥，在穿过 relay 的那条管道内部再跑一层双向 TLS 1.3，两边按指纹互相钉住。relay 搬运的是它自己打不开的字节。">
-      Controller and device each hold an Ed25519 key and run mutual TLS 1.3
-      inside the relayed pipe, pinned by fingerprint. The relay moves bytes it
-      cannot open.
-    </p>
-
-    <div class="panel pin" id="pin">
-      <div class="head">
-        <span class="t" data-en="End-to-end identity" data-zh="端到端身份">End-to-end identity</span>
-        <span class="s mono">TLS 1.3 · Ed25519</span>
-      </div>
-      <div class="body">
-        <div class="party">
-          <span class="who">claude@workstation
-            <em data-en="controller" data-zh="控制端">controller</em></span>
-          <span class="fp mono">SHA256:fJoz5aAnHwQ/tPQ//WvDpG9XEEeEzOvQEZIlqODOAEo=</span>
-        </div>
-        <div class="wireline">
-          <span class="wire"></span>
-          <span class="state">
-            <span class="ring">
-              <svg width="13" height="13" viewBox="0 0 18 18" aria-hidden="true">
-                <path d="M3.5 9.4l3.4 3.4L14.5 5.2" fill="none" stroke="currentColor"
-                      stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </span>
-            <b id="pinstate" data-en="Fingerprints matched — pinned on both sides"
-                             data-zh="指纹一致 —— 两端都已钉住">Fingerprints matched — pinned on both sides</b>
-          </span>
-          <span class="wire"></span>
-        </div>
-        <div class="party">
-          <span class="fp mono">SHA256:LELKNbJhYtSLwjFb9hc0iAl9p0JX5MTDEEEQqTofoPc=</span>
-          <span class="who">bench-02
-            <em data-en="device" data-zh="设备">device</em></span>
-        </div>
-      </div>
-      <div class="ledger">
-        <span class="cap" data-en="Everything the relay wrote down about this session"
-                          data-zh="这场会话在 relay 上留下的全部记录">Everything the relay wrote down about this session</span>
-        <code class="mono" id="ledger">—</code>
-      </div>
-    </div>
-  </section>
-
-  <!-- 白屏：安装。两个维度（系统 × 下载源）各一个分段控件，命令永远只有一条 -->
-  <section class="tile center" id="install">
-    <h2 data-en="One line to install." data-zh="一行装完。">One line to install.</h2>
-    <p class="lead"
-       data-en="Run it on the machine you want to reach. Nothing lands on disk until a signed release manifest checks out."
-       data-zh="在你想连的那台机器上跑。签名过的发布清单验过之前，什么都不会落盘。">
-      Run it on the machine you want to reach. Nothing lands on disk until a
-      signed release manifest checks out.
+       data-en="Install, then start. Sign in once in the browser, paste the code back into the terminal, and the machine is in."
+       data-zh="装上，再启动。浏览器里登录一次，把授权码贴回终端，这台机器就接上了。">
+      Install, then start. Sign in once in the browser, paste the code back into
+      the terminal, and the machine is in.
     </p>
 
     <div class="picker">
@@ -240,24 +93,127 @@
       </div>
     </div>
 
+    <!-- 静态文本里放的是默认那一份，另外三份在 app.js 的 INSTALL 里。
+         Agent 读这一页不跑脚本（「把 wc.z10.dev 甩给你的 Agent」靠的就是这一段），所以：
+         · 命令用 <pre>：换成 <code> 的话，转成 markdown 时两行会被压成
+           `… | sh wanctl start` 一行，照抄就把 wanctl start 当成了 sh 的参数；
+         · Windows 和镜像那几条完整写在 .note 里，有脚本时 app.js 换成一句短说明。 -->
     <div class="cmdline">
-      <code id="installcmd">curl -fsSL https://github.com/Daily-AC/wanctl/releases/latest/download/install.sh | sh</code>
+      <pre id="installcmd">curl -fsSL https://github.com/Daily-AC/wanctl/releases/latest/download/install.sh | sh
+wanctl start</pre>
       <button id="copy" type="button" data-en="Copy" data-zh="复制">Copy</button>
     </div>
-    <p class="note" id="srcnote">Straight from the GitHub release.</p>
+    <p class="note" id="srcnote">Straight from the GitHub release. Windows (PowerShell): irm https://github.com/Daily-AC/wanctl/releases/latest/download/install.ps1 | iex, then wanctl start. From mainland China, install from the official relay instead: curl -fsSL https://wanctl-relay.z10.dev/install.sh | sh (Windows: irm https://wanctl-relay.z10.dev/install.ps1 | iex).</p>
+    <!-- 「甩给 Agent」那条链路的后半段（09-27 盲测：一个没见过 wanctl 的 Agent 只拿这一页的 markdown，
+         装都装对了，但不知道连哪台 relay、装完用什么命令）。出处：README「First run」、config_cmd.go 的
+         ensureEndpointsConfigured / askInstance、README 的 wanctl peers / exec 示例。 -->
+    <p class="note"
+       data-en="If nothing is configured yet, the first start asks which relay to use: ours at wanctl.z10.dev (invite-only for now), or one you run. After that, &lt;code&gt;wanctl help&lt;/code&gt; lists every command; your agent mostly needs &lt;code&gt;wanctl peers&lt;/code&gt; and &lt;code&gt;wanctl exec --target DEVICE &quot;…&quot;&lt;/code&gt;."
+       data-zh="没配置过的话，第一次启动会问连哪一台 relay：我们的 wanctl.z10.dev（目前要邀请），或者你自己架的。之后 &lt;code&gt;wanctl help&lt;/code&gt; 列出全部命令，Agent 最常用的是 &lt;code&gt;wanctl peers&lt;/code&gt; 和 &lt;code&gt;wanctl exec --target 设备 &quot;…&quot;&lt;/code&gt;。">
+      If nothing is configured yet, the first start asks which relay to use:
+      ours at wanctl.z10.dev (invite-only for now), or one you run. After that,
+      <code>wanctl help</code> lists every command; your agent mostly needs
+      <code>wanctl peers</code> and <code>wanctl exec --target DEVICE "…"</code>.
+    </p>
   </section>
 
-  <!-- 浅灰屏：装完连到哪儿。两扇门是真正等价的两个选择，所以这里用一次
-       诚实的 50/50 —— 而且它和上面的交替两栏是不同的形状，节奏不会延续成节拍器。 -->
+  <!-- 深色屏：信任。命题从旧版的「你不点头，什么都不会跑」换成了真实用法：
+       人点的是每台机器一次的「信任」，之后听这台机器自己的模式。
+       主体在右：门户里那张配对浮层，放大出来，按钮真能按。 -->
+  <section class="tile dark split chapter" id="trust">
+    <div class="say">
+    <h2 data-en="The first time it touches a machine, it asks you."
+        data-zh="&lt;span class=&quot;cl&quot;&gt;第一次碰一台机器，&lt;/span&gt;&lt;span class=&quot;cl&quot;&gt;它先来问你。&lt;/span&gt;">The first time it touches a machine, it asks you.</h2>
+    <p class="lead"
+       data-en="Your agent hands you a link. Open it, check the fingerprint, and trust it. Once per machine; the link lasts five minutes."
+       data-zh="Agent 会递给你一条链接。打开，核对指纹，点&lt;span class=&quot;cl&quot;&gt;「信任并继续」&lt;/span&gt;。每台机器一次，链接五分钟内有效。">
+      Your agent hands you a link. Open it, check the fingerprint, and trust it.
+      Once per machine; the link lasts five minutes.
+    </p>
+    </div>
+    <div class="see">
+    <div class="panel pair" id="pair">
+      <div class="head">
+        <span class="t" data-en="A controller wants in" data-zh="控制端想连进来">A controller wants in</span>
+      </div>
+      <div class="body">
+        <p class="msg" data-en="This controller is connecting for the first time. Trust it and it can drive this device."
+                       data-zh="这个控制端第一次连接。信任之后它就能控制这台设备。">This controller is connecting for the first time. Trust it and it can drive this device.</p>
+        <dl>
+          <div class="kv"><dt data-en="Device" data-zh="设备">Device</dt><dd class="mono">bench-02</dd></div>
+          <div class="kv"><dt data-en="Controller" data-zh="控制端">Controller</dt><dd class="mono">claude@workstation</dd></div>
+          <div class="kv"><dt data-en="Fingerprint" data-zh="指纹">Fingerprint</dt><dd class="mono">SHA256:fJoz5aA…DOAEo=</dd></div>
+        </dl>
+      </div>
+      <div class="acts" id="pairacts">
+        <button class="soft" type="button" data-v="n" data-en="Refuse" data-zh="拒绝">Refuse</button>
+        <button class="yes" type="button" data-v="y" data-en="Trust it" data-zh="信任并继续">Trust it</button>
+      </div>
+      <p class="toast" id="pairtoast" aria-live="polite"></p>
+    </div>
+    </div>
+
+    <!-- 通栏收尾：信任之后是什么在管。模式名照抄门户（internal/portal/web/index.html），
+         60 秒是 internal/console 的 DefaultTimeout。 -->
+    <div class="lesson">
+      <p class="claim"
+         data-en="After that, each machine follows its own setting."
+         data-zh="之后，听这台机器自己的设置。">After that, each machine follows its own setting.</p>
+      <ul>
+        <li>
+          <span class="k" data-en="Allow all" data-zh="全放行">Allow all</span>
+          <span class="d" data-en="Commands run on the spot. Every one is written to the activity log."
+                          data-zh="命令当场执行，每一条都记进活动。">Commands run on the spot. Every one is written to the activity log.</span>
+        </li>
+        <li>
+          <span class="k" data-en="Ask me" data-zh="逐条确认">Ask me</span>
+          <span class="d" data-en="Each command waits on the device until you approve it in the portal. No answer in 60 seconds means no."
+                          data-zh="每条命令停在设备上，等你在门户里点头；60 秒没人答就拒绝。">Each command waits on the device until you approve it in the portal. No answer in 60 seconds means no.</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 白屏：网页里的 AI。两种接法，地址都是官方实例的真实入口（curl 过）。
+       最后一句是中继能看见什么的实话：端到端只对本机 Agent 直连成立。 -->
+  <section class="tile center" id="web">
+    <h2 data-en="The AI in your browser can use it too." data-zh="网页里的 AI 也能接。">The AI in your browser can use it too.</h2>
+    <p class="lead"
+       data-en="Pick the way in by what the chat can do."
+       data-zh="看它会什么，选一种接法。">Pick the way in by what the chat can do.</p>
+    <ul class="ways">
+      <li>
+        <span class="k" data-en="Takes connectors (MCP), like ChatGPT" data-zh="支持连接器（MCP）的，比如 ChatGPT">Takes connectors (MCP), like ChatGPT</span>
+        <code class="mono">https://wanctl-relay.z10.dev/mcp</code>
+        <span class="d" data-en="Add it as a connector, then allow it once in the portal."
+                        data-zh="加成连接器，在门户里授权一次。">Add it as a connector, then allow it once in the portal.</span>
+      </li>
+      <li>
+        <span class="k" data-en="Can only read web pages" data-zh="只会读网址的">Can only read web pages</span>
+        <code class="mono">https://wanctl-relay.z10.dev/webfetch</code>
+        <span class="d" data-en="Ask it to open this page. You approve a short-lived pass for one device."
+                        data-zh="让它打开这个地址，你给它批一张限时、只管一台设备的通行证。">Ask it to open this page. You approve a short-lived pass for one device.</span>
+      </li>
+    </ul>
+    <p class="note"
+       data-en="An agent on your own computer talks to each device end to end encrypted; the relay only carries bytes it cannot read. A web AI's controller runs inside the relay, so the relay does see the commands it sends."
+       data-zh="你电脑上的 Agent 和设备之间端到端加密，relay 只搬它读不了的字节。网页 AI 的控制端在 relay 里，relay 看得见它发出的命令。">
+      An agent on your own computer talks to each device end to end encrypted;
+      the relay only carries bytes it cannot read. A web AI's controller runs
+      inside the relay, so the relay does see the commands it sends.
+    </p>
+  </section>
+
+  <!-- 浅灰屏：开源，两扇门。官方实例和自己架是真正等价的两个选择，所以用一次诚实的 50/50。 -->
   <section class="tile grey" id="relay">
     <div class="say">
-      <h2 data-en="One relay in the middle. Ours, or yours."
-          data-zh="&lt;span class=&quot;cl&quot;&gt;中间那台 relay。&lt;/span&gt;&lt;span class=&quot;cl&quot;&gt;我们的，或者你自己的。&lt;/span&gt;">One relay in the middle. Ours, or yours.</h2>
+      <h2 data-en="Open source. Run the relay yourself if you like."
+          data-zh="&lt;span class=&quot;cl&quot;&gt;开源。&lt;/span&gt;&lt;span class=&quot;cl&quot;&gt;中继也能自己架。&lt;/span&gt;">Open source. Run the relay yourself if you like.</h2>
       <p class="lead"
-         data-en="Every device dials one relay, and it never sees inside your sessions either way. We run one. The whole thing is also a compose file."
-         data-zh="每台设备都拨向一台 relay，而无论用哪台，它都看不见你会话的内容。我们跑了一台；整套东西也就是一个 compose 文件。">
-        Every device dials one relay, and it never sees inside your sessions
-        either way. We run one. The whole thing is also a compose file.
+         data-en="Every device dials one relay. Use ours, or run relay, portal and Postgres from one compose file. Apache-2.0."
+         data-zh="每台设备都拨向一台 relay。用我们的，或者用一个 compose 文件把 relay、门户和 Postgres 跑起来。Apache-2.0。">
+        Every device dials one relay. Use ours, or run relay, portal and Postgres
+        from one compose file. Apache-2.0.
       </p>
     </div>
 
@@ -266,10 +222,10 @@
         <span class="k" data-en="Hosted" data-zh="我们跑的那台">Hosted</span>
         <p class="addr mono"><a href="https://wanctl.z10.dev">wanctl.z10.dev</a></p>
         <p class="d"
-           data-en="Invite-only while it is one person&#39;s server rather than a service. No SLA, no support queue, no charge."
-           data-zh="它现在还是一个人的服务器，不是一项服务，所以只能邀请进。没有 SLA，没有工单，也不收钱。">
+           data-en="Invite-only while it is one person&#39;s server rather than a service. Sign in with GitHub and ask for access. No SLA, no charge."
+           data-zh="它现在还是一个人的服务器，不是一项服务，所以只能邀请进：用 GitHub 登录后申请。没有 SLA，也不收钱。">
           Invite-only while it is one person's server rather than a service.
-          No SLA, no support queue, no charge.
+          Sign in with GitHub and ask for access. No SLA, no charge.
         </p>
       </div>
 
@@ -277,10 +233,9 @@
         <span class="k" data-en="Your own" data-zh="你自己的那台">Your own</span>
         <p class="addr mono">docker compose up</p>
         <p class="d"
-           data-en="Relay, portal and Postgres in one compose file. Nothing about your fleet ever reaches a machine you do not own."
-           data-zh="relay、门户和 Postgres 在同一个 compose 文件里。你的设备信息不会到达任何一台不属于你的机器。">
-          Relay, portal and Postgres in one compose file. Nothing about your
-          fleet ever reaches a machine you do not own.
+           data-en="Nothing about your fleet reaches a machine you do not own."
+           data-zh="你的设备信息不会到达任何一台不属于你的机器。">
+          Nothing about your fleet reaches a machine you do not own.
         </p>
         <a class="link-arrow" href="/docs/self-hosting/"
            data-en="Read the self-hosting guide" data-zh="看自部署指南">Read the self-hosting guide</a>
@@ -291,9 +246,6 @@
 </main>
 
 <footer class="foot">
-  <!-- 前三条以前指向 GitHub 上的 markdown blob，现在指向文档站自己的页面：
-       同一份 markdown，排过版、双语外壳、不用先看懂一个仓库。
-       SECURITY.md / releases / 仓库首页仍旧留在 GitHub —— 那三样本来就是 GitHub 的东西。 -->
   <nav class="flinks">
     <a href="/docs/" data-en="Docs" data-zh="文档">Docs</a>
     <a href="/docs/architecture/"
@@ -308,11 +260,10 @@
   </nav>
   <div class="row">
     <span data-en="Open source, Apache-2.0." data-zh="开源，Apache-2.0。">Open source, Apache-2.0.</span>
-    <span class="end mono" data-en="Demo devices are fictional." data-zh="演示设备均为虚构。">Demo devices are fictional.</span>
+    <span class="end mono" data-en="Device names shown here are fictional." data-zh="页面上的设备名均为虚构。">Device names shown here are fictional.</span>
   </div>
 </footer>
 
 <script src="assets/app.js"></script>
-<script src="assets/field.js"></script>
 </body>
 </html>
