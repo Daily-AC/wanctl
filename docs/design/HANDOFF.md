@@ -5,8 +5,9 @@ last-reviewed: 2026-09-04
 ## 0. 已上线
 
 **https://wc.z10.dev**，2026-09-04 14:40 上线。发布跑 `tools/deploy.sh`，不用手工 tar。
-2026-09-19 起站点在 VM homelab 的 static-web（`/srv/data/static/wc`），经 Cloudflare Tunnel 服务；
-灰云的 wc.lab.z10.dev 随 `*.lab` 通配一起下线了。§3.10 的 ls/hk 部署是历史。
+2026-09-27 起站点在 tchk（`/srv/data/wanctl/site`），由那台机器上的 nginx 直接服务，
+server 块和 relay、门户同在 homelab 仓库 `stacks/wanctl/nginx-wanctl.conf`；DNS 是灰云 A 记录，前面没有 CF。
+09-19 到 09-27 在 VM homelab 的 static-web 经 Cloudflare Tunnel，再往前是 §3.10 的 ls/hk，都是历史。
 状态：首屏与「安全模型」一屏都已获甲方认可（安全模型：「很对味，很干净，很极简」）。
 **09-04 下午重做了首屏的交互呈现**——起因是甲方落地时把那块活 demo 当成了一张图片。
 往下的章节（自部署 / 文档入口）没开工。
@@ -164,8 +165,13 @@ GitHub。机制在 `internal/relay/dist.go` 的 `installerHandler` + `WANCTL_PUB
 
 ## 3.10 部署（09-04，已上线；09-19 迁到 VM，本节为历史）
 
-> 现状：静态文件在 VM homelab `/srv/data/static/wc`，由 homelab 仓库 `stacks/static` 的 static-web
-> 服务；`tools/deploy.sh` 已改成发到那里。下文的 ls nginx、hk 反代和 wc.lab 都已退役。
+> 现状（2026-09-27 起）：静态文件在 tchk `/srv/data/wanctl/site`，tchk 的 nginx 直接服务，
+> `tools/deploy.sh` 发到那里。前面没有 CF，缓存头由 nginx 自己给：带 `?v=` 指纹的 URL 缓存一年，
+> 页面和不带指纹的 URL 一律 `no-cache`；字体一年。下文的 ls nginx、hk 反代和 wc.lab 都已退役，
+> 09-19 到 09-27 的 VM static-web 也已退役。
+>
+> 迁到 tchk 时撞到一个 VM 上一直藏着的坑：`mktemp -d` 建的发布副本是 700，tar 把它带到了站点根上，
+> 以 www-data 跑的 nginx 整站 403（VM 的 Caddy 以 root 跑，看不出来）。`deploy.sh` 已补 `chmod -R a+rX`。
 
 按 `fleet-deploy`：静态文件在 **ls** `/srv/www/wc.z10.dev`，**hk 只做 TLS 终止 + 反代**。
 `wc` 是一级子域、`wc.lab` 是二级，两个都命中已有泛域名，**DNS 一条都没加、证书一张都没签**。
