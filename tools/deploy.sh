@@ -1,19 +1,20 @@
 #!/bin/sh
-# 把 site/ 发布到 VM homelab 的 /srv/data/static/wc，由 static-web 容器经
-# Cloudflare Tunnel 服务成 wc.z10.dev（homelab 仓库 stacks/static）。
-# 2026-09-19 服务整体迁到 VM 之前是 ls 的 /srv/www 加 hk 反代，那条路已退役。
+# 把 site/ 发布到 tchk 的 /srv/data/wanctl/site，由那台机器上的 nginx 直接服务成
+# wc.z10.dev（server 块和 relay、门户在同一份配置里：homelab 仓库
+# stacks/wanctl/nginx-wanctl.conf）。2026-09-27 之前是家里 VM 的 static-web 经
+# Cloudflare Tunnel，再往前是 ls 的 /srv/www 加 hk 反代，两条路都已退役。
 #
 # 为什么要在这里改文件而不是直接 rsync：
-#   Cloudflare 会用它自己的 Browser Cache TTL（免费版默认 4h）改写浏览器看到的
-#   Cache-Control，源站写 no-cache 也拦不住。所以样式表和脚本的 URL 必须带内容指纹
-#   ——换了内容就是换了 URL，旧副本再怎么被缓存也影响不到新访客。
+#   样式表、脚本、图片和视频的 URL 带内容指纹（?v=<md5>），换了内容就是换了 URL，
+#   nginx 因此可以让带指纹的 URL 缓存一年，页面本身每次都回源验证。
+#   （起因是 Cloudflare 那段时期：它用自己的 Browser Cache TTL 改写 Cache-Control，
+#   源站写 no-cache 也拦不住。现在前面没有 CF 了，指纹仍然是缓存策略的前提。）
 #   指纹只加在发布副本上，本地开发照旧访问 assets/app.css，不用跑构建。
 #
 # 用法：tools/deploy.sh [--dry-run]
 set -e
-# 不在家里局域网时 `ssh homelab` 连不上，用 WANCTL_SITE_HOST=homelab-cf。
-HOST=${WANCTL_SITE_HOST:-homelab}
-DEST=/srv/data/static/wc
+HOST=${WANCTL_SITE_HOST:-tchk}
+DEST=/srv/data/wanctl/site
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
@@ -68,9 +69,11 @@ if [ "$1" = "--dry-run" ]; then echo "dry run，未上传"; exit 0; fi
 # macOS 的 tar 默认会带 ._* 影子文件（扩展属性），那些会被公开服务出去。
 # 先解压到旁边的新目录，再整目录换上去：上一版留在 $DEST.prev，回滚是换回来，
 # 换的那一瞬间也不会有访客拿到半套文件。
+# chmod：mktemp -d 建的发布副本是 700，tar 把这个模式带到了站点根目录上，
+# 以 www-data 跑的 nginx 于是整站 403（VM 上的 Caddy 以 root 跑，一直没暴露）。
 COPYFILE_DISABLE=1 tar -C "$STAGE" --no-xattrs -cf - . 2>/dev/null \
   | ssh "$HOST" "set -e; rm -rf $DEST.new && mkdir -p $DEST.new \
-      && tar -C $DEST.new -xf - && find $DEST.new -name '._*' -delete \
+      && tar -C $DEST.new -xf - && find $DEST.new -name '._*' -delete && chmod -R a+rX $DEST.new \
       && rm -rf $DEST.prev && { [ ! -d $DEST ] || mv $DEST $DEST.prev; } && mv $DEST.new $DEST \
       && printf '已发布 %s 个文件，' \"\$(find $DEST -type f | wc -l)\" && du -sh $DEST | cut -f1"
 
