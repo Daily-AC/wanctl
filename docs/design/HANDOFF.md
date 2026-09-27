@@ -1,6 +1,6 @@
 # wanctl web 重构 · 交接
 
-last-reviewed: 2026-09-04
+last-reviewed: 2026-09-27
 
 ## 0. 已上线
 
@@ -8,13 +8,49 @@ last-reviewed: 2026-09-04
 2026-09-27 起站点在 tchk（`/srv/data/wanctl/site`），由那台机器上的 nginx 直接服务，
 server 块和 relay、门户同在 homelab 仓库 `stacks/wanctl/nginx-wanctl.conf`；DNS 是灰云 A 记录，前面没有 CF。
 09-19 到 09-27 在 VM homelab 的 static-web 经 Cloudflare Tunnel，再往前是 §3.10 的 ls/hk，都是历史。
-状态：首屏与「安全模型」一屏都已获甲方认可（安全模型：「很对味，很干净，很极简」）。
+**09-27 首页按讲解片重写**，现状看下面 §0.5；从 §3 到 §3.14 是 09-04 ~ 09-05 那一版（真机壳、
+活的审批 demo、密文场、设备表、端到端身份），留着是为了被否路线和坑的来历。
+
+状态（09-05 版）：首屏与「安全模型」一屏都已获甲方认可（安全模型：「很对味，很干净，很极简」）。
 **09-04 下午重做了首屏的交互呈现**——起因是甲方落地时把那块活 demo 当成了一张图片。
 往下的章节（自部署 / 文档入口）没开工。
 
 工作区：worktree `~/projects/wanctl-oss-worktrees/web-tagout`，分支 `web-tagout`，
 从 `main@1d4327c` 开出。主工作区 `~/projects/wanctl-oss` 保持只读。
 提交：`ee49939` → `7460c8c` → `5a9988a`（当前）。远端还没推。
+
+## 0.5 09-27 版：片子当首屏
+
+甲方 09-27 22:15 定：片子当首屏（静音自动循环）、旧文案按片子重写能删就删；22:21 追加「开声音」按钮。
+旧首屏演的是逐条命令手机审批，与真实用法相反（甲方 9 月 2,020 次操作只点过 11 次「信任」）；
+「relay 只看得见密文」对网页 AI 不成立。视觉规则的变化都写进了 DESIGN.md（§1、§2、§5、§6、§7）。
+
+- `site/index.html` — 五段：首屏（白：标题、一句话、复制条、片子、开声音）→ 安装（浅灰，两行命令）
+  → **信任（深，chapter：配对卡 + 两种模式）** → 网页 AI（白，两种接法 + relay 能看见什么）→ 开源（浅灰，两扇门）
+- `site/assets/app.js` — 片子的声音键、语言、安装分段控件、复制、配对卡；验收接口 `window.__site`
+- `site/assets/film-zh.mp4` · `film-zh.webp` — 片子和第 0 帧 poster。源片在 `~/projects/wanctl-film/out/`，
+  网页版这样压（1080p60，7.3 MB，响度 −14 LUFS 不动）：
+  `ffmpeg -i wanctl-zh-v25.mp4 -c:v libx264 -preset slow -tune animation -crf 28 -pix_fmt yuv420p -profile:v high -level 4.2 -c:a aac -b:a 128k -movflags +faststart film-zh.mp4`；
+  poster：`ffmpeg -i wanctl-zh-v25.mp4 -frames:v 1 f0.png && cwebp -q 82 f0.png -o film-zh.webp`
+- `tools/og.html` → `og.png` — 分享卡片换成和片尾同构的纯排版卡（字标、那句话、一条命令行）
+- 删掉：`field.js`、`iphone.webp`、`macbook.webp`、`tools/frames.py`、`tools/phone-fit.mjs`、`tools/field-shot.mjs`
+
+这一版怎么验的（都能重跑）：
+
+1. **Agent 盲测**：把首页转成 markdown（`uvx --from html2text html2text --ignore-images --body-width=0 site/index.html`），
+   交给一个没见过 wanctl 的子 agent 扮演 Claude Code。第一轮它发现安装那两行被压成
+   `… | sh wanctl start` 一行（照抄会把 `wanctl start` 当成 sh 的参数）—— 改成 `<pre>`；
+   第二轮命令都对了，它指出不知道连哪台 relay、装完用什么命令 —— 安装屏补了一段。
+   **改安装那屏的结构之后要重跑这个**，「把 wc.z10.dev 甩给你的 Agent」靠的就是它。
+2. **截图评审**（DESIGN §6.5）：6/10，量得住的五条改了（手机首屏空白、声音键不对齐、网页 AI 表列不齐、
+   收尾分隔线宽度不一、安全说明是小字）；没改的：片子里被截断的注释和橙色块是片子自己的逐字打出帧；
+   中文正文逐字断行是中文排版常态；分段控件和两扇门是甲方早先拍过板的形态。
+3. **`tools/sweep.mjs`**：320 次测量横向溢出 0；首屏复制条在 320/360 上装不下 → ≤400 换行。
+4. 真浏览器（CDP 视口仿真，1440×900 / 1280×720 / 412×915 / 390×844 × 中英）：片子静音自动播、
+   片子底边都在折线内、开声音 → 关声音 → 开声音、reduced-motion 下停在第 0 帧且按钮是「播放」、
+   复制条换成剪贴板里那句、配对卡 toast、安装切 Windows × 镜像。
+
+已知短板：手机上片子只有 219px 高，里面的字读不了；英文页放的也是中文片。都在等甲方。
 
 ---
 
