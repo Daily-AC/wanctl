@@ -52,6 +52,10 @@ type job struct {
 	id      string
 	cmd     string
 	started time.Time
+	// owner is the fingerprint of the controller that started the job. Only
+	// that controller may read it back: the ID is also written to the
+	// activity log, which is not the same audience as the output.
+	owner string
 
 	mu        sync.Mutex
 	out       []byte // merged stdout+stderr accumulated so far
@@ -134,15 +138,26 @@ func (s *jobStore) get(id string) *job {
 	return s.jobs[id]
 }
 
-// start launches command in a fresh shell and returns the new job's id. The
-// command runs in its own goroutine; the agent process (a long-lived daemon)
-// keeps it alive after the launching connection closes.
-func (s *jobStore) start(shell, command, cwd string) (string, error) {
+// getFor is get for the controller asking: a job another controller started
+// is reported exactly as one that does not exist, so asking is no way to learn
+// which IDs are live.
+func (s *jobStore) getFor(id, owner string) *job {
+	j := s.get(id)
+	if j == nil || j.owner != owner {
+		return nil
+	}
+	return j
+}
+
+// start launches command in a fresh shell for the controller owner and returns
+// the new job's id. The command runs in its own goroutine; the agent process (a
+// long-lived daemon) keeps it alive after the launching connection closes.
+func (s *jobStore) start(owner, shell, command, cwd string) (string, error) {
 	idb := make([]byte, 12)
 	if _, err := rand.Read(idb); err != nil {
 		return "", err
 	}
-	j := &job{id: hex.EncodeToString(idb), cmd: command, started: time.Now(), maxOutput: s.limits.maxOutput}
+	j := &job{id: hex.EncodeToString(idb), cmd: command, started: time.Now(), owner: owner, maxOutput: s.limits.maxOutput}
 
 	s.mu.Lock()
 	s.gcLocked()

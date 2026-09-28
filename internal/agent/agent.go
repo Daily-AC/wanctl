@@ -772,7 +772,7 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 		case protocol.KindExecAsync:
 			a.doExecAsync(conn, fp, peerName, m)
 		case protocol.KindExecPoll:
-			a.doExecPoll(conn, m)
+			a.doExecPoll(conn, fp, peerName, m, audit)
 		case protocol.KindLogs:
 			ok, decision := a.gateDataCapability(capabilityReadEventLog, fp, check)
 			if ok && !checksPass([]func() bool{check, audit.workspaceCheck}) {
@@ -1055,7 +1055,7 @@ func (a *Agent) doExecAsync(conn *tls.Conn, fp, peerName string, m protocol.Mess
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "command denied by device policy: " + m.Command})
 		return
 	}
-	id, err := a.jobs.start(a.opts.Shell, m.Command, m.Cwd)
+	id, err := a.jobs.start(fp, a.opts.Shell, m.Command, m.Cwd)
 	if err != nil {
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return
@@ -1065,12 +1065,19 @@ func (a *Agent) doExecAsync(conn *tls.Conn, fp, peerName string, m protocol.Mess
 }
 
 // doExecPoll streams a background job's output past m.Offset, then reports the
-// new total length and whether it is still running. The job id (a random secret
-// returned at start) is the capability, so no extra policy gate is applied — the
-// command itself was gated when it started.
-func (a *Agent) doExecPoll(conn *tls.Conn, m protocol.Message) {
-	j := a.jobs.get(m.JobID)
+// new total length and whether it is still running. No policy gate applies —
+// the command itself was gated when it started — but the job is only visible
+// to the controller that started it. The ID alone cannot be the authority: it
+// is written to the activity log, and everyone the device is shared with can
+// read that log.
+func (a *Agent) doExecPoll(conn *tls.Conn, fp, peerName string, m protocol.Message, audit sessionAudit) {
+	j := a.jobs.getFor(m.JobID, fp)
 	if j == nil {
+		if a.jobs.get(m.JobID) != nil {
+			// Someone else's job. Answered like a missing one; recorded,
+			// because asking for another controller's output is worth knowing.
+			a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: "[poll " + m.JobID + "]", Decision: "denied: job belongs to another controller"})
+		}
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "unknown or expired job: " + m.JobID})
 		return
 	}
