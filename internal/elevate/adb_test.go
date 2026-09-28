@@ -159,6 +159,66 @@ func TestADBRunRetriesOnceOnADeadConnection(t *testing.T) {
 	}
 }
 
+// TestADBProbeRedialsADeadCachedConnection is the probe's half of the test
+// above. A probe runs `id` on whatever connection an earlier command left open,
+// and that socket can die while idle. Reporting the dead socket as "not
+// available" is worse than a failed command: the Manager caches the verdict,
+// so every elevated command for the next minute is refused while adbd sits
+// there listening.
+func TestADBProbeRedialsADeadCachedConnection(t *testing.T) {
+	first := &stubConn{uid: "uid=2000(shell)"}
+	second := &stubConn{uid: "uid=2000(shell)"}
+	a := NewADB(t.TempDir(), "wanctl@test")
+	a.ports = func() ([]int, string) { return []int{41234}, "hint" }
+	dials := 0
+	a.dial = func(context.Context, string, *adb.Key) (shellConn, error) {
+		dials++
+		if dials == 1 {
+			return first, nil
+		}
+		return second, nil
+	}
+	if st := a.Probe(context.Background()); !st.Available {
+		t.Fatalf("first probe = unavailable (%s)", st.Reason)
+	}
+	first.err = errors.New("connection reset by peer") // dropped while idle
+
+	st := a.Probe(context.Background())
+	if !st.Available {
+		t.Fatalf("probe reported a dead cached connection as the channel being unavailable: %s", st.Reason)
+	}
+	if !first.closed {
+		t.Error("the dead connection was not closed")
+	}
+	if dials != 2 || len(second.ran) != 1 || second.ran[0] != "id" {
+		t.Errorf("dials=%d, second connection ran %q; want one redial that runs `id`", dials, second.ran)
+	}
+}
+
+// TestADBProbeDoesNotRetryAFreshConnection: a connection dialed a moment ago
+// cannot have gone stale, and when `id` fails on it the failure is the
+// diagnosis. Retrying would spend the rest of the probe's budget and could
+// replace the device's banner with a dial timeout.
+func TestADBProbeDoesNotRetryAFreshConnection(t *testing.T) {
+	a := NewADB(t.TempDir(), "wanctl@test")
+	a.ports = func() ([]int, string) { return []int{41234}, "hint" }
+	dials := 0
+	a.dial = func(context.Context, string, *adb.Key) (shellConn, error) {
+		dials++
+		return &stubConn{err: errors.New("i/o timeout")}, nil
+	}
+	st := a.Probe(context.Background())
+	if st.Available {
+		t.Fatal("probe accepted a connection that could not run `id`")
+	}
+	if dials != 1 {
+		t.Errorf("dialed %d times, want 1", dials)
+	}
+	if !strings.Contains(st.Reason, "`id` failed") {
+		t.Errorf("reason = %q, want the failure on the connection itself", st.Reason)
+	}
+}
+
 func TestPortFromState(t *testing.T) {
 	write := func(t *testing.T, v any) string {
 		t.Helper()

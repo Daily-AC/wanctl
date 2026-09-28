@@ -101,12 +101,27 @@ func (a *ADB) Probe(ctx context.Context) Status {
 	ctx, cancel := context.WithTimeout(ctx, adbProbeTimeout)
 	defer cancel()
 
-	conn, port, err := a.connect(ctx)
+	conn, port, reused, err := a.connect(ctx)
 	if err != nil {
 		return Status{Available: false, Reason: err.Error()}
 	}
 	var sb strings.Builder
 	code, err := conn.Shell(ctx, "id", &sb)
+	if err != nil && !adb.ErrNoExitCode(err) && reused {
+		// The connection an earlier command left open can die while nobody
+		// is using it — some ROMs drop the socket when the screen locks — and
+		// adbd is still right there. Run redials once for this; a probe that
+		// did not would call the channel unavailable, and the Manager would
+		// believe it for a whole probe TTL. A connection dialed just now gets
+		// no second attempt: it cannot have gone stale, and its failure, with
+		// the banner describeConn adds, is the diagnosis.
+		a.reset()
+		if conn, port, _, err = a.connect(ctx); err != nil {
+			return Status{Available: false, Reason: err.Error()}
+		}
+		sb.Reset()
+		code, err = conn.Shell(ctx, "id", &sb)
+	}
 	out := firstLine(strings.TrimSpace(sb.String()))
 	switch {
 	case err != nil && !adb.ErrNoExitCode(err):
@@ -131,7 +146,7 @@ func (a *ADB) Probe(ctx context.Context) Status {
 }
 
 func (a *ADB) Run(ctx context.Context, command, cwd string, out io.Writer) (int, error) {
-	conn, _, err := a.connect(ctx)
+	conn, _, _, err := a.connect(ctx)
 	if err != nil {
 		return -1, err
 	}
@@ -146,7 +161,7 @@ func (a *ADB) Run(ctx context.Context, command, cwd string, out io.Writer) (int,
 		// A dead connection is worth one transparent retry: wireless debugging
 		// drops the socket when the screen locks on some ROMs.
 		a.reset()
-		conn, _, derr := a.connect(ctx)
+		conn, _, _, derr := a.connect(ctx)
 		if derr != nil {
 			return -1, err
 		}
@@ -156,15 +171,17 @@ func (a *ADB) Run(ctx context.Context, command, cwd string, out io.Writer) (int,
 }
 
 // connect returns a live connection, dialing on first use and after a reset.
-func (a *ADB) connect(ctx context.Context) (shellConn, int, error) {
+// reused reports that the connection was already open, which is the only kind
+// that can have died while nothing was using it.
+func (a *ADB) connect(ctx context.Context) (conn shellConn, port int, reused bool, err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.conn != nil {
-		return a.conn, a.port, nil
+		return a.conn, a.port, true, nil
 	}
 	key, err := adb.LoadOrCreateKey(a.configDir, a.name)
 	if err != nil {
-		return nil, 0, fmt.Errorf("adb key: %w", err)
+		return nil, 0, false, fmt.Errorf("adb key: %w", err)
 	}
 	dial := a.dial
 	if dial == nil {
@@ -183,12 +200,12 @@ func (a *ADB) connect(ctx context.Context) (shellConn, int, error) {
 		conn, err := dial(ctx, fmt.Sprintf("127.0.0.1:%d", p), key)
 		if err == nil {
 			a.conn, a.port = conn, p
-			return conn, p, nil
+			return conn, p, false, nil
 		}
 		if errors.Is(err, adb.ErrPublicKeyPending) {
 			// Distinct from "nothing is listening": someone has to tap Allow on
 			// the device, and trying other ports would bury that.
-			return nil, 0, fmt.Errorf("adbd on port %d is waiting for someone to allow wanctl's key on the device screen", p)
+			return nil, 0, false, fmt.Errorf("adbd on port %d is waiting for someone to allow wanctl's key on the device screen", p)
 		}
 		// Every port's failure is kept. Reporting only the last one hid the
 		// real diagnosis behind the fallback port's timeout — the useful error
@@ -197,9 +214,9 @@ func (a *ADB) connect(ctx context.Context) (shellConn, int, error) {
 		last = err
 	}
 	if last == nil {
-		return nil, 0, errors.New("no adbd port to try")
+		return nil, 0, false, errors.New("no adbd port to try")
 	}
-	return nil, 0, fmt.Errorf("could not reach adbd on this device (%s); %s",
+	return nil, 0, false, fmt.Errorf("could not reach adbd on this device (%s); %s",
 		strings.Join(failures, "; "), hint)
 }
 
