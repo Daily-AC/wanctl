@@ -177,8 +177,22 @@ func TestPortFromState(t *testing.T) {
 		t.Fatalf("port = %d, want 37123", got)
 	}
 
-	// A stale port is a wrong answer, not an old one: wireless debugging picks
-	// a new port every time it is enabled, and something else may hold the old.
+	// Age since discovery is not staleness: the app stamps a port once, when
+	// mDNS reports it, and never again while it stays up. On 2026-09-09 a
+	// PGBM10's state file carried a battery reading under a minute old beside
+	// a port stamped eight minutes before it; a 30-minute limit threw such a
+	// port away half an hour after discovery, with adbd still listening on it.
+	discovered := time.Now().Add(-45 * time.Minute).UTC().Format(time.RFC3339Nano)
+	if got := portFromState(write(t, map[string]any{
+		"level": 23,
+		"adb":   map[string]any{"port": 46321, "updated_at": discovered},
+	})); got != 46321 {
+		t.Fatalf("port = %d, want 46321: a port discovered 45 minutes ago is still the port", got)
+	}
+
+	// A file nothing has maintained for longer than the backstop is not
+	// believed: wireless debugging picks a new port every time it is enabled,
+	// and something else may hold the old one.
 	old := time.Now().Add(-2 * maxADBPortAge).UTC().Format(time.RFC3339Nano)
 	if got := portFromState(write(t, map[string]any{
 		"adb": map[string]any{"port": 37123, "updated_at": old},
