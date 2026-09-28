@@ -82,6 +82,15 @@ func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegat
 		ownerNS:      auth.OwnerNamespace,
 		lastActive:   time.Now(),
 	}
+	// Both directions are charged to the namespace that dialed, which opened
+	// the session and can end it. The portal dials on behalf of every account,
+	// so its sessions draw on the relay's budget alone.
+	ns := auth.CallerNamespace
+	if r.portalNS != "" && ns == r.portalNS {
+		ns = ""
+	}
+	s.toClient.attach(r.resident, ns)
+	s.toAgent.attach(r.resident, ns)
 	r.hmu.Lock()
 	r.hsess[sid] = s
 	r.hmu.Unlock()
@@ -92,7 +101,7 @@ func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegat
 			delete(r.hsess, sid)
 		}
 		r.hmu.Unlock()
-		s.close()
+		s.free()
 	})
 	return s
 }
@@ -123,7 +132,7 @@ func (r *Relay) closeHTTPSession(sid string, s *httpSession) {
 		delete(r.hsess, sid)
 	}
 	r.hmu.Unlock()
-	s.close()
+	s.free()
 	if s.lease != nil {
 		s.lease.close()
 	}

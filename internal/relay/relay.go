@@ -98,6 +98,7 @@ type Relay struct {
 	hmu        sync.Mutex
 	hagents    map[string]*httpAgent   // key "ns/device" (HTTP transport)
 	hsess      map[string]*httpSession // key session id (HTTP transport)
+	resident   *residency              // tunnel bytes held by every HTTP session
 	reaperOnce sync.Once
 	leaseMu    sync.Mutex
 	leases     map[string]*accessLease
@@ -127,6 +128,7 @@ func New(ts TokenStore) *Relay {
 		pending:      map[string]*pendingSession{},
 		hagents:      map[string]*httpAgent{},
 		hsess:        map[string]*httpSession{},
+		resident:     newResidency(),
 		enrollCodes:  map[string]*enrollCode{},
 		notifyDedupe: map[notifyDedupeKey]time.Time{},
 		notifySend:   notify.NewSender(notify.Options{}),
@@ -270,10 +272,12 @@ func checkAdminJSONKeys(data []byte) error {
 }
 
 // bodyCapFor returns the body cap for a route, or 0 for routes that bound
-// themselves.
+// themselves. /h/close is one of those: a writer that knows the relay orders
+// writes sends its last bytes with the close, up to a whole write of them, and
+// the control-body cap cut those off.
 func bodyCapFor(path string) int64 {
 	switch {
-	case path == "/h/up":
+	case path == "/h/up", path == "/h/close":
 		return 0
 	case strings.HasPrefix(path, "/mcp"), strings.HasPrefix(path, "/wanctl-mcp"):
 		return limits.RelayMCPBodyBytes
