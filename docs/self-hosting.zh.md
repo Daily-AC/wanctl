@@ -61,7 +61,11 @@ Postgres 和门户身份放在具名卷里。`docker compose down` 会保留它�
 两个应用端口都只绑在 loopback 上。一份最小的 Caddyfile 是：
 
 ```caddyfile
-relay.example.com { reverse_proxy 127.0.0.1:8080 }
+relay.example.com {
+    reverse_proxy 127.0.0.1:8080 {
+        header_up X-Real-IP {remote_host}
+    }
+}
 portal.example.com { reverse_proxy 127.0.0.1:8081 }
 ```
 
@@ -76,6 +80,7 @@ server {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Real-IP $remote_addr;
         proxy_buffering off;
     }
 }
@@ -94,8 +99,13 @@ server {
 ```
 
 wanctl 默认用有限长度的 HTTP 长轮询请求，所以不需要 WebSocket 升级支持，
-也不需要为流式做特别的超时设置。把 nginx 的响应缓冲关掉就够了，
-没有别的代理行为需要特殊照顾。
+也不需要为流式做特别的超时设置。就连接本身而言，把 nginx 的响应缓冲关掉就够了。
+
+不过 relay 需要知道每个请求来自哪个客户端。它有些额度是按客户端算的，
+比如一个客户端能新建多少个 WebFetch 请求。经过代理之后，所有请求都来自代理本身，
+所以 relay 从 `X-Real-IP` 取客户端地址；只有连接来自回环或私有地址（也就是代理）
+时才相信这个头，而且从不看 `X-Forwarded-For`，因为那里面是客户端自己想写什么就
+写什么。上面两份配置都设置了 `X-Real-IP`；不设的话，所有客户端会共用同一份额度。
 
 往下走之前，把这条链路的每一段都确认一遍：
 

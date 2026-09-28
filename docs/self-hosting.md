@@ -64,7 +64,11 @@ keeps them; `docker compose down -v` permanently removes them.
 Both application ports bind only to loopback. A minimal Caddyfile is:
 
 ```caddyfile
-relay.example.com { reverse_proxy 127.0.0.1:8080 }
+relay.example.com {
+    reverse_proxy 127.0.0.1:8080 {
+        header_up X-Real-IP {remote_host}
+    }
+}
 portal.example.com { reverse_proxy 127.0.0.1:8081 }
 ```
 
@@ -79,6 +83,7 @@ server {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Real-IP $remote_addr;
         proxy_buffering off;
     }
 }
@@ -98,7 +103,16 @@ server {
 
 wanctl uses finite HTTP long-poll requests by default, so WebSocket upgrade
 support and streaming-specific timeouts are not required. Disabling nginx
-response buffering is sufficient; no other special proxy behavior is needed.
+response buffering is sufficient for the connection itself.
+
+The relay does need to know who each client is. It keeps some budgets per
+client — how many new WebFetch requests one client may start, for example — and
+behind a proxy every request arrives from the proxy. It therefore takes the
+client's address from `X-Real-IP`, which it believes only when the connection
+comes from a loopback or private address (that is, from the proxy), and never
+from `X-Forwarded-For`, which carries whatever the client chose to send. Both
+configurations above set `X-Real-IP`; without it every client shares one
+budget.
 
 Before moving on, confirm each leg of the chain:
 
