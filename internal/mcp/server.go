@@ -117,16 +117,20 @@ func HandlerWithOptions(o Options) (http.Handler, error) {
 	if len(o.Seed) < 32 {
 		return nil, fmt.Errorf("mcp seed must be at least 32 bytes, got %d", len(o.Seed))
 	}
-	sessions = &sessionStore{
+	store := &sessionStore{
 		seed:    append([]byte(nil), o.Seed...),
 		m:       map[string]*remoteSession{},
+		open:    map[string]*transportSession{},
 		revoked: map[string]time.Time{},
 		trust:   map[string]*transport.Store{},
 		oauth:   o.OAuth,
 	}
-	go sessions.gcLoop()
+	sessions = store
+	go store.gcLoop()
 	s := newMCPServer()
-	opts := []server.StreamableHTTPOption{}
+	// Session IDs come from the store, which bounds and expires them; see
+	// hostedsessions.go.
+	opts := []server.StreamableHTTPOption{server.WithSessionIdManagerResolver(sessionIDs{store: store})}
 	if o.EndpointPath != "" {
 		opts = append(opts, server.WithEndpointPath(o.EndpointPath))
 	}
@@ -139,7 +143,9 @@ func HandlerWithOptions(o Options) (http.Handler, error) {
 		}
 		return ctx
 	}))
-	h := refuseBrowserOrigins(server.NewStreamableHTTPServer(s, opts...))
+	streamable := server.NewStreamableHTTPServer(s, opts...)
+	store.terminate = terminateVia(streamable)
+	h := refuseBrowserOrigins(store.gate(streamable))
 	if o.OAuth != nil {
 		h = oauthGate(append([]byte(nil), o.Seed...), o.OAuth, h)
 	}
@@ -264,6 +270,12 @@ type sessionStore struct {
 	seed    []byte
 	m       map[string]*remoteSession
 	revoked map[string]time.Time // process-local JTI revocations; not durable across restart
+	// open is every transport session admitted and not yet closed, keyed by
+	// Mcp-Session-Id (hostedsessions.go). terminate has mcp-go free its own
+	// state for one; clock stands in for time.Now in tests.
+	open      map[string]*transportSession
+	terminate func(id string)
+	clock     func() time.Time
 
 	// OAuth sessions are keyed by the access token's JTI rather than by
 	// Mcp-Session-Id, which is the whole point: the same bearer reaching us in
@@ -297,11 +309,11 @@ func (s *sessionStore) get(ctx context.Context) sessionAPI {
 	if r == nil {
 		r = &remoteSession{
 			id: sid, seed: s.seed, owner: s, known: transport.NewMemStore(),
-			rebindJTIs: map[string]time.Time{}, lastUsed: time.Now(),
+			rebindJTIs: map[string]time.Time{}, lastUsed: s.now(),
 		}
 		s.m[sid] = r
 	}
-	r.lastUsed = time.Now()
+	r.lastUsed = s.now()
 	return r
 }
 
@@ -323,7 +335,7 @@ func (s *sessionStore) oauthSession(claim mcpauth.Claim) sessionAPI {
 		}
 		s.m[key] = r
 	}
-	r.lastUsed = time.Now()
+	r.lastUsed = s.now()
 	return r
 }
 
@@ -387,21 +399,12 @@ func ForgetPinnedDevice(namespace, device string) {
 	sessions.forgetPin(namespace, device)
 }
 
-// gcLoop prunes idle HTTP sessions every minute (TTL 1h). Cheap because state
-// is small and re-login is just one user click.
+// gcLoop closes idle HTTP sessions every minute; see sweep for the limits.
 func (s *sessionStore) gcLoop() {
-	const ttl = time.Hour
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for range t.C {
-		cutoff := time.Now().Add(-ttl)
-		s.mu.Lock()
-		for id, r := range s.m {
-			if r.lastUsed.Before(cutoff) {
-				delete(s.m, id)
-			}
-		}
-		s.mu.Unlock()
+		s.sweep()
 	}
 }
 

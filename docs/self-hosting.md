@@ -107,8 +107,9 @@ response buffering is sufficient for the connection itself.
 
 The relay does need to know who each client is. It keeps some budgets per
 client — how many new WebFetch requests or OAuth client registrations one
-client may start, or how many `/dl` downloads it may run at once — and behind a
-proxy every request arrives from the proxy. It therefore takes the
+client may start, how many `/dl` downloads it may run at once, and how many
+hosted MCP sessions it may hold open without logging in — and behind a proxy
+every request arrives from the proxy. It therefore takes the
 client's address from `X-Real-IP`, which it believes only when the connection
 comes from a loopback or private address (that is, from the proxy), and never
 from `X-Forwarded-For`, which carries whatever the client chose to send. Both

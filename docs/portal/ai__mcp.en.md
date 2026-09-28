@@ -61,7 +61,7 @@ The first time it then reaches a device, that device's **Waiting** page raises a
 
 ## When the session drops
 
-The code-based session login above lives only in relay memory; OAuth connectors do not depend on it. Restart the relay, or reset the connection, and the AI gets `LOGIN REQUIRED`.
+The code-based session login above lives only in relay memory; OAuth connectors do not depend on it. Restart the relay, or reset the connection, and the AI gets `LOGIN REQUIRED`. So does a session left idle: the relay closes one that has logged in after two hours without a request, and one that never logged in after ten minutes.
 
 A successful login also handed the AI a **rebind credential** starting with `wrb1.`, good for seven days. It keeps that itself and uses it to recover on the spot, without sending you back to the browser. Losing it costs nothing — the three steps above work again.
 
