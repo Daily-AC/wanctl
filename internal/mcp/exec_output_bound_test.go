@@ -24,13 +24,19 @@ import (
 // target, already paired and pinned.
 func hostedDevice(t *testing.T) (h http.Handler, access, target string) {
 	t.Helper()
+	return hostedDeviceNamed(t, "chatty-device")
+}
+
+// hostedDeviceNamed is hostedDevice for a device that calls itself name.
+func hostedDeviceNamed(t *testing.T, name string) (h http.Handler, access, target string) {
+	t.Helper()
 	previous := sessions
 	t.Cleanup(func() { sessions = previous })
 	relayServer := httptest.NewServer(relay.New(relay.EnvTokenStore("exec-test:alice")).Handler())
 	t.Cleanup(relayServer.Close)
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	t.Setenv("TMPDIR", t.TempDir()) // where the device keeps its copy of long output
-	ag, err := agent.New(agent.Options{RelayURL: relayServer.URL, Token: "exec-test", Name: "chatty-device", AutoYes: true, Mode: policy.ModeBypass, Transport: "http"})
+	ag, err := agent.New(agent.Options{RelayURL: relayServer.URL, Token: "exec-test", Name: name, AutoYes: true, Mode: policy.ModeBypass, Transport: "http"})
 	if err != nil {
 		t.Fatal(err)
 	}
