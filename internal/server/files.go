@@ -105,7 +105,8 @@ func newPendingUpload(policyRoot, path string, perm os.FileMode) (*pendingUpload
 // part of that. The directories are made under the same os.Root as the file, so
 // the policy decision still constrains every component.
 func newPendingUploadIn(policyRoot, path string, perm os.FileMode, mkdirParents bool) (*pendingUpload, error) {
-	rootPath, name, err := rootedName(policyRoot, path)
+	guard := loadProtected()
+	rootPath, name, err := guard.rootedName(policyRoot, path)
 	if err != nil {
 		return nil, err
 	}
@@ -125,16 +126,25 @@ func newPendingUploadIn(policyRoot, path string, perm os.FileMode, mkdirParents 
 		return nil, err
 	}
 	targetName := filepath.Base(name)
-	if info, err := parent.Lstat(targetName); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 {
+	existing, err := parent.Lstat(targetName)
+	if err == nil {
+		if existing.Mode()&os.ModeSymlink != 0 {
 			parent.Close()
 			return nil, fmt.Errorf("refusing symbolic link %q", path)
 		}
-		if !info.Mode().IsRegular() {
+		if !existing.Mode().IsRegular() {
 			parent.Close()
 			return nil, fmt.Errorf("refusing non-regular file %q", path)
 		}
 	} else if !os.IsNotExist(err) {
+		parent.Close()
+		return nil, err
+	} else {
+		existing = nil
+	}
+	// The same refusal again, on the directory actually opened rather than on
+	// the path that led to it. Nothing is created in it before this passes.
+	if err := guard.checkOpened(parent, existing, path); err != nil {
 		parent.Close()
 		return nil, err
 	}
@@ -240,7 +250,8 @@ func HandleFileGet(conn *tls.Conn, m protocol.Message, policyRoot string) {
 // every path component beneath an open directory handle, so a concurrent
 // symlink replacement cannot redirect the operation outside the allowed root.
 func openPolicyFile(policyRoot, path string) (*os.File, error) {
-	rootPath, name, err := rootedName(policyRoot, path)
+	guard := loadProtected()
+	rootPath, name, err := guard.rootedName(policyRoot, path)
 	if err != nil {
 		return nil, err
 	}
@@ -249,8 +260,16 @@ func openPolicyFile(policyRoot, path string) (*os.File, error) {
 		return nil, err
 	}
 	defer root.Close()
+	// The file is opened from a handle on its own directory, so the directory
+	// that is checked below is the one the file was actually found in.
+	parent, err := root.OpenRoot(filepath.Dir(name))
+	if err != nil {
+		return nil, err
+	}
+	defer parent.Close()
+	base := filepath.Base(name)
 
-	if info, err := root.Lstat(name); err == nil {
+	if info, err := parent.Lstat(base); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return nil, fmt.Errorf("refusing symbolic link %q", path)
 		}
@@ -261,7 +280,7 @@ func openPolicyFile(policyRoot, path string) (*os.File, error) {
 		return nil, err
 	}
 
-	f, err := root.OpenFile(name, secureOpenFlags|os.O_RDONLY, 0)
+	f, err := parent.OpenFile(base, secureOpenFlags|os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -274,32 +293,150 @@ func openPolicyFile(policyRoot, path string) (*os.File, error) {
 		f.Close()
 		return nil, fmt.Errorf("refusing non-regular file %q", path)
 	}
+	if err := guard.checkOpened(parent, info, path); err != nil {
+		f.Close()
+		return nil, err
+	}
 	return f, nil
 }
 
-// protectedTarget names why target may not be transferred, or "" if it is fine.
-// It refuses anything inside wanctl's own config directory and the running
-// binary itself.
-func protectedTarget(target string) string {
-	target = longestRealPrefix(target)
+const (
+	reasonConfigDir = "wanctl's own config dir (identity, trust, policy)"
+	reasonBinary    = "the running wanctl binary"
+)
+
+// protected is what no file operation may touch: wanctl's own config dir — the
+// device identity key, the namespace token, the trust and policy files — and
+// the running binary.
+//
+// They are recognised by file identity (os.SameFile), not by comparing path
+// strings. A path is only one spelling of a file, and the filesystem accepts
+// many: APFS and NTFS fold case, macOS reaches the data volume through
+// /System/Volumes/Data firmlinks that no symlink resolution reveals, Windows has
+// 8.3 short names and ignores trailing dots. A string comparison has to predict
+// every one of them and is wrong on the first it misses; asking the filesystem
+// which directory a path names is right for all of them at once.
+type protected struct {
+	configDir  os.FileInfo   // nil if there is none
+	configPath string        // its resolved path, for the fallback comparison
+	configFile []os.FileInfo // what sits directly inside it
+	binary     os.FileInfo   // nil if it cannot be found
+	binaryPath string
+}
+
+// loadProtected reads the identities fresh for each operation: the config dir
+// gains files over the agent's life (a first-time token, a new rules file), and
+// a stale list would miss them.
+func loadProtected() protected {
+	var p protected
 	if dir, err := transport.ConfigDir(); err == nil && dir != "" {
-		if pathWithin(target, longestRealPrefix(dir)) {
-			return "wanctl's own config dir (identity, trust, policy)"
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			p.configDir, p.configPath = info, longestRealPrefix(dir)
+			if entries, err := os.ReadDir(dir); err == nil {
+				for _, e := range entries {
+					if info, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && !info.IsDir() {
+						p.configFile = append(p.configFile, info)
+					}
+				}
+			}
 		}
 	}
 	if self, err := os.Executable(); err == nil {
-		if self = longestRealPrefix(self); target == self {
-			return "the running wanctl binary"
+		if info, err := os.Stat(self); err == nil {
+			p.binary, p.binaryPath = info, longestRealPrefix(self)
 		}
+	}
+	return p
+}
+
+// protectedTarget names why target may not be transferred, or "" if it is fine.
+func protectedTarget(target string) string { return loadProtected().target(target) }
+
+// target decides from the path, before anything is opened or created: the
+// target itself and every directory above it that exists are compared with the
+// protected identities. Walking up is what covers a file that does not exist
+// yet, and a directory that file_write would create inside the config dir.
+func (p protected) target(target string) string {
+	resolved := longestRealPrefix(target)
+	for dir := resolved; ; {
+		if info, err := os.Stat(dir); err == nil {
+			if p.configDir != nil && os.SameFile(info, p.configDir) {
+				return reasonConfigDir
+			}
+			if dir == resolved && p.binary != nil && os.SameFile(info, p.binary) {
+				return reasonBinary
+			}
+		}
+		up := filepath.Dir(dir)
+		if up == dir {
+			break
+		}
+		dir = up
+	}
+	// Identity needs a stat that succeeds. Where one does not, fall back to
+	// comparing resolved paths the way the platform's default volume compares
+	// names, so the fallback at least agrees with the filesystem about case.
+	if p.configPath != "" && pathWithinOn(runtime.GOOS, resolved, p.configPath) {
+		return reasonConfigDir
+	}
+	if p.binaryPath != "" && foldPath(runtime.GOOS, resolved) == foldPath(runtime.GOOS, p.binaryPath) {
+		return reasonBinary
 	}
 	return ""
 }
 
+// checkOpened repeats the decision on what was actually opened: the directory
+// handle the operation works in, and the file found there. The path check above
+// runs before the open, and this one closes the distance between the two — a
+// directory swapped in between, or a file reachable under a second name.
+func (p protected) checkOpened(dir *os.Root, file os.FileInfo, path string) error {
+	if p.configDir != nil {
+		if info, err := dir.Stat("."); err != nil {
+			return err
+		} else if os.SameFile(info, p.configDir) {
+			return fmt.Errorf("refusing %s: %q", reasonConfigDir, path)
+		}
+	}
+	if file == nil {
+		return nil
+	}
+	if p.binary != nil && os.SameFile(file, p.binary) {
+		return fmt.Errorf("refusing %s: %q", reasonBinary, path)
+	}
+	for _, f := range p.configFile {
+		if os.SameFile(file, f) {
+			return fmt.Errorf("refusing %s: %q", reasonConfigDir, path)
+		}
+	}
+	return nil
+}
+
 func pathWithin(target, dir string) bool {
+	return pathWithinOn(runtime.GOOS, target, dir)
+}
+
+// pathWithinOn reports whether target is dir or beneath it, comparing names the
+// way goos's default filesystem does (see foldPath).
+func pathWithinOn(goos, target, dir string) bool {
+	sep := "/"
+	if goos == "windows" {
+		sep = `\`
+	}
+	target, dir = foldPath(goos, target), foldPath(goos, dir)
 	if target == dir {
 		return true
 	}
-	return strings.HasPrefix(target, dir+string(filepath.Separator))
+	return strings.HasPrefix(target, strings.TrimSuffix(dir, sep)+sep)
+}
+
+// foldPath lower-cases p where goos's default volumes are case-insensitive:
+// NTFS on Windows, APFS on macOS. Folding on a macOS volume formatted
+// case-sensitive can only refuse more, never admit more.
+func foldPath(goos, p string) string {
+	if goos == "windows" || goos == "darwin" || goos == "ios" {
+		return strings.ToLower(p)
+	}
+	return p
 }
 
 // longestRealPrefix resolves symlinks on the longest existing leading portion
@@ -318,6 +455,10 @@ func longestRealPrefix(p string) string {
 }
 
 func rootedName(policyRoot, path string) (string, string, error) {
+	return loadProtected().rootedName(policyRoot, path)
+}
+
+func (p protected) rootedName(policyRoot, path string) (string, string, error) {
 	target, err := filepath.Abs(path)
 	if err != nil {
 		return "", "", err
@@ -329,7 +470,7 @@ func rootedName(policyRoot, path string) (string, string, error) {
 	// read key.pem to steal the device identity — an escalation independent of
 	// the policy root (audit 2026-08-28, SEC-D1-01). Refused for both read and
 	// write, since rootedName backs openPolicyFile and newPendingUpload alike.
-	if reason := protectedTarget(target); reason != "" {
+	if reason := p.target(target); reason != "" {
 		return "", "", fmt.Errorf("refusing %s: %q", reason, path)
 	}
 	rootPath := policyRoot

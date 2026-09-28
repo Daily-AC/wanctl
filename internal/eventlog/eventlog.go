@@ -72,6 +72,11 @@ var (
 	authHeaderRE = regexp.MustCompile(`(?i)(\bauthorization[ \t]*[:=][ \t]*)(?:(?:bearer|basic)[ \t]+)?[^\s'\";]+`)
 	urlSecretRE  = regexp.MustCompile(`(?i)([?&](?:token|password|passwd|secret|api[-_]?key|access[-_]?token|authorization)=)[^&#\s'\"]+`)
 	envSecretRE  = regexp.MustCompile(`(\b(?:WANCTL_TOKEN|TOKEN|PASSWORD|PASSWD|SECRET|API_KEY|ACCESS_TOKEN|AUTHORIZATION)[ \t]*=[ \t]*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s]+)`)
+	// adbPairRE is the adb-pair verb, `adb-pair <port> <code>`. The code is a
+	// credential for the device's adbd for as long as its pairing dialog is
+	// open. The port stays; everything after it on the line goes, so a
+	// malformed or split code does not survive either.
+	adbPairRE = regexp.MustCompile(`\badb-pair[ \t]+(\d{1,5}[ \t]+)?[^\r\n]+`)
 )
 
 // Open creates (or opens) the named log inside <config>/logs/.
@@ -96,7 +101,13 @@ func RedactText(s string) string {
 	s = urlSecretRE.ReplaceAllString(s, `${1}[REDACTED]`)
 	s = authHeaderRE.ReplaceAllString(s, `${1}[REDACTED]`)
 	s = secretFlagRE.ReplaceAllString(s, `${1}[REDACTED]`)
-	return envSecretRE.ReplaceAllString(s, `${1}[REDACTED]`)
+	s = envSecretRE.ReplaceAllString(s, `${1}[REDACTED]`)
+	return adbPairRE.ReplaceAllStringFunc(s, func(m string) string {
+		if port := strings.TrimSpace(adbPairRE.FindStringSubmatch(m)[1]); port != "" {
+			return "adb-pair " + port + " [redacted]"
+		}
+		return "adb-pair [redacted]"
+	})
 }
 
 func redactEvent(e Event) Event {

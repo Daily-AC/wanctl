@@ -242,7 +242,7 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "wanctl: "+err.Error())
+		fmt.Fprintln(os.Stderr, "wanctl: "+errorText(err))
 		os.Exit(1)
 	}
 }
@@ -710,11 +710,15 @@ func cmdExec(ctx context.Context, args []string) error {
 			return err
 		}
 	}
+	stdout, flushOut := deviceOutput(os.Stdout)
+	stderr, flushErr := deviceOutput(os.Stderr)
 	if ref.ID != "" {
 		code, err := execWorkspace(ctx, c, ref, protocol.Message{
 			Command: command, RequestID: *requestID, Cwd: *cwd,
 			OneShot: *oneShot, Elevate: *elevateFlag, Via: *via,
-		}, *scriptPath, *interp, *async, os.Stdout, os.Stderr)
+		}, *scriptPath, *interp, *async, stdout, stderr)
+		flushOut()
+		flushErr()
 		if ctx.Err() != nil {
 			fmt.Fprintln(os.Stderr, "wanctl: stopped waiting; the remote command may still be running. Use workspace poll with the request_id above, or workspace cancel to stop it")
 			os.Exit(130)
@@ -724,10 +728,12 @@ func cmdExec(ctx context.Context, args []string) error {
 		}
 		os.Exit(code)
 	}
-	code, err := c.Exec(ctx, client.ExecRequest{
+	code, err := c.ExecTo(ctx, client.ExecRequest{
 		Target: *target, Command: command, OneShot: *oneShot, Cwd: *cwd,
 		Elevate: *elevateFlag, Via: *via,
-	})
+	}, stdout, stderr)
+	flushOut()
+	flushErr()
 	if err != nil {
 		if ctx.Err() != nil {
 			fmt.Fprintln(os.Stderr, "wanctl: interrupted — sent a cancel to the device")
@@ -774,6 +780,8 @@ func cmdScreenshot(ctx context.Context, args []string) error {
 	// PNG on disk that looks like a real one. The device's stderr and any
 	// policy rejection travel on separate frames, so they still reach the user.
 	var png bytes.Buffer
+	deviceStderr, flushStderr := deviceOutput(os.Stderr)
+	defer flushStderr()
 	code, err := c.ExecTo(ctx, client.ExecRequest{
 		Target: *target, Command: "screenshot", OneShot: true,
 		// Asked for elevated because Android cannot capture without it and this
@@ -781,7 +789,7 @@ func cmdScreenshot(ctx context.Context, args []string) error {
 		// an ordinary command. ElevateOptional is what lets a laptop answer
 		// without naming a channel it does not have.
 		Elevate: true, ElevateOptional: true, Via: *via,
-	}, &png, os.Stderr)
+	}, &png, deviceStderr)
 	if err != nil {
 		return err
 	}
@@ -800,7 +808,9 @@ func cmdScreenshot(ctx context.Context, args []string) error {
 	}
 
 	if *out == "-" {
-		_, err := os.Stdout.Write(png.Bytes())
+		w, flush := deviceOutput(os.Stdout)
+		defer flush()
+		_, err := w.Write(png.Bytes())
 		return err
 	}
 	path := *out
@@ -937,14 +947,19 @@ func cmdRead(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.WriteString(os.Stdout, res.Content); err != nil {
+	stdout, flushOut := deviceOutput(os.Stdout)
+	_, err = io.WriteString(stdout, res.Content)
+	flushOut()
+	if err != nil {
 		return err
 	}
 	truncated := "no"
 	if res.Truncated {
 		truncated = "yes"
 	}
-	fmt.Fprintf(os.Stderr, "lines %d-%d of %d, sha256 %s, truncated=%s\n",
+	stderr, flushErr := deviceOutput(os.Stderr)
+	defer flushErr()
+	fmt.Fprintf(stderr, "lines %d-%d of %d, sha256 %s, truncated=%s\n",
 		res.FirstLine, res.LastLine, res.TotalLines, res.SHA256, truncated)
 	switch {
 	case res.LongLine != 0:
@@ -997,7 +1012,9 @@ func cmdEdit(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("replaced %d occurrence(s), sha256 %s\n", res.Replaced, res.SHA256)
+	out, flush := deviceOutput(os.Stdout)
+	defer flush()
+	fmt.Fprintf(out, "replaced %d occurrence(s), sha256 %s\n", res.Replaced, res.SHA256)
 	return nil
 }
 
@@ -1034,7 +1051,9 @@ func cmdWrite(ctx context.Context, args []string) error {
 	if res.Created {
 		verb = "created"
 	}
-	fmt.Printf("%s %s (%d bytes, sha256 %s)\n", verb, rest[0], res.SizeBytes, res.SHA256)
+	out, flush := deviceOutput(os.Stdout)
+	defer flush()
+	fmt.Fprintf(out, "%s %s (%d bytes, sha256 %s)\n", verb, rest[0], res.SizeBytes, res.SHA256)
 	return nil
 }
 
@@ -1095,7 +1114,9 @@ func cmdPair(ctx context.Context, args []string) error {
 		fmt.Printf("✓ %s 已经信任本机, 无需操作. 直接 `wanctl exec --target %s ...` 即可.\n", *target, *target)
 		return nil
 	}
-	fmt.Printf("待审批 — 把下面这条链接交给 %s 的所有者, 他在浏览器打开并点「信任并继续」即可:\n\n  %s\n\n之后再跑 `wanctl exec/push/pull` 就能通了 (链接 5 分钟内有效).\n", *target, pairingURL)
+	out, flush := deviceOutput(os.Stdout)
+	defer flush()
+	fmt.Fprintf(out, "待审批 — 把下面这条链接交给 %s 的所有者, 他在浏览器打开并点「信任并继续」即可:\n\n  %s\n\n之后再跑 `wanctl exec/push/pull` 就能通了 (链接 5 分钟内有效).\n", *target, pairingURL)
 	return nil
 }
 
@@ -1109,21 +1130,25 @@ func cmdPeers(ctx context.Context) error {
 		return err
 	}
 	devs, aliases, shared := view.Devices, view.Aliases, view.Shared
+	// Device names and labels are chosen by whoever registered the device,
+	// which for a shared device is someone else.
+	out, flush := deviceOutput(os.Stdout)
+	defer flush()
 	if len(devs) == 0 && len(shared) == 0 {
-		fmt.Println("no devices online for this token")
+		fmt.Fprintln(out, "no devices online for this token")
 		return nil
 	}
 	if len(devs) == 0 {
-		fmt.Println("no devices of your own are online")
+		fmt.Fprintln(out, "no devices of your own are online")
 	}
 	for _, d := range devs {
 		if alias := aliases[d]; alias != "" {
-			fmt.Printf("%s  (%s)\n", d, alias)
+			fmt.Fprintf(out, "%s  (%s)\n", d, alias)
 		} else {
-			fmt.Println(d)
+			fmt.Fprintln(out, d)
 		}
 	}
-	fmt.Print(sharedPeerLines(shared))
+	fmt.Fprint(out, sharedPeerLines(shared))
 	return nil
 }
 
@@ -1240,12 +1265,16 @@ func cmdLogs(ctx context.Context, args []string) error {
 		return fmt.Errorf("--follow requires --service and is not yet supported")
 	}
 
+	// Log lines carry commands, paths and names other people chose: the
+	// controllers of this device, or the owner of the remote one.
+	out, flush := deviceOutput(os.Stdout)
+	defer flush()
 	if *target != "" {
 		c, err := client.New()
 		if err != nil {
 			return err
 		}
-		return c.Logs(ctx, *target, *logType, *grep, *since, *limit)
+		return c.LogsTo(ctx, *target, *logType, *grep, *since, *limit, out)
 	}
 	// Local read (run on the device itself).
 	lg, err := eventlog.Open("events.jsonl")
@@ -1264,7 +1293,7 @@ func cmdLogs(ctx context.Context, args []string) error {
 	}
 	for _, e := range events {
 		b, _ := json.Marshal(e)
-		fmt.Println(string(b))
+		fmt.Fprintln(out, string(b))
 	}
 	return nil
 }
@@ -1396,9 +1425,12 @@ func cmdTrust(args []string) error {
 		return err
 	}
 	peers := store.List()
-	fmt.Printf("%s: %d\n", label, len(peers))
+	// A controller names itself when it pairs.
+	out, flush := deviceOutput(os.Stdout)
+	defer flush()
+	fmt.Fprintf(out, "%s: %d\n", label, len(peers))
 	for _, p := range peers {
-		fmt.Printf("  %-20s %s  (added %s)\n", p.Name, transport.ShortFingerprint(p.Fingerprint), p.Added.Format("2006-01-02"))
+		fmt.Fprintf(out, "  %-20s %s  (added %s)\n", p.Name, transport.ShortFingerprint(p.Fingerprint), p.Added.Format("2006-01-02"))
 	}
 	return nil
 }

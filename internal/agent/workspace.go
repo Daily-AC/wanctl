@@ -284,7 +284,7 @@ func (a *Agent) startWorkspaceCommand(w *workspace, fp, peer string, m protocol.
 	if err != nil || !fresh {
 		return err
 	}
-	cwd := w.root
+	var cwd string
 	if m.Cwd != "" {
 		cwd, err = w.resolve(m.Cwd)
 		if err != nil {
@@ -293,6 +293,14 @@ func (a *Agent) startWorkspaceCommand(w *workspace, fp, peer string, m protocol.
 			w.mu.Unlock()
 			return err
 		}
+	} else {
+		// Without a cwd the command runs wherever the shell is now, and an
+		// earlier command may have moved it away from the root. The policy
+		// decision, the approval card and the audit line have to name that
+		// directory: a directory-scoped rule is a statement about where a
+		// command runs. The shell cannot move before this command starts —
+		// this request is the workspace's active one until it finishes.
+		cwd = w.currentDir()
 	}
 	stillPending := func() bool {
 		w.mu.Lock()
@@ -331,6 +339,23 @@ func (a *Agent) startWorkspaceCommand(w *workspace, fp, peer string, m protocol.
 		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peer, Detail: "[workspace " + w.id + " request " + m.RequestID + "] " + m.Command, Cwd: cwd, Decision: "finished", Exit: &code})
 	}()
 	return nil
+}
+
+// workspaceDirTimeout bounds asking the shell where it is. A shell that cannot
+// print its directory in this long is not going to run the command either.
+const workspaceDirTimeout = 10 * time.Second
+
+// currentDir is the directory the workspace shell is in, or "" when the shell
+// cannot say. "" is the safe unknown: no directory-scoped rule matches it, so
+// the command needs a global rule, bypass mode or a human's approval.
+func (w *workspace) currentDir() string {
+	ctx, cancel := context.WithTimeout(w.ctx, workspaceDirTimeout)
+	defer cancel()
+	dir, err := w.shell.CurrentDir(ctx)
+	if err != nil {
+		return ""
+	}
+	return dir
 }
 
 // Scripts must execute in the existing shell to preserve cd/export. Keep the
