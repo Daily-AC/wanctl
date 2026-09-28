@@ -71,3 +71,69 @@ func TestOAuthNamespaceTokenLivesAsLongAsItsRefreshChain(t *testing.T) {
 		t.Fatal("a refused refresh brought the expired namespace token back")
 	}
 }
+
+// The Postgres half of the rule, against a real database: renewal moves a live
+// token's expiry, gives one minted before the rule an expiry, and leaves a
+// revoked or lapsed token — or someone else's — exactly as it was.
+func TestOAuthPostgresRenewalMovesOnlyALiveToken(t *testing.T) {
+	p, db, exec := pgDeviceIDStore(t)
+	expiresAt := func(token string) (time.Time, bool) {
+		t.Helper()
+		var at *time.Time
+		if err := db.QueryRow(`SELECT expires_at FROM tokens WHERE hash = $1`, HashToken(token)).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		if at == nil {
+			return time.Time{}, false
+		}
+		return *at, true
+	}
+	until := time.Now().Add(40 * 24 * time.Hour).Truncate(time.Second)
+
+	live, err := p.IssueToken("alice", "oauth:test", oauthTokenDays)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := p.ExtendRelayTokenHash("bob", HashToken(live), until); err != nil || ok {
+		t.Fatalf("renewal through another namespace = %v, %v", ok, err)
+	}
+	if ok, err := p.ExtendRelayTokenHash("alice", HashToken(live), until); err != nil || !ok {
+		t.Fatalf("renewing a live token = %v, %v", ok, err)
+	}
+	if at, _ := expiresAt(live); !at.Equal(until) {
+		t.Fatalf("expires_at = %v, want %v", at, until)
+	}
+
+	forever, err := p.IssueToken("alice", "oauth:before-the-rule", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := p.ExtendRelayTokenHash("alice", HashToken(forever), until); err != nil || !ok {
+		t.Fatalf("renewing a token with no expiry = %v, %v", ok, err)
+	}
+	if _, has := expiresAt(forever); !has {
+		t.Fatal("a renewed token still never expires")
+	}
+
+	if err := p.RevokeRelayTokenHash("alice", HashToken(live)); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := p.ExtendRelayTokenHash("alice", HashToken(live), until.Add(time.Hour)); err != nil || ok {
+		t.Fatalf("renewing a revoked token = %v, %v", ok, err)
+	}
+	if _, ok := p.Resolve(live); ok {
+		t.Fatal("a revoked token resolves after a renewal attempt")
+	}
+
+	lapsed, err := p.IssueToken("alice", "oauth:lapsed", oauthTokenDays)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE tokens SET expires_at = now() - interval '1 minute' WHERE hash = $1`, HashToken(lapsed))
+	if ok, err := p.ExtendRelayTokenHash("alice", HashToken(lapsed), until); err != nil || ok {
+		t.Fatalf("renewing a lapsed token = %v, %v", ok, err)
+	}
+	if _, ok := p.Resolve(lapsed); ok {
+		t.Fatal("a lapsed token resolves after a renewal attempt")
+	}
+}

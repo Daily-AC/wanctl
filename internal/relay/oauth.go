@@ -37,6 +37,10 @@ const (
 	oauthRequestTTL   = 10 * time.Minute
 	oauthCodeTTL      = 10 * time.Minute
 	oauthMaxRedirects = 5
+	// oauthTokenDays is the namespace token's life at minting, in the unit
+	// IssueToken takes. writeOAuthTokens then pins it to the exact expiry of
+	// the refresh token issued beside it.
+	oauthTokenDays = int(oauthRefreshTTL / (24 * time.Hour))
 )
 
 // OAuthClient is a client that registered itself under RFC 7591. There is no
@@ -79,6 +83,10 @@ type OAuthStore interface {
 	// RevokeRelayTokenHash revokes the namespace token an OAuth grant minted,
 	// addressed by hash because the raw token is never stored in the clear.
 	RevokeRelayTokenHash(namespace, hash string) error
+	// ExtendRelayTokenHash sets when that namespace token expires. It reports
+	// false, and changes nothing, when the token is already revoked or expired:
+	// a grant whose token is gone is over, and renewing must not revive it.
+	ExtendRelayTokenHash(namespace, hash string, until time.Time) (bool, error)
 }
 
 // oauthAuthzRequest is one browser trip in flight: the client has asked, the
@@ -650,7 +658,7 @@ func (r *Relay) oauthTokenFromCode(w http.ResponseWriter, req *http.Request, cli
 	}
 	// The namespace token is minted here and nowhere earlier. A consent the
 	// client never redeemed therefore leaves no live credential behind.
-	token, err := r.admin.IssueToken(c.namespace, "oauth:"+client.Name, 0)
+	token, err := r.admin.IssueToken(c.namespace, "oauth:"+client.Name, oauthTokenDays)
 	if err != nil {
 		http.Error(w, "issue token: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -697,8 +705,28 @@ func (r *Relay) oauthTokenFromRefresh(w http.ResponseWriter, req *http.Request, 
 }
 
 // writeOAuthTokens seals the pair and stores the replacement refresh row.
+//
+// The namespace token is what every access token carries: it is the grant's
+// real reach, to every device in the namespace. It therefore expires with the
+// refresh token issued here, and each refresh moves both forward together. A
+// connector in use never notices; one that stops refreshing leaves nothing
+// behind that works forever, where before its token outlived the chain that
+// justified it. (A token minted before this rule has no expiry until its
+// connector next refreshes.) A token that is already gone ends the chain: the
+// client is told to authorize again instead of being handed access tokens
+// that fail on their first use.
 func (r *Relay) writeOAuthTokens(w http.ResponseWriter, namespace, relayToken, clientID string) {
 	now := time.Now()
+	expires := now.Add(oauthRefreshTTL)
+	live, err := r.oauthStore.ExtendRelayTokenHash(namespace, HashToken(relayToken), expires)
+	if err != nil {
+		http.Error(w, "renew token: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !live {
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "this authorization is no longer valid; authorize again")
+		return
+	}
 	access, _, err := mcpauth.SealAccess(r.mcpSeed, namespace, relayToken, clientID, now, oauthAccessTTL)
 	if err != nil {
 		http.Error(w, "seal access token: "+err.Error(), http.StatusInternalServerError)
@@ -715,7 +743,7 @@ func (r *Relay) writeOAuthTokens(w http.ResponseWriter, namespace, relayToken, c
 		ClientID:  clientID,
 		Namespace: namespace,
 		Grant:     grant,
-		ExpiresAt: now.Add(oauthRefreshTTL),
+		ExpiresAt: expires,
 	}); err != nil {
 		http.Error(w, "store refresh token: "+err.Error(), http.StatusInternalServerError)
 		return
