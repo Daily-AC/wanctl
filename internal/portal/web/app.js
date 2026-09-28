@@ -1557,8 +1557,9 @@
   }
 
   /* ── 下载安装 ────────────────────────────────────────────────────────
-     版本与资产大小尽力从 GitHub API 拿 —— 门户服务器不一定够得着 GitHub，
-     浏览器这一侧通常可以；拿不到就退回固定的 latest 直链。
+     链接一律指向 GitHub 的 latest 直链。这里以前会先去问 GitHub API 要版本
+     和大小，但门户的 CSP（connect-src 'self'）从来不放行那次请求，页面一直
+     走的就是直链，还每次留一条违规，所以删了。
      安卓卡在最前面且最大：手机是唯一没有别的入口的平台，你没法在手机上
      curl 一个安装脚本。 */
   var dlDone = false;
@@ -1566,8 +1567,7 @@
   function loadDownloads() {
     if (dlDone) return;
     var GH = 'https://github.com/Daily-AC/wanctl', latest = GH + '/releases/latest/download';
-    fetch('https://api.github.com/repos/Daily-AC/wanctl/releases/latest')
-      .then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
+    Promise.resolve(null)
       .then(function (rel) {
         var assets = (rel && rel.assets) || [];
         var asset = function (n) { return assets.filter(function (a) { return a.name === n; })[0]; };

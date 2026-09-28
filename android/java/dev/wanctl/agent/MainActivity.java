@@ -959,11 +959,20 @@ public final class MainActivity extends Activity {
     }
 
     private void showElevationHelp() {
+        String vendor = Build.MANUFACTURER.toLowerCase(java.util.Locale.ROOT);
+        // HyperOS and MIUI refuse input injection to the shell uid until this
+        // Xiaomi-only switch is on, and nothing else on the phone says so.
+        String xiaomi =
+                vendor.contains("xiaomi") || vendor.contains("redmi")
+                        ? "小米和 Redmi 手机还需在开发者选项中打开「USB 调试（安全设置）」（需插 SIM 卡并登录小米账号），否则模拟点击和输入会被系统拒绝。\n\n"
+                        : "";
         new AlertDialog.Builder(this)
                 .setTitle("配置提权通道")
                 .setMessage(
                         "仅在需要控制系统、截图或模拟点击时开启。\n\n"
                                 + "无线调试：手机连接 Wi-Fi，打开开发者选项中的「无线调试」，点「使用配对码配对设备」并保持弹窗打开。在另一台设备的浏览器打开门户，选择这台手机，进入「设备设置 → ADB 配对」，填写弹窗里的端口和六位码。\n\n"
+                                + "重启、断开 Wi-Fi 或换到另一个接入点后，系统会关闭无线调试，需要重新打开；配对超过 7 天未使用会被系统撤销，需要重新配对（开发者选项中的「停用 adb 授权超时功能」可关闭这个期限）。\n\n"
+                                + xiaomi
                                 + "已 root 的手机可使用 root 通道。开启后仍需按系统提示授权。")
                 .setNegativeButton("关闭", (d, w) -> showAdvanced())
                 .setNeutralButton(
@@ -1003,7 +1012,7 @@ public final class MainActivity extends Activity {
         String vendor = Build.MANUFACTURER.toLowerCase(java.util.Locale.ROOT);
         String detail;
         if (vendor.contains("oppo") || vendor.contains("oneplus") || vendor.contains("realme"))
-            detail = "在应用信息中打开「耗电管理」，允许后台活动；如有「自启动」选项，也请开启。";
+            detail = "在应用信息中打开「耗电管理」，允许后台活动；如有「自启动」选项，也请开启。最后在最近任务中锁定 wanctl，否则清理最近任务会强行停止它，下次打开前都不会自动恢复。";
         else if (vendor.contains("vivo")) detail = "在系统电池设置的「后台耗电管理」中找到 wanctl，选择「允许后台高耗电」，并允许自启动。";
         else if (vendor.contains("xiaomi") || vendor.contains("redmi"))
             detail = "在应用信息的「省电策略」中选择「无限制」，并允许自启动。";

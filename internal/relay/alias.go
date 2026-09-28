@@ -36,15 +36,34 @@ func normalizeDeviceAlias(alias string) (string, error) {
 	if alias == "" {
 		return "", nil
 	}
-	if !utf8.ValidString(alias) || utf8.RuneCountInString(alias) > 40 {
+	if !cleanLabel(alias) || utf8.RuneCountInString(alias) > 40 {
 		return "", ErrAliasInvalid
 	}
-	for _, r := range alias {
+	return alias, nil
+}
+
+// cleanLabel reports whether s can stand for a device where people read and
+// type it: valid UTF-8, no '/', which separates a namespace from a device in a
+// target, and no control characters, which a terminal printing a peer list
+// would act on. Aliases and the names devices register with share the rule.
+func cleanLabel(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
 		if r == '/' || unicode.IsControl(r) {
-			return "", ErrAliasInvalid
+			return false
 		}
 	}
-	return alias, nil
+	return true
+}
+
+// validDeviceName reports whether a device may register under name: a clean
+// label of at most the 255 bytes a name has always been allowed. A name that is
+// not is refused rather than cleaned up, so what a device calls itself is never
+// silently different from what the relay shows.
+func validDeviceName(name string) bool {
+	return name != "" && len(name) <= 255 && cleanLabel(name)
 }
 
 func (p *PGStore) SetDeviceAlias(namespace, device, alias string) (DeviceAlias, error) {

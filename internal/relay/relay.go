@@ -5,16 +5,19 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"wanctl/internal/admission"
 	"wanctl/internal/limits"
@@ -92,12 +95,16 @@ type Relay struct {
 	agents         map[string]*agentConn      // key "ns/device" (WebSocket transport)
 	pending        map[string]*pendingSession // key session id (WebSocket transport)
 
-	hmu        sync.Mutex
-	hagents    map[string]*httpAgent   // key "ns/device" (HTTP transport)
-	hsess      map[string]*httpSession // key session id (HTTP transport)
-	reaperOnce sync.Once
-	leaseMu    sync.Mutex
-	leases     map[string]*accessLease
+	hmu      sync.Mutex
+	hagents  map[string]*httpAgent   // key "ns/device" (HTTP transport)
+	hsess    map[string]*httpSession // key session id (HTTP transport)
+	resident *residency              // tunnel bytes held by every HTTP session
+	// maxSessions is httpSessionsTotal, a field so a test can reach it
+	// without opening thousands of sessions.
+	maxSessions int
+	reaperOnce  sync.Once
+	leaseMu     sync.Mutex
+	leases      map[string]*accessLease
 
 	enrollMu    sync.Mutex
 	enrollCodes map[string]*enrollCode // one-time device-enrollment codes
@@ -111,6 +118,8 @@ type Relay struct {
 	oauthMu       sync.Mutex
 	oauthRequests map[string]*oauthAuthzRequest
 	oauthCodes    map[string]*oauthCode
+	// oauthRegistrations is each client address's budget for /oauth/register.
+	oauthRegistrations registrationBudget
 
 	notifyDedupeMu sync.Mutex
 	notifyDedupe   map[notifyDedupeKey]time.Time
@@ -124,6 +133,8 @@ func New(ts TokenStore) *Relay {
 		pending:      map[string]*pendingSession{},
 		hagents:      map[string]*httpAgent{},
 		hsess:        map[string]*httpSession{},
+		resident:     newResidency(),
+		maxSessions:  httpSessionsTotal,
 		enrollCodes:  map[string]*enrollCode{},
 		notifyDedupe: map[notifyDedupeKey]time.Time{},
 		notifySend:   notify.NewSender(notify.Options{}),
@@ -190,16 +201,89 @@ func limitBodies(next http.Handler) http.Handler {
 			if n := bodyCapFor(req.URL.Path); n > 0 {
 				req.Body = http.MaxBytesReader(w, req.Body, n)
 			}
+			if strings.HasPrefix(req.URL.Path, "/admin/") {
+				data, err := io.ReadAll(req.Body)
+				if err != nil {
+					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+					return
+				}
+				if err := checkAdminJSONKeys(data); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				req.Body = io.NopCloser(bytes.NewReader(data))
+			}
 		}
 		next.ServeHTTP(w, req)
 	})
 }
 
+// checkAdminJSONKeys refuses an admin request body that has a non-ASCII object
+// key, or two keys in one object that differ only in case. The portal puts the
+// caller's namespace (or author) into these bodies next to fields the user
+// chose, and encoding/json matches keys case-insensitively under Unicode
+// folding with the last match winning, so either shape could let a user's key
+// ("nameſpace", with U+017F) replace the one the portal set. Admin field names
+// are all ASCII, so nothing legitimate is refused.
+func checkAdminJSONKeys(data []byte) error {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	// seen holds one key set per open object; arrays push nil.
+	var seen []map[string]bool
+	expectKey := func() bool { return len(seen) > 0 && seen[len(seen)-1] != nil }
+	afterValue := true // true when the next string in an object is a key
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF && len(seen) == 0 {
+			return nil
+		}
+		if err != nil {
+			return errors.New("invalid JSON body")
+		}
+		switch t := tok.(type) {
+		case json.Delim:
+			switch t {
+			case '{':
+				seen = append(seen, map[string]bool{})
+				afterValue = true
+				continue
+			case '[':
+				seen = append(seen, nil)
+			case '}', ']':
+				seen = seen[:len(seen)-1]
+			}
+			afterValue = true
+		case string:
+			if expectKey() && afterValue {
+				for i := 0; i < len(t); i++ {
+					if t[i] >= utf8.RuneSelf {
+						return fmt.Errorf("non-ASCII field name %q", t)
+					}
+				}
+				k := strings.ToLower(t)
+				if seen[len(seen)-1][k] {
+					return fmt.Errorf("duplicate field %q", t)
+				}
+				seen[len(seen)-1][k] = true
+				afterValue = false
+				continue
+			}
+			afterValue = true
+		default:
+			afterValue = true
+		}
+	}
+}
+
 // bodyCapFor returns the body cap for a route, or 0 for routes that bound
-// themselves.
+// themselves. /h/close is one of those: a writer that knows the relay orders
+// writes sends its last bytes with the close, up to a whole write of them, and
+// the control-body cap cut those off.
 func bodyCapFor(path string) int64 {
 	switch {
-	case path == "/h/up":
+	case path == "/h/up", path == "/h/close":
 		return 0
 	case strings.HasPrefix(path, "/mcp"), strings.HasPrefix(path, "/wanctl-mcp"):
 		return limits.RelayMCPBodyBytes
@@ -247,15 +331,12 @@ func (r *Relay) SetNotifySender(sender webhookSender) { r.notifySend = sender }
 func (r *Relay) SetLogBuffer(logs *serverlog.Buffer) { r.logs = logs }
 
 func (r *Relay) auth(w http.ResponseWriter, req *http.Request) (ns string, ok bool) {
-	token, legacy, ok := admission.Token(req)
+	token, ok := admission.Token(req)
 	if !ok {
 		return "", false
 	}
 	if strings.HasPrefix(token, "wfd_") {
 		return "", false
-	}
-	if legacy {
-		admission.MarkLegacy(w)
 	}
 	return r.ts.Resolve(token)
 }
@@ -375,7 +456,13 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	}
 	limits.ClearHijackedDeadline(req.Context())
 	nc := wsconn.FromAccepted(req.Context(), c)
-	dec := json.NewDecoder(nc)
+	// A JSON decoder holds a value whole before handing it over, and the
+	// control channel is one stream however it is split into messages, so each
+	// value is bounded here: to what a control request may carry. The channel
+	// carries a registration and, after it, nothing the relay acts on.
+	body := &io.LimitedReader{R: nc}
+	dec := json.NewDecoder(body)
+	body.N = limits.RelayControlBodyBytes
 	var reg struct {
 		Op, Device, Fingerprint, Inst, Name string
 		DeviceID                            string `json:"device_id"`
@@ -405,6 +492,13 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 		if err := r.allowLegacyRegistration(ns, reg.Device); err != nil {
 			r.registrationMu.Unlock()
 			c.Close(websocket.StatusPolicyViolation, err.Error())
+			return
+		}
+		// An agent from before device IDs may send no name, and is then
+		// labelled by its device name; one it does send is held to the rule.
+		if reg.Name != "" && !validDeviceName(reg.Name) {
+			r.registrationMu.Unlock()
+			c.Close(websocket.StatusPolicyViolation, "invalid device name")
 			return
 		}
 	}
@@ -439,6 +533,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	}()
 	// Keep the control connection alive; drain any further messages (e.g. pings).
 	for {
+		body.N = limits.RelayControlBodyBytes
 		var ignore json.RawMessage
 		if err := dec.Decode(&ignore); err != nil {
 			return
@@ -473,7 +568,7 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 	}
 	sid := newID()
 	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), done: make(chan struct{}), ownerNS: auth.OwnerNamespace}
-	lease := r.beginAccessLease(sid, targetKey, access, token)
+	lease := r.beginAccessLease(sid, targetKey, access, token, auth.Capabilities)
 	defer lease.close()
 	r.mu.Lock()
 	r.pending[sid] = ps

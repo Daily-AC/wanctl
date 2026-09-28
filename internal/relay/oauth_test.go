@@ -27,9 +27,10 @@ type oauthBackend struct {
 	noopAdmin
 	mu       sync.Mutex
 	next     int
-	tokens   map[string]string // raw token -> namespace
-	revoked  map[string]bool   // token hash -> revoked
-	labels   map[string]string // raw token -> label
+	tokens   map[string]string    // raw token -> namespace
+	revoked  map[string]bool      // token hash -> revoked
+	expires  map[string]time.Time // raw token -> expiry; absent means never
+	labels   map[string]string    // raw token -> label
 	clients  map[string]OAuthClient
 	refresh  map[string]OAuthRefresh
 	issuedNS []string
@@ -38,6 +39,7 @@ type oauthBackend struct {
 func newOAuthBackend() *oauthBackend {
 	return &oauthBackend{
 		tokens: map[string]string{}, revoked: map[string]bool{}, labels: map[string]string{},
+		expires: map[string]time.Time{},
 		clients: map[string]OAuthClient{}, refresh: map[string]OAuthRefresh{},
 	}
 }
@@ -46,28 +48,92 @@ func (b *oauthBackend) Resolve(token string) (string, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	ns, ok := b.tokens[token]
-	if !ok || b.revoked[HashToken(token)] {
+	if !ok || b.revoked[HashToken(token)] || b.expiredLocked(token) {
 		return "", false
 	}
 	return ns, true
 }
 
-func (b *oauthBackend) IssueToken(namespace, label string, _ int) (string, error) {
+func (b *oauthBackend) expiredLocked(token string) bool {
+	expiry, ok := b.expires[token]
+	return ok && !time.Now().Before(expiry)
+}
+
+func (b *oauthBackend) IssueToken(namespace, label string, days int) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.next++
 	raw := "wanctl_test_" + namespace + "_" + string(rune('a'+b.next))
 	b.tokens[raw] = namespace
 	b.labels[raw] = label
+	if days > 0 {
+		b.expires[raw] = time.Now().AddDate(0, 0, days)
+	}
 	b.issuedNS = append(b.issuedNS, namespace)
 	return raw, nil
 }
 
-func (b *oauthBackend) PutOAuthClient(c OAuthClient) error {
+// ExtendRelayTokenHash moves a live token's expiry, the way the Postgres store
+// does: never for a token that is already revoked or expired.
+func (b *oauthBackend) ExtendRelayTokenHash(namespace, hash string, until time.Time) (bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	for raw, ns := range b.tokens {
+		if HashToken(raw) != hash || ns != namespace {
+			continue
+		}
+		if b.revoked[hash] || b.expiredLocked(raw) {
+			return false, nil
+		}
+		b.expires[raw] = until
+		return true, nil
+	}
+	return false, nil
+}
+
+// expiry reports when a token stops resolving; zero means never.
+func (b *oauthBackend) expiry(token string) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.expires[token]
+}
+
+func (b *oauthBackend) setExpiry(token string, at time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.expires[token] = at
+}
+
+// RegisterOAuthClient mirrors the Postgres store: stale clients that never
+// completed an authorization go first (unless one is under way), and the new
+// client is refused if it would push the count of such clients past maxUnused.
+func (b *oauthBackend) RegisterOAuthClient(c OAuthClient, maxUnused int, staleBefore time.Time, inFlight []string) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	used := map[string]bool{}
+	for _, row := range b.refresh {
+		used[row.ClientID] = true
+	}
+	keep := map[string]bool{}
+	for _, id := range inFlight {
+		keep[id] = true
+	}
+	unused := 0
+	for id, existing := range b.clients {
+		if used[id] {
+			continue
+		}
+		if existing.CreatedAt.Before(staleBefore) && !keep[id] {
+			delete(b.clients, id)
+			continue
+		}
+		unused++
+	}
+	if unused >= maxUnused {
+		return false, nil
+	}
 	b.clients[c.ID] = c
-	return nil
+	return true, nil
 }
 
 func (b *oauthBackend) OAuthClient(id string) (OAuthClient, bool, error) {
@@ -91,15 +157,16 @@ func (b *oauthBackend) OAuthRefresh(hash string) (OAuthRefresh, bool, error) {
 	return t, ok, nil
 }
 
-func (b *oauthBackend) RevokeOAuthRefresh(hash string) error {
+func (b *oauthBackend) RevokeOAuthRefresh(hash string) (bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	t, ok := b.refresh[hash]
-	if ok {
-		t.RevokedAt = time.Now()
-		b.refresh[hash] = t
+	if !ok || !t.RevokedAt.IsZero() {
+		return false, nil
 	}
-	return nil
+	t.RevokedAt = time.Now()
+	b.refresh[hash] = t
+	return true, nil
 }
 
 func (b *oauthBackend) RevokeRelayTokenHash(_, hash string) error {

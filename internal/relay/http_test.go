@@ -24,6 +24,7 @@ func startHTTPPoll(t *testing.T, h http.Handler, query string) <-chan pollResult
 	ch := make(chan pollResult, 1)
 	go func() {
 		req := httptest.NewRequest("GET", "/h/poll?"+query, nil)
+		bearerFromQuery(req)
 		resp := httptest.NewRecorder()
 		h.ServeHTTP(resp, req)
 		var open sessionauth.Open
@@ -56,6 +57,7 @@ func waitHTTPAgentInst(t *testing.T, r *Relay, key, inst string) {
 func dialHTTP(t *testing.T, h http.Handler) string {
 	t.Helper()
 	req := httptest.NewRequest("GET", "/h/dial?token=tok-alice&target=alice/home-pc", nil)
+	bearerFromQuery(req)
 	resp := httptest.NewRecorder()
 	h.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK {
@@ -74,6 +76,7 @@ func dialHTTP(t *testing.T, h http.Handler) string {
 func deregisterHTTP(t *testing.T, h http.Handler, query string) {
 	t.Helper()
 	req := httptest.NewRequest("POST", "/h/deregister?"+query, nil)
+	bearerFromQuery(req)
 	resp := httptest.NewRecorder()
 	h.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK {
@@ -173,6 +176,7 @@ func TestHTTPPollReceivesRelayIssuedCapabilities(t *testing.T) {
 	waitHTTPAgentInst(t, r, "owner/home-pc", "A")
 
 	req := httptest.NewRequest("GET", "/h/dial?token=reader-token&target=owner/home-pc", nil)
+	bearerFromQuery(req)
 	resp := httptest.NewRecorder()
 	h.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK {
@@ -197,6 +201,7 @@ func TestHTTPUploadRejectsOversizedBody(t *testing.T) {
 	r.hsess["session"] = &httpSession{toClient: newSideQueue(), toAgent: newSideQueue(), callerNS: "alice", ownerNS: "alice"}
 	req := httptest.NewRequest("POST", "/h/up?token=tok-alice&session=session&role=client",
 		bytes.NewReader(make([]byte, limits.RelayHTTPUploadBytes+1)))
+	bearerFromQuery(req)
 	resp := httptest.NewRecorder()
 	r.Handler().ServeHTTP(resp, req)
 	if resp.Code != http.StatusRequestEntityTooLarge {

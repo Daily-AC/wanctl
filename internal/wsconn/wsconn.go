@@ -9,8 +9,17 @@ import (
 	"net/http"
 	"sync"
 
+	"wanctl/internal/protocol"
+
 	"github.com/coder/websocket"
 )
+
+// MaxMessageBytes is the largest message either end reads: the largest frame
+// the protocol carries (protocol.MaxFrame), with room for the headers of the
+// TLS records it travels in. Messages are TLS records in practice, and the
+// relay's pipe forwards at most 32 KiB at a time, so nothing honest comes
+// near it; a peer that sends more is cut off rather than read on.
+const MaxMessageBytes = protocol.MaxFrame + 64<<10
 
 // A note on the context passed to websocket.NetConn below: it must NOT be the
 // caller's dial context. Callers routinely dial under a handshake deadline
@@ -33,14 +42,20 @@ func DialWith(ctx context.Context, url string, header http.Header, hc *http.Clie
 	if err != nil {
 		return nil, resp, err
 	}
-	c.SetReadLimit(-1) // do not cap message size; we frame in the protocol layer
-	return websocket.NetConn(context.Background(), c, websocket.MessageBinary), resp, nil
+	return netConn(c), resp, nil
 }
 
 // FromAccepted wraps a server-side accepted websocket into a net.Conn.
 func FromAccepted(ctx context.Context, c *websocket.Conn) net.Conn {
-	c.SetReadLimit(-1)
-	return websocket.NetConn(context.Background(), c, websocket.MessageBinary)
+	return netConn(c)
+}
+
+// netConn wraps c for binary messages of up to MaxMessageBytes. The limit is
+// set after websocket.NetConn, which lifts any limit set before it.
+func netConn(c *websocket.Conn) net.Conn {
+	nc := websocket.NetConn(context.Background(), c, websocket.MessageBinary)
+	c.SetReadLimit(MaxMessageBytes)
+	return nc
 }
 
 // CloseOnCancel closes nc once ctx is done, which unblocks whatever read or

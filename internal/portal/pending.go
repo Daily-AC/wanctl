@@ -3,6 +3,7 @@ package portal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"sort"
@@ -38,6 +39,24 @@ type waitingItem struct {
 // slowest device sets the latency of the entire main screen.
 const perDeviceWait = 4 * time.Second
 
+// waitingWorkers bounds how many devices one aggregate asks at a time. A
+// namespace can own a few hundred devices; asking them all at once from every
+// poll is what let one account's slow machines tie up the shared portal.
+const waitingWorkers = 16
+
+// waitingCall is one aggregate in progress for a namespace. Polls that arrive
+// while it runs wait for its answer instead of starting their own.
+type waitingCall struct {
+	done  chan struct{}
+	items []waitingItem
+	err   *waitingErr
+}
+
+type waitingErr struct {
+	msg  string
+	code int
+}
+
 // handleWaiting fans out over the caller's own online devices and returns
 // everything waiting on a decision.
 //
@@ -65,15 +84,49 @@ func (s *Server) handleWaiting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.waitMu.Lock()
+	call := s.waitCalls[ns]
+	if call == nil {
+		call = &waitingCall{done: make(chan struct{})}
+		if s.waitCalls == nil {
+			s.waitCalls = map[string]*waitingCall{}
+		}
+		s.waitCalls[ns] = call
+		go func() {
+			call.items, call.err = s.collectWaiting(ns)
+			s.waitMu.Lock()
+			delete(s.waitCalls, ns)
+			s.waitMu.Unlock()
+			close(call.done)
+		}()
+	}
+	s.waitMu.Unlock()
+
+	select {
+	case <-call.done:
+	case <-r.Context().Done():
+		return
+	}
+	if call.err != nil {
+		http.Error(w, call.err.msg, call.err.code)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Items []waitingItem `json:"items"`
+	}{call.items})
+}
+
+// collectWaiting asks each of ns's own online devices what is waiting on it.
+// It runs detached from any one request, since several polls may share it.
+func (s *Server) collectWaiting(ns string) ([]waitingItem, *waitingErr) {
 	resp, err := s.adminReq("GET", "/admin/devices", url.Values{"namespace": {ns}}, nil)
 	if err != nil {
-		http.Error(w, "relay unreachable", http.StatusBadGateway)
-		return
+		return nil, &waitingErr{"relay unreachable", http.StatusBadGateway}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "relay admin error", resp.StatusCode)
-		return
+		return nil, &waitingErr{"relay admin error", resp.StatusCode}
 	}
 	var list struct {
 		Devices []struct {
@@ -99,18 +152,24 @@ func (s *Server) handleWaiting(w http.ResponseWriter, r *http.Request) {
 		mu    sync.Mutex
 		items = []waitingItem{}
 		wg    sync.WaitGroup
+		slots = make(chan struct{}, waitingWorkers)
 	)
 	for _, name := range names {
 		wg.Add(1)
+		slots <- struct{}{}
 		go func(device string) {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(r.Context(), perDeviceWait)
+			defer func() { <-slots }()
+			ctx, cancel := context.WithTimeout(context.Background(), perDeviceWait)
 			defer cancel()
 			d, err := s.deviceConnFor(ctx, ns, device)
 			if err != nil {
 				return // offline or not yet trusted; nothing to report, not an error
 			}
-			st, err := d.state()
+			st, err := d.stateIfIdle(perDeviceWait)
+			if errors.Is(err, errDeviceBusy) {
+				return // answering someone else; the next poll asks again
+			}
 			if err != nil {
 				s.dropConn(ns, device)
 				return
@@ -134,9 +193,5 @@ func (s *Server) handleWaiting(w http.ResponseWriter, r *http.Request) {
 
 	// Oldest first: whoever has been blocked longest goes on top.
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Created.Before(items[j].Created) })
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
-		Items []waitingItem `json:"items"`
-	}{items})
+	return items, nil
 }

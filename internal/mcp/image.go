@@ -16,6 +16,12 @@ import (
 // downscaled until it fits, and the text line says so.
 const maxImageBytes = 4 << 20
 
+// maxDecodePixels bounds the image a capture over the cap may be decoded into.
+// A PNG's header states its size and decoding allocates four bytes a pixel, so
+// a small file can ask for gigabytes; the hosted endpoint shares the relay's
+// process with every other tenant. 50 megapixels is well past an 8K screen.
+const maxDecodePixels = 50_000_000
+
 // fitImage returns the bytes to hand a caller, their media type and the
 // dimensions they have.
 //
@@ -33,6 +39,9 @@ func fitImage(raw []byte, cap int) (data []byte, mime string, w, h int, note str
 	}
 	if len(raw) <= cap {
 		return raw, "image/png", cfg.Width, cfg.Height, "", nil
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > maxDecodePixels {
+		return nil, "", 0, 0, "", fmt.Errorf("the device returned a %dx%d PNG, too large to downscale here; capture it to a file on the device with wanctl_exec and fetch it instead", cfg.Width, cfg.Height)
 	}
 	img, err := png.Decode(bytes.NewReader(raw))
 	if err != nil {

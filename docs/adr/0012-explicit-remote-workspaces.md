@@ -22,8 +22,8 @@ Each workspace belongs to its authenticated controller fingerprint and has a
 random ID, absolute project root, independent command shell, and command
 ledger. File paths resolve relative to the root. An explicit exec cwd resolves
 against the root; omitting cwd preserves the shell's current directory. The
-directory used for exec policy evaluation is the project root unless an
-explicit cwd is supplied. This is a policy scope, not an OS sandbox.
+directory used for exec policy evaluation is the directory the command runs
+in (see the amendment below). This is a policy scope, not an OS sandbox.
 
 The controller chooses the workspace ID before opening, so an uncertain open
 can be recovered by the same reference. Execution similarly reserves a caller
@@ -90,3 +90,18 @@ inside the existing matching shell. The device can wait up to 250 ms for a
 normal MCP exec, bounded at one second at protocol level, while command
 ownership remains independent of the connection. See the
 [trial evidence](../plans/2026-09-21-workspace-immersion.md).
+
+## Amendment, 2026-09-29: policy follows the shell's directory
+
+A directory-scoped rule is a statement about the directory a command runs in,
+and a command sent without a cwd runs wherever the persistent shell is, which
+an earlier `cd` may have changed. Such a command is therefore evaluated
+against the directory the shell reports for itself just before the command
+runs, and the approval card and audit log name that directory, not the root.
+
+The report comes back through a device-created data file, not the output
+stream, and nothing else can run in the shell between the report and the
+command. When the shell cannot name its directory, the command is evaluated
+with no directory: only a global rule, bypass mode or an approval admits it.
+An explicit cwd behaves as before. The cost is one extra shell round trip per
+command sent without a cwd.

@@ -20,7 +20,7 @@ import (
 func startAgent(t *testing.T, base, token, device string) {
 	t.Helper()
 	ctx := context.Background()
-	ctrl, _, err := wsconn.Dial(ctx, base+"/agent?token="+token, nil)
+	ctrl, _, err := wsconn.Dial(ctx, base+"/agent", admission.Header(token))
 	if err != nil {
 		t.Fatalf("agent ctrl dial: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestRelayPipesSession(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	conn, _, err := wsconn.Dial(ctx, base+"/dial?token=tok-alice&target=alice/home-pc", nil)
+	conn, _, err := wsconn.Dial(ctx, base+"/dial?target=alice/home-pc", admission.Header("tok-alice"))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestRelayPipesRepeatedSessions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for i := 0; i < 50; i++ {
-		conn, _, err := wsconn.Dial(ctx, base+"/dial?token=tok-alice&target=alice/home-pc", nil)
+		conn, _, err := wsconn.Dial(ctx, base+"/dial?target=alice/home-pc", admission.Header("tok-alice"))
 		if err != nil {
 			t.Fatalf("session %d dial: %v", i, err)
 		}
@@ -118,7 +118,7 @@ func TestRelayRejectsBadToken(t *testing.T) {
 	base := "ws" + strings.TrimPrefix(srv.URL, "http")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, resp, err := wsconn.Dial(ctx, base+"/dial?token=bad&target=alice/home-pc", nil)
+	_, resp, err := wsconn.Dial(ctx, base+"/dial?target=alice/home-pc", admission.Header("bad"))
 	if err == nil {
 		t.Fatal("expected rejection")
 	}
@@ -127,36 +127,18 @@ func TestRelayRejectsBadToken(t *testing.T) {
 	}
 }
 
-func TestLegacyQueryAuthIsDeprecatedAndBearerIsPreferred(t *testing.T) {
-	r := New(EnvTokenStore("secret-token:alice"))
-	h := r.Handler()
-
-	legacyReq := httptest.NewRequest("GET", "/peers?token=secret-token", nil)
-	legacyResp := httptest.NewRecorder()
-	h.ServeHTTP(legacyResp, legacyReq)
-	if legacyResp.Code != http.StatusOK || legacyResp.Header().Get("Deprecation") != "true" {
-		t.Fatalf("legacy response: status=%d deprecation=%q", legacyResp.Code, legacyResp.Header().Get("Deprecation"))
+// A malformed Authorization header is refused outright, and the refusal does
+// not echo back anything the caller sent as a credential.
+func TestMalformedBearerIsRefusedWithoutEchoingIt(t *testing.T) {
+	h := New(EnvTokenStore("secret-token:alice")).Handler()
+	req := httptest.NewRequest("GET", "/peers?token=secret-token", nil)
+	req.Header.Set("Authorization", "invalid secret-header")
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("malformed bearer status = %d, want 401", resp.Code)
 	}
-	if warning := legacyResp.Header().Get("Warning"); warning == "" || strings.Contains(warning, "secret-token") {
-		t.Fatal("legacy response must carry a credential-free deprecation warning")
-	}
-
-	bearerReq := httptest.NewRequest("GET", "/peers", nil)
-	bearerReq.Header.Set("Authorization", "Bearer secret-token")
-	bearerResp := httptest.NewRecorder()
-	h.ServeHTTP(bearerResp, bearerReq)
-	if bearerResp.Code != http.StatusOK || bearerResp.Header().Get("Deprecation") != "" {
-		t.Fatalf("bearer response: status=%d deprecation=%q", bearerResp.Code, bearerResp.Header().Get("Deprecation"))
-	}
-
-	malformedReq := httptest.NewRequest("GET", "/peers?token=secret-token", nil)
-	malformedReq.Header.Set("Authorization", "invalid secret-header")
-	malformedResp := httptest.NewRecorder()
-	h.ServeHTTP(malformedResp, malformedReq)
-	if malformedResp.Code != http.StatusUnauthorized {
-		t.Fatalf("malformed bearer status = %d, want 401", malformedResp.Code)
-	}
-	if body := malformedResp.Body.String(); strings.Contains(body, "secret-token") || strings.Contains(body, "secret-header") {
+	if body := resp.Body.String(); strings.Contains(body, "secret-token") || strings.Contains(body, "secret-header") {
 		t.Fatal("authentication error reflected a credential")
 	}
 }

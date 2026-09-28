@@ -43,7 +43,7 @@ A web AI like ChatGPT or claude.ai may recreate its MCP session between tool cal
 
 In its custom connector, give it the same endpoint URL and set authentication to **OAuth** (not "no authentication"); it works out the rest of the discovery itself. On save it sends you to the portal: you sign in with GitHub as usual, the page names the client that is asking and the host your authorization will be delivered to, and you click **Allow**. No code to copy, nothing to paste back.
 
-The authorization belongs to the connector rather than to a session, so every new session it opens is still signed in. To withdraw it, revoke the token labelled `oauth:` plus the client's name on the portal's access-token page, or ask the AI to call `wanctl_logout` — same effect.
+The authorization belongs to the connector rather than to a session, so every new session it opens is still signed in. To withdraw it, revoke the token labelled `oauth:` plus the client's name on the portal's access-token page, or ask the AI to call `wanctl_logout` — same effect. A connector in use renews its authorization by itself; one left unused for 30 days loses it, token included, and has to be authorized again.
 
 > This path needs the operator to have given the relay a database, `WANCTL_PUBLIC_ORIGIN` and `WANCTL_PORTAL`, all three. Without any one of them the endpoint keeps only the session login below, and an AI's connector finds no authorization server to discover.
 
@@ -61,7 +61,7 @@ The first time it then reaches a device, that device's **Waiting** page raises a
 
 ## When the session drops
 
-The code-based session login above lives only in relay memory; OAuth connectors do not depend on it. Restart the relay, or reset the connection, and the AI gets `LOGIN REQUIRED`.
+The code-based session login above lives only in relay memory; OAuth connectors do not depend on it. Restart the relay, or reset the connection, and the AI gets `LOGIN REQUIRED`. So does a session left idle: the relay closes one that has logged in after two hours without a request, and one that never logged in after ten minutes.
 
 A successful login also handed the AI a **rebind credential** starting with `wrb1.`, good for seven days. It keeps that itself and uses it to recover on the spot, without sending you back to the browser. Losing it costs nothing — the three steps above work again.
 

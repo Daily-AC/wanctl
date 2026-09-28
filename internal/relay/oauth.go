@@ -9,9 +9,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"wanctl/internal/clientip"
 	"wanctl/internal/mcpauth"
 )
 
@@ -37,6 +40,33 @@ const (
 	oauthRequestTTL   = 10 * time.Minute
 	oauthCodeTTL      = 10 * time.Minute
 	oauthMaxRedirects = 5
+	// oauthTokenDays is the namespace token's life at minting, in the unit
+	// IssueToken takes. writeOAuthTokens then pins it to the exact expiry of
+	// the refresh token issued beside it.
+	oauthTokenDays = int(oauthRefreshTTL / (24 * time.Hour))
+)
+
+// Registration takes no credential (RFC 7591 intends it that way: a public
+// endpoint cannot know its clients in advance) and every one is a durable row,
+// so it is bounded three ways. A connector registers once when it is added, so
+// a client needs a handful an hour at most; the rest bound what anonymous
+// callers can leave in the database between them.
+const (
+	// oauthRegistrationsPerClient is each client address's budget per
+	// oauthRegistrationWindow.
+	oauthRegistrationsPerClient = 10
+	oauthRegistrationWindow     = time.Hour
+	// oauthRegistrationClients bounds how many client addresses are tracked
+	// in one window, so the budget itself cannot grow without limit.
+	oauthRegistrationClients = 4096
+	// oauthMaxUnusedClients caps the clients that have never completed an
+	// authorization. One that has was approved by a signed-in human, and
+	// does not count.
+	oauthMaxUnusedClients = 500
+	// oauthUnusedClientTTL is how long a client that never completed an
+	// authorization is kept. A connector authorizes right after it
+	// registers; a day later nobody is coming back for that client_id.
+	oauthUnusedClientTTL = 24 * time.Hour
 )
 
 // OAuthClient is a client that registered itself under RFC 7591. There is no
@@ -68,14 +98,26 @@ type OAuthRefresh struct {
 // relay can run the MCP endpoint without one and because these rows have
 // nothing to do with the portal's admin surface.
 type OAuthStore interface {
-	PutOAuthClient(OAuthClient) error
+	// RegisterOAuthClient stores c unless that would leave more than
+	// maxUnused clients that have never completed an authorization (no
+	// refresh token names them). Clients like that registered before
+	// staleBefore are deleted first, except those in inFlight, whose
+	// authorization is under way. It reports whether c was stored.
+	RegisterOAuthClient(c OAuthClient, maxUnused int, staleBefore time.Time, inFlight []string) (bool, error)
 	OAuthClient(id string) (OAuthClient, bool, error)
 	PutOAuthRefresh(OAuthRefresh) error
 	OAuthRefresh(hash string) (OAuthRefresh, bool, error)
-	RevokeOAuthRefresh(hash string) error
+	// RevokeOAuthRefresh reports whether this call is the one that revoked
+	// the row: false when it was already revoked or does not exist, so two
+	// requests racing to redeem one refresh token cannot both win.
+	RevokeOAuthRefresh(hash string) (bool, error)
 	// RevokeRelayTokenHash revokes the namespace token an OAuth grant minted,
 	// addressed by hash because the raw token is never stored in the clear.
 	RevokeRelayTokenHash(namespace, hash string) error
+	// ExtendRelayTokenHash sets when that namespace token expires. It reports
+	// false, and changes nothing, when the token is already revoked or expired:
+	// a grant whose token is gone is over, and renewing must not revive it.
+	ExtendRelayTokenHash(namespace, hash string, until time.Time) (bool, error)
 }
 
 // oauthAuthzRequest is one browser trip in flight: the client has asked, the
@@ -293,8 +335,26 @@ func (r *Relay) oauthRegister(w http.ResponseWriter, req *http.Request) {
 		secret = "wcs_" + randHex(32)
 		client.SecretHash = HashToken(secret)
 	}
-	if err := r.oauthStore.PutOAuthClient(client); err != nil {
+	// Charged only once the request would be stored: a malformed one costs the
+	// database nothing, and a client fixing its request should not lose budget.
+	if ok, wait := r.oauthRegistrations.take(clientip.Key(req), time.Now()); !ok {
+		w.Header().Set("Retry-After", retryAfter(wait))
+		oauthError(w, http.StatusTooManyRequests, "temporarily_unavailable",
+			"too many client registrations from this address; try again later")
+		return
+	}
+	stored, err := r.oauthStore.RegisterOAuthClient(client, oauthMaxUnusedClients,
+		client.CreatedAt.Add(-oauthUnusedClientTTL), r.oauthClientsInFlight())
+	if err != nil {
 		http.Error(w, "store client: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !stored {
+		// Room comes back as unused registrations age out or get used; an
+		// hour is a fair first guess and a client may retry sooner.
+		w.Header().Set("Retry-After", retryAfter(time.Hour))
+		oauthError(w, http.StatusServiceUnavailable, "temporarily_unavailable",
+			"this server is not accepting new client registrations right now; try again later")
 		return
 	}
 	out := map[string]any{
@@ -315,6 +375,75 @@ func (r *Relay) oauthRegister(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(out)
+}
+
+// oauthClientsInFlight names the clients with an authorization under way: a
+// request waiting on the consent page, or a code not yet redeemed. Cleaning up
+// unused registrations must not delete a client out from under its own login.
+func (r *Relay) oauthClientsInFlight() []string {
+	r.oauthMu.Lock()
+	defer r.oauthMu.Unlock()
+	r.purgeOAuthLocked()
+	ids := make([]string, 0, len(r.oauthRequests)+len(r.oauthCodes))
+	for _, ar := range r.oauthRequests {
+		ids = append(ids, ar.clientID)
+	}
+	for _, c := range r.oauthCodes {
+		ids = append(ids, c.clientID)
+	}
+	return ids
+}
+
+// registrationBudget counts registrations per client address in fixed windows.
+// The zero value is ready to use.
+type registrationBudget struct {
+	mu      sync.Mutex
+	windows map[string]registrationWindow
+}
+
+type registrationWindow struct {
+	start time.Time
+	count int
+}
+
+// take spends one registration of key's budget. When it is spent, take
+// reports how long until it refills.
+func (b *registrationBudget) take(key string, now time.Time) (bool, time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.windows == nil {
+		b.windows = map[string]registrationWindow{}
+	}
+	w, found := b.windows[key]
+	if found && now.Sub(w.start) >= oauthRegistrationWindow {
+		found = false
+	}
+	if !found {
+		if len(b.windows) >= oauthRegistrationClients {
+			for k, old := range b.windows {
+				if now.Sub(old.start) >= oauthRegistrationWindow {
+					delete(b.windows, k)
+				}
+			}
+			if len(b.windows) >= oauthRegistrationClients {
+				// Every tracked address is still inside its window. Refusing
+				// the newcomer is what keeps this map bounded.
+				return false, time.Minute
+			}
+		}
+		w = registrationWindow{start: now}
+	}
+	if w.count >= oauthRegistrationsPerClient {
+		return false, w.start.Add(oauthRegistrationWindow).Sub(now)
+	}
+	w.count++
+	b.windows[key] = w
+	return true, 0
+}
+
+// retryAfter renders a wait as a Retry-After value in whole seconds, at least 1.
+func retryAfter(d time.Duration) string {
+	return strconv.Itoa(max(1, int((d+time.Second-1)/time.Second)))
 }
 
 // validRedirectURI allows https anywhere and http only on the loopback
@@ -647,7 +776,7 @@ func (r *Relay) oauthTokenFromCode(w http.ResponseWriter, req *http.Request, cli
 	}
 	// The namespace token is minted here and nowhere earlier. A consent the
 	// client never redeemed therefore leaves no live credential behind.
-	token, err := r.admin.IssueToken(c.namespace, "oauth:"+client.Name, 0)
+	token, err := r.admin.IssueToken(c.namespace, "oauth:"+client.Name, oauthTokenDays)
 	if err != nil {
 		http.Error(w, "issue token: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -680,16 +809,42 @@ func (r *Relay) oauthTokenFromRefresh(w http.ResponseWriter, req *http.Request, 
 	// Rotate: the presented token dies here whether or not the client ever
 	// receives the replacement, so a stolen refresh token is usable at most
 	// once and the theft shows up as the real client being logged out.
-	if err := r.oauthStore.RevokeOAuthRefresh(row.Hash); err != nil {
+	revoked, err := r.oauthStore.RevokeOAuthRefresh(row.Hash)
+	if err != nil {
 		http.Error(w, "rotate refresh token: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !revoked {
+		// Another request redeemed it between the lookup and here.
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "refresh token is unknown, expired, revoked or issued to another client")
 		return
 	}
 	r.writeOAuthTokens(w, claim.Namespace, claim.Token, client.ID)
 }
 
 // writeOAuthTokens seals the pair and stores the replacement refresh row.
+//
+// The namespace token is what every access token carries: it is the grant's
+// real reach, to every device in the namespace. It therefore expires with the
+// refresh token issued here, and each refresh moves both forward together. A
+// connector in use never notices; one that stops refreshing leaves nothing
+// behind that works forever, where before its token outlived the chain that
+// justified it. (A token minted before this rule has no expiry until its
+// connector next refreshes.) A token that is already gone ends the chain: the
+// client is told to authorize again instead of being handed access tokens
+// that fail on their first use.
 func (r *Relay) writeOAuthTokens(w http.ResponseWriter, namespace, relayToken, clientID string) {
 	now := time.Now()
+	expires := now.Add(oauthRefreshTTL)
+	live, err := r.oauthStore.ExtendRelayTokenHash(namespace, HashToken(relayToken), expires)
+	if err != nil {
+		http.Error(w, "renew token: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !live {
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "this authorization is no longer valid; authorize again")
+		return
+	}
 	access, _, err := mcpauth.SealAccess(r.mcpSeed, namespace, relayToken, clientID, now, oauthAccessTTL)
 	if err != nil {
 		http.Error(w, "seal access token: "+err.Error(), http.StatusInternalServerError)
@@ -706,7 +861,7 @@ func (r *Relay) writeOAuthTokens(w http.ResponseWriter, namespace, relayToken, c
 		ClientID:  clientID,
 		Namespace: namespace,
 		Grant:     grant,
-		ExpiresAt: now.Add(oauthRefreshTTL),
+		ExpiresAt: expires,
 	}); err != nil {
 		http.Error(w, "store refresh token: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -756,7 +911,7 @@ func (r *Relay) oauthRevoke(w http.ResponseWriter, req *http.Request) {
 // token the grant is standing on — otherwise a still-live access token would
 // keep working for up to an hour after the user revoked it.
 func (r *Relay) revokeOAuthGrant(row OAuthRefresh) {
-	_ = r.oauthStore.RevokeOAuthRefresh(row.Hash)
+	_, _ = r.oauthStore.RevokeOAuthRefresh(row.Hash)
 	if claim, err := mcpauth.OpenGrant(r.mcpSeed, row.Grant, time.Now()); err == nil {
 		_ = r.oauthStore.RevokeRelayTokenHash(claim.Namespace, HashToken(claim.Token))
 	}

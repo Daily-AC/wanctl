@@ -266,13 +266,15 @@ func cmdStatus(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("remote device %q: %w", target, err)
 		}
-		fmt.Printf("● 远端设备 %s 在线，agent 运行中\n", target)
+		out, flush := deviceOutput(os.Stdout)
+		defer flush()
+		fmt.Fprintf(out, "● 远端设备 %s 在线，agent 运行中\n", target)
 		if !status.Detailed {
-			fmt.Println("  详情: 该设备版本较旧，无法报告 policy mode 或 agent 版本")
+			fmt.Fprintln(out, "  详情: 该设备版本较旧，无法报告 policy mode 或 agent 版本")
 			return nil
 		}
-		fmt.Printf("  Policy mode: %s\n", status.Mode)
-		fmt.Printf("  Agent 版本: %s\n", status.Version)
+		fmt.Fprintf(out, "  Policy mode: %s\n", status.Mode)
+		fmt.Fprintf(out, "  Agent 版本: %s\n", status.Version)
 		return nil
 	}
 	return printLocalStatus()

@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"wanctl/internal/admission"
 	"wanctl/internal/androidverb"
@@ -37,6 +38,7 @@ import (
 	"wanctl/internal/relayhttp"
 	"wanctl/internal/server"
 	"wanctl/internal/sessionauth"
+	"wanctl/internal/termsafe"
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
 
@@ -532,6 +534,11 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	if hello.Kind != protocol.KindHello && hello.Kind != protocol.KindConsoleHello && hello.Kind != protocol.KindWorkspaceHello {
 		return
 	}
+	// A controller names and describes itself. Both reach the owner — pairing
+	// cards, the trust list, logs, notifications — and are kept in
+	// known_clients.json, so control characters are dropped here, where the
+	// text first arrives, rather than by every place that later shows it.
+	hello.Name, hello.Label = peerText(hello.Name), peerText(hello.Label)
 	if !auth.ValidFor(a.DeviceID()) {
 		a.refuse(conn, fp, hello.Name, "rejected:session", protocol.Message{Kind: protocol.KindReject, Reason: "invalid relay session capabilities"}, audit)
 		return
@@ -565,7 +572,13 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	// Authorize (TOFU / pre-trusted portal key) and reply OK for BOTH exec and
 	// console sessions BEFORE serving — the controller/portal blocks on this OK,
 	// and a console session must be gated by the same trust check as an exec one.
-	if !a.authorize(fp, hello.Name, hello.Label, audit) {
+	if trusted, err := a.authorize(fp, hello.Name, hello.Label, audit); !trusted {
+		if errors.Is(err, console.ErrTooManyPairings) {
+			// Nothing was queued, so there is nothing a pairing link could
+			// approve. The refusal itself is the record of the attempt.
+			a.refuse(conn, fp, hello.Name, "rejected:pairing-full", protocol.Message{Kind: protocol.KindReject, Reason: err.Error()}, audit)
+			return
+		}
 		pairingURL := a.pairingURL(fp, hello.Name, hello.Label)
 		reason := "device has not paired this controller — ask the user to approve"
 		if pairingURL == "" {
@@ -624,10 +637,13 @@ func (a *Agent) mustIdentify(helloKind, fp, label string) bool {
 	return a.unlabeledPairing(fp, label)
 }
 
-func (a *Agent) authorize(fp, name, label string, scopes ...sessionAudit) bool {
+// authorize reports whether fp may use this device, asking the owner when it
+// is not yet trusted. The error is set only when the request could not even be
+// put to the owner (console.ErrTooManyPairings).
+func (a *Agent) authorize(fp, name, label string, scopes ...sessionAudit) (bool, error) {
 	if a.known.Has(fp) {
 		a.known.Touch(fp)
-		return true
+		return true, nil
 	}
 	if a.opts.AutoYes {
 		a.known.AddLabeled(fp, name, label)
@@ -638,25 +654,26 @@ func (a *Agent) authorize(fp, name, label string, scopes ...sessionAudit) bool {
 		// instead of a stdout line nobody reads.
 		a.logSessionEvent(firstAudit(scopes), eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "auto-trust"})
 		a.notifyTrustChanged(fp, name, "granted")
-		return true
+		return true, nil
 	}
 	// Surface the pairing request to a connected front-end (the portal web
 	// console) and block for a human's trust decision. A headless agent with no
 	// portal connected denies (pre-trust with --portal-fps or --yes instead).
 	var paired bool
+	var err error
 	if firstAudit(scopes).grantID != "" {
-		paired = a.console.AskPairNonBlocking(fp, name, label)
+		paired, err = a.console.AskPairNonBlocking(fp, name, label)
 	} else {
-		paired = a.console.AskPair(fp, name, label)
+		paired, err = a.console.AskPair(fp, name, label)
 	}
 	if paired {
 		a.known.AddLabeled(fp, name, label)
 		fmt.Printf("[paired] controller %q trusted via console: %s\n", name, fp)
 		a.logSessionEvent(firstAudit(scopes), eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "console"})
 		a.notifyTrustChanged(fp, name, "granted")
-		return true
+		return true, nil
 	}
-	return false
+	return false, err
 }
 
 // pairingURL builds the portal URL a user clicks to trust this controller. The
@@ -772,7 +789,7 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 		case protocol.KindExecAsync:
 			a.doExecAsync(conn, fp, peerName, m)
 		case protocol.KindExecPoll:
-			a.doExecPoll(conn, m)
+			a.doExecPoll(conn, fp, peerName, m, audit)
 		case protocol.KindLogs:
 			ok, decision := a.gateDataCapability(capabilityReadEventLog, fp, check)
 			if ok && !checksPass([]func() bool{check, audit.workspaceCheck}) {
@@ -1055,7 +1072,7 @@ func (a *Agent) doExecAsync(conn *tls.Conn, fp, peerName string, m protocol.Mess
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "command denied by device policy: " + m.Command})
 		return
 	}
-	id, err := a.jobs.start(a.opts.Shell, m.Command, m.Cwd)
+	id, err := a.jobs.start(fp, a.opts.Shell, m.Command, m.Cwd)
 	if err != nil {
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 		return
@@ -1065,12 +1082,19 @@ func (a *Agent) doExecAsync(conn *tls.Conn, fp, peerName string, m protocol.Mess
 }
 
 // doExecPoll streams a background job's output past m.Offset, then reports the
-// new total length and whether it is still running. The job id (a random secret
-// returned at start) is the capability, so no extra policy gate is applied — the
-// command itself was gated when it started.
-func (a *Agent) doExecPoll(conn *tls.Conn, m protocol.Message) {
-	j := a.jobs.get(m.JobID)
+// new total length and whether it is still running. No policy gate applies —
+// the command itself was gated when it started — but the job is only visible
+// to the controller that started it. The ID alone cannot be the authority: it
+// is written to the activity log, and everyone the device is shared with can
+// read that log.
+func (a *Agent) doExecPoll(conn *tls.Conn, fp, peerName string, m protocol.Message, audit sessionAudit) {
+	j := a.jobs.getFor(m.JobID, fp)
 	if j == nil {
+		if a.jobs.get(m.JobID) != nil {
+			// Someone else's job. Answered like a missing one; recorded,
+			// because asking for another controller's output is worth knowing.
+			a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: "[poll " + m.JobID + "]", Decision: "denied: job belongs to another controller"})
+		}
 		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "unknown or expired job: " + m.JobID})
 		return
 	}
@@ -1297,6 +1321,16 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 			return protocol.Message{Kind: protocol.KindError, Reason: "invalid pairing port or six-digit code"}
 		}
 		_, _, err := a.runADBPair(fmt.Sprintf("adb-pair %d %s", msg.PairPort, msg.PairCode), io.Discard)
+		// Pairing puts this agent's key into the device's adbd trust list,
+		// which is worth a line in the activity log like any adb-pair run
+		// through exec — with the outcome, never with the code.
+		if a.log != nil {
+			exit := 0
+			if err != nil {
+				exit = -1
+			}
+			a.log.Append(eventlog.Event{Type: "exec", Detail: fmt.Sprintf("adb-pair %d [redacted]", msg.PairPort), Decision: "console", Exit: &exit})
+		}
 		if err != nil {
 			return protocol.Message{Kind: protocol.KindError, Reason: strings.ReplaceAll(err.Error(), msg.PairCode, "[redacted]")}
 		}
@@ -1487,10 +1521,7 @@ func (a *Agent) runConsolePrompt(ctx context.Context) {
 		}
 		snap := a.console.State()
 		for _, p := range snap.Pending {
-			fmt.Printf("\n--- approval request ---\n")
-			fmt.Printf("ID:  %s\n", p.ID)
-			fmt.Printf("Cmd: %s\n", p.Cmd)
-			fmt.Printf("Allow? [y] once  [a] remember dir  [g] remember global  [n] deny: ")
+			fmt.Print(approvalPrompt(p))
 			var line string
 			fmt.Scanln(&line)
 			// console.Decide speaks the y/a/g/n vocabulary directly; anything
@@ -1502,6 +1533,33 @@ func (a *Agent) runConsolePrompt(ctx context.Context) {
 			a.console.Decide(p.ID, verdict)
 		}
 	}
+}
+
+// approvalPrompt is what the device's own terminal shows for a pending request.
+// The command is the controller's text, and a terminal would act on control
+// characters in it — enough to show one command while the owner approves
+// another — so they are made visible.
+func approvalPrompt(p console.Pending) string {
+	return "\n--- approval request ---\n" +
+		"ID:  " + p.ID + "\n" +
+		"Cmd: " + termsafe.Escape(p.Cmd) + "\n" +
+		"Allow? [y] once  [a] remember dir  [g] remember global  [n] deny: "
+}
+
+// peerText is a controller's self-description with control characters
+// removed: line breaks and tabs become spaces, everything else is dropped, and
+// so is anything that is not UTF-8.
+func peerText(s string) string {
+	s = strings.ToValidUTF8(s, "")
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			return ' '
+		case unicode.IsControl(r):
+			return -1
+		}
+		return r
+	}, s))
 }
 
 // Busy reports whether this agent is in the middle of work that restarting it

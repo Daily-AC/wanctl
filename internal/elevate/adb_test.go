@@ -96,6 +96,84 @@ func TestADBProbeExplainsWhenNothingIsListening(t *testing.T) {
 	if !strings.Contains(st.Reason, "Wireless debugging") && !strings.Contains(st.Reason, "wireless debugging") {
 		t.Fatalf("reason = %q, want it to say what the owner should turn on", st.Reason)
 	}
+
+	// The same refusal through the real port discovery. "Turn it on" is not
+	// enough on its own: the owner turned it on, and Android turned it off
+	// again after a reboot, a Wi-Fi drop or a move to another access point.
+	// Unless the reason says so, the owner's honest answer is "it is on".
+	refuseAll := func(a *ADB) {
+		a.dial = func(context.Context, string, *adb.Key) (shellConn, error) {
+			return nil, errors.New("connect: connection refused")
+		}
+	}
+	whyOff := []string{"Wireless debugging", "reboot", "Wi-Fi disconnects", "different access point"}
+
+	t.Run("the app has found no port", func(t *testing.T) {
+		state := filepath.Join(t.TempDir(), "device.json")
+		if err := os.WriteFile(state, []byte(`{"level":76}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(StateEnv, state)
+		t.Setenv(PortEnv, "")
+		a := NewADB(t.TempDir(), "wanctl@test")
+		refuseAll(a)
+		st := a.Probe(context.Background())
+		if st.Available {
+			t.Fatal("probe accepted a device with no adbd")
+		}
+		// The first phrase is what `wanctl help exec` tells an agent to match
+		// on (internal/catalog); rewording it strands that entry.
+		for _, want := range append([]string{"could not reach adbd on this device"},
+			append(whyOff, "the wanctl app has no current wireless-debugging port", "turn it off and on again")...) {
+			if !strings.Contains(st.Reason, want) {
+				t.Errorf("reason = %q\nwant it to say %q", st.Reason, want)
+			}
+		}
+	})
+
+	t.Run("no app to discover the port", func(t *testing.T) {
+		t.Setenv(StateEnv, "")
+		t.Setenv(PortEnv, "")
+		a := NewADB(t.TempDir(), "wanctl@test")
+		refuseAll(a)
+		st := a.Probe(context.Background())
+		for _, want := range whyOff {
+			if !strings.Contains(st.Reason, want) {
+				t.Errorf("reason = %q\nwant it to say %q", st.Reason, want)
+			}
+		}
+		// Termux and an adb shell have no app watching mDNS, so nothing may
+		// be blamed on one.
+		if strings.Contains(st.Reason, "wanctl app") {
+			t.Errorf("reason = %q, blames an app that is not there", st.Reason)
+		}
+	})
+}
+
+// TestADBRejectedKeyIsNotBlamedOnWirelessDebugging: when adbd answers on the
+// discovered port and refuses the key, wireless debugging is demonstrably on.
+// The pairing is what has to be redone, and the adb error says so; closing the
+// reason with "turn on Wireless debugging" would send the owner to a switch
+// that is already on and away from the fix.
+func TestADBRejectedKeyIsNotBlamedOnWirelessDebugging(t *testing.T) {
+	a := NewADB(t.TempDir(), "wanctl@test")
+	a.ports = func() ([]int, string) { return []int{41031, 5555}, "turn on Wireless debugging" }
+	a.dial = func(_ context.Context, addr string, _ *adb.Key) (shellConn, error) {
+		if addr == "127.0.0.1:41031" {
+			return nil, fmt.Errorf("adb: TLS handshake with adbd: remote error: tls: bad certificate (%w: pair again)", adb.ErrKeyRejected)
+		}
+		return nil, errors.New("connect: connection refused")
+	}
+	st := a.Probe(context.Background())
+	if st.Available {
+		t.Fatal("probe accepted a device that refused the key")
+	}
+	if !strings.Contains(st.Reason, "pair again") {
+		t.Errorf("reason = %q, lost the pairing explanation", st.Reason)
+	}
+	if strings.Contains(st.Reason, "turn on Wireless debugging") {
+		t.Errorf("reason = %q, tells the owner to turn on wireless debugging, which is on", st.Reason)
+	}
 }
 
 // TestADBPendingAuthorizationStopsTheSearch: when adbd is waiting for someone
@@ -159,6 +237,66 @@ func TestADBRunRetriesOnceOnADeadConnection(t *testing.T) {
 	}
 }
 
+// TestADBProbeRedialsADeadCachedConnection is the probe's half of the test
+// above. A probe runs `id` on whatever connection an earlier command left open,
+// and that socket can die while idle. Reporting the dead socket as "not
+// available" is worse than a failed command: the Manager caches the verdict,
+// so every elevated command for the next minute is refused while adbd sits
+// there listening.
+func TestADBProbeRedialsADeadCachedConnection(t *testing.T) {
+	first := &stubConn{uid: "uid=2000(shell)"}
+	second := &stubConn{uid: "uid=2000(shell)"}
+	a := NewADB(t.TempDir(), "wanctl@test")
+	a.ports = func() ([]int, string) { return []int{41234}, "hint" }
+	dials := 0
+	a.dial = func(context.Context, string, *adb.Key) (shellConn, error) {
+		dials++
+		if dials == 1 {
+			return first, nil
+		}
+		return second, nil
+	}
+	if st := a.Probe(context.Background()); !st.Available {
+		t.Fatalf("first probe = unavailable (%s)", st.Reason)
+	}
+	first.err = errors.New("connection reset by peer") // dropped while idle
+
+	st := a.Probe(context.Background())
+	if !st.Available {
+		t.Fatalf("probe reported a dead cached connection as the channel being unavailable: %s", st.Reason)
+	}
+	if !first.closed {
+		t.Error("the dead connection was not closed")
+	}
+	if dials != 2 || len(second.ran) != 1 || second.ran[0] != "id" {
+		t.Errorf("dials=%d, second connection ran %q; want one redial that runs `id`", dials, second.ran)
+	}
+}
+
+// TestADBProbeDoesNotRetryAFreshConnection: a connection dialed a moment ago
+// cannot have gone stale, and when `id` fails on it the failure is the
+// diagnosis. Retrying would spend the rest of the probe's budget and could
+// replace the device's banner with a dial timeout.
+func TestADBProbeDoesNotRetryAFreshConnection(t *testing.T) {
+	a := NewADB(t.TempDir(), "wanctl@test")
+	a.ports = func() ([]int, string) { return []int{41234}, "hint" }
+	dials := 0
+	a.dial = func(context.Context, string, *adb.Key) (shellConn, error) {
+		dials++
+		return &stubConn{err: errors.New("i/o timeout")}, nil
+	}
+	st := a.Probe(context.Background())
+	if st.Available {
+		t.Fatal("probe accepted a connection that could not run `id`")
+	}
+	if dials != 1 {
+		t.Errorf("dialed %d times, want 1", dials)
+	}
+	if !strings.Contains(st.Reason, "`id` failed") {
+		t.Errorf("reason = %q, want the failure on the connection itself", st.Reason)
+	}
+}
+
 func TestPortFromState(t *testing.T) {
 	write := func(t *testing.T, v any) string {
 		t.Helper()
@@ -177,8 +315,22 @@ func TestPortFromState(t *testing.T) {
 		t.Fatalf("port = %d, want 37123", got)
 	}
 
-	// A stale port is a wrong answer, not an old one: wireless debugging picks
-	// a new port every time it is enabled, and something else may hold the old.
+	// Age since discovery is not staleness: the app stamps a port once, when
+	// mDNS reports it, and never again while it stays up. On 2026-09-09 a
+	// PGBM10's state file carried a battery reading under a minute old beside
+	// a port stamped eight minutes before it; a 30-minute limit threw such a
+	// port away half an hour after discovery, with adbd still listening on it.
+	discovered := time.Now().Add(-45 * time.Minute).UTC().Format(time.RFC3339Nano)
+	if got := portFromState(write(t, map[string]any{
+		"level": 23,
+		"adb":   map[string]any{"port": 46321, "updated_at": discovered},
+	})); got != 46321 {
+		t.Fatalf("port = %d, want 46321: a port discovered 45 minutes ago is still the port", got)
+	}
+
+	// A file nothing has maintained for longer than the backstop is not
+	// believed: wireless debugging picks a new port every time it is enabled,
+	// and something else may hold the old one.
 	old := time.Now().Add(-2 * maxADBPortAge).UTC().Format(time.RFC3339Nano)
 	if got := portFromState(write(t, map[string]any{
 		"adb": map[string]any{"port": 37123, "updated_at": old},

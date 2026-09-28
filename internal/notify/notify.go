@@ -175,8 +175,11 @@ func feishuBody(e Event, keyword, secret string, now time.Time) ([]byte, error) 
 	if e.Detail != "" {
 		message += "\n\n" + e.Detail
 	}
+	// plain_text, not lark_md: the message and detail carry text other people
+	// chose (an access request's note, a device name, a command), and as
+	// markdown that text can put a link of its own choosing on the card.
 	card.Card.Elements = []any{
-		map[string]any{"tag": "div", "text": map[string]string{"tag": "lark_md", "content": message}},
+		map[string]any{"tag": "div", "text": map[string]string{"tag": "plain_text", "content": message}},
 		map[string]any{"tag": "note", "elements": []any{
 			map[string]string{"tag": "plain_text", "content": eventNote(e)},
 		}},
@@ -210,17 +213,19 @@ func eventNote(e Event) string {
 	return device + " · " + e.TS.Local().Format("2006-01-02 15:04:05 MST")
 }
 
+// dingtalkBody sends plain text. The message and detail carry text other
+// people chose, and a markdown message would render their links and images.
+// The keyword check DingTalk applies still passes: the title leads the content.
 func dingtalkBody(e Event, keyword, msgUUID string) ([]byte, error) {
-	title := titleFor(e, keyword)
-	text := "### " + title + "\n\n" + e.Message
+	text := titleFor(e, keyword) + "\n\n" + e.Message
 	if e.Detail != "" {
-		text += "\n\n```\n" + e.Detail + "\n```"
+		text += "\n\n" + e.Detail
 	}
-	text += "\n\n> " + eventNote(e)
+	text += "\n\n" + eventNote(e)
 	return json.Marshal(map[string]any{
-		"msgtype":  "markdown",
-		"markdown": map[string]string{"title": title, "text": text},
-		"msgUuid":  msgUUID,
+		"msgtype": "text",
+		"text":    map[string]string{"content": text},
+		"msgUuid": msgUUID,
 	})
 }
 

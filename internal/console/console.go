@@ -8,6 +8,7 @@ package console
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"sync"
 	"time"
 
@@ -77,8 +78,27 @@ type pendingPair struct {
 }
 
 // pairTTL bounds how long an undecided pairing request lives in memory waiting
-// for a user to click the URL the AI surfaced.
+// for a user to click the URL the AI surfaced, and how long an approval waits
+// for its controller to come back and collect it.
 const pairTTL = 5 * time.Minute
+
+// maxPendingPairs bounds how many unknown controllers can wait for the owner at
+// once. Each is an entry held in memory and, when new, a notification to the
+// owner, and a fresh key costs whoever dials nothing: without a bound, anyone
+// able to reach the device could grow both without limit. Past it, new
+// fingerprints are refused until requests are decided or expire. The ones
+// already waiting are kept, so a flood cannot push a genuine request out of the
+// owner's view.
+const maxPendingPairs = 16
+
+// pairNotifyWindow limits pairing notifications: within it, at most one per
+// fingerprint and at most maxPendingPairs in all. The portal still shows every
+// waiting request; only the push to the owner is held back.
+const pairNotifyWindow = 30 * time.Minute
+
+// ErrTooManyPairings is the answer to a new controller while maxPendingPairs
+// requests are already waiting.
+var ErrTooManyPairings = errors.New("too many pairing requests are already waiting for the device owner; try again later")
 
 // DefaultTimeout is how long an approval waits for a front-end decision when
 // nothing has raised it. It suits a human already looking at a screen.
@@ -107,6 +127,7 @@ type Service struct {
 	trustedFn func() []TrustedController // supplies the trusted-controller list (set by the agent)
 	pendingFn func(Pending)              // best-effort observer; never runs on the approval path
 	pairingFn func(PendingPairing)       // best-effort observer; called only for a new pairing entry
+	notified  map[string]time.Time       // fingerprints recently reported to pairingFn (pairNotifyWindow)
 }
 
 // SetTimeout changes how long Ask and AskPair wait for a decision, and returns
@@ -166,6 +187,7 @@ func New(engine *policy.Engine, log *eventlog.Logger, info Info) *Service {
 	return &Service{
 		engine: engine, log: log, info: info, timeout: DefaultTimeout,
 		pend: map[string]*pending{}, pairs: map[string]*pendingPair{}, subs: map[chan struct{}]struct{}{},
+		notified: map[string]time.Time{},
 	}
 }
 
@@ -183,29 +205,38 @@ func New(engine *policy.Engine, log *eventlog.Logger, info Info) *Service {
 // This decouples controller-dial timing from portal-tab timing: the AI gets a
 // reject + URL right away, the user clicks it whenever, the next dial finds the
 // fp already trusted and goes through.
-func (s *Service) AskPair(fp, name, label string) bool {
+//
+// An approval is collected once. The dial that receives it is the one the
+// agent records in its trust store; keeping the verdict around afterwards
+// would answer "trusted" to that key again later — after the owner revoked it,
+// with nobody asked.
+//
+// A new fingerprint while maxPendingPairs requests are already waiting gets
+// ErrTooManyPairings and no entry.
+func (s *Service) AskPair(fp, name, label string) (bool, error) {
 	return s.askPair(fp, name, label, true)
 }
 
 // AskPairNonBlocking publishes the same owner approval request but immediately
 // returns its current decision. URL-only clients must receive the pairing link
 // before their bounded task deadline, even while a portal console is watching.
-func (s *Service) AskPairNonBlocking(fp, name, label string) bool {
+func (s *Service) AskPairNonBlocking(fp, name, label string) (bool, error) {
 	return s.askPair(fp, name, label, false)
 }
 
-func (s *Service) askPair(fp, name, label string, waitForDecision bool) bool {
+func (s *Service) askPair(fp, name, label string, waitForDecision bool) (bool, error) {
 	s.mu.Lock()
 	s.pruneExpiredPairsLocked()
 	p := s.pairs[fp]
 	created := false
 	if p != nil {
-		// Already decided? Return its verdict immediately.
+		// Already decided? Return its verdict, which this collects.
 		select {
 		case <-p.decided:
 			trust := p.trust
+			delete(s.pairs, fp)
 			s.mu.Unlock()
-			return trust
+			return trust, nil
 		default:
 		}
 		// Same fp dialing again — refresh metadata + TTL, reuse the entry.
@@ -217,6 +248,10 @@ func (s *Service) askPair(fp, name, label string, waitForDecision bool) bool {
 		}
 		p.expires = time.Now().Add(pairTTL)
 	} else {
+		if s.undecidedPairsLocked() >= maxPendingPairs {
+			s.mu.Unlock()
+			return false, ErrTooManyPairings
+		}
 		created = true
 		p = &pendingPair{
 			view:    PendingPairing{FP: fp, Name: name, Label: label, Created: time.Now()},
@@ -227,12 +262,13 @@ func (s *Service) askPair(fp, name, label string, waitForDecision bool) bool {
 	}
 	hasFrontend := waitForDecision && len(s.subs) > 0
 	pairingFn := s.pairingFn
+	report := created && pairingFn != nil && s.claimPairNotifyLocked(fp)
 	pairingView := p.view
 	decided := p.decided
 	wait := s.timeout
 	s.mu.Unlock()
 	s.notify()
-	if created && pairingFn != nil {
+	if report {
 		go pairingFn(pairingView)
 	}
 
@@ -240,19 +276,53 @@ func (s *Service) askPair(fp, name, label string, waitForDecision bool) bool {
 		// Headless or no portal tab attending; let the controller fail fast and
 		// surface a URL to the user. The entry persists (pairTTL) for offline
 		// approval.
-		return false
+		return false, nil
 	}
 	select {
 	case <-decided:
 		s.mu.Lock()
 		trust := p.trust
+		if s.pairs[fp] == p {
+			delete(s.pairs, fp) // collected, see AskPair
+		}
 		s.mu.Unlock()
-		return trust
+		return trust, nil
 	case <-time.After(wait):
 		// Front-end was attending but didn't decide in time. Entry persists for
 		// retroactive approval; this dial reports a reject + URL.
+		return false, nil
+	}
+}
+
+// undecidedPairsLocked counts the requests still waiting for the owner. Caller
+// holds s.mu.
+func (s *Service) undecidedPairsLocked() int {
+	n := 0
+	for _, p := range s.pairs {
+		select {
+		case <-p.decided:
+		default:
+			n++
+		}
+	}
+	return n
+}
+
+// claimPairNotifyLocked reports whether a new request from fp may notify the
+// owner, and records it if so. Caller holds s.mu. The record is pruned to the
+// window on every call, and never holds more than maxPendingPairs entries.
+func (s *Service) claimPairNotifyLocked(fp string) bool {
+	now := time.Now()
+	for k, at := range s.notified {
+		if now.Sub(at) >= pairNotifyWindow {
+			delete(s.notified, k)
+		}
+	}
+	if _, recent := s.notified[fp]; recent || len(s.notified) >= maxPendingPairs {
 		return false
 	}
+	s.notified[fp] = now
+	return true
 }
 
 // DecidePair delivers a trust verdict for a pending pairing. Returns false if
@@ -282,24 +352,24 @@ func (s *Service) DecidePair(fp string, trust bool) bool {
 	close(p.decided)
 	if !trust {
 		delete(s.pairs, fp)
+	} else {
+		// The approval waits pairTTL for its controller to collect it, and
+		// no longer: an approval left lying around would admit that key
+		// whenever it next showed up.
+		p.expires = time.Now().Add(pairTTL)
 	}
 	s.mu.Unlock()
 	s.notify()
 	return true
 }
 
-// pruneExpiredPairsLocked drops undecided pair entries past their TTL. Caller
-// holds s.mu. Decided entries are left for the next dial to consume.
+// pruneExpiredPairsLocked drops pair entries past their TTL: requests nobody
+// answered, and approvals nobody collected. Caller holds s.mu.
 func (s *Service) pruneExpiredPairsLocked() {
 	now := time.Now()
 	for fp, p := range s.pairs {
-		select {
-		case <-p.decided:
-			// keep; the next AskPair drains it
-		default:
-			if now.After(p.expires) {
-				delete(s.pairs, fp)
-			}
+		if now.After(p.expires) {
+			delete(s.pairs, fp)
 		}
 	}
 }

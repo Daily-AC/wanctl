@@ -91,7 +91,7 @@ func TestFeishuInteractiveCardShape(t *testing.T) {
 	}
 }
 
-func TestDingTalkMarkdownShapeIncludesMessageUUID(t *testing.T) {
+func TestDingTalkTextShapeIncludesMessageUUID(t *testing.T) {
 	req, err := buildRequest(Destination{
 		URL: "https://oapi.dingtalk.com/robot/send?access_token=abc", Format: FormatDingTalk, Keyword: "WANCTL",
 	}, fixedEvent(), "same-uuid", time.Now())
@@ -99,18 +99,42 @@ func TestDingTalkMarkdownShapeIncludesMessageUUID(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got struct {
-		MsgType  string `json:"msgtype"`
-		MsgUUID  string `json:"msgUuid"`
-		Markdown struct {
-			Title string `json:"title"`
-			Text  string `json:"text"`
-		} `json:"markdown"`
+		MsgType string `json:"msgtype"`
+		MsgUUID string `json:"msgUuid"`
+		Text    struct {
+			Content string `json:"content"`
+		} `json:"text"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.MsgType != "markdown" || got.MsgUUID != "same-uuid" || !strings.Contains(got.Markdown.Title, "WANCTL") || !strings.Contains(got.Markdown.Text, "legion") {
+	if got.MsgType != "text" || got.MsgUUID != "same-uuid" || !strings.HasPrefix(got.Text.Content, "WANCTL") || !strings.Contains(got.Text.Content, "legion") {
 		t.Fatalf("DingTalk body = %+v", got)
+	}
+}
+
+// Text other people chose reaches these cards (an access request's note, a
+// device name, a command). Neither provider may render it as markup.
+func TestCardsCarryOtherPeoplesTextAsPlainText(t *testing.T) {
+	e := fixedEvent()
+	e.Detail = "[open the approval page](https://example.invalid/phish) ![](https://example.invalid/pixel)"
+	for format, url := range map[string]string{
+		FormatFeishu:   "https://open.feishu.cn/open-apis/bot/v2/hook/abc",
+		FormatDingTalk: "https://oapi.dingtalk.com/robot/send?access_token=abc",
+	} {
+		req, err := buildRequest(Destination{URL: url, Format: format}, e, "uuid", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw bytes.Buffer
+		raw.ReadFrom(req.Body)
+		body := raw.String()
+		if strings.Contains(body, "lark_md") || strings.Contains(body, `"markdown"`) {
+			t.Errorf("%s: body renders markup: %s", format, body)
+		}
+		if !strings.Contains(body, "example.invalid/phish") {
+			t.Errorf("%s: the note itself went missing: %s", format, body)
+		}
 	}
 }
 

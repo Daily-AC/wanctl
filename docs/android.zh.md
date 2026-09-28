@@ -73,6 +73,11 @@ https://relay.example.com/dl/wanctl-android-arm64.apk
 同一台设备上的 Termux 就是这么设的，这也是为什么 Termux 那条路的锁屏测试当初过了。
 app 设置中的**通知与后台运行**入口会跳到 OPPO、小米和华为上的等价路径。
 
+ColorOS（OPPO、一加、realme）上还有一种丢掉 agent 的方式：清理最近任务会强行停止
+所有没在那里锁定的应用（在一台 PGBM10、ColorOS 14 上见过）。被强行停止的应用会一直停着——
+收不到开机广播，定时任务也不跑，直到有人再打开它。在最近任务里锁定 wanctl 的卡片；
+app 的后台运行指引在这些手机上也会这么提示。
+
 ### 给一台 APK 设备配对，按顺序来
 
 这几道闸是一道一道触发的，每一道的修法都不一样，所以头三次 `wanctl exec`
@@ -176,9 +181,12 @@ AOSP 会在它后面追加 64 字节的 TLS 导出密钥材料，把这次交换
 导出标签是 `"adb-label\0"`，**带着**它结尾的那个 NUL，因为 AOSP 传的标签长度是
 `sizeof()`。少了那个字节，产出的密钥材料完全合法，只是永远对不上设备那边的。
 
-配对是持久的：密钥落在 `/data/misc/adb/adb_keys` 里，能扛过重启。
-无线调试本身则不能——Android 开机就把它关掉——所以重启之后那个开关得再打开一次，
-但配对码不用再输一遍。
+配对能扛过重启，但不是永久的：密钥落在 `/data/misc/adb/adb_keys` 里，
+而 Android 会删掉 **7 天**没有连接过的密钥（AOSP 默认的授权超时），
+所以提权通道闲置一周的手机得重新配对。开发者选项 → **停用 adb 授权超时功能**
+（Disable adb authorization timeout）会关掉这个期限。**撤销 USB 调试授权**
+（Revoke USB debugging authorizations）会一次删掉所有配对过的密钥，wanctl 的也在内。
+无线调试本身更脆弱——见[什么会让 adb 通道失效](#什么会让-adb-通道失效)。
 
 **连接**端口也不稳定，而且它不是配对端口：IP 地址和端口 底下那个数字，
 在无线调试被重新打开时、以及重新配对之后都会变（在一台 PGBM10 上实测：37819 → 41031）。
@@ -191,9 +199,37 @@ app 不会问你要它——它盯着 mDNS 上的 `_adb-tls-connect._tcp`，
 而且 app 在盯着的时候会握住一个 `MulticastLock`——没人握的时候 Wi-Fi
 会在硬件层把多播过滤掉。盯梢随**提权通道**开关一起启停：
 一台主人没打开提权的设备，不会去听那个用来启用提权的端口。
+v0.14.0 及更早的 app 没完全做到：它们只在服务启动时看一眼开关，
+所以在 agent 运行中打开开关，端口要等到在首页点「停用」再点「启用」才会被发现；
+而且发现的端口半小时后就不再被采信，哪怕 adbd 还在上面。
 
 `WANCTL_ADB_PORT` 仍然覆盖一切，这正是 Termux 和 adb-shell 两条路需要的：
 它们没有框架可问。
+
+#### 什么会让 adb 通道失效
+
+无线调试不是一个打开了就一直开着的开关，它背后的配对也会过期。
+下面是 Android 的做法，出自 AOSP 的 `AdbDebuggingManager`：
+
+| 发生了什么 | Android 会做什么 | 怎么让通道恢复 |
+|---|---|---|
+| 重启 | 关掉无线调试 | 重新打开无线调试 |
+| Wi-Fi 关闭或断开，或换到另一个接入点 | 关掉无线调试 | 重新连上 Wi-Fi，再打开无线调试 |
+| 通道 7 天没有连接过 | 撤销配对 | 重新配对 |
+| 撤销 USB 调试授权 | 撤销所有配对 | 重新配对 |
+
+「另一个接入点」指的是另一个 BSSID，所以在两个 mesh 节点之间漫游也算；
+在大多数路由器上，2.4 GHz 和 5 GHz 之间切换也算。前两行不影响配对，
+不用重新输配对码，通道报的是 `could not reach adbd on this device`。
+后两行要重新配对，通道报的是 `TLS handshake with adbd`。
+每一行都需要有人在手机旁边操作，这就是为什么实际上只有 `su` 能在无人值守时一直可用。
+
+小米手机（MIUI、HyperOS）上，adb 通道所用的 shell uid 在打开开发者选项 →
+**USB 调试（安全设置）**（USB debugging (Security settings)）之前不能注入输入，
+而这个开关要求插着 SIM 卡并登录小米账号；安装应用还要打开 **USB 安装**
+（Install via USB）。没开的话，`input` 会失败于 `SecurityException … INJECT_EVENTS permission`，
+安装会失败于 `INSTALL_FAILED_USER_RESTRICTED`。这是在一台小米 10 至尊版
+（MIUI 12.5，Android 11）上经 USB adb 实测的，走的是同一个 uid 2000。
 
 #### adb 通道需要人一次，而且过不去这一关就没法自动化
 

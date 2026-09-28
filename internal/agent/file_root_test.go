@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/admission"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/relay"
@@ -52,7 +53,7 @@ func filePolicyConn(t *testing.T, allowedRoot string) *tls.Conn {
 	}
 	dctx, dcancel := context.WithTimeout(context.Background(), 3*time.Second)
 	t.Cleanup(dcancel)
-	nc, _, err := wsconn.Dial(dctx, base+"/dial?token=tok&target=alice/home-pc", nil)
+	nc, _, err := wsconn.Dial(dctx, base+"/dial?target=alice/home-pc", admission.Header("tok"))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

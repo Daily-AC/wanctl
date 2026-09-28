@@ -16,7 +16,7 @@ func TestResolveTokenNamespaceUsesRelayIdentity(t *testing.T) {
 		if r.URL.Path != "/peers" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
-		gotToken, _, _ = admission.Token(r)
+		gotToken, _ = admission.Token(r)
 		if r.URL.Query().Get("token") != "" {
 			t.Fatal("token was placed in the request URL")
 		}

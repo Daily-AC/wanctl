@@ -31,7 +31,11 @@ func workspaceRoute(target, raw string) (client.WorkspaceRef, error) {
 }
 
 func printWorkspace(ref client.WorkspaceRef, result *protocol.WorkspaceResult) error {
-	return json.NewEncoder(os.Stdout).Encode(struct {
+	// JSON already escapes C0 controls; C1 characters come out as \u escapes
+	// on a terminal, which keeps the document valid JSON.
+	out, flush := deviceOutput(os.Stdout)
+	defer flush()
+	return json.NewEncoder(out).Encode(struct {
 		Workspace string `json:"workspace"`
 		*protocol.WorkspaceResult
 	}{ref.String(), result})

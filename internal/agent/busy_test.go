@@ -39,7 +39,7 @@ func TestBusyCoversEveryKindOfWork(t *testing.T) {
 	})
 
 	t.Run("a running background job", func(t *testing.T) {
-		if _, err := a.jobs.start("/bin/sh", "sleep 5", ""); err != nil {
+		if _, err := a.jobs.start("controller", "/bin/sh", "sleep 5", ""); err != nil {
 			t.Fatal(err)
 		}
 		if !a.Busy() {

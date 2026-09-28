@@ -82,6 +82,26 @@ func (d *deviceConn) rpc(req protocol.Message) (protocol.Message, error) {
 func (d *deviceConn) rpcWithin(req protocol.Message, timeout time.Duration) (protocol.Message, error) {
 	d.rpcMu.Lock()
 	defer d.rpcMu.Unlock()
+	return d.rpcLocked(req, timeout)
+}
+
+// errDeviceBusy means another RPC to this device is in flight. Only callers
+// that would rather skip a device than queue behind it see it.
+var errDeviceBusy = errors.New("device busy")
+
+// tryRPCWithin is rpcWithin for a caller that must not wait behind another
+// RPC: a slow device holds rpcMu for up to the whole timeout, and callers that
+// queue there pile up one goroutine per request.
+func (d *deviceConn) tryRPCWithin(req protocol.Message, timeout time.Duration) (protocol.Message, error) {
+	if !d.rpcMu.TryLock() {
+		return protocol.Message{}, errDeviceBusy
+	}
+	defer d.rpcMu.Unlock()
+	return d.rpcLocked(req, timeout)
+}
+
+// rpcLocked sends req and waits for its reply. The caller holds rpcMu.
+func (d *deviceConn) rpcLocked(req protocol.Message, timeout time.Duration) (protocol.Message, error) {
 	d.wmu.Lock()
 	err := protocol.WriteMessage(d.conn, req)
 	d.wmu.Unlock()
@@ -113,6 +133,17 @@ func (d *deviceConn) rpcWithin(req protocol.Message, timeout time.Duration) (pro
 
 func (d *deviceConn) state() (console.State, error) {
 	m, err := d.rpc(protocol.Message{Kind: protocol.KindConsoleState})
+	if err != nil {
+		return console.State{}, err
+	}
+	var st console.State
+	return st, json.Unmarshal(m.Data, &st)
+}
+
+// stateIfIdle is state for the aggregate view: it skips a device that is busy
+// answering someone else and gives up after timeout.
+func (d *deviceConn) stateIfIdle(timeout time.Duration) (console.State, error) {
+	m, err := d.tryRPCWithin(protocol.Message{Kind: protocol.KindConsoleState}, timeout)
 	if err != nil {
 		return console.State{}, err
 	}

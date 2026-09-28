@@ -2,6 +2,8 @@ package relay
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -73,7 +75,17 @@ func (c *httpSessionConn) Close() error {
 	return nil
 }
 
-func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegation.Access, token string) *httpSession {
+var (
+	errNamespaceSessions = fmt.Errorf("too many open sessions for this account (%d); a session whose controller went away is released within about a minute, so wait and try again", httpSessionsPerNS)
+	errRelaySessions     = errors.New("the relay has too many open sessions; try again later")
+)
+
+// newHTTPSession registers session sid, or refuses with errNamespaceSessions
+// or errRelaySessions when the dialing namespace or the relay already holds as
+// many as it may. Every path that opens an HTTP session comes through here,
+// and the count is taken under the same lock as the registration, so
+// concurrent dials cannot overshoot it.
+func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegation.Access, token string) (*httpSession, error) {
 	s := &httpSession{
 		toClient:     newSideQueue(),
 		toAgent:      newSideQueue(),
@@ -82,19 +94,53 @@ func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegat
 		ownerNS:      auth.OwnerNamespace,
 		lastActive:   time.Now(),
 	}
+	s.clientSeen = s.lastActive
+	// Both directions are charged to the namespace that dialed, which opened
+	// the session and can end it. The portal dials on behalf of every account,
+	// so its sessions draw on the relay's budget alone.
+	ns := auth.CallerNamespace
+	if r.portalNS != "" && ns == r.portalNS {
+		ns = ""
+	}
+	s.toClient.attach(r.resident, ns)
+	s.toAgent.attach(r.resident, ns)
 	r.hmu.Lock()
-	r.hsess[sid] = s
+	var refused error
+	switch {
+	case len(r.hsess) >= r.maxSessions:
+		refused = errRelaySessions
+	case ns != "" && r.countNamespaceSessionsLocked(ns) >= httpSessionsPerNS:
+		refused = errNamespaceSessions
+	default:
+		r.hsess[sid] = s
+	}
 	r.hmu.Unlock()
-	s.lease = r.beginAccessLease(sid, auth.OwnerNamespace+"/"+auth.Device, access, token)
+	if refused != nil {
+		s.free()
+		return nil, refused
+	}
+	s.lease = r.beginAccessLease(sid, auth.OwnerNamespace+"/"+auth.Device, access, token, auth.Capabilities)
 	s.lease.addCloser(func() {
 		r.hmu.Lock()
 		if r.hsess[sid] == s {
 			delete(r.hsess, sid)
 		}
 		r.hmu.Unlock()
-		s.close()
+		s.free()
 	})
-	return s
+	return s, nil
+}
+
+// countNamespaceSessionsLocked counts the HTTP sessions namespace ns dialed
+// that the relay still holds. Caller holds hmu.
+func (r *Relay) countNamespaceSessionsLocked(ns string) int {
+	n := 0
+	for _, s := range r.hsess {
+		if s.callerNS == ns {
+			n++
+		}
+	}
+	return n
 }
 
 // closeHTTPSessionDrainable ends a session the gentle way: the queues stop
@@ -123,7 +169,7 @@ func (r *Relay) closeHTTPSession(sid string, s *httpSession) {
 		delete(r.hsess, sid)
 	}
 	r.hmu.Unlock()
-	s.close()
+	s.free()
 	if s.lease != nil {
 		s.lease.close()
 	}
@@ -139,8 +185,12 @@ func (r *Relay) httpSessionConn(sid string, s *httpSession, role string) io.Read
 		writeQ: writeQ,
 		// The WebSocket leg ending is an ordinary end of session, so the HTTP
 		// peer keeps its queued bytes until it has read them, exactly as it
-		// does when that peer posts /h/close itself.
-		close:  func() { r.closeHTTPSessionDrainable(sid, s) },
+		// does when that peer posts /h/close itself. Nothing reads this side's
+		// direction any more, so that one goes at once.
+		close: func() {
+			readQ.free()
+			r.closeHTTPSessionDrainable(sid, s)
+		},
 		settle: func() { r.releaseDrainedSession(sid, s) },
 	}
 }
@@ -161,7 +211,14 @@ func (r *Relay) handleWSDialToHTTP(w http.ResponseWriter, req *http.Request, tar
 	sid := newID()
 	auth.Session = sid
 	r.hmu.Unlock()
-	s := r.newHTTPSession(sid, auth, access, token)
+	s, err := r.newHTTPSession(sid, auth, access, token)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	}
+	r.hmu.Lock()
+	s.clientBridged = true
+	r.hmu.Unlock()
 
 	select {
 	case a.open <- auth:
@@ -201,7 +258,11 @@ func (r *Relay) handleHDialToWS(w http.ResponseWriter, targetKey string, auth se
 	auth.Op = "open"
 	auth.Session = sid
 	auth.URL = "/session/" + sid
-	s := r.newHTTPSession(sid, auth, access, token)
+	s, err := r.newHTTPSession(sid, auth, access, token)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	}
 	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), done: make(chan struct{}), ownerNS: auth.OwnerNamespace}
 	r.mu.Lock()
 	r.pending[sid] = ps

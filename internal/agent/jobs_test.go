@@ -19,7 +19,7 @@ func TestJobStore_RunsCapturesOutputAndExit(t *testing.T) {
 		t.Skip("uses /bin/sh")
 	}
 	s := newJobStore()
-	id, err := s.start("/bin/sh", "printf 'hello\\n'; exit 7", "")
+	id, err := s.start("controller", "/bin/sh", "printf 'hello\\n'; exit 7", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestJobStore_CwdWithSpecialCharacters(t *testing.T) {
 	}
 
 	s := newJobStore()
-	id, err := s.start("/bin/sh", "pwd", cwd)
+	id, err := s.start("controller", "/bin/sh", "pwd", cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,11 +136,11 @@ func TestJobStoreRejectsExcessConcurrentJobs(t *testing.T) {
 	}
 	s := newJobStore()
 	for i := 0; i < expectedMaxConcurrentJobs; i++ {
-		if _, err := s.start("/bin/sh", "sleep 0.5", ""); err != nil {
+		if _, err := s.start("controller", "/bin/sh", "sleep 0.5", ""); err != nil {
 			t.Fatalf("start job %d: %v", i, err)
 		}
 	}
-	if id, err := s.start("/bin/sh", "sleep 0.5", ""); err == nil {
+	if id, err := s.start("controller", "/bin/sh", "sleep 0.5", ""); err == nil {
 		t.Fatalf("excess concurrent job was accepted as %s", id)
 	}
 }
@@ -152,7 +152,7 @@ func TestJobStoreTimesOutRunningJob(t *testing.T) {
 	l := defaultJobLimits()
 	l.runTimeout = 50 * time.Millisecond
 	s := newJobStoreWithLimits(l)
-	id, err := s.start("/bin/sh", "sleep 5", "")
+	id, err := s.start("controller", "/bin/sh", "sleep 5", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestJobStoreGCsOnCompletionToRetainedBudgets(t *testing.T) {
 			s := newJobStoreWithLimits(l)
 			var jobs []*job
 			for _, command := range []string{"printf 123456", "printf abcdef"} {
-				id, err := s.start("/bin/sh", command, "")
+				id, err := s.start("controller", "/bin/sh", command, "")
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -46,7 +46,6 @@ func TestSharedDeviceMutationRoutesFollowTheManagementSwitch(t *testing.T) {
 		{"/api/devices/notify", http.MethodPost, body, true, false},
 		// Reads of what the device did. `wanctl logs` gives these to every
 		// grantee, so the portal does too, switch or no switch.
-		{"/api/devices/events", http.MethodGet, "", false, true},
 		{"/api/devices/logs", http.MethodGet, "", false, true},
 	}
 
@@ -85,7 +84,6 @@ func TestSharedDeviceMutationRoutesFollowTheManagementSwitch(t *testing.T) {
 						"/api/devices/adb-pair":        s.handleDeviceADBPair,
 						"/api/devices/lark":            s.handleDeviceLarkWrite,
 						"/api/devices/notify":          s.handleDeviceNotify,
-						"/api/devices/events":          s.handleDeviceEvents,
 						"/api/devices/logs":            s.handleDeviceLogs,
 					}[rt.path]
 
