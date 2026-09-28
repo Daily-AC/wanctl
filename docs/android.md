@@ -76,6 +76,13 @@ does not prevent it.
 on the same device, which is why the Termux route's locked-screen test passed.
 The app's 电池 button links to the equivalent path for OPPO, Xiaomi and Huawei.
 
+On ColorOS (OPPO, OnePlus, realme) there is one more way to lose the agent:
+clearing the recent-tasks screen force-stops every app that is not locked there
+(seen on a PGBM10, ColorOS 14). A force-stopped app stays stopped — no boot
+broadcast, no scheduled job, nothing until someone opens it again. Lock
+wanctl's card in recent tasks; the app's background guide says so on these
+phones.
+
 ### Pairing an APK device, in order
 
 The gates fire one at a time and each has a different fix, so the first three
@@ -194,10 +201,14 @@ label is `"adb-label\0"` **with** its trailing NUL, because AOSP passes
 `sizeof()` as the label length. Dropping that byte produces perfectly valid
 keying material that simply never matches the device's.
 
-Pairing is persistent: the key lands in `/data/misc/adb/adb_keys` and survives
-reboots. Wireless debugging itself does not — Android turns it off on boot —
-so after a restart the switch has to be flipped again, but the code does not
-have to be re-entered.
+The pairing survives a reboot, but it is not permanent: the key lands in
+`/data/misc/adb/adb_keys`, and Android removes a key that has not connected for
+**7 days** (AOSP's default authorization timeout), so a phone whose elevation
+channel sat unused for a week has to be paired again. Developer options →
+**Disable adb authorization timeout** (停用 adb 授权超时功能) turns that expiry
+off. **Revoke USB debugging authorizations** (撤销 USB 调试授权) removes every
+paired key at once, wanctl's included. Wireless debugging itself is more
+fragile still — see [What turns the adb channel off](#what-turns-the-adb-channel-off).
 
 The **connect** port is not stable either, and it is not the pairing port: the
 number under IP 地址和端口 changes when wireless debugging is re-enabled and
@@ -212,10 +223,42 @@ That discovery is Java (`NsdManager`) because mDNS on Android is a framework
 service, and the app holds a `MulticastLock` while it watches — Wi-Fi filters
 multicast in hardware when nothing does. Watching starts and stops with the
 **提权通道** switch: a device whose owner has not turned elevation on is not
-listening for the port that would enable it.
+listening for the port that would enable it. Apps up to v0.14.0 did not quite
+do this: they looked at the switch only when the service started, so turning it
+on while the agent was running left the port undiscovered until 停用 and 启用
+on the home screen, and they stopped trusting a discovered port after half an
+hour even though adbd was still on it.
 
 `WANCTL_ADB_PORT` still overrides everything, which is what the Termux and
 adb-shell routes need: they have no framework to ask.
+
+#### What turns the adb channel off
+
+Wireless debugging is not a switch that stays on, and the pairing behind it
+expires. What Android does, read from AOSP's `AdbDebuggingManager`:
+
+| what happened | what Android does | what brings the channel back |
+|---|---|---|
+| a reboot | turns wireless debugging off | turning Wireless debugging on again |
+| Wi-Fi switched off or disconnected, or a different access point | turns wireless debugging off | reconnecting, then turning it on again |
+| 7 days without the channel connecting | revokes the pairing | pairing again |
+| Revoke USB debugging authorizations | revokes every pairing | pairing again |
+
+"A different access point" means a different BSSID, so moving between two mesh
+nodes counts, and on most routers so does moving between the 2.4 and 5 GHz
+radios. The first two rows
+keep the pairing, so no new code is needed, and the channel reports them as
+`could not reach adbd on this device`. The last two need a new pairing, and the
+channel reports them as `TLS handshake with adbd`. Every row needs a human at
+the phone, which is the practical reason only `su` stays usable unattended.
+
+On Xiaomi phones (MIUI, HyperOS) the shell uid the adb channel runs as cannot
+inject input until Developer options → **USB debugging (Security settings)**
+(USB 调试（安全设置）) is on, which needs a SIM card and a signed-in Xiaomi
+account; installing packages also needs **Install via USB** (USB 安装). Without
+them `input` fails with `SecurityException … INJECT_EVENTS permission` and an
+install with `INSTALL_FAILED_USER_RESTRICTED`. That was measured over USB adb on
+a Mi 10 Ultra (MIUI 12.5, Android 11), which reaches the same uid 2000.
 
 #### The adb channel needs a human once, and cannot be automated past that
 
