@@ -838,7 +838,7 @@ func registerMCPTools(s *server.MCPServer, bindings ...*workspaceConversation) {
 				c.Desc = "CONVERSATION MODE: the entered workspace is injected automatically. Do not provide target or workspace.\n\n" + c.Desc
 			}
 		}
-		s.AddTool(mcpapi.NewTool(c.MCPName, toolOptions(c)...), h)
+		s.AddTool(mcpapi.NewTool(c.MCPName, toolOptions(c)...), escapeDeviceOutput(c.MCPName, h))
 	}
 }
 
