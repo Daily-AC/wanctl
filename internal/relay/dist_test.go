@@ -54,8 +54,14 @@ func TestSkillsRefusesRequestDerivedOrigin(t *testing.T) {
 
 func signedDist(t *testing.T) string {
 	t.Helper()
+	return signedDistWith(t, []byte("signed binary"))
+}
+
+// signedDistWith builds a signed release directory whose one artifact,
+// wanctl-linux-amd64, holds payload.
+func signedDistWith(t *testing.T, payload []byte) string {
+	t.Helper()
 	dir := t.TempDir()
-	payload := []byte("signed binary")
 	name := wanrelease.ArtifactName("linux", "amd64")
 	if err := os.WriteFile(filepath.Join(dir, name), payload, 0o755); err != nil {
 		t.Fatal(err)
