@@ -41,11 +41,12 @@ func hasControl(s string) bool {
 }
 
 // What a device says reaches the model with its control characters made
-// visible: command output, polled output, the device's own name and the
-// reasons it gives. A file read through wanctl_read is the exception — it
-// comes back exactly as stored, which is what lets wanctl_edit match it.
+// visible: command output, polled output and the reasons it gives. A file read
+// through wanctl_read is the exception — it comes back exactly as stored, which
+// is what lets wanctl_edit match it. (A device name carrying control characters
+// no longer gets that far: the relay refuses it at registration.)
 func TestDeviceControlCharactersReachTheModelEscaped(t *testing.T) {
-	h, access, target := hostedDeviceNamed(t, "box\x1b]0;renamed\x07")
+	h, access, target := hostedDeviceNamed(t, "box")
 	sid := openSession(t, h, access)
 	const styled = `printf 'a\033[31mb\033[0m\tc\rd\001e\302\233f\n'`
 	const shown = `a\x1b[31mb\x1b[0m` + "\tc\rd" + `\x01e\u009bf`
@@ -75,12 +76,6 @@ func TestDeviceControlCharactersReachTheModelEscaped(t *testing.T) {
 		if hasControl(s) || !strings.Contains(s, shown) {
 			t.Errorf("exec_poll %s = %q, want the output with its controls escaped", where, s)
 		}
-	}
-
-	text, data, _ = toolCall(t, h, access, sid, "wanctl_peers", nil)
-	listing, _ := json.Marshal(data)
-	if hasControl(text) || hasControl(string(listing)) || !strings.Contains(text, `box\x1b]0;renamed\x07`) {
-		t.Errorf("peers = %q / %s, want the device's name with its controls escaped", text, listing)
 	}
 
 	text, _, _ = toolCall(t, h, access, sid, "wanctl_exec", map[string]any{"target": target, "command": "true", "cwd": "/nonexistent-\x1b[2J-dir"})
