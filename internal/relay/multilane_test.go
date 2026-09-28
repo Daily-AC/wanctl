@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -46,7 +47,11 @@ func (f *windowFaultTransport) RoundTrip(req *http.Request) (*http.Response, err
 		resp.Body.Close()
 		return nil, errors.New("injected lost upload response")
 	}
-	if req.URL.Path == "/h/down" && resp.StatusCode == http.StatusOK && req.URL.Query().Get(httpconn.DownWantParam) == "3" && f.truncated == 0 {
+	// Truncate the first numbered chunk past the start that carries data. A
+	// fixed slot (it was want=3) sometimes answered 204 because its bytes had
+	// not been queued yet, and then the fault never fired.
+	want, _ := strconv.Atoi(req.URL.Query().Get(httpconn.DownWantParam))
+	if req.URL.Path == "/h/down" && resp.StatusCode == http.StatusOK && want >= 2 && f.truncated == 0 {
 		f.truncated++
 		resp.Body = &truncatedBody{inner: resp.Body, remaining: 1024}
 	}
