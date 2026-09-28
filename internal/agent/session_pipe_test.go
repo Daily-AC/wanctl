@@ -45,6 +45,12 @@ func seededIdentity(t *testing.T, seed byte) *transport.Identity {
 // answer to the hello.
 func pipeHello(t *testing.T, a *Agent, id *transport.Identity) (*tls.Conn, protocol.Message) {
 	t.Helper()
+	return pipeHelloAs(t, a, id, "pipe-controller", "test controller")
+}
+
+// pipeHelloAs is pipeHello with the name and label the controller claims.
+func pipeHelloAs(t *testing.T, a *Agent, id *transport.Identity, name, label string) (*tls.Conn, protocol.Message) {
+	t.Helper()
 	dev, controller := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() { cancel(); controller.Close(); dev.Close() })
@@ -61,7 +67,7 @@ func pipeHello(t *testing.T, a *Agent, id *transport.Identity) (*tls.Conn, proto
 		t.Fatalf("handshake: %v", err)
 	}
 	dr.Conn.SetDeadline(time.Now().Add(20 * time.Second))
-	if err := protocol.WriteMessage(dr.Conn, protocol.Message{Kind: protocol.KindHello, Role: "client", Name: "pipe-controller", Label: "test controller", Version: "1"}); err != nil {
+	if err := protocol.WriteMessage(dr.Conn, protocol.Message{Kind: protocol.KindHello, Role: "client", Name: name, Label: label, Version: "1"}); err != nil {
 		t.Fatal(err)
 	}
 	reply, err := protocol.ReadMessage(dr.Conn)

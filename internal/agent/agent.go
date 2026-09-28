@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"wanctl/internal/admission"
 	"wanctl/internal/androidverb"
@@ -37,6 +38,7 @@ import (
 	"wanctl/internal/relayhttp"
 	"wanctl/internal/server"
 	"wanctl/internal/sessionauth"
+	"wanctl/internal/termsafe"
 	"wanctl/internal/transport"
 	"wanctl/internal/wsconn"
 
@@ -532,6 +534,11 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	if hello.Kind != protocol.KindHello && hello.Kind != protocol.KindConsoleHello && hello.Kind != protocol.KindWorkspaceHello {
 		return
 	}
+	// A controller names and describes itself. Both reach the owner — pairing
+	// cards, the trust list, logs, notifications — and are kept in
+	// known_clients.json, so control characters are dropped here, where the
+	// text first arrives, rather than by every place that later shows it.
+	hello.Name, hello.Label = peerText(hello.Name), peerText(hello.Label)
 	if !auth.ValidFor(a.DeviceID()) {
 		a.refuse(conn, fp, hello.Name, "rejected:session", protocol.Message{Kind: protocol.KindReject, Reason: "invalid relay session capabilities"}, audit)
 		return
@@ -1514,10 +1521,7 @@ func (a *Agent) runConsolePrompt(ctx context.Context) {
 		}
 		snap := a.console.State()
 		for _, p := range snap.Pending {
-			fmt.Printf("\n--- approval request ---\n")
-			fmt.Printf("ID:  %s\n", p.ID)
-			fmt.Printf("Cmd: %s\n", p.Cmd)
-			fmt.Printf("Allow? [y] once  [a] remember dir  [g] remember global  [n] deny: ")
+			fmt.Print(approvalPrompt(p))
 			var line string
 			fmt.Scanln(&line)
 			// console.Decide speaks the y/a/g/n vocabulary directly; anything
@@ -1529,6 +1533,33 @@ func (a *Agent) runConsolePrompt(ctx context.Context) {
 			a.console.Decide(p.ID, verdict)
 		}
 	}
+}
+
+// approvalPrompt is what the device's own terminal shows for a pending request.
+// The command is the controller's text, and a terminal would act on control
+// characters in it — enough to show one command while the owner approves
+// another — so they are made visible.
+func approvalPrompt(p console.Pending) string {
+	return "\n--- approval request ---\n" +
+		"ID:  " + p.ID + "\n" +
+		"Cmd: " + termsafe.Escape(p.Cmd) + "\n" +
+		"Allow? [y] once  [a] remember dir  [g] remember global  [n] deny: "
+}
+
+// peerText is a controller's self-description with control characters
+// removed: line breaks and tabs become spaces, everything else is dropped, and
+// so is anything that is not UTF-8.
+func peerText(s string) string {
+	s = strings.ToValidUTF8(s, "")
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			return ' '
+		case unicode.IsControl(r):
+			return -1
+		}
+		return r
+	}, s))
 }
 
 // Busy reports whether this agent is in the middle of work that restarting it
