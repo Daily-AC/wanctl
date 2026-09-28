@@ -2,6 +2,8 @@ package relay
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -73,7 +75,17 @@ func (c *httpSessionConn) Close() error {
 	return nil
 }
 
-func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegation.Access, token string) *httpSession {
+var (
+	errNamespaceSessions = fmt.Errorf("too many open sessions for this account (%d); close some and try again", httpSessionsPerNS)
+	errRelaySessions     = errors.New("the relay has too many open sessions; try again later")
+)
+
+// newHTTPSession registers session sid, or refuses with errNamespaceSessions
+// or errRelaySessions when the dialing namespace or the relay already holds as
+// many as it may. Every path that opens an HTTP session comes through here,
+// and the count is taken under the same lock as the registration, so
+// concurrent dials cannot overshoot it.
+func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegation.Access, token string) (*httpSession, error) {
 	s := &httpSession{
 		toClient:     newSideQueue(),
 		toAgent:      newSideQueue(),
@@ -92,8 +104,20 @@ func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegat
 	s.toClient.attach(r.resident, ns)
 	s.toAgent.attach(r.resident, ns)
 	r.hmu.Lock()
-	r.hsess[sid] = s
+	var refused error
+	switch {
+	case len(r.hsess) >= r.maxSessions:
+		refused = errRelaySessions
+	case ns != "" && r.countNamespaceSessionsLocked(ns) >= httpSessionsPerNS:
+		refused = errNamespaceSessions
+	default:
+		r.hsess[sid] = s
+	}
 	r.hmu.Unlock()
+	if refused != nil {
+		s.free()
+		return nil, refused
+	}
 	s.lease = r.beginAccessLease(sid, auth.OwnerNamespace+"/"+auth.Device, access, token)
 	s.lease.addCloser(func() {
 		r.hmu.Lock()
@@ -103,7 +127,19 @@ func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegat
 		r.hmu.Unlock()
 		s.free()
 	})
-	return s
+	return s, nil
+}
+
+// countNamespaceSessionsLocked counts the HTTP sessions namespace ns dialed
+// that the relay still holds. Caller holds hmu.
+func (r *Relay) countNamespaceSessionsLocked(ns string) int {
+	n := 0
+	for _, s := range r.hsess {
+		if s.callerNS == ns {
+			n++
+		}
+	}
+	return n
 }
 
 // closeHTTPSessionDrainable ends a session the gentle way: the queues stop
@@ -174,7 +210,11 @@ func (r *Relay) handleWSDialToHTTP(w http.ResponseWriter, req *http.Request, tar
 	sid := newID()
 	auth.Session = sid
 	r.hmu.Unlock()
-	s := r.newHTTPSession(sid, auth, access, token)
+	s, err := r.newHTTPSession(sid, auth, access, token)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	}
 
 	select {
 	case a.open <- auth:
@@ -214,7 +254,11 @@ func (r *Relay) handleHDialToWS(w http.ResponseWriter, targetKey string, auth se
 	auth.Op = "open"
 	auth.Session = sid
 	auth.URL = "/session/" + sid
-	s := r.newHTTPSession(sid, auth, access, token)
+	s, err := r.newHTTPSession(sid, auth, access, token)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	}
 	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), done: make(chan struct{}), ownerNS: auth.OwnerNamespace}
 	r.mu.Lock()
 	r.pending[sid] = ps

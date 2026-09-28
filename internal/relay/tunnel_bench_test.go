@@ -57,7 +57,10 @@ func benchPushOnce(b *testing.B, payload []byte, rtt time.Duration) {
 	const sid = "sess-bench"
 	r := New(EnvTokenStore("tok-alice:alice"))
 	auth := sessionauth.Open{Session: sid, Device: "home-pc", CallerNamespace: "alice", OwnerNamespace: "alice"}
-	s := r.newHTTPSession(sid, auth, delegation.Access{Namespace: "alice"}, "tok-alice")
+	s, err := r.newHTTPSession(sid, auth, delegation.Access{Namespace: "alice"}, "tok-alice")
+	if err != nil {
+		b.Fatal(err)
+	}
 	defer r.closeHTTPSession(sid, s)
 	srv := httptest.NewServer(r.Handler())
 	defer srv.Close()

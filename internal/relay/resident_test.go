@@ -327,7 +327,10 @@ func TestResidentBytesCountChunksAReaderNeverAcknowledged(t *testing.T) {
 func tenantSession(t *testing.T, r *Relay, sid, ns string) *httpSession {
 	t.Helper()
 	auth := sessionauth.Open{Session: sid, Device: "dev", CallerNamespace: ns, OwnerNamespace: ns}
-	s := r.newHTTPSession(sid, auth, delegation.Access{Namespace: ns}, "tok-"+ns)
+	s, err := r.newHTTPSession(sid, auth, delegation.Access{Namespace: ns}, "tok-"+ns)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { r.closeHTTPSession(sid, s) })
 	return s
 }

@@ -1122,7 +1122,7 @@ func TestRevokedCredentialTearsDownImmediately(t *testing.T) {
 	a := testTransportGrant()
 	store := &transportGrantStore{grants: map[string]delegation.Access{"delegate": a, "owner": {Namespace: "alice"}}}
 	r := New(store)
-	s := r.newHTTPSession("revoked", sessionauth.Open{
+	s, _ := r.newHTTPSession("revoked", sessionauth.Open{
 		Session: "revoked", Device: "allowed", CallerNamespace: "alice", OwnerNamespace: "alice",
 	}, a, "delegate")
 	defer r.closeHTTPSession("revoked", s)

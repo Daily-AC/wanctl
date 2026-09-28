@@ -95,13 +95,16 @@ type Relay struct {
 	agents         map[string]*agentConn      // key "ns/device" (WebSocket transport)
 	pending        map[string]*pendingSession // key session id (WebSocket transport)
 
-	hmu        sync.Mutex
-	hagents    map[string]*httpAgent   // key "ns/device" (HTTP transport)
-	hsess      map[string]*httpSession // key session id (HTTP transport)
-	resident   *residency              // tunnel bytes held by every HTTP session
-	reaperOnce sync.Once
-	leaseMu    sync.Mutex
-	leases     map[string]*accessLease
+	hmu      sync.Mutex
+	hagents  map[string]*httpAgent   // key "ns/device" (HTTP transport)
+	hsess    map[string]*httpSession // key session id (HTTP transport)
+	resident *residency              // tunnel bytes held by every HTTP session
+	// maxSessions is httpSessionsTotal, a field so a test can reach it
+	// without opening thousands of sessions.
+	maxSessions int
+	reaperOnce  sync.Once
+	leaseMu     sync.Mutex
+	leases      map[string]*accessLease
 
 	enrollMu    sync.Mutex
 	enrollCodes map[string]*enrollCode // one-time device-enrollment codes
@@ -129,6 +132,7 @@ func New(ts TokenStore) *Relay {
 		hagents:      map[string]*httpAgent{},
 		hsess:        map[string]*httpSession{},
 		resident:     newResidency(),
+		maxSessions:  httpSessionsTotal,
 		enrollCodes:  map[string]*enrollCode{},
 		notifyDedupe: map[notifyDedupeKey]time.Time{},
 		notifySend:   notify.NewSender(notify.Options{}),

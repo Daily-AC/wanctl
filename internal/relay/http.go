@@ -792,6 +792,16 @@ const (
 	// only stops the flood, and only new names past the cap (existing devices
 	// keep polling).
 	httpAgentsPerNS = 256
+	// httpSessionsPerNS bounds the HTTP sessions one namespace has dialed
+	// and the relay still holds. Each holds memory beyond the bytes it
+	// carries, and a session stays registered until both ends have closed it
+	// or the sweeper retires it, so without a count one account could open
+	// sessions until the relay-wide limit below was all its own. A person or
+	// an AI working through the CLI or MCP has a handful open at once.
+	httpSessionsPerNS = 64
+	// httpSessionsTotal bounds every HTTP session the relay holds, the
+	// portal's included (see Relay.maxSessions).
+	httpSessionsTotal = 4096
 	// httpSessionIdle reaps a session neither party has polled for this long.
 	// A live session is polled at least every downPollWait (20s); an abandoned
 	// one is not, so 3× is comfortably clear of a slow but live command.
@@ -966,7 +976,10 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 	sid := newID()
 	auth.Session = sid
 	r.hmu.Unlock()
-	r.newHTTPSession(sid, auth, access, token)
+	if _, err := r.newHTTPSession(sid, auth, access, token); err != nil {
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	}
 
 	select {
 	case a.open <- auth:
