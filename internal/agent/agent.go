@@ -1314,6 +1314,16 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 			return protocol.Message{Kind: protocol.KindError, Reason: "invalid pairing port or six-digit code"}
 		}
 		_, _, err := a.runADBPair(fmt.Sprintf("adb-pair %d %s", msg.PairPort, msg.PairCode), io.Discard)
+		// Pairing puts this agent's key into the device's adbd trust list,
+		// which is worth a line in the activity log like any adb-pair run
+		// through exec — with the outcome, never with the code.
+		if a.log != nil {
+			exit := 0
+			if err != nil {
+				exit = -1
+			}
+			a.log.Append(eventlog.Event{Type: "exec", Detail: fmt.Sprintf("adb-pair %d [redacted]", msg.PairPort), Decision: "console", Exit: &exit})
+		}
 		if err != nil {
 			return protocol.Message{Kind: protocol.KindError, Reason: strings.ReplaceAll(err.Error(), msg.PairCode, "[redacted]")}
 		}

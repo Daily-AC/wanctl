@@ -177,3 +177,23 @@ func TestReadMissingFileIsEmpty(t *testing.T) {
 	}
 	_ = time.Now
 }
+
+// The adb-pair verb carries the six-digit code the device shows while its
+// pairing dialog is open. For that time it is a credential for the device's
+// adbd, so no record of the command keeps it — wherever in the text it sits.
+func TestRedactTextHidesADBPairingCodes(t *testing.T) {
+	cases := map[string]string{
+		"adb-pair 37123 123456":                           "adb-pair 37123 [redacted]",
+		"adb-pair\t37123   654321":                        "adb-pair 37123 [redacted]",
+		"[workspace w-1 request r] adb-pair 40001 111222": "[workspace w-1 request r] adb-pair 40001 [redacted]",
+		"adb-pair 123456":                                 "adb-pair [redacted]",
+		"adb-pair 37123 12 3456; echo done":               "adb-pair 37123 [redacted]",
+		"adb-pairing 1 2":                                 "adb-pairing 1 2",
+		"adb pair 37123 123456":                           "adb pair 37123 123456",
+	}
+	for in, want := range cases {
+		if got := RedactText(in); got != want {
+			t.Errorf("RedactText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
