@@ -457,7 +457,13 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	}
 	limits.ClearHijackedDeadline(req.Context())
 	nc := wsconn.FromAccepted(req.Context(), c)
-	dec := json.NewDecoder(nc)
+	// A JSON decoder holds a value whole before handing it over, and the
+	// control channel is one stream however it is split into messages, so each
+	// value is bounded here: to what a control request may carry. The channel
+	// carries a registration and, after it, nothing the relay acts on.
+	body := &io.LimitedReader{R: nc}
+	dec := json.NewDecoder(body)
+	body.N = limits.RelayControlBodyBytes
 	var reg struct {
 		Op, Device, Fingerprint, Inst, Name string
 		DeviceID                            string `json:"device_id"`
@@ -528,6 +534,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	}()
 	// Keep the control connection alive; drain any further messages (e.g. pings).
 	for {
+		body.N = limits.RelayControlBodyBytes
 		var ignore json.RawMessage
 		if err := dec.Decode(&ignore); err != nil {
 			return
