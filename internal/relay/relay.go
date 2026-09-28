@@ -569,7 +569,7 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 	}
 	sid := newID()
 	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), done: make(chan struct{}), ownerNS: auth.OwnerNamespace}
-	lease := r.beginAccessLease(sid, targetKey, access, token)
+	lease := r.beginAccessLease(sid, targetKey, access, token, auth.Capabilities)
 	defer lease.close()
 	r.mu.Lock()
 	r.pending[sid] = ps

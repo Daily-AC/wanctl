@@ -118,7 +118,7 @@ func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegat
 		s.free()
 		return nil, refused
 	}
-	s.lease = r.beginAccessLease(sid, auth.OwnerNamespace+"/"+auth.Device, access, token)
+	s.lease = r.beginAccessLease(sid, auth.OwnerNamespace+"/"+auth.Device, access, token, auth.Capabilities)
 	s.lease.addCloser(func() {
 		r.hmu.Lock()
 		if r.hsess[sid] == s {

@@ -159,6 +159,10 @@ func (r *Relay) userFriendDecision(w http.ResponseWriter, req *http.Request, act
 		friendError(w, err)
 		return
 	}
+	if action == "remove" {
+		// Removing a friend revokes the shares between the two, both ways.
+		r.closeRevokedShares(namespace, peer)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -287,6 +291,9 @@ func (r *Relay) userShareManage(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no live share of that device with that namespace", http.StatusNotFound)
 		return
 	}
+	if !body.Manage {
+		r.closeRevokedShares(namespace)
+	}
 	writeJSON(w, map[string]any{"device": device, "grantee": body.Grantee, "manage": body.Manage})
 }
 
@@ -331,6 +338,7 @@ func (r *Relay) userShareRevoke(w http.ResponseWriter, req *http.Request) {
 		writeErrorToken(w, http.StatusNotFound, "not-found")
 		return
 	}
+	r.closeRevokedShares(namespace)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -397,6 +405,9 @@ func (r *Relay) adminFriendAction(w http.ResponseWriter, req *http.Request, acti
 	if err != nil {
 		friendError(w, err)
 		return
+	}
+	if action == "remove" {
+		r.closeRevokedShares(body.Namespace, body.Peer)
 	}
 	if action == "request" {
 		if status == "pending" {
