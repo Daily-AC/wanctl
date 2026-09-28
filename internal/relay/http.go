@@ -558,6 +558,11 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 		created, err = r.registerDeviceID(ns, deviceID, req.URL.Query().Get("name"), req.URL.Query().Get("fp"))
 	} else {
 		err = r.allowLegacyRegistration(ns, device)
+		// An agent from before device IDs may send no name, and is then
+		// labelled by its device name; one it does send is held to the rule.
+		if name := req.URL.Query().Get("name"); err == nil && name != "" && !validDeviceName(name) {
+			err = errors.New("invalid device name")
+		}
 		if err == nil {
 			created = r.recordDeviceRegistration(ns, device, req.URL.Query().Get("fp"))
 		}

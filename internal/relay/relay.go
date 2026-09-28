@@ -481,6 +481,13 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 			c.Close(websocket.StatusPolicyViolation, err.Error())
 			return
 		}
+		// An agent from before device IDs may send no name, and is then
+		// labelled by its device name; one it does send is held to the rule.
+		if reg.Name != "" && !validDeviceName(reg.Name) {
+			r.registrationMu.Unlock()
+			c.Close(websocket.StatusPolicyViolation, "invalid device name")
+			return
+		}
 	}
 	key := ns + "/" + reg.Device
 	wasLive := r.deviceLive(ns, reg.Device)

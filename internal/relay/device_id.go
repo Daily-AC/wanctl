@@ -20,7 +20,7 @@ type DeviceRegistrationStore interface {
 // registerDeviceID is separate from legacy registration: an old agent must never
 // overwrite the identity record of an upgraded installation.
 func (r *Relay) registerDeviceID(ns, id, name, fp string) (bool, error) {
-	if !transport.ValidDeviceID(id) || name == "" || len(name) > 255 || !transport.ValidFingerprint(fp) {
+	if !transport.ValidDeviceID(id) || !validDeviceName(name) || !transport.ValidFingerprint(fp) {
 		return false, fmt.Errorf("invalid device registration")
 	}
 	created := false
