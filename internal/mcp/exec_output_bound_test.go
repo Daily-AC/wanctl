@@ -159,7 +159,10 @@ func TestHostedExecHoldsOnlyWhatItReturns(t *testing.T) {
 		t.Errorf("truncation flags = %v, stderr = %q / %v", data["stdout_truncated"], data["stderr"], data["stderr_truncated"])
 	}
 	t.Logf("%d MiB of device output raised the heap by at most %d MiB", outputBytes>>20, peak>>20)
-	if peak > 32<<20 {
+	// The relay runs in this process too and may legitimately queue up to its
+	// 32 MiB per-direction budget when the reader is slower than the device
+	// (a two-core CI runner is). Keeping the whole stream would read 100+.
+	if peak > 64<<20 {
 		t.Fatalf("receiving %d MiB of output raised the heap by %d MiB; it should keep only what it returns", outputBytes>>20, peak>>20)
 	}
 }
