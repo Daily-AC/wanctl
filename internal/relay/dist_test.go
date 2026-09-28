@@ -168,65 +168,54 @@ func TestDistributionChangeAfterStartupFailsClosed(t *testing.T) {
 	}
 }
 
-func TestDistributionVerificationConcurrencyIsBounded(t *testing.T) {
+// Downloads in progress are bounded overall. The manifest and signatures are
+// small, served from memory, and never wait for a download slot.
+func TestDownloadsAreBoundedOverall(t *testing.T) {
 	dir := signedDist(t)
 	handler, err := newSignedDistHandler(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	h := handler.(*signedDistHandler)
-	h.verifySlots <- struct{}{}
-	h.verifySlots <- struct{}{}
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/wanctl-linux-amd64", nil)
-	req.URL.Path = "wanctl-linux-amd64" // signedDistHandler runs behind StripPrefix("/dl/").
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("busy distribution status = %d, want 503", rec.Code)
+	h.downloads.total = maxDownloads
+	get := func(name string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/"+name, nil)
+		req.URL.Path = name // signedDistHandler runs behind StripPrefix("/dl/").
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := get("wanctl-linux-amd64"); rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("download with every slot taken = %d (Retry-After %q), want 503 with Retry-After", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	if rec := get(wanrelease.ManifestName); rec.Code != http.StatusOK {
+		t.Fatalf("manifest with every download slot taken = %d, want 200", rec.Code)
+	}
+	h.downloads.total = 0
+	if rec := get("wanctl-linux-amd64"); rec.Code != http.StatusOK || rec.Body.String() != "signed binary" {
+		t.Fatalf("download = %d %q", rec.Code, rec.Body.String())
+	}
+	if h.downloads.total != 0 || len(h.downloads.byClient) != 0 {
+		t.Fatalf("a finished download left its slot taken: %d in total, per client %v", h.downloads.total, h.downloads.byClient)
 	}
 }
 
-// slotProbe records how many verification slots were held at the moment the
-// first body byte was written, i.e. once streaming to the client has begun.
-type slotProbe struct {
-	*httptest.ResponseRecorder
-	slots    chan struct{}
-	heldAt   int
-	sawWrite bool
-}
-
-func (p *slotProbe) Write(b []byte) (int, error) {
-	if !p.sawWrite {
-		p.sawWrite = true
-		p.heldAt = len(p.slots)
-	}
-	return p.ResponseRecorder.Write(b)
-}
-
-// Two slow readers used to pin both slots for as long as they cared to drain
-// the body, answering everyone else with 503 (audit 2026-08-28, SEC-F-07).
-func TestDistributionSlotReleasedBeforeStreaming(t *testing.T) {
-	dir := signedDist(t)
-	handler, err := newSignedDistHandler(dir)
+// Ranges are served straight from the file, which is how an interrupted
+// download resumes.
+func TestDownloadServesRanges(t *testing.T) {
+	t.Setenv("WANCTL_DIST_DIR", signedDist(t))
+	srv := httptest.NewServer(New(EnvTokenStore("")).Handler())
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/dl/wanctl-linux-amd64", nil)
+	req.Header.Set("Range", "bytes=7-")
+	resp, err := srv.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := handler.(*signedDistHandler)
-	probe := &slotProbe{ResponseRecorder: httptest.NewRecorder(), slots: h.verifySlots}
-	req := httptest.NewRequest(http.MethodGet, "/wanctl-linux-amd64", nil)
-	req.URL.Path = "wanctl-linux-amd64"
-	h.ServeHTTP(probe, req)
-	if probe.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", probe.Code)
-	}
-	if !probe.sawWrite {
-		t.Fatal("no body was written")
-	}
-	if probe.heldAt != 0 {
-		t.Fatalf("%d verification slot(s) still held while streaming, want 0", probe.heldAt)
-	}
-	if n := len(h.verifySlots); n != 0 {
-		t.Fatalf("%d verification slot(s) leaked after the request", n)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent || string(body) != "binary" {
+		t.Fatalf("range request = %d %q, want 206 \"binary\"", resp.StatusCode, body)
 	}
 }
 

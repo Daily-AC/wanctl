@@ -62,6 +62,7 @@ func TestDownloadAllocationDoesNotScaleWithTheArtifact(t *testing.T) {
 	if least > size/4 {
 		t.Fatalf("one %d MiB download allocated %d MiB; it should stream from disk", size>>20, least>>20)
 	}
+	t.Logf("one %d MiB download allocated %d KiB", size>>20, least>>10)
 }
 
 // slowDownload starts a download on behalf of client (named the way the
@@ -106,7 +107,51 @@ func TestStalledDownloadsDoNotHoldTheArtifactInMemory(t *testing.T) {
 	time.Sleep(200 * time.Millisecond) // let each handler fill the socket and block
 	runtime.GC()
 	runtime.ReadMemStats(&during)
-	if grew := int64(during.HeapAlloc) - int64(before.HeapAlloc); grew > size {
+	grew := int64(during.HeapAlloc) - int64(before.HeapAlloc)
+	if grew > size {
 		t.Fatalf("%d stalled readers grew the heap by %d MiB, more than one %d MiB artifact", readers, grew>>20, size>>20)
+	}
+	t.Logf("%d stalled readers of a %d MiB artifact grew the heap by %d KiB", readers, size>>20, grew>>10)
+}
+
+// Stalled readers from one address use up that address's share of downloads
+// and nobody else's; closing them hands the share back.
+func TestStalledReadersFromOneClientLeaveOthersTheirDownloads(t *testing.T) {
+	srv := distServer(t, randomPayload(t, 8<<20))
+	var stalled []net.Conn
+	for i := 0; i < maxDownloadsPerClient; i++ {
+		status, conn := slowDownload(t, srv, "198.51.100.7")
+		if status != http.StatusOK {
+			t.Fatalf("stalled reader %d got %d", i+1, status)
+		}
+		stalled = append(stalled, conn)
+	}
+	if status, _ := slowDownload(t, srv, "198.51.100.7"); status != http.StatusServiceUnavailable {
+		t.Fatalf("one more download from the same client = %d, want 503", status)
+	}
+	fetch := func(client string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/dl/wanctl-linux-amd64", nil)
+		req.Header.Set("X-Real-IP", client)
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+	if status := fetch("198.51.100.8"); status != http.StatusOK {
+		t.Fatalf("another client's download = %d, want 200", status)
+	}
+	for _, conn := range stalled {
+		conn.Close()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for fetch("198.51.100.7") != http.StatusOK {
+		if time.Now().After(deadline) {
+			t.Fatal("closing the stalled downloads did not hand their slots back")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

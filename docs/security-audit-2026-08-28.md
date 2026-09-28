@@ -93,7 +93,7 @@ work, not an implicit acceptance.
 | SEC-F-04 | Low | Release publication did not depend on vulnerability/completeness gates and could omit APKs. | **Fixed** in `838bca1`: scan and shared validator gate publication; APK secrets are mandatory. |
 | SEC-F-05 | Low | Android keystore password appeared in argv and decoded keystore survived failed builds. | **Fixed** in `838bca1`: env password source, 0700-era umask, exit trap. |
 | SEC-F-06 | Low | Portal/relay recommend bootstrap installers not covered by the signed artifact manifest. | **Open**; prefer GitHub release and add installers to the signed manifest before treating relay bootstrap as strong. |
-| SEC-F-07 | Low | Two slow `/dl` readers held both verification slots and denied other downloads. | **Fixed** in `838bca1`: slot released after verification, before streaming. |
+| SEC-F-07 | Low | Two slow `/dl` readers held both verification slots and denied other downloads. | **Fixed** in `838bca1`: slot released after verification, before streaming. **Since reworked**: artifacts are hashed once at startup and stream from the file, and downloads in progress are bounded overall and per client, so one address's stalled readers take only its own share. |
 | SEC-F-08 | Info | Release documentation named dead paths and pre-OSS behavior. | **Fixed** in follow-up for build, notes, APK, compose, and repository-protection claims. |
 | SEC-F-09 | Info | PowerShell installer accepted non-HTTPS and HTTPS-to-HTTP redirects without a TLS floor. | **Fixed** in `838bca1`. |
 | SEC-F-10 | Info | CGO-free binaries reproduced bit-for-bit; Android/NDK builds lack an equally pinned reproducibility record. | Recorded; Android toolchain pinning remains future release-engineering work. |
