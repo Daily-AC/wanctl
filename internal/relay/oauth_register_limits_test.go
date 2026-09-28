@@ -40,7 +40,7 @@ func wantTemporarilyUnavailable(t *testing.T, rr *httptest.ResponseRecorder, sta
 // client gets a handful an hour; the next client is unaffected.
 func TestClientRegistrationIsBudgetedPerClient(t *testing.T) {
 	r, _, _ := newOAuthRelay(t)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < oauthRegistrationsPerClient; i++ {
 		if rr := registerFrom(t, r, "198.51.100.1"); rr.Code != http.StatusCreated {
 			t.Fatalf("registration %d = %d %s", i+1, rr.Code, rr.Body.String())
 		}
@@ -57,7 +57,7 @@ func TestClientRegistrationIsBudgetedPerClient(t *testing.T) {
 func TestClientRegistrationHasACeiling(t *testing.T) {
 	r, b, _ := newOAuthRelay(t)
 	now := time.Now()
-	for i := 0; i < 500; i++ {
+	for i := 0; i < oauthMaxUnusedClients; i++ {
 		id := fmt.Sprintf("wco_prefilled_%03d", i)
 		b.clients[id] = OAuthClient{ID: id, Name: "x", RedirectURIs: []string{testRedirect}, AuthMethod: "none", CreatedAt: now}
 	}
@@ -74,7 +74,7 @@ func TestClientRegistrationHasACeiling(t *testing.T) {
 // authorization is under way right now, which must still finish.
 func TestStaleUnusedClientsAreForgotten(t *testing.T) {
 	r, b, _ := newOAuthRelay(t)
-	old := time.Now().Add(-25 * time.Hour)
+	old := time.Now().Add(-oauthUnusedClientTTL - time.Hour)
 	b.clients["wco_stale"] = OAuthClient{ID: "wco_stale", Name: "x", RedirectURIs: []string{testRedirect}, AuthMethod: "none", CreatedAt: old}
 	b.clients["wco_used"] = OAuthClient{ID: "wco_used", Name: "x", RedirectURIs: []string{testRedirect}, AuthMethod: "none", CreatedAt: old}
 	b.refresh["used"] = OAuthRefresh{Hash: "used", ClientID: "wco_used", Namespace: "alice", ExpiresAt: time.Now().Add(time.Hour)}
@@ -105,5 +105,106 @@ func TestStaleUnusedClientsAreForgotten(t *testing.T) {
 	})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("the authorization under way did not complete: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+// The same rules against a real database, including the parts a map cannot
+// get wrong: the anti-join that defines "never used", and an in-flight list
+// that is empty or absent.
+func TestOAuthPostgresRegistrationForgetsStaleClientsAndCaps(t *testing.T) {
+	p, db, exec := pgDeviceIDStore(t)
+	now := time.Now()
+	old := now.Add(-oauthUnusedClientTTL - time.Hour)
+	client := func(id string, created time.Time) OAuthClient {
+		return OAuthClient{ID: id, Name: "x", RedirectURIs: []string{testRedirect}, AuthMethod: "none", CreatedAt: created}
+	}
+	register := func(c OAuthClient, maxUnused int, staleBefore time.Time, inFlight []string) bool {
+		t.Helper()
+		ok, err := p.RegisterOAuthClient(c, maxUnused, staleBefore, inFlight)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	has := func(id string) bool {
+		t.Helper()
+		_, found, err := p.OAuthClient(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+	for _, c := range []OAuthClient{client("wco_stale", old), client("wco_used", old), client("wco_inflight", old), client("wco_recent", now.Add(-time.Hour))} {
+		if !register(c, 10, time.Time{}, nil) {
+			t.Fatalf("seeding %s was refused", c.ID)
+		}
+	}
+	exec(`INSERT INTO oauth_refresh_tokens (hash, client_id, namespace, grant_envelope, expires_at)
+	      VALUES ('h', 'wco_used', 'alice', 'g', now() + interval '1 hour')`)
+
+	if !register(client("wco_new", now), 10, now.Add(-oauthUnusedClientTTL), []string{"wco_inflight"}) {
+		t.Fatal("registration refused under the ceiling")
+	}
+	if has("wco_stale") {
+		t.Error("a stale client that never authorized was kept")
+	}
+	for _, id := range []string{"wco_used", "wco_inflight", "wco_recent", "wco_new"} {
+		if !has(id) {
+			t.Errorf("%s was deleted", id)
+		}
+	}
+
+	// Unused now: wco_inflight, wco_recent, wco_new. The used client is not
+	// counted, so a ceiling of three is full and one of four is not.
+	if register(client("wco_over", now), 3, now.Add(-oauthUnusedClientTTL), []string{"wco_inflight"}) || has("wco_over") {
+		t.Fatal("a registration past the ceiling was stored")
+	}
+	if !register(client("wco_fits", now), 4, now.Add(-oauthUnusedClientTTL), []string{"wco_inflight"}) {
+		t.Fatal("the used client was counted against the ceiling")
+	}
+
+	// With nothing in flight — nil, as a relay with no pending consent passes —
+	// the stale in-flight client is now just stale.
+	if !register(client("wco_later", now), 10, now.Add(-oauthUnusedClientTTL), nil) {
+		t.Fatal("registration refused")
+	}
+	if has("wco_inflight") {
+		t.Error("a stale client was kept when no authorization was in flight")
+	}
+	var total int
+	if err := db.QueryRow(`SELECT count(*) FROM oauth_clients`).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 5 { // used, recent, new, fits, later
+		t.Errorf("%d clients remain, want 5", total)
+	}
+}
+
+// The budget refills when its window ends, and it tracks a bounded number of
+// addresses: past that, a newcomer waits rather than growing the map.
+func TestRegistrationBudgetRefillsAndStaysBounded(t *testing.T) {
+	var b registrationBudget
+	start := time.Now()
+	for i := 0; i < oauthRegistrationsPerClient; i++ {
+		if ok, _ := b.take("a", start); !ok {
+			t.Fatalf("registration %d refused", i+1)
+		}
+	}
+	ok, wait := b.take("a", start.Add(time.Minute))
+	if ok || wait != oauthRegistrationWindow-time.Minute {
+		t.Fatalf("spent budget = %v, wait %v; want refused until the window ends", ok, wait)
+	}
+	if ok, _ := b.take("a", start.Add(oauthRegistrationWindow)); !ok {
+		t.Fatal("the budget did not refill after its window")
+	}
+
+	for i := len(b.windows); i < oauthRegistrationClients; i++ {
+		b.take(fmt.Sprintf("client-%d", i), start.Add(oauthRegistrationWindow))
+	}
+	if ok, _ := b.take("newcomer", start.Add(oauthRegistrationWindow)); ok || len(b.windows) != oauthRegistrationClients {
+		t.Fatalf("a full map admitted a newcomer: ok=%v, %d windows", ok, len(b.windows))
+	}
+	if ok, _ := b.take("newcomer", start.Add(2*oauthRegistrationWindow)); !ok || len(b.windows) != 1 {
+		t.Fatalf("expired windows were not reclaimed: ok=%v, %d windows", ok, len(b.windows))
 	}
 }

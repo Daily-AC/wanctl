@@ -104,13 +104,6 @@ func (b *oauthBackend) setExpiry(token string, at time.Time) {
 	b.expires[token] = at
 }
 
-func (b *oauthBackend) PutOAuthClient(c OAuthClient) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.clients[c.ID] = c
-	return nil
-}
-
 // RegisterOAuthClient mirrors the Postgres store: stale clients that never
 // completed an authorization go first (unless one is under way), and the new
 // client is refused if it would push the count of such clients past maxUnused.

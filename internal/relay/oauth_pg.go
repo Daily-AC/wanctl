@@ -11,16 +11,52 @@ import (
 // store files (notify_pg.go, lark_pg.go) rather than folded into admin.go: the
 // rows have their own lifecycle and nothing to do with the admin surface.
 
-func (p *PGStore) PutOAuthClient(c OAuthClient) error {
+// oauthRegisterLock serializes registrations (pg_advisory_xact_lock), so two
+// cannot both see room for the last place under the ceiling. The value is
+// arbitrary; it only has to be this statement's own.
+const oauthRegisterLock = 0x77636f5f726567 // "wco_reg"
+
+// A client "never completed an authorization" when no refresh token names it:
+// the first refresh token is written by the code exchange that ends one.
+const oauthUnusedClient = `NOT EXISTS (SELECT 1 FROM oauth_refresh_tokens r WHERE r.client_id = c.id)`
+
+func (p *PGStore) RegisterOAuthClient(c OAuthClient, maxUnused int, staleBefore time.Time, inFlight []string) (bool, error) {
 	uris, err := json.Marshal(c.RedirectURIs)
 	if err != nil {
-		return err
+		return false, err
 	}
-	_, err = p.db.Exec(
+	if inFlight == nil {
+		inFlight = []string{}
+	}
+	tx, err := p.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock($1)`, oauthRegisterLock); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM oauth_clients c
+		  WHERE c.created_at < $1 AND NOT (c.id = ANY($2)) AND `+oauthUnusedClient,
+		staleBefore, inFlight); err != nil {
+		return false, err
+	}
+	var unused int
+	if err := tx.QueryRow(`SELECT count(*) FROM oauth_clients c WHERE ` + oauthUnusedClient).Scan(&unused); err != nil {
+		return false, err
+	}
+	if unused >= maxUnused {
+		// Nothing stored, but the stale rows deleted above are gone for good.
+		return false, tx.Commit()
+	}
+	if _, err := tx.Exec(
 		`INSERT INTO oauth_clients (id, secret_hash, name, redirect_uris, auth_method, created_at)
 		 VALUES ($1,$2,$3,$4,$5,$6)`,
-		c.ID, c.SecretHash, c.Name, uris, c.AuthMethod, c.CreatedAt)
-	return err
+		c.ID, c.SecretHash, c.Name, uris, c.AuthMethod, c.CreatedAt); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 func (p *PGStore) OAuthClient(id string) (OAuthClient, bool, error) {

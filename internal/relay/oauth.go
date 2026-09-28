@@ -9,9 +9,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"wanctl/internal/clientip"
 	"wanctl/internal/mcpauth"
 )
 
@@ -43,6 +46,29 @@ const (
 	oauthTokenDays = int(oauthRefreshTTL / (24 * time.Hour))
 )
 
+// Registration takes no credential (RFC 7591 intends it that way: a public
+// endpoint cannot know its clients in advance) and every one is a durable row,
+// so it is bounded three ways. A connector registers once when it is added, so
+// a client needs a handful an hour at most; the rest bound what anonymous
+// callers can leave in the database between them.
+const (
+	// oauthRegistrationsPerClient is each client address's budget per
+	// oauthRegistrationWindow.
+	oauthRegistrationsPerClient = 10
+	oauthRegistrationWindow     = time.Hour
+	// oauthRegistrationClients bounds how many client addresses are tracked
+	// in one window, so the budget itself cannot grow without limit.
+	oauthRegistrationClients = 4096
+	// oauthMaxUnusedClients caps the clients that have never completed an
+	// authorization. One that has was approved by a signed-in human, and
+	// does not count.
+	oauthMaxUnusedClients = 500
+	// oauthUnusedClientTTL is how long a client that never completed an
+	// authorization is kept. A connector authorizes right after it
+	// registers; a day later nobody is coming back for that client_id.
+	oauthUnusedClientTTL = 24 * time.Hour
+)
+
 // OAuthClient is a client that registered itself under RFC 7591. There is no
 // review step: a public MCP endpoint cannot know its clients in advance, and
 // registering buys nothing on its own — a client_id only becomes access when a
@@ -72,7 +98,12 @@ type OAuthRefresh struct {
 // relay can run the MCP endpoint without one and because these rows have
 // nothing to do with the portal's admin surface.
 type OAuthStore interface {
-	PutOAuthClient(OAuthClient) error
+	// RegisterOAuthClient stores c unless that would leave more than
+	// maxUnused clients that have never completed an authorization (no
+	// refresh token names them). Clients like that registered before
+	// staleBefore are deleted first, except those in inFlight, whose
+	// authorization is under way. It reports whether c was stored.
+	RegisterOAuthClient(c OAuthClient, maxUnused int, staleBefore time.Time, inFlight []string) (bool, error)
 	OAuthClient(id string) (OAuthClient, bool, error)
 	PutOAuthRefresh(OAuthRefresh) error
 	OAuthRefresh(hash string) (OAuthRefresh, bool, error)
@@ -304,8 +335,26 @@ func (r *Relay) oauthRegister(w http.ResponseWriter, req *http.Request) {
 		secret = "wcs_" + randHex(32)
 		client.SecretHash = HashToken(secret)
 	}
-	if err := r.oauthStore.PutOAuthClient(client); err != nil {
+	// Charged only once the request would be stored: a malformed one costs the
+	// database nothing, and a client fixing its request should not lose budget.
+	if ok, wait := r.oauthRegistrations.take(clientip.Key(req), time.Now()); !ok {
+		w.Header().Set("Retry-After", retryAfter(wait))
+		oauthError(w, http.StatusTooManyRequests, "temporarily_unavailable",
+			"too many client registrations from this address; try again later")
+		return
+	}
+	stored, err := r.oauthStore.RegisterOAuthClient(client, oauthMaxUnusedClients,
+		client.CreatedAt.Add(-oauthUnusedClientTTL), r.oauthClientsInFlight())
+	if err != nil {
 		http.Error(w, "store client: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !stored {
+		// Room comes back as unused registrations age out or get used; an
+		// hour is a fair first guess and a client may retry sooner.
+		w.Header().Set("Retry-After", retryAfter(time.Hour))
+		oauthError(w, http.StatusServiceUnavailable, "temporarily_unavailable",
+			"this server is not accepting new client registrations right now; try again later")
 		return
 	}
 	out := map[string]any{
@@ -326,6 +375,75 @@ func (r *Relay) oauthRegister(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(out)
+}
+
+// oauthClientsInFlight names the clients with an authorization under way: a
+// request waiting on the consent page, or a code not yet redeemed. Cleaning up
+// unused registrations must not delete a client out from under its own login.
+func (r *Relay) oauthClientsInFlight() []string {
+	r.oauthMu.Lock()
+	defer r.oauthMu.Unlock()
+	r.purgeOAuthLocked()
+	ids := make([]string, 0, len(r.oauthRequests)+len(r.oauthCodes))
+	for _, ar := range r.oauthRequests {
+		ids = append(ids, ar.clientID)
+	}
+	for _, c := range r.oauthCodes {
+		ids = append(ids, c.clientID)
+	}
+	return ids
+}
+
+// registrationBudget counts registrations per client address in fixed windows.
+// The zero value is ready to use.
+type registrationBudget struct {
+	mu      sync.Mutex
+	windows map[string]registrationWindow
+}
+
+type registrationWindow struct {
+	start time.Time
+	count int
+}
+
+// take spends one registration of key's budget. When it is spent, take
+// reports how long until it refills.
+func (b *registrationBudget) take(key string, now time.Time) (bool, time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.windows == nil {
+		b.windows = map[string]registrationWindow{}
+	}
+	w, found := b.windows[key]
+	if found && now.Sub(w.start) >= oauthRegistrationWindow {
+		found = false
+	}
+	if !found {
+		if len(b.windows) >= oauthRegistrationClients {
+			for k, old := range b.windows {
+				if now.Sub(old.start) >= oauthRegistrationWindow {
+					delete(b.windows, k)
+				}
+			}
+			if len(b.windows) >= oauthRegistrationClients {
+				// Every tracked address is still inside its window. Refusing
+				// the newcomer is what keeps this map bounded.
+				return false, time.Minute
+			}
+		}
+		w = registrationWindow{start: now}
+	}
+	if w.count >= oauthRegistrationsPerClient {
+		return false, w.start.Add(oauthRegistrationWindow).Sub(now)
+	}
+	w.count++
+	b.windows[key] = w
+	return true, 0
+}
+
+// retryAfter renders a wait as a Retry-After value in whole seconds, at least 1.
+func retryAfter(d time.Duration) string {
+	return strconv.Itoa(max(1, int((d+time.Second-1)/time.Second)))
 }
 
 // validRedirectURI allows https anywhere and http only on the loopback

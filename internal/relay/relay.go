@@ -114,6 +114,8 @@ type Relay struct {
 	oauthMu       sync.Mutex
 	oauthRequests map[string]*oauthAuthzRequest
 	oauthCodes    map[string]*oauthCode
+	// oauthRegistrations is each client address's budget for /oauth/register.
+	oauthRegistrations registrationBudget
 
 	notifyDedupeMu sync.Mutex
 	notifyDedupe   map[notifyDedupeKey]time.Time
