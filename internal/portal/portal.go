@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -787,13 +788,28 @@ func (s *Server) proxyGet(w http.ResponseWriter, ns, path string) {
 	copyResp(w, resp)
 }
 
-// proxyPost merges the namespace into the client's JSON body and forwards a POST.
-func (s *Server) proxyPost(w http.ResponseWriter, r *http.Request, ns, path string) {
-	body := map[string]any{}
+// proxyPost forwards a POST to the relay admin API with the caller's namespace
+// set by the portal. Only the listed fields are taken from the client, matched
+// byte for byte, and anything else is refused: the relay decodes these bodies
+// with encoding/json, which matches keys case-insensitively under Unicode
+// folding, so a client key such as "nameſpace" (U+017F) would otherwise reach
+// the relay next to the portal's "namespace" and replace it.
+func (s *Server) proxyPost(w http.ResponseWriter, r *http.Request, ns, path string, fields ...string) {
+	body := map[string]json.RawMessage{}
 	if r.Body != nil {
-		json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
 	}
-	body["namespace"] = ns
+	for k := range body {
+		if !slices.Contains(fields, k) {
+			http.Error(w, fmt.Sprintf("unknown field %q", k), http.StatusBadRequest)
+			return
+		}
+	}
+	nsJSON, _ := json.Marshal(ns)
+	body["namespace"] = nsJSON
 	resp, err := s.adminReq("POST", path, nil, body)
 	if err != nil {
 		http.Error(w, "relay unreachable", http.StatusBadGateway)
@@ -991,7 +1007,7 @@ func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "POST" {
-		s.proxyPost(w, r, ns, "/admin/tokens/issue")
+		s.proxyPost(w, r, ns, "/admin/tokens/issue", "label", "days")
 		return
 	}
 	s.proxyGet(w, ns, "/admin/tokens")
@@ -999,7 +1015,7 @@ func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTokenRevoke(w http.ResponseWriter, r *http.Request) {
 	if ns, ok := s.requireNS(w, r); ok {
-		s.proxyPost(w, r, ns, "/admin/tokens/revoke")
+		s.proxyPost(w, r, ns, "/admin/tokens/revoke", "id")
 	}
 }
 
@@ -1015,10 +1031,17 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost {
-		s.proxyPost(w, r, ns, "/admin/notify")
+		s.proxyPost(w, r, ns, "/admin/notify", notifyUpdateFields...)
 		return
 	}
 	s.proxyGet(w, ns, "/admin/notify")
+}
+
+// notifyUpdateFields are the webhook settings the portal lets a user change;
+// they mirror relay.notifyWebhookUpdate.
+var notifyUpdateFields = []string{
+	"url", "format", "keyword", "secret", "on_approval", "on_exec", "on_lifecycle",
+	"on_security", "exec_failures_only", "include_detail", "delete",
 }
 
 func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
@@ -1203,7 +1226,7 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "POST" {
-		s.proxyPost(w, r, ns, "/admin/acl")
+		s.proxyPost(w, r, ns, "/admin/acl", "device", "grantee", "manage")
 		return
 	}
 	s.proxyGet(w, ns, "/admin/acl")
@@ -1213,13 +1236,13 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 // proxy: the relay checks that the caller owns the device.
 func (s *Server) handleACLManage(w http.ResponseWriter, r *http.Request) {
 	if ns, ok := s.requireNS(w, r); ok {
-		s.proxyPost(w, r, ns, "/admin/acl/manage")
+		s.proxyPost(w, r, ns, "/admin/acl/manage", "device", "grantee", "manage")
 	}
 }
 
 func (s *Server) handleACLRevoke(w http.ResponseWriter, r *http.Request) {
 	if ns, ok := s.requireNS(w, r); ok {
-		s.proxyPost(w, r, ns, "/admin/acl/revoke")
+		s.proxyPost(w, r, ns, "/admin/acl/revoke", "id")
 	}
 }
 

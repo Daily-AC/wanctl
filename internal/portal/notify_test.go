@@ -24,12 +24,23 @@ func TestNotifyPostUsesSessionNamespace(t *testing.T) {
 		}
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/notify", strings.NewReader(
-		`{"namespace":"alice","url":"https://hooks.example/topic","format":"json"}`))
+		`{"url":"https://hooks.example/topic","format":"json"}`))
 	req.Header.Set("X-User", "bob@example.com")
 	rr := httptest.NewRecorder()
 	s.handleNotify(rr, req)
 	if rr.Code != http.StatusOK || posted["namespace"] != "bob" {
 		t.Fatalf("response = %d %q; posted = %+v", rr.Code, rr.Body.String(), posted)
+	}
+
+	// A namespace in the body is refused rather than quietly replaced.
+	posted = nil
+	req = httptest.NewRequest(http.MethodPost, "/api/notify", strings.NewReader(
+		`{"namespace":"alice","url":"https://hooks.example/topic","format":"json"}`))
+	req.Header.Set("X-User", "bob@example.com")
+	rr = httptest.NewRecorder()
+	s.handleNotify(rr, req)
+	if rr.Code != http.StatusBadRequest || posted != nil {
+		t.Fatalf("with a namespace field: response = %d %q; posted = %+v", rr.Code, rr.Body.String(), posted)
 	}
 }
 

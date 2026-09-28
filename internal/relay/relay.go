@@ -5,16 +5,19 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"wanctl/internal/admission"
 	"wanctl/internal/limits"
@@ -190,9 +193,80 @@ func limitBodies(next http.Handler) http.Handler {
 			if n := bodyCapFor(req.URL.Path); n > 0 {
 				req.Body = http.MaxBytesReader(w, req.Body, n)
 			}
+			if strings.HasPrefix(req.URL.Path, "/admin/") {
+				data, err := io.ReadAll(req.Body)
+				if err != nil {
+					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+					return
+				}
+				if err := checkAdminJSONKeys(data); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				req.Body = io.NopCloser(bytes.NewReader(data))
+			}
 		}
 		next.ServeHTTP(w, req)
 	})
+}
+
+// checkAdminJSONKeys refuses an admin request body that has a non-ASCII object
+// key, or two keys in one object that differ only in case. The portal puts the
+// caller's namespace (or author) into these bodies next to fields the user
+// chose, and encoding/json matches keys case-insensitively under Unicode
+// folding with the last match winning, so either shape could let a user's key
+// ("nameſpace", with U+017F) replace the one the portal set. Admin field names
+// are all ASCII, so nothing legitimate is refused.
+func checkAdminJSONKeys(data []byte) error {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	// seen holds one key set per open object; arrays push nil.
+	var seen []map[string]bool
+	expectKey := func() bool { return len(seen) > 0 && seen[len(seen)-1] != nil }
+	afterValue := true // true when the next string in an object is a key
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF && len(seen) == 0 {
+			return nil
+		}
+		if err != nil {
+			return errors.New("invalid JSON body")
+		}
+		switch t := tok.(type) {
+		case json.Delim:
+			switch t {
+			case '{':
+				seen = append(seen, map[string]bool{})
+				afterValue = true
+				continue
+			case '[':
+				seen = append(seen, nil)
+			case '}', ']':
+				seen = seen[:len(seen)-1]
+			}
+			afterValue = true
+		case string:
+			if expectKey() && afterValue {
+				for i := 0; i < len(t); i++ {
+					if t[i] >= utf8.RuneSelf {
+						return fmt.Errorf("non-ASCII field name %q", t)
+					}
+				}
+				k := strings.ToLower(t)
+				if seen[len(seen)-1][k] {
+					return fmt.Errorf("duplicate field %q", t)
+				}
+				seen[len(seen)-1][k] = true
+				afterValue = false
+				continue
+			}
+			afterValue = true
+		default:
+			afterValue = true
+		}
+	}
 }
 
 // bodyCapFor returns the body cap for a route, or 0 for routes that bound
