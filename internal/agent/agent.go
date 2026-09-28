@@ -565,7 +565,13 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	// Authorize (TOFU / pre-trusted portal key) and reply OK for BOTH exec and
 	// console sessions BEFORE serving — the controller/portal blocks on this OK,
 	// and a console session must be gated by the same trust check as an exec one.
-	if !a.authorize(fp, hello.Name, hello.Label, audit) {
+	if trusted, err := a.authorize(fp, hello.Name, hello.Label, audit); !trusted {
+		if errors.Is(err, console.ErrTooManyPairings) {
+			// Nothing was queued, so there is nothing a pairing link could
+			// approve. The refusal itself is the record of the attempt.
+			a.refuse(conn, fp, hello.Name, "rejected:pairing-full", protocol.Message{Kind: protocol.KindReject, Reason: err.Error()}, audit)
+			return
+		}
 		pairingURL := a.pairingURL(fp, hello.Name, hello.Label)
 		reason := "device has not paired this controller — ask the user to approve"
 		if pairingURL == "" {
@@ -624,10 +630,13 @@ func (a *Agent) mustIdentify(helloKind, fp, label string) bool {
 	return a.unlabeledPairing(fp, label)
 }
 
-func (a *Agent) authorize(fp, name, label string, scopes ...sessionAudit) bool {
+// authorize reports whether fp may use this device, asking the owner when it
+// is not yet trusted. The error is set only when the request could not even be
+// put to the owner (console.ErrTooManyPairings).
+func (a *Agent) authorize(fp, name, label string, scopes ...sessionAudit) (bool, error) {
 	if a.known.Has(fp) {
 		a.known.Touch(fp)
-		return true
+		return true, nil
 	}
 	if a.opts.AutoYes {
 		a.known.AddLabeled(fp, name, label)
@@ -638,25 +647,26 @@ func (a *Agent) authorize(fp, name, label string, scopes ...sessionAudit) bool {
 		// instead of a stdout line nobody reads.
 		a.logSessionEvent(firstAudit(scopes), eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "auto-trust"})
 		a.notifyTrustChanged(fp, name, "granted")
-		return true
+		return true, nil
 	}
 	// Surface the pairing request to a connected front-end (the portal web
 	// console) and block for a human's trust decision. A headless agent with no
 	// portal connected denies (pre-trust with --portal-fps or --yes instead).
 	var paired bool
+	var err error
 	if firstAudit(scopes).grantID != "" {
-		paired = a.console.AskPairNonBlocking(fp, name, label)
+		paired, err = a.console.AskPairNonBlocking(fp, name, label)
 	} else {
-		paired = a.console.AskPair(fp, name, label)
+		paired, err = a.console.AskPair(fp, name, label)
 	}
 	if paired {
 		a.known.AddLabeled(fp, name, label)
 		fmt.Printf("[paired] controller %q trusted via console: %s\n", name, fp)
 		a.logSessionEvent(firstAudit(scopes), eventlog.Event{Type: "trust", PeerFP: fp, PeerName: name, Detail: label, Decision: "console"})
 		a.notifyTrustChanged(fp, name, "granted")
-		return true
+		return true, nil
 	}
-	return false
+	return false, err
 }
 
 // pairingURL builds the portal URL a user clicks to trust this controller. The

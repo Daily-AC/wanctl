@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
+	"wanctl/internal/eventlog"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 )
@@ -38,4 +41,39 @@ func TestRevokedControllerHasToPairAgain(t *testing.T) {
 	if a.known.Has(id.Fingerprint) {
 		t.Fatal("the revoked controller is back in the trust store")
 	}
+}
+
+// With the owner's queue of pairing requests full, a new controller is turned
+// away with a reason it can act on — later — and no pairing link, since nothing
+// was queued for a link to approve. The device records the refusal.
+func TestPairingRefusedWhileTheQueueIsFull(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	a, err := New(Options{RelayURL: "http://unused", Token: "synthetic", Mode: policy.ModeNormal, Shell: "/bin/sh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(a.Close)
+	for i := 0; ; i++ {
+		if _, err := a.console.AskPairNonBlocking(fmt.Sprintf("SHA256:waiting-%d", i), "w", "waiting"); err != nil {
+			break
+		}
+		if i > 1000 {
+			t.Fatal("the pairing queue never filled")
+		}
+	}
+	id := seededIdentity(t, 9)
+	_, reply := pipeHello(t, a, id)
+	if reply.Kind != protocol.KindReject || !strings.Contains(reply.Reason, "too many pairing requests") || reply.PairingURL != "" {
+		t.Fatalf("reply = %+v; want a reject that says to retry later, without a link", reply)
+	}
+	events, err := a.log.Read(eventlog.Filter{Type: "connect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if e.PeerFP == id.Fingerprint && e.Decision == "rejected:pairing-full" {
+			return
+		}
+	}
+	t.Fatalf("no record of the refusal: %+v", events)
 }

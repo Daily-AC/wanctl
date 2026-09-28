@@ -12,7 +12,7 @@ func TestAskPairBlocksUntilDecide(t *testing.T) {
 	defer cancel()
 
 	res := make(chan bool, 1)
-	go func() { res <- s.AskPair("SHA256:abc", "thunder-2", "巡检 home-pc") }()
+	go func() { ok, _ := s.AskPair("SHA256:abc", "thunder-2", "巡检 home-pc"); res <- ok }()
 
 	// the pending pairing shows up in State
 	var fp, label string
@@ -47,7 +47,7 @@ func TestAskPairDeniesWithoutFrontend(t *testing.T) {
 	s.timeout = time.Second
 	// no Subscribe() -> no front-end -> must deny immediately, not block.
 	start := time.Now()
-	if s.AskPair("SHA256:x", "nobody", "") {
+	if ok, _ := s.AskPair("SHA256:x", "nobody", ""); ok {
 		t.Fatal("AskPair must deny when no front-end is connected")
 	}
 	if time.Since(start) > 500*time.Millisecond {
@@ -63,7 +63,7 @@ func TestAskPairPersistsForRetroactiveApproval(t *testing.T) {
 	s.timeout = time.Second
 
 	// No subscriber: should fail fast …
-	if s.AskPair("SHA256:late", "thunder-2", "Claude X") {
+	if ok, _ := s.AskPair("SHA256:late", "thunder-2", "Claude X"); ok {
 		t.Fatal("expected false with no front-end")
 	}
 	// … but the entry persists for the URL-click flow.
@@ -75,7 +75,7 @@ func TestAskPairPersistsForRetroactiveApproval(t *testing.T) {
 		t.Fatal("DecidePair on persisted entry should succeed")
 	}
 	// Same controller retries → now trusted.
-	if !s.AskPair("SHA256:late", "thunder-2", "Claude X") {
+	if ok, _ := s.AskPair("SHA256:late", "thunder-2", "Claude X"); !ok {
 		t.Fatal("AskPair after retroactive approval should return true")
 	}
 	// And no longer shown in the UI.
@@ -90,7 +90,7 @@ func TestDecidePairDenyReturnsFalse(t *testing.T) {
 	_, cancel := s.Subscribe()
 	defer cancel()
 	res := make(chan bool, 1)
-	go func() { res <- s.AskPair("SHA256:deny", "evil", "") }()
+	go func() { ok, _ := s.AskPair("SHA256:deny", "evil", ""); res <- ok }()
 	for i := 0; i < 50 && len(s.State().PendingPairings) == 0; i++ {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -110,7 +110,7 @@ func TestExpiredPairingLeavesTheConsole(t *testing.T) {
 	s.timeout = time.Second
 
 	// URL flow: no front-end attending, entry persists for a retroactive click.
-	if s.AskPair("SHA256:stale", "kestrel", "claude-code on kestrel") {
+	if ok, _ := s.AskPair("SHA256:stale", "kestrel", "claude-code on kestrel"); ok {
 		t.Fatal("expected false with no front-end")
 	}
 	if len(s.State().PendingPairings) != 1 {
@@ -142,7 +142,7 @@ func TestDecidePairRefusesExpiredWithoutAStateRead(t *testing.T) {
 	if s.DecidePair("SHA256:late", true) {
 		t.Fatal("DecidePair trusted a request that had already expired")
 	}
-	if s.AskPair("SHA256:late", "kestrel", "") {
+	if ok, _ := s.AskPair("SHA256:late", "kestrel", ""); ok {
 		t.Fatal("controller retry must not find itself trusted")
 	}
 }

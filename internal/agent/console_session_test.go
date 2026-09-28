@@ -332,7 +332,7 @@ func TestPortalAdminOverlapAllowsOldKeyRevocation(t *testing.T) {
 	if len(resp.Data) != 0 || known.Has(old) || !known.Has(newFP) {
 		t.Fatalf("old portal key was not revoked after overlap: resp=%s old=%v new=%v", resp.Data, known.Has(old), known.Has(newFP))
 	}
-	if a.authorize(old, "portal", "") {
+	if ok, _ := a.authorize(old, "portal", ""); ok {
 		t.Fatal("revoked portal key was still authorized for a new session")
 	}
 }
