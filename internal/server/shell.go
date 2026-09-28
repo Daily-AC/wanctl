@@ -422,6 +422,65 @@ func (s *ShellSession) changeDirLocked(cwd string, out io.Writer) (int, error) {
 	return s.execLocked(changeDirCommand(runtime.GOOS, path), out)
 }
 
+// CurrentDir reports the directory the session's shell is in now, as the shell
+// itself names it: the logical path its own pwd prints, so a session started in
+// or moved to a directory reports that same spelling back.
+//
+// The answer travels through a data file this process created, the same way a
+// cwd travels in (changeDirLocked), and never through the session's output
+// stream: a background job an earlier command started may still be writing to
+// that stream at any moment. A shell that cannot name its directory — the
+// directory was removed, the location is not a filesystem path — is an error,
+// never a guess.
+//
+// This is the shell's own account of itself. A command that was allowed to run
+// in the session can redefine what the shell does next, and this is no
+// exception; what it gets right is the ordinary case of a command having moved
+// the shell with cd.
+func (s *ShellSession) CurrentDir(ctx context.Context) (string, error) {
+	f, err := os.CreateTemp("", "wanctl-pwd-"+s.token+"-*")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	f.Close()
+	defer os.Remove(path)
+	code, err := s.ExecInDirContext(ctx, currentDirCommand(runtime.GOOS, path), "", io.Discard)
+	if err != nil {
+		return "", err
+	}
+	// Only the POSIX status belongs to this command. PowerShell's end marker
+	// reports $LASTEXITCODE, which still holds whatever native program an
+	// earlier command ran; there an empty file is the failure signal.
+	if code != 0 && runtime.GOOS != "windows" {
+		return "", fmt.Errorf("session shell could not name its directory (exit %d)", code)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	dir := string(b)
+	if runtime.GOOS != "windows" {
+		dir = strings.TrimSuffix(dir, "\n") // pwd's own terminator; a name may end in one too
+	}
+	if dir == "" {
+		return "", fmt.Errorf("session shell could not name its directory")
+	}
+	return dir, nil
+}
+
+// currentDirCommand is fixed protocol source that writes the shell's directory
+// into a data file generated locally. `command` keeps a shell function named
+// pwd out of it; PowerShell reads the location from the engine rather than
+// from Get-Location, which a script could redefine, and writes nothing when
+// the location is not on the filesystem.
+func currentDirCommand(goos, dataPath string) string {
+	if goos == "windows" {
+		return "$wanctlLoc=$ExecutionContext.SessionState.Path.CurrentLocation; if($wanctlLoc.Provider.Name -eq 'FileSystem'){[IO.File]::WriteAllText(" + quotePowerShellLiteral(dataPath) + ",$wanctlLoc.ProviderPath)}"
+	}
+	return "command pwd >| " + quotePOSIXLiteral(dataPath)
+}
+
 // Closed reports whether the session has been torn down. It takes no lock: the
 // agent asks this while holding the lock that guards every session on the
 // device, so waiting here for one session's command would stall all of them.
