@@ -467,6 +467,7 @@ func TestRejectedKeyNamesThePairing(t *testing.T) {
 		t.Fatalf("err = %v, want ErrKeyRejected: adbd answered and refused the key", err)
 	}
 	for _, want := range []string{
+		// What `wanctl help exec` tells an agent to match on (internal/catalog).
 		"TLS handshake with adbd",
 		"7 days", "Disable adb authorization timeout",
 		"Revoke USB debugging authorizations",

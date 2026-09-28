@@ -121,7 +121,10 @@ func TestADBProbeExplainsWhenNothingIsListening(t *testing.T) {
 		if st.Available {
 			t.Fatal("probe accepted a device with no adbd")
 		}
-		for _, want := range append(whyOff, "the wanctl app has no current wireless-debugging port", "turn it off and on again") {
+		// The first phrase is what `wanctl help exec` tells an agent to match
+		// on (internal/catalog); rewording it strands that entry.
+		for _, want := range append([]string{"could not reach adbd on this device"},
+			append(whyOff, "the wanctl app has no current wireless-debugging port", "turn it off and on again")...) {
 			if !strings.Contains(st.Reason, want) {
 				t.Errorf("reason = %q\nwant it to say %q", st.Reason, want)
 			}
