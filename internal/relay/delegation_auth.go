@@ -13,12 +13,9 @@ import (
 const delegationRecheckInterval = time.Second
 
 func (r *Relay) authAccess(w http.ResponseWriter, req *http.Request) (delegation.Access, string, bool) {
-	token, legacy, ok := admission.Token(req)
+	token, ok := admission.Token(req)
 	if !ok {
 		return delegation.Access{}, "", false
-	}
-	if legacy {
-		admission.MarkLegacy(w)
 	}
 	a, ok := ResolveAccess(r.ts, token)
 	if a.Delegated && a.Namespace == r.portalNS {

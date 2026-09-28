@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/admission"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/relay"
@@ -49,7 +50,7 @@ func reconnect(t *testing.T, base string) *transport.DialResult {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	nc, _, err := wsconn.Dial(ctx, base+"/dial?token=tok&target=alice/home-pc", nil)
+	nc, _, err := wsconn.Dial(ctx, base+"/dial?target=alice/home-pc", admission.Header("tok"))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

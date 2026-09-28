@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+// bearerFromQuery moves a test request's token= parameter into the
+// Authorization header, the one place the relay reads a credential from, so
+// fixtures can keep spelling a whole request as one query string.
+func bearerFromQuery(req *http.Request) {
+	q := req.URL.Query()
+	if token := q.Get("token"); token != "" {
+		q.Del("token")
+		req.URL.RawQuery = q.Encode()
+		req.RequestURI = req.URL.RequestURI()
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+}
+
 // A credential travels in the Authorization header and nowhere else. A token in
 // the URL is written into every access log between the caller and the relay,
 // and into browser history and Referer headers besides.

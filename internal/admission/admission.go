@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-const legacyWarning = `299 wanctl "token query authentication is deprecated; use Authorization: Bearer"`
-
 func Header(token string) http.Header {
 	h := make(http.Header)
 	if token != "" {
@@ -23,23 +21,14 @@ func SetBearer(req *http.Request, token string) {
 	}
 }
 
-// Token returns the bearer credential. A malformed Authorization header fails
-// closed and never falls back to the legacy query parameter.
-func Token(req *http.Request) (token string, legacy, ok bool) {
-	if value := req.Header.Get("Authorization"); value != "" {
-		parts := strings.Fields(value)
-		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
-			return "", false, false
-		}
-		return parts[1], false, true
+// Token returns the bearer credential from the Authorization header, the only
+// place one is accepted. A token in the URL query is ignored: a URL is copied
+// into proxy access logs, browser history and Referer headers, and every
+// wanctl client has sent the header instead for many releases.
+func Token(req *http.Request) (token string, ok bool) {
+	parts := strings.Fields(req.Header.Get("Authorization"))
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		return "", false
 	}
-	if token := req.URL.Query().Get("token"); token != "" {
-		return token, true, true
-	}
-	return "", false, false
-}
-
-func MarkLegacy(w http.ResponseWriter) {
-	w.Header().Set("Deprecation", "true")
-	w.Header().Set("Warning", legacyWarning)
+	return parts[1], true
 }

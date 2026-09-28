@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/admission"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/relay"
@@ -22,7 +23,7 @@ func connectController(t *testing.T, base string) *transport.DialResult {
 	known, _ := transport.OpenStore("known_servers.json")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	nc, _, err := wsconn.Dial(ctx, base+"/dial?token=tok&target=alice/home-pc", nil)
+	nc, _, err := wsconn.Dial(ctx, base+"/dial?target=alice/home-pc", admission.Header("tok"))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
