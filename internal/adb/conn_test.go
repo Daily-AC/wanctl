@@ -440,6 +440,44 @@ func TestTLSRequiredWithoutPairingIsExplained(t *testing.T) {
 	}
 }
 
+// TestRejectedKeyNamesThePairing models what adbd does with a key it does not
+// know — never paired, or a pairing Android has since revoked. Its TLS is 1.3
+// only, where the client completes its half of the handshake before the server
+// judges the client certificate, so the refusal is not a Handshake error at
+// all: it is an alert on the first read. That used to reach the phone's owner
+// as a bare "remote error: tls: …", with nothing saying that the pairing was
+// the problem or that Android drops one after a week without a connection.
+func TestRejectedKeyNamesThePairing(t *testing.T) {
+	server := selfSignedTLSConfig(t)
+	server.MinVersion = tls.VersionTLS13
+	server.ClientAuth = tls.RequireAnyClientCert
+	server.VerifyPeerCertificate = func([][]byte, [][]*x509.Certificate) error {
+		return errors.New("not in adb_keys")
+	}
+	addr := newFakeAdbd(t, &fakeAdbd{useTLS: true, tlsConfig: server})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	key := testKey(t)
+	_, err := Dial(ctx, addr, key, key.TLSConfig)
+	if err == nil {
+		t.Fatal("a device that refused the key was accepted")
+	}
+	if !errors.Is(err, ErrKeyRejected) {
+		t.Fatalf("err = %v, want ErrKeyRejected: adbd answered and refused the key", err)
+	}
+	for _, want := range []string{
+		"TLS handshake with adbd",
+		"7 days", "Disable adb authorization timeout",
+		"Revoke USB debugging authorizations",
+		"Device settings → ADB pairing",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v\nwant it to say %q", err, want)
+		}
+	}
+}
+
 // publicKeyOf recovers an *rsa.PublicKey from the adb encoding, which is also a
 // check that the encoding round-trips.
 func publicKeyOf(k *Key) (*rsa.PublicKey, error) {

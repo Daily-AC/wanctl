@@ -81,9 +81,15 @@ func (c *Conn) handshake(key *Key, tlsConfig TLSConfigFunc) error {
 		return err
 	}
 	sentPublicKey := false
+	upgraded := false
 	for {
 		m, err := c.recv()
 		if err != nil {
+			if upgraded && isPeerAlert(err) {
+				// TLS 1.3 delivers adbd's verdict on our certificate here,
+				// after Handshake has already returned (see startTLS).
+				return keyRejected(err)
+			}
 			return err
 		}
 		switch m.Command {
@@ -98,6 +104,7 @@ func (c *Conn) handshake(key *Key, tlsConfig TLSConfigFunc) error {
 			if err := c.startTLS(tlsConfig); err != nil {
 				return err
 			}
+			upgraded = true
 			// Nothing is sent here, and that silence is load-bearing. adbd
 			// calls handle_online() and send_connect() itself the instant the
 			// handshake succeeds (daemon/adb_wifi.cpp,

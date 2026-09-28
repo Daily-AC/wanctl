@@ -96,6 +96,81 @@ func TestADBProbeExplainsWhenNothingIsListening(t *testing.T) {
 	if !strings.Contains(st.Reason, "Wireless debugging") && !strings.Contains(st.Reason, "wireless debugging") {
 		t.Fatalf("reason = %q, want it to say what the owner should turn on", st.Reason)
 	}
+
+	// The same refusal through the real port discovery. "Turn it on" is not
+	// enough on its own: the owner turned it on, and Android turned it off
+	// again after a reboot, a Wi-Fi drop or a move to another access point.
+	// Unless the reason says so, the owner's honest answer is "it is on".
+	refuseAll := func(a *ADB) {
+		a.dial = func(context.Context, string, *adb.Key) (shellConn, error) {
+			return nil, errors.New("connect: connection refused")
+		}
+	}
+	whyOff := []string{"Wireless debugging", "reboot", "Wi-Fi disconnects", "different access point"}
+
+	t.Run("the app has found no port", func(t *testing.T) {
+		state := filepath.Join(t.TempDir(), "device.json")
+		if err := os.WriteFile(state, []byte(`{"level":76}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(StateEnv, state)
+		t.Setenv(PortEnv, "")
+		a := NewADB(t.TempDir(), "wanctl@test")
+		refuseAll(a)
+		st := a.Probe(context.Background())
+		if st.Available {
+			t.Fatal("probe accepted a device with no adbd")
+		}
+		for _, want := range append(whyOff, "the wanctl app has no current wireless-debugging port", "turn it off and on again") {
+			if !strings.Contains(st.Reason, want) {
+				t.Errorf("reason = %q\nwant it to say %q", st.Reason, want)
+			}
+		}
+	})
+
+	t.Run("no app to discover the port", func(t *testing.T) {
+		t.Setenv(StateEnv, "")
+		t.Setenv(PortEnv, "")
+		a := NewADB(t.TempDir(), "wanctl@test")
+		refuseAll(a)
+		st := a.Probe(context.Background())
+		for _, want := range whyOff {
+			if !strings.Contains(st.Reason, want) {
+				t.Errorf("reason = %q\nwant it to say %q", st.Reason, want)
+			}
+		}
+		// Termux and an adb shell have no app watching mDNS, so nothing may
+		// be blamed on one.
+		if strings.Contains(st.Reason, "wanctl app") {
+			t.Errorf("reason = %q, blames an app that is not there", st.Reason)
+		}
+	})
+}
+
+// TestADBRejectedKeyIsNotBlamedOnWirelessDebugging: when adbd answers on the
+// discovered port and refuses the key, wireless debugging is demonstrably on.
+// The pairing is what has to be redone, and the adb error says so; closing the
+// reason with "turn on Wireless debugging" would send the owner to a switch
+// that is already on and away from the fix.
+func TestADBRejectedKeyIsNotBlamedOnWirelessDebugging(t *testing.T) {
+	a := NewADB(t.TempDir(), "wanctl@test")
+	a.ports = func() ([]int, string) { return []int{41031, 5555}, "turn on Wireless debugging" }
+	a.dial = func(_ context.Context, addr string, _ *adb.Key) (shellConn, error) {
+		if addr == "127.0.0.1:41031" {
+			return nil, fmt.Errorf("adb: TLS handshake with adbd: remote error: tls: bad certificate (%w: pair again)", adb.ErrKeyRejected)
+		}
+		return nil, errors.New("connect: connection refused")
+	}
+	st := a.Probe(context.Background())
+	if st.Available {
+		t.Fatal("probe accepted a device that refused the key")
+	}
+	if !strings.Contains(st.Reason, "pair again") {
+		t.Errorf("reason = %q, lost the pairing explanation", st.Reason)
+	}
+	if strings.Contains(st.Reason, "turn on Wireless debugging") {
+		t.Errorf("reason = %q, tells the owner to turn on wireless debugging, which is on", st.Reason)
+	}
 }
 
 // TestADBPendingAuthorizationStopsTheSearch: when adbd is waiting for someone
