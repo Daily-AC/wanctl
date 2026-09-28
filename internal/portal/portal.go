@@ -1787,4 +1787,3 @@ func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request) {
 	w.Write(raw)
 	w.Write([]byte(`}`))
 }
-
