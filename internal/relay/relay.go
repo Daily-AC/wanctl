@@ -114,6 +114,8 @@ type Relay struct {
 	oauthMu       sync.Mutex
 	oauthRequests map[string]*oauthAuthzRequest
 	oauthCodes    map[string]*oauthCode
+	// oauthRegistrations is each client address's budget for /oauth/register.
+	oauthRegistrations registrationBudget
 
 	notifyDedupeMu sync.Mutex
 	notifyDedupe   map[notifyDedupeKey]time.Time
@@ -321,15 +323,12 @@ func (r *Relay) SetNotifySender(sender webhookSender) { r.notifySend = sender }
 func (r *Relay) SetLogBuffer(logs *serverlog.Buffer) { r.logs = logs }
 
 func (r *Relay) auth(w http.ResponseWriter, req *http.Request) (ns string, ok bool) {
-	token, legacy, ok := admission.Token(req)
+	token, ok := admission.Token(req)
 	if !ok {
 		return "", false
 	}
 	if strings.HasPrefix(token, "wfd_") {
 		return "", false
-	}
-	if legacy {
-		admission.MarkLegacy(w)
 	}
 	return r.ts.Resolve(token)
 }

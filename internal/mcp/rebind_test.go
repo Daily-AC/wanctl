@@ -120,7 +120,7 @@ func TestLegacyBase64RebindIsRejected(t *testing.T) {
 func TestRebindDoesNotTrustClaimedNamespace(t *testing.T) {
 	var resolvedToken string
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resolvedToken, _, _ = admission.Token(r)
+		resolvedToken, _ = admission.Token(r)
 		json.NewEncoder(w).Encode(map[string]any{"namespace": "real-owner", "devices": []string{}})
 	}))
 	defer relay.Close()

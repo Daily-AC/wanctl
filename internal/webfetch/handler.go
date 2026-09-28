@@ -27,6 +27,7 @@ import (
 	"unicode/utf8"
 
 	"wanctl/internal/client"
+	"wanctl/internal/clientip"
 	"wanctl/internal/delegation"
 	"wanctl/internal/transport"
 )
@@ -342,8 +343,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, r, delegation.ErrExpired)
 			return
 		}
-		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if !h.rateAllowed("new:"+ip, 10) {
+		// Per client, not per TCP peer: behind the reverse proxy every
+		// request has the same peer, and one caller could spend everyone's.
+		if !h.rateAllowed("new:"+clientip.Key(r), 10) {
 			h.respond(w, r, 429, map[string]any{"error": "too many access requests"})
 			return
 		}

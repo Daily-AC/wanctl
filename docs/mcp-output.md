@@ -47,6 +47,14 @@ Devices can report `spill_bytes` even for short output that needed no copy.
 Only `spill_path` identifies an actual reported copy; a zero `spill_kept`
 without a path does not by itself imply output was lost.
 
+Text that comes from a device — command output, the reasons a device gives,
+device names — is returned with its control characters shown as visible
+escapes: `\x1b` for ESC and the other C0 controls and DEL, `\u009b` for C1
+controls, `\xff` for a byte that is not UTF-8. Newline, carriage return and tab
+are kept, and escaping escaped text changes nothing. The one exception is the
+content `wanctl_read` returns, which is the file exactly as stored so that
+`wanctl_edit` can match it byte for byte.
+
 Ordinary device shell execution merges stdout and stderr into the stdout
 channel. Separate stderr metadata describes only separate frames actually
 received; an empty stderr field does not mean the command produced no errors.

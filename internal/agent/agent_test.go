@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/admission"
 	"wanctl/internal/config"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/policy"
@@ -67,7 +68,7 @@ func TestAgentExecOverRelay(t *testing.T) {
 	known, _ := transport.OpenStore("known_servers.json")
 	dctx, dcancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer dcancel()
-	nc, _, err := wsconn.Dial(dctx, base+"/dial?token=tok&target=alice/home-pc", nil)
+	nc, _, err := wsconn.Dial(dctx, base+"/dial?target=alice/home-pc", admission.Header("tok"))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -209,7 +210,7 @@ func TestAutoTrustAdmissionIsLogged(t *testing.T) {
 	known, _ := transport.OpenStore("known_servers.json")
 	dctx, dcancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer dcancel()
-	nc, _, err := wsconn.Dial(dctx, base+"/dial?token=tok&target=alice/home-pc", nil)
+	nc, _, err := wsconn.Dial(dctx, base+"/dial?target=alice/home-pc", admission.Header("tok"))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -238,7 +239,7 @@ func TestAutoTrustAdmissionIsLogged(t *testing.T) {
 	// A second connection from the same controller is a plain connect, not a
 	// second admission.
 	dr.Conn.Close()
-	nc2, _, err := wsconn.Dial(dctx, base+"/dial?token=tok&target=alice/home-pc", nil)
+	nc2, _, err := wsconn.Dial(dctx, base+"/dial?target=alice/home-pc", admission.Header("tok"))
 	if err != nil {
 		t.Fatalf("dial 2: %v", err)
 	}

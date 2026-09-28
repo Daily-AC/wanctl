@@ -208,6 +208,7 @@ func (n *noopAdmin) RoleForNamespace(string) (string, error)    { return "", sql
 func do(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	bearerFromQuery(req)
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}

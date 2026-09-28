@@ -117,16 +117,20 @@ func HandlerWithOptions(o Options) (http.Handler, error) {
 	if len(o.Seed) < 32 {
 		return nil, fmt.Errorf("mcp seed must be at least 32 bytes, got %d", len(o.Seed))
 	}
-	sessions = &sessionStore{
+	store := &sessionStore{
 		seed:    append([]byte(nil), o.Seed...),
 		m:       map[string]*remoteSession{},
+		open:    map[string]*transportSession{},
 		revoked: map[string]time.Time{},
 		trust:   map[string]*transport.Store{},
 		oauth:   o.OAuth,
 	}
-	go sessions.gcLoop()
+	sessions = store
+	go store.gcLoop()
 	s := newMCPServer()
-	opts := []server.StreamableHTTPOption{}
+	// Session IDs come from the store, which bounds and expires them; see
+	// hostedsessions.go.
+	opts := []server.StreamableHTTPOption{server.WithSessionIdManagerResolver(sessionIDs{store: store})}
 	if o.EndpointPath != "" {
 		opts = append(opts, server.WithEndpointPath(o.EndpointPath))
 	}
@@ -139,7 +143,9 @@ func HandlerWithOptions(o Options) (http.Handler, error) {
 		}
 		return ctx
 	}))
-	h := refuseBrowserOrigins(server.NewStreamableHTTPServer(s, opts...))
+	streamable := server.NewStreamableHTTPServer(s, opts...)
+	store.terminate = terminateVia(streamable)
+	h := refuseBrowserOrigins(store.gate(streamable))
 	if o.OAuth != nil {
 		h = oauthGate(append([]byte(nil), o.Seed...), o.OAuth, h)
 	}
@@ -264,6 +270,12 @@ type sessionStore struct {
 	seed    []byte
 	m       map[string]*remoteSession
 	revoked map[string]time.Time // process-local JTI revocations; not durable across restart
+	// open is every transport session admitted and not yet closed, keyed by
+	// Mcp-Session-Id (hostedsessions.go). terminate has mcp-go free its own
+	// state for one; clock stands in for time.Now in tests.
+	open      map[string]*transportSession
+	terminate func(id string)
+	clock     func() time.Time
 
 	// OAuth sessions are keyed by the access token's JTI rather than by
 	// Mcp-Session-Id, which is the whole point: the same bearer reaching us in
@@ -297,11 +309,11 @@ func (s *sessionStore) get(ctx context.Context) sessionAPI {
 	if r == nil {
 		r = &remoteSession{
 			id: sid, seed: s.seed, owner: s, known: transport.NewMemStore(),
-			rebindJTIs: map[string]time.Time{}, lastUsed: time.Now(),
+			rebindJTIs: map[string]time.Time{}, lastUsed: s.now(),
 		}
 		s.m[sid] = r
 	}
-	r.lastUsed = time.Now()
+	r.lastUsed = s.now()
 	return r
 }
 
@@ -323,7 +335,7 @@ func (s *sessionStore) oauthSession(claim mcpauth.Claim) sessionAPI {
 		}
 		s.m[key] = r
 	}
-	r.lastUsed = time.Now()
+	r.lastUsed = s.now()
 	return r
 }
 
@@ -387,21 +399,12 @@ func ForgetPinnedDevice(namespace, device string) {
 	sessions.forgetPin(namespace, device)
 }
 
-// gcLoop prunes idle HTTP sessions every minute (TTL 1h). Cheap because state
-// is small and re-login is just one user click.
+// gcLoop closes idle HTTP sessions every minute; see sweep for the limits.
 func (s *sessionStore) gcLoop() {
-	const ttl = time.Hour
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for range t.C {
-		cutoff := time.Now().Add(-ttl)
-		s.mu.Lock()
-		for id, r := range s.m {
-			if r.lastUsed.Before(cutoff) {
-				delete(s.m, id)
-			}
-		}
-		s.mu.Unlock()
+		s.sweep()
 	}
 }
 
@@ -835,7 +838,7 @@ func registerMCPTools(s *server.MCPServer, bindings ...*workspaceConversation) {
 				c.Desc = "CONVERSATION MODE: the entered workspace is injected automatically. Do not provide target or workspace.\n\n" + c.Desc
 			}
 		}
-		s.AddTool(mcpapi.NewTool(c.MCPName, toolOptions(c)...), h)
+		s.AddTool(mcpapi.NewTool(c.MCPName, toolOptions(c)...), escapeDeviceOutput(c.MCPName, h))
 	}
 }
 
@@ -1303,7 +1306,8 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	if hint != nil {
 		return hint, nil
 	}
-	var stdout, stderr bytes.Buffer
+	// Only what can be returned is kept, as it arrives; see outputKeeper.
+	stdout, stderr := keepTail(), keepEnds()
 	res, err := c.ExecOut(ctx, client.ExecRequest{
 		Target:  target,
 		Command: command,
@@ -1316,7 +1320,7 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		// and it is the difference between "the error was in the middle of 3 MB
 		// you cannot see" and one grep.
 		SpillAfter: maxExecStream,
-	}, &stdout, &stderr)
+	}, stdout, stderr)
 	if err != nil {
 		hint := dialErrorResult(sess, err)
 		if res.SpillPath != "" {
@@ -1326,29 +1330,29 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return hint, nil
 	}
 	code := res.Code
-	stdoutText, stderrText := tailStream(stdout.Bytes(), res), clampStream(stderr.Bytes())
+	stdoutText, stderrText := stdout.tailText(res), stderr.clampText()
 	out := fmt.Sprintf("exit: %d\n", code)
-	if stdout.Len() > 0 {
+	if stdout.total > 0 {
 		s := stdoutText
 		out += "\n--- stdout ---\n" + s
 		if !strings.HasSuffix(s, "\n") {
 			out += "\n"
 		}
 	}
-	if stderr.Len() > 0 {
+	if stderr.total > 0 {
 		s := stderrText
 		out += "\n--- stderr ---\n" + s
 		if !strings.HasSuffix(s, "\n") {
 			out += "\n"
 		}
 	}
-	if stdout.Len() == 0 && stderr.Len() == 0 {
+	if stdout.total == 0 && stderr.total == 0 {
 		out += "(no output)\n"
 	}
 	data := map[string]any{
 		"target": target, "done": true, "code": code,
 		"stdout": stdoutText, "stderr": stderrText,
-		"stdout_truncated": stdout.Len() > maxExecStream, "stderr_truncated": stderr.Len() > maxExecStream,
+		"stdout_truncated": stdout.total > maxExecStream, "stderr_truncated": stderr.total > maxExecStream,
 	}
 	if res.SpillPath != "" {
 		data["spill_path"] = res.SpillPath
@@ -1665,8 +1669,8 @@ func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallT
 	if hint != nil {
 		return hint, nil
 	}
-	var buf bytes.Buffer
-	newOffset, running, code, err := c.ExecPollTo(ctx, target, jobID, int64(reqInt(req, "offset")), &buf)
+	buf := keepEnds()
+	newOffset, running, code, err := c.ExecPollTo(ctx, target, jobID, int64(reqInt(req, "offset")), buf)
 	if err != nil {
 		return dialErrorResult(sess, err), nil
 	}
@@ -1675,8 +1679,8 @@ func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallT
 		head = fmt.Sprintf("state: done\nexit: %d\nnext_offset: %d\n", code, newOffset)
 	}
 	out := head
-	if buf.Len() > 0 {
-		out += "\n--- new output ---\n" + clampStream(buf.Bytes())
+	if buf.total > 0 {
+		out += "\n--- new output ---\n" + buf.clampText()
 	} else {
 		out += "\n(no new output since offset)\n"
 	}
@@ -1686,7 +1690,7 @@ func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallT
 	}
 	data := map[string]any{
 		"target": target, "job_id": jobID, "state": state, "done": !running,
-		"output": clampStream(buf.Bytes()), "next_offset": newOffset, "truncated": buf.Len() > maxExecStream,
+		"output": buf.clampText(), "next_offset": newOffset, "truncated": buf.total > maxExecStream,
 	}
 	if !running {
 		data["code"] = code
@@ -1965,7 +1969,61 @@ func mcpRules(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolRe
 // holds the result/error the caller is after).
 const maxExecStream = 48 * 1024
 
-// tailStream is what a synchronous exec returns when its output does not fit.
+// clampHead is how much of the start of a stream clampText keeps; the rest of
+// maxExecStream goes to the end, where a command's result usually is.
+const clampHead = 8 * 1024
+
+// outputKeeper holds what a caller will be shown of one output stream while
+// the stream is still arriving: its first headN bytes, its last tailN, and a
+// count of all of it. How much a device sends is the device's choice — a
+// command can print without end, and nothing obliges an agent to honour
+// SpillAfter — so nothing here grows with the output. The server used to
+// collect each stream whole and cut it down when the command ended, holding
+// everything a device sent until then.
+type outputKeeper struct {
+	headN, tailN int
+	head, tail   []byte
+	total        int64
+}
+
+// keepTail keeps what tailText shows: the last maxExecStream bytes.
+func keepTail() *outputKeeper { return &outputKeeper{tailN: maxExecStream} }
+
+// keepEnds keeps what clampText shows: the first clampHead bytes and the last
+// maxExecStream-clampHead.
+func keepEnds() *outputKeeper {
+	return &outputKeeper{headN: clampHead, tailN: maxExecStream - clampHead}
+}
+
+// Write never fails and keeps at most headN + 2*tailN bytes: the tail buffer
+// runs to twice its size before it is shifted down, so the copy happens once
+// per tailN bytes of output rather than on every write.
+func (k *outputKeeper) Write(p []byte) (int, error) {
+	n := len(p)
+	k.total += int64(n)
+	if room := k.headN - len(k.head); room > 0 {
+		take := min(room, len(p))
+		k.head = append(k.head, p[:take]...)
+		p = p[take:]
+	}
+	if len(p) > k.tailN {
+		p = p[len(p)-k.tailN:]
+	}
+	if len(k.tail)+len(p) > 2*k.tailN {
+		keep := k.tailN - len(p) // with p appended, exactly tailN remain
+		k.tail = append(k.tail[:0], k.tail[len(k.tail)-keep:]...)
+	}
+	k.tail = append(k.tail, p...)
+	return n, nil
+}
+
+// last is the stream's final tailN bytes, or all of what followed the head
+// when there were fewer.
+func (k *outputKeeper) last() []byte {
+	return k.tail[max(0, len(k.tail)-k.tailN):]
+}
+
+// tailText is what a synchronous exec returns for stdout (a keepTail keeper).
 //
 // It keeps the END of the output, not the beginning and the end. A command's
 // result is at the end: the compiler's error summary, the test run's failures,
@@ -1974,16 +2032,16 @@ const maxExecStream = 48 * 1024
 // the head is one grep away and the tail is what the caller needs in front of
 // it. deviceCopy names that file, so the next call is `grep` and not the same
 // command again with a filter guessed blind.
-func tailStream(b []byte, res client.ExecOutcome) string {
-	if len(b) <= maxExecStream {
-		return string(b)
+func (k *outputKeeper) tailText(res client.ExecOutcome) string {
+	if k.total <= maxExecStream {
+		return string(k.head) + string(k.tail)
 	}
-	tail := b[len(b)-maxExecStream:]
-	// The device counted every byte it produced; this buffer holds only what
+	tail := k.last()
+	// The device counted every byte it produced; this keeper counted only what
 	// arrived on one stream. When the two disagree the device's number is the
 	// true one, and it is the number a caller reasons about when deciding
 	// whether the tail is worth reading at all.
-	total := int64(len(b))
+	total := k.total
 	if res.SpillBytes > total {
 		total = res.SpillBytes
 	}
@@ -2013,20 +2071,22 @@ func spillNote(res client.ExecOutcome) string {
 	}
 }
 
-func clampStream(b []byte) string {
-	if len(b) <= maxExecStream {
-		return string(b)
+// clampText is what stderr and polled output return (a keepEnds keeper): all
+// of it when it fits, otherwise its start and its end around a line saying how
+// much was cut.
+func (k *outputKeeper) clampText() string {
+	if k.total <= maxExecStream {
+		return string(k.head) + string(k.tail)
 	}
-	const headN = 8 * 1024
-	tailN := maxExecStream - headN
-	dropped := len(b) - headN - tailN
+	tail := k.last()
+	dropped := k.total - int64(len(k.head)) - int64(len(tail))
 	var sb strings.Builder
-	sb.Write(b[:headN])
+	sb.Write(k.head)
 	sb.WriteString(fmt.Sprintf(
 		"\n\n[... wanctl truncated %d bytes (%d total); showing first %d + last %d. "+
 			"Re-run with a tighter filter, e.g. `... | Select-Object -Last 200` or `... | tail -n 200` ...]\n\n",
-		dropped, len(b), headN, tailN))
-	sb.Write(b[len(b)-tailN:])
+		dropped, k.total, len(k.head), len(tail)))
+	sb.Write(tail)
 	return sb.String()
 }
 

@@ -5,14 +5,17 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"wanctl/internal/clientip"
 	wanrelease "wanctl/internal/release"
 )
 
@@ -110,8 +113,15 @@ func newSignedDistHandler(dir string) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("verify manifest: %w", err)
 	}
-	if err := wanrelease.VerifyDirectory(dir, manifestRaw, signatureRaw, wanrelease.TrustedPublicKeys); err != nil {
-		return nil, err
+	// Every artifact is hashed against the signed manifest here, once, and
+	// only a directory that passes whole is served at all.
+	artifacts := make(map[string]verifiedArtifact)
+	for _, artifact := range manifest.Artifacts {
+		file, err := verifyArtifactFile(dir, artifact)
+		if err != nil {
+			return nil, fmt.Errorf("verify signed artifact %q: %w", artifact.Name, err)
+		}
+		artifacts[artifact.Name] = verifiedArtifact{Artifact: artifact, file: file}
 	}
 	// The install scripts verify this signature instead of the Ed25519 one, which
 	// neither macOS's LibreSSL nor PowerShell 5.1 can check. Serving it is not a
@@ -125,15 +135,30 @@ func newSignedDistHandler(dir string) (http.Handler, error) {
 			wanrelease.RSASignatureName, err)
 		rsaSignatureRaw = nil
 	}
-	artifacts := make(map[string]wanrelease.Artifact)
-	for _, artifact := range manifest.Artifacts {
-		artifacts[artifact.Name] = artifact
-	}
 	return &signedDistHandler{
 		dir: dir, manifestRaw: manifestRaw, signatureRaw: signatureRaw,
 		rsaSignatureRaw: rsaSignatureRaw,
-		artifacts:       artifacts, verifySlots: make(chan struct{}, 2),
+		artifacts:       artifacts,
 	}, nil
+}
+
+// verifyArtifactFile hashes one artifact against its manifest entry and
+// returns the identity of the file it hashed, taken from the same open file,
+// so that what was checked is exactly what later requests are compared with.
+func verifyArtifactFile(dir string, artifact wanrelease.Artifact) (os.FileInfo, error) {
+	f, err := os.Open(filepath.Join(dir, artifact.Name))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if err := wanrelease.VerifyArtifact(f, io.Discard, artifact); err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 type signedDistHandler struct {
@@ -141,8 +166,58 @@ type signedDistHandler struct {
 	manifestRaw     []byte
 	signatureRaw    []byte
 	rsaSignatureRaw []byte
-	artifacts       map[string]wanrelease.Artifact
-	verifySlots     chan struct{}
+	artifacts       map[string]verifiedArtifact
+	downloads       downloadSlots
+}
+
+// verifiedArtifact is a manifest entry and the file that was hashed against it
+// when the relay started.
+type verifiedArtifact struct {
+	wanrelease.Artifact
+	file os.FileInfo
+}
+
+// A download streams from the file, so each one costs a connection, a file
+// handle and a few small buffers — never a copy of the artifact. These bound
+// how many run at once, overall and per client. A download is held for as long
+// as its reader takes (up to the server's write timeout), so a per-client share
+// is what stops a few stalled readers from one address from taking every slot,
+// the failure the old two-slot design had while it held its slots through the
+// transfer (audit 2026-08-28, SEC-F-07). An installer or `wanctl update` fetches
+// one artifact at a time; four leaves room for a retry beside it.
+const (
+	maxDownloads          = 64
+	maxDownloadsPerClient = 4
+)
+
+// downloadSlots counts downloads in progress. The zero value is ready to use.
+type downloadSlots struct {
+	mu       sync.Mutex
+	total    int
+	byClient map[string]int
+}
+
+func (s *downloadSlots) acquire(client string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.total >= maxDownloads || s.byClient[client] >= maxDownloadsPerClient {
+		return false
+	}
+	if s.byClient == nil {
+		s.byClient = map[string]int{}
+	}
+	s.total++
+	s.byClient[client]++
+	return true
+}
+
+func (s *downloadSlots) release(client string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.total--
+	if s.byClient[client]--; s.byClient[client] <= 0 {
+		delete(s.byClient, client)
+	}
 }
 
 func (h *signedDistHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -189,24 +264,24 @@ func (h *signedDistHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 		http.NotFound(w, req)
 		return
 	}
-	select {
-	case h.verifySlots <- struct{}{}:
-	default:
-		http.Error(w, "release verification is busy", http.StatusServiceUnavailable)
+	client := clientip.Key(req)
+	if !h.downloads.acquire(client) {
+		w.Header().Set("Retry-After", "30")
+		http.Error(w, "too many downloads in progress; try again shortly", http.StatusServiceUnavailable)
 		return
 	}
-	verified, err := h.readVerified(name, artifact)
-	// The slot bounds the memory and CPU spent hashing artifacts, not the
-	// network. Holding it while streaming let two slow clients keep every other
-	// /dl request at 503 (audit 2026-08-28, SEC-F-07).
-	<-h.verifySlots
+	defer h.downloads.release(client)
+	f, err := h.openVerified(artifact)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	defer f.Close()
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
-	http.ServeContent(w, req, name, time.Time{}, bytes.NewReader(verified))
+	// Straight from the file: Range works, and memory does not grow with the
+	// artifact or with how slowly the client reads.
+	http.ServeContent(w, req, name, time.Time{}, f)
 }
 
 var (
@@ -214,20 +289,25 @@ var (
 	errArtifactChanged     = errors.New("signed artifact changed; restart relay to re-verify")
 )
 
-// readVerified returns the artifact's bytes only if they still match the
-// signed manifest entry.
-func (h *signedDistHandler) readVerified(name string, artifact wanrelease.Artifact) ([]byte, error) {
-	f, err := os.Open(filepath.Join(h.dir, name))
+// openVerified opens an artifact only if it is still the very file that was
+// hashed at startup: same file, same size, same modification time. A
+// deployment that replaces or rewrites the directory under a running relay
+// then gets 503 rather than a mix of old and new, until a restart verifies the
+// new release. This is a consistency check, not the trust decision — clients
+// verify the signed manifest and its hashes themselves — which is why it no
+// longer re-hashes the artifact on every request.
+func (h *signedDistHandler) openVerified(artifact verifiedArtifact) (*os.File, error) {
+	f, err := os.Open(filepath.Join(h.dir, artifact.Name))
 	if err != nil {
 		return nil, errArtifactUnavailable
 	}
-	var verified bytes.Buffer
-	err = wanrelease.VerifyArtifact(f, &verified, artifact)
-	closeErr := f.Close()
-	if err != nil || closeErr != nil {
+	info, err := f.Stat()
+	if err != nil || !os.SameFile(info, artifact.file) || info.Size() != artifact.Size ||
+		!info.ModTime().Equal(artifact.file.ModTime()) {
+		f.Close()
 		return nil, errArtifactChanged
 	}
-	return verified.Bytes(), nil
+	return f, nil
 }
 
 // installerHandler serves the bootstrap installer that ships inside the signed
