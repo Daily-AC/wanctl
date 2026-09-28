@@ -71,8 +71,7 @@ func TestActivityAndEventsComeWithTheShareNotTheSwitch(t *testing.T) {
 			}
 		})
 		for path, h := range map[string]http.HandlerFunc{
-			"/api/devices/logs":   s.handleDeviceLogs,
-			"/api/devices/events": s.handleDeviceEvents,
+			"/api/devices/logs": s.handleDeviceLogs,
 		} {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest("GET", path+"?device=devbox", nil)
@@ -106,7 +105,6 @@ func TestManagedShareGetsTheConsoleButNotTheOwnersNotifications(t *testing.T) {
 	for path, h := range map[string]http.HandlerFunc{
 		"/api/devices/console": s.handleDeviceConsole,
 		"/api/devices/logs":    s.handleDeviceLogs,
-		"/api/devices/events":  s.handleDeviceEvents,
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("GET", path+"?device=devbox", nil)

@@ -221,7 +221,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/devices/rules", s.handleDeviceRules)
 	mux.HandleFunc("/api/devices/mode", s.handleDeviceMode)
 	mux.HandleFunc("/api/devices/logs", s.handleDeviceLogs)
-	mux.HandleFunc("/api/devices/events", s.handleDeviceEvents)
 	mux.HandleFunc("/admin/logs", s.handleAdminLogs)
 	mux.HandleFunc("/api/docs/tree", s.handleDocsTree)
 	mux.HandleFunc("/api/docs/article/", s.handleDocsArticleGet)
@@ -1378,7 +1377,7 @@ func (s *Server) requireDeviceOwner(w http.ResponseWriter, r *http.Request, devi
 
 // deviceConnFor returns a warm console connection to ns/device, dialing if needed.
 // It uses double-checked locking so that two concurrent callers for the same absent
-// device (e.g. /api/devices/console and /api/devices/events on page load) do not
+// device (e.g. /api/devices/console and /api/pending on page load) do not
 // both dial and leak the losing connection. The goroutine that loses the post-dial
 // re-check closes its own conn and returns the winner's.
 func (s *Server) deviceConnFor(ctx context.Context, ns, device string) (*deviceConn, error) {
@@ -1789,35 +1788,3 @@ func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`}`))
 }
 
-// eventPollWait bounds one long-poll on /api/devices/events. Shorter than the
-// relay's own poll windows so the request returns a finite response well before
-// any proxy idle timeout; the browser immediately re-polls.
-const eventPollWait = 25 * time.Second
-
-func (s *Server) handleDeviceEvents(w http.ResponseWriter, r *http.Request) {
-	device := r.URL.Query().Get("device")
-	ns, ok := s.requireDeviceUse(w, r, device)
-	if !ok {
-		return
-	}
-	d, err := s.deviceConnFor(r.Context(), ns, device)
-	if err != nil {
-		s.connError(w, device, err)
-		return
-	}
-	// Long-poll, not SSE: a buffering edge proxy holds streaming responses (and
-	// ignores X-Accel-Buffering), so an open text/event-stream never reaches the
-	// browser. Block for one approval-state push (or time out), return a finite
-	// JSON response nginx forwards promptly, and let the client re-poll.
-	notifs, unsubscribe := d.subscribe()
-	defer unsubscribe()
-	select {
-	case <-r.Context().Done():
-		w.WriteHeader(http.StatusNoContent)
-	case st := <-notifs:
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(st)
-	case <-time.After(eventPollWait):
-		w.WriteHeader(http.StatusNoContent) // no event this round; client re-polls
-	}
-}
