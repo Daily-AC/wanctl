@@ -762,6 +762,15 @@ type httpSession struct {
 	lease        *accessLease
 	ownerNS      string
 	lastActive   time.Time
+	// clientSeen is the last request from the controller's side alone. The
+	// device keeps a poll parked on its side of every session, so a
+	// controller killed mid-command (SIGKILL, a crash, a dropped link) would
+	// otherwise leave a session the sweeper never retires, and enough of them
+	// fill the account's session count. clientBridged marks a controller that
+	// came in over WebSocket: the relay itself pipes its side, and the
+	// socket closing ends the session.
+	clientSeen    time.Time
+	clientBridged bool
 	// closedAt is set when a peer closed the session gracefully. The session
 	// then stops accepting new bytes but stays in the registry, so the peer
 	// still reading it collects what is already queued instead of having the
@@ -1293,6 +1302,9 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 	// starts once the chunk is written, not when the poll arrived.
 	r.hmu.Lock()
 	s.lastActive = time.Now()
+	if req.URL.Query().Get("role") != "agent" {
+		s.clientSeen = s.lastActive
+	}
 	r.hmu.Unlock()
 }
 
@@ -1431,6 +1443,9 @@ func (r *Relay) sessionForAccess(sid string, a delegation.Access, role string) *
 		return nil
 	}
 	s.lastActive = time.Now()
+	if role != "agent" {
+		s.clientSeen = s.lastActive
+	}
 	return s
 }
 
@@ -1481,6 +1496,21 @@ func (r *Relay) reapHTTP(now time.Time) {
 		idle := httpSessionIdle
 		serveC, heldC := s.toClient.undelivered()
 		serveA, heldA := s.toAgent.undelivered()
+		// A controller that has not been heard from for longer than a live
+		// one ever waits between polls is gone, whatever the device is doing.
+		// A controller that closed gracefully is excluded: the device may still
+		// be collecting what it left.
+		if !s.clientBridged && !serveC && s.closedAt.IsZero() && !s.clientSeen.IsZero() {
+			clientIdle := httpSessionIdle
+			if heldC {
+				clientIdle = unackedRetention
+			}
+			if now.Sub(s.clientSeen) > clientIdle {
+				delete(r.hsess, sid)
+				dead = append(dead, s)
+				continue
+			}
+		}
 		if serveC || serveA {
 			continue // a poll is in progress
 		}

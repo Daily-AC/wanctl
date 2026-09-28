@@ -76,7 +76,7 @@ func (c *httpSessionConn) Close() error {
 }
 
 var (
-	errNamespaceSessions = fmt.Errorf("too many open sessions for this account (%d); close some and try again", httpSessionsPerNS)
+	errNamespaceSessions = fmt.Errorf("too many open sessions for this account (%d); a session whose controller went away is released within about a minute, so wait and try again", httpSessionsPerNS)
 	errRelaySessions     = errors.New("the relay has too many open sessions; try again later")
 )
 
@@ -94,6 +94,7 @@ func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegat
 		ownerNS:      auth.OwnerNamespace,
 		lastActive:   time.Now(),
 	}
+	s.clientSeen = s.lastActive
 	// Both directions are charged to the namespace that dialed, which opened
 	// the session and can end it. The portal dials on behalf of every account,
 	// so its sessions draw on the relay's budget alone.
@@ -215,6 +216,9 @@ func (r *Relay) handleWSDialToHTTP(w http.ResponseWriter, req *http.Request, tar
 		http.Error(w, err.Error(), http.StatusTooManyRequests)
 		return
 	}
+	r.hmu.Lock()
+	s.clientBridged = true
+	r.hmu.Unlock()
 
 	select {
 	case a.open <- auth:
