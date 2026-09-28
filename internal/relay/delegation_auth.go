@@ -2,6 +2,8 @@ package relay
 
 import (
 	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,18 +78,21 @@ func (r *Relay) accessPeers(a delegation.Access) map[string]any {
 
 // accessLease ties all carrier legs to the exact controller credential. Raw
 // credentials live only in relay memory and are never forwarded to the agent.
+// caps is what the session was opened with, so a share that later allows less
+// can tell which of its sessions hold more (see closeRevokedShares).
 type accessLease struct {
 	r                  *Relay
 	sid, target, token string
 	access             delegation.Access
+	caps               sessionauth.Capabilities
 	done               chan struct{}
 	once               sync.Once
 	mu                 sync.Mutex
 	closers            []func()
 }
 
-func (r *Relay) beginAccessLease(sid, target string, access delegation.Access, token string) *accessLease {
-	l := &accessLease{r: r, sid: sid, target: target, token: token, access: access, done: make(chan struct{})}
+func (r *Relay) beginAccessLease(sid, target string, access delegation.Access, token string, caps sessionauth.Capabilities) *accessLease {
+	l := &accessLease{r: r, sid: sid, target: target, token: token, access: access, caps: caps, done: make(chan struct{})}
 	r.leaseMu.Lock()
 	if r.leases == nil {
 		r.leases = make(map[string]*accessLease)
@@ -132,6 +137,37 @@ func (l *accessLease) valid() bool {
 		return false
 	default:
 		return true
+	}
+}
+
+// closeRevokedShares ends the sessions a share opened into devices of owners
+// that the share no longer allows: every one once the share is gone, and those
+// holding the device's control plane once management is off. The device
+// serves whatever arrives on a session it has accepted, so the relay's check
+// at dial time is the only one an ordinary session gets; every change that
+// takes a share away calls this, so a grantee's open session does not outlive
+// the permission it was opened under. Sessions an owner opened on their own
+// devices, and the portal's, rest on no share and are left alone.
+func (r *Relay) closeRevokedShares(owners ...string) {
+	if r.acl == nil {
+		return
+	}
+	var held []*accessLease
+	r.leaseMu.Lock()
+	for _, l := range r.leases {
+		owner, _, _ := strings.Cut(l.target, "/")
+		caller := l.access.Namespace
+		if caller != owner && (r.portalNS == "" || caller != r.portalNS) && slices.Contains(owners, owner) {
+			held = append(held, l)
+		}
+	}
+	r.leaseMu.Unlock()
+	for _, l := range held {
+		owner, device, _ := strings.Cut(l.target, "/")
+		grant, ok := r.acl.ACLGrant(l.access.Namespace, owner, device)
+		if !ok || !grant.Manage && l.caps.Has(sessionauth.Console) {
+			l.close()
+		}
 	}
 }
 

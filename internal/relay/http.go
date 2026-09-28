@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -70,80 +71,310 @@ type sideQueue struct {
 	// those bytes are in no field at all, so without this the queue looks empty
 	// while a whole chunk is in a poll's hands.
 	inflight bool
+
+	// What this direction holds in memory, guarded by ackMu (see resident.go).
+	// resident is every byte it holds or has promised room to: queued in ch or
+	// head, waiting in seqHeld, assigned to a reader and not yet acknowledged,
+	// and reserved for a write whose body is still being read. slots counts the
+	// chunks in ch or seqHeld and the writes promised a place in ch, which is
+	// what lets an admitted write be enqueued without ever waiting on ch.
+	limit    int64
+	resident int64
+	slots    int
+	room     chan struct{} // closed when resident or slots drop, if a writer waits
+	pool     *residency    // the relay's account; nil for a queue outside one
+	share    *nsShare      // the dialing namespace's part of pool; nil if exempt
+	freed    bool          // free gave everything back; nothing is counted after it
 }
 
+// queueChunks is how many chunks one direction holds between ch, seqHeld and
+// the writes admitted into it. The byte budget alone would let a writer of
+// one-byte chunks pay many times their size in per-chunk overhead.
+const queueChunks = 256
+
 func newSideQueue() *sideQueue {
-	return &sideQueue{ch: make(chan []byte, 256), done: make(chan struct{}), turn: make(chan struct{}, 1), seqNext: 1, assigned: make(map[uint64][]byte), changed: make(chan struct{})}
+	return &sideQueue{ch: make(chan []byte, queueChunks), done: make(chan struct{}), turn: make(chan struct{}, 1), seqNext: 1, assigned: make(map[uint64][]byte), changed: make(chan struct{}), limit: maxResidentPerDirection}
+}
+
+// attach charges this direction to the relay's account, and to namespace ns's
+// share of it unless ns is "".
+func (q *sideQueue) attach(pool *residency, ns string) {
+	q.pool = pool
+	if ns != "" {
+		q.share = pool.join(ns)
+	}
 }
 
 // maxSeqAhead bounds how far past the next expected write a sequenced /h/up may
-// be, and so how much one direction holds while it waits for a gap to fill:
-// writers keep a handful of batches in flight, never this many.
-const maxSeqAhead = 64
+// be. A writer keeps eight in flight, but when one of them is retried, or just
+// slow to get one of the writer's connections, the writer goes on posting the
+// ones after it — dozens on a fast link — and each is held here until the gap
+// fills. A write past the window is sent back to be tried again later (see
+// acceptUpload). One inside it has to be admissible before the gap fills, or it
+// would wait for room on one of the writer's connections, and with four of
+// them waiting the write that fills the gap has no connection left to go out
+// on. So the window is what one direction's budget holds in the largest
+// writes, less the room kept for the missing write and one more to spare; a
+// namespace's share has the same room left with the session's other direction
+// full. seqWindowLocked works it out for a direction's actual budget.
+const maxSeqAhead = uint64(maxResidentPerDirection/maxUploadBytes - 2)
 
-// pushSeq enqueues b as write number seq of this direction, holding it until
-// every earlier write has been queued. It reports false once the queue is
-// closed or when seq is further ahead than any honest writer runs.
-func (q *sideQueue) pushSeq(seq uint64, b []byte) bool {
-	q.seqMu.Lock()
-	defer q.seqMu.Unlock()
-	switch {
-	case seq < q.seqNext:
-		return true // a retry of a write already queued
-	case seq > q.seqNext+maxSeqAhead:
-		return false
-	case seq > q.seqNext:
-		if q.seqHeld == nil {
-			q.seqHeld = map[uint64][]byte{}
-		}
-		cp := make([]byte, len(b))
-		copy(cp, b)
-		q.seqHeld[seq] = cp
-		return true
-	}
+// seqWindowLocked is maxSeqAhead for this direction's budget. Caller holds
+// ackMu.
+func (q *sideQueue) seqWindowLocked() uint64 {
+	return uint64(max(q.limit/maxUploadBytes-2, 1))
+}
+
+var (
+	errQueueClosed = errors.New("session closed")
+	// errRepeatWrite is a write already taken, retried by a writer that did not
+	// see the answer. It is acknowledged and not taken again.
+	errRepeatWrite = errors.New("write already queued")
+	errOutOfWindow = errors.New("write out of window")
+)
+
+// admitSeq waits until write number seq of n bytes may be read and holds room
+// for it (see reserveLocked); commitSeq then takes it into the stream, or
+// unreserve gives the room back. It returns errRepeatWrite for a write already
+// taken, errOutOfWindow for one past the window (see maxSeqAhead),
+// errQueueClosed once the queue has closed, and the context's error if the
+// writer gave up waiting.
+func (q *sideQueue) admitSeq(ctx context.Context, seq uint64, n int64) error {
+	waited := false
 	for {
-		if len(b) > 0 && !q.push(b) {
-			return false
+		q.seqMu.Lock()
+		next := q.seqNext
+		_, held := q.seqHeld[seq]
+		q.ackMu.Lock()
+		window := q.seqWindowLocked()
+		q.ackMu.Unlock()
+		q.seqMu.Unlock()
+		switch {
+		case seq < next || held:
+			return errRepeatWrite
+		case seq > next+window:
+			return errOutOfWindow
 		}
-		q.seqNext++
-		next, ok := q.seqHeld[q.seqNext]
-		if !ok {
-			return true
+		wait, err := q.tryReserve(n, seq > next, &waited)
+		if err != nil || wait == nil {
+			return err
 		}
-		delete(q.seqHeld, q.seqNext)
-		b = next
+		if err := q.await(ctx, wait); err != nil {
+			return err
+		}
 	}
 }
 
-// push enqueues a copy of b, or reports false once the queue is closed. The
-// decision is taken under ackMu, which close also takes, so "is it closed" and
-// "enqueue it" cannot both look true to a writer racing a close: once close has
-// returned, every later push is refused. Only a push that finds the queue full
-// waits outside the lock, and one that was already waiting there when the close
-// landed is genuinely concurrent with it, so either answer is honest.
-func (q *sideQueue) push(b []byte) bool {
-	cp := make([]byte, len(b))
-	copy(cp, b)
+// reserve is admitSeq for a writer that does not number its writes.
+func (q *sideQueue) reserve(ctx context.Context, n int64) error {
+	waited := false
+	for {
+		wait, err := q.tryReserve(n, false, &waited)
+		if err != nil || wait == nil {
+			return err
+		}
+		if err := q.await(ctx, wait); err != nil {
+			return err
+		}
+	}
+}
+
+// await waits for room to be given back, the queue to close, or ctx to end.
+// The caller holds no lock, so nothing a reader needs is held while it waits.
+func (q *sideQueue) await(ctx context.Context, room <-chan struct{}) error {
+	select {
+	case <-room:
+		return nil
+	case <-q.done:
+		return errQueueClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// tryReserve holds room for a write of n bytes, or returns the channel to wait
+// on before trying again. waited records, across the tries of one write,
+// whether it has already been counted as waiting on the relay's account.
+func (q *sideQueue) tryReserve(n int64, ahead bool, waited *bool) (<-chan struct{}, error) {
 	q.ackMu.Lock()
+	defer q.ackMu.Unlock()
 	select {
 	case <-q.done:
-		q.ackMu.Unlock()
-		return false
+		return nil, errQueueClosed
 	default:
 	}
-	select {
-	case q.ch <- cp:
-		q.ackMu.Unlock()
-		return true
-	default:
+	if n == 0 {
+		return nil, nil // an empty write holds nothing and never enters ch
 	}
-	q.ackMu.Unlock()
+	wait, onPool, nsFull := q.reserveLocked(n, ahead)
+	if onPool && !*waited {
+		*waited = true
+		q.pool.noteWait(nsFull)
+	}
+	return wait, nil
+}
+
+// reserveLocked holds n bytes and one slot for a write, if this direction and
+// the relay's account have room for them. A write that is ahead of the stream
+// leaves room for the largest write free at every level: otherwise writes
+// waiting on a gap could fill the budget and leave the write that fills the gap
+// no room to land in. When there is no room it returns the channel to wait on,
+// whether it was the relay's account rather than this direction that was full,
+// and whether that was the namespace's share. Caller holds ackMu.
+func (q *sideQueue) reserveLocked(n int64, ahead bool) (wait <-chan struct{}, onPool, nsFull bool) {
+	spare, spareSlots := int64(0), 0
+	if ahead {
+		spare, spareSlots = maxUploadBytes, 1
+	}
+	if q.resident+n > q.limit-spare || q.slots+1 > cap(q.ch)-spareSlots {
+		if q.room == nil {
+			q.room = make(chan struct{})
+		}
+		return q.room, false, false
+	}
+	if q.pool != nil {
+		if wait, nsFull := q.pool.reserve(q.share, n, spare); wait != nil {
+			return wait, true, nsFull
+		}
+	}
+	q.resident += n
+	q.slots++
+	return nil, false, false
+}
+
+// releaseLocked gives back n bytes and slots chunk slots. Caller holds ackMu.
+func (q *sideQueue) releaseLocked(n int64, slots int) {
+	if q.freed || (n == 0 && slots == 0) {
+		return
+	}
+	q.resident -= n
+	q.slots -= slots
+	q.wakeLocked()
+	if q.pool != nil {
+		q.pool.release(q.share, n)
+	}
+}
+
+// wakeLocked tells writers waiting on this direction to look again.
+func (q *sideQueue) wakeLocked() {
+	if q.room != nil {
+		close(q.room)
+		q.room = nil
+	}
+}
+
+// keepLocked settles a reservation of reserved bytes for a write that turned
+// out to carry used bytes: the difference goes back, and the slot too if the
+// write carries nothing. Caller holds ackMu.
+func (q *sideQueue) keepLocked(reserved, used int64) {
+	slots := 0
+	if reserved > 0 && used == 0 {
+		slots = 1
+	}
+	q.releaseLocked(reserved-used, slots)
+}
+
+// unreserve gives back a reservation whose write was never taken.
+func (q *sideQueue) unreserve(reserved int64) {
+	q.ackMu.Lock()
+	defer q.ackMu.Unlock()
+	q.keepLocked(reserved, 0)
+}
+
+// enqueue queues b, a write reserve admitted with room for reserved bytes. It
+// keeps b itself rather than a copy. Taking it is decided under ackMu, which
+// close also takes, so "is it closed" and "enqueue it" cannot both look true to
+// a writer racing a close: once close has returned, every later write is
+// refused and its room given back.
+func (q *sideQueue) enqueue(b []byte, reserved int64) error {
+	q.ackMu.Lock()
+	defer q.ackMu.Unlock()
+	return q.enqueueLocked(b, reserved)
+}
+
+func (q *sideQueue) enqueueLocked(b []byte, reserved int64) error {
 	select {
-	case q.ch <- cp:
-		return true
 	case <-q.done:
+		q.keepLocked(reserved, 0)
+		return errQueueClosed
+	default:
+	}
+	q.keepLocked(reserved, int64(len(b)))
+	if len(b) > 0 {
+		q.ch <- b // never waits: the reservation holds this chunk's slot
+	}
+	return nil
+}
+
+// commitSeq takes write number seq, which admitSeq admitted with room for
+// reserved bytes, into the stream: in place if every earlier write is in, and
+// otherwise into seqHeld until they are. A write taken in the meantime by a
+// retry of it is acknowledged and its room given back.
+func (q *sideQueue) commitSeq(seq uint64, b []byte, reserved int64) error {
+	q.seqMu.Lock()
+	defer q.seqMu.Unlock()
+	q.ackMu.Lock()
+	defer q.ackMu.Unlock()
+	select {
+	case <-q.done:
+		q.keepLocked(reserved, 0)
+		return errQueueClosed
+	default:
+	}
+	if _, held := q.seqHeld[seq]; held || seq < q.seqNext {
+		q.keepLocked(reserved, 0)
+		return nil
+	}
+	if seq > q.seqNext {
+		q.keepLocked(reserved, int64(len(b)))
+		if q.seqHeld == nil {
+			q.seqHeld = map[uint64][]byte{}
+		}
+		q.seqHeld[seq] = b
+		return nil
+	}
+	if err := q.enqueueLocked(b, reserved); err != nil {
+		return err
+	}
+	for {
+		q.seqNext++
+		next, ok := q.seqHeld[q.seqNext]
+		if !ok {
+			break
+		}
+		delete(q.seqHeld, q.seqNext)
+		if len(next) > 0 {
+			q.ch <- next // its slot has been held since it was admitted
+		}
+	}
+	// A write that waited for room as out of order may be the next one now,
+	// which needs less room.
+	q.wakeLocked()
+	return nil
+}
+
+// pushSeq is admitSeq and commitSeq for a caller that already holds the bytes,
+// and it queues a copy of them. It reports false once the queue is closed or
+// when seq is past the window.
+func (q *sideQueue) pushSeq(seq uint64, b []byte) bool {
+	n := int64(len(b))
+	switch err := q.admitSeq(context.Background(), seq, n); {
+	case errors.Is(err, errRepeatWrite):
+		return true
+	case err != nil:
 		return false
 	}
+	return q.commitSeq(seq, bytes.Clone(b), n) == nil
+}
+
+// push enqueues a copy of b, waiting for room, or reports false once the queue
+// is closed. The in-process bridge writes this way.
+func (q *sideQueue) push(b []byte) bool {
+	n := int64(len(b))
+	if q.reserve(context.Background(), n) != nil {
+		return false
+	}
+	return q.enqueue(bytes.Clone(b), n) == nil
 }
 
 func (q *sideQueue) close() {
@@ -152,6 +383,39 @@ func (q *sideQueue) close() {
 		close(q.done)
 		q.ackMu.Unlock()
 	})
+}
+
+// free closes the queue and gives back everything it holds, for a session that
+// has left the registry: nobody can reach its bytes any more, and a poll or a
+// bridge read still holding the queue must not keep them counted against the
+// relay. The bytes are dropped, so the memory goes with them.
+func (q *sideQueue) free() {
+	q.close()
+	q.seqMu.Lock()
+	defer q.seqMu.Unlock()
+	q.ackMu.Lock()
+	defer q.ackMu.Unlock()
+	if q.freed {
+		return
+	}
+	for drained := false; !drained; {
+		select {
+		case <-q.ch:
+		default:
+			drained = true
+		}
+	}
+	q.seqHeld = nil
+	q.head = nil
+	q.assigned = map[uint64][]byte{}
+	q.unacked = nil
+	if q.pool != nil {
+		q.pool.release(q.share, q.resident)
+		q.pool.leave(q.share)
+	}
+	q.resident, q.slots = 0, 0
+	q.freed = true
+	q.wakeLocked()
 }
 
 // beginTake and endTake bracket a poll's hold on the queue, so that a chunk
@@ -265,18 +529,22 @@ func (q *sideQueue) takeUpTo(ctx context.Context, ack uint64, timeout time.Durat
 }
 
 // dropAcked and assign require ackMu. The legacy unacked field remains a view
-// of the first outstanding chunk for the queue's existing diagnostics.
+// of the first outstanding chunk for the queue's existing diagnostics. An
+// acknowledged chunk is the reader's now, so its bytes leave the relay here.
 func (q *sideQueue) dropAcked(ack uint64) {
 	first := q.seq + 1
 	q.unacked = nil
+	var gone int64
 	for k, b := range q.assigned {
 		if k <= ack {
 			delete(q.assigned, k)
+			gone += int64(len(b))
 		} else if k < first {
 			first = k
 			q.unacked = b
 		}
 	}
+	q.releaseLocked(gone, 0)
 }
 
 func (q *sideQueue) assign(seq uint64, data []byte) {
@@ -356,6 +624,11 @@ func (q *sideQueue) pollDrain(ctx context.Context, timeout time.Duration) (data 
 	q.beginTake()
 	defer q.endTake()
 	data, closed = q.drain(ctx, timeout)
+	// Nothing will be re-sent to this reader, so the bytes leave the relay as
+	// soon as they are taken.
+	q.ackMu.Lock()
+	q.releaseLocked(int64(len(data)), 0)
+	q.ackMu.Unlock()
 	return data, closed, true
 }
 
@@ -376,11 +649,10 @@ func (q *sideQueue) pollDrain(ctx context.Context, timeout time.Duration) (data 
 // = 2.5 MiB/s).
 //
 // It bounds the response because a chunk that would overshoot is split and its
-// tail served first next time, not appended whole. The memory one direction
-// holds is therefore maxDrainBytes for the unacked chunk, plus the tail of at
-// most one split chunk, plus the 256-slot queue itself — whose chunks are
-// bounded by limits.RelayHTTPUploadBytes on the /h/up path but not on the
-// in-process bridge, which is why the split has to exist at all.
+// tail served first next time, not appended whole. Chunks are bounded by
+// limits.RelayHTTPUploadBytes on the /h/up path but not on the in-process
+// bridge, which is why the split has to exist at all. What one direction holds
+// in all is bounded by maxResidentPerDirection.
 const maxDrainBytes = 2 << 20
 
 // maxDrainLimit bounds what a reader may ask one chunk to carry (DownMaxParam).
@@ -401,6 +673,16 @@ func (q *sideQueue) drain(ctx context.Context, timeout time.Duration) (data []by
 // drainUpTo is drain with a bound of limit bytes instead of maxDrainBytes.
 func (q *sideQueue) drainUpTo(ctx context.Context, timeout time.Duration, limit int) (data []byte, closed bool) {
 	var out []byte
+	// Every chunk taken out of ch frees its slot. Its bytes stay counted: the
+	// caller either holds them as assigned or lets them go itself.
+	taken := 0
+	defer func() {
+		if taken > 0 {
+			q.ackMu.Lock()
+			q.releaseLocked(0, taken)
+			q.ackMu.Unlock()
+		}
+	}()
 	// appendCapped takes as much of b as still fits and parks the rest in head.
 	// out is grown by hand so that neither its length nor the memory behind it
 	// can pass the cap, and an idle poll that never sees a byte allocates none.
@@ -418,12 +700,16 @@ func (q *sideQueue) drainUpTo(ctx context.Context, timeout time.Duration, limit 
 		}
 		out = append(out, b...)
 	}
+	took := func(b []byte) {
+		taken++
+		appendCapped(b)
+	}
 	// fill drains what is already queued, without waiting.
 	fill := func() {
 		for len(out) < limit {
 			select {
 			case b := <-q.ch:
-				appendCapped(b)
+				took(b)
 			default:
 				return
 			}
@@ -442,7 +728,7 @@ func (q *sideQueue) drainUpTo(ctx context.Context, timeout time.Duration, limit 
 	}
 	select {
 	case b := <-q.ch:
-		appendCapped(b)
+		took(b)
 		fill()
 		return out, false
 	case <-time.After(timeout):
@@ -452,7 +738,7 @@ func (q *sideQueue) drainUpTo(ctx context.Context, timeout time.Duration, limit 
 	case <-q.done:
 		select {
 		case b := <-q.ch:
-			appendCapped(b)
+			took(b)
 			fill()
 			return out, false
 		default:
@@ -488,6 +774,14 @@ func (s *httpSession) close() {
 	s.toAgent.close()
 }
 
+// free closes the session and drops what it holds. Every path that takes a
+// session out of the registry calls it; a graceful close does not, because
+// the far side is still reading.
+func (s *httpSession) free() {
+	s.toClient.free()
+	s.toAgent.free()
+}
+
 const (
 	httpAgentTTL = 40 * time.Second
 	// httpAgentsPerNS bounds how many distinct device names one namespace may
@@ -498,6 +792,16 @@ const (
 	// only stops the flood, and only new names past the cap (existing devices
 	// keep polling).
 	httpAgentsPerNS = 256
+	// httpSessionsPerNS bounds the HTTP sessions one namespace has dialed
+	// and the relay still holds. Each holds memory beyond the bytes it
+	// carries, and a session stays registered until both ends have closed it
+	// or the sweeper retires it, so without a count one account could open
+	// sessions until the relay-wide limit below was all its own. A person or
+	// an AI working through the CLI or MCP has a handful open at once.
+	httpSessionsPerNS = 64
+	// httpSessionsTotal bounds every HTTP session the relay holds, the
+	// portal's included (see Relay.maxSessions).
+	httpSessionsTotal = 4096
 	// httpSessionIdle reaps a session neither party has polled for this long.
 	// A live session is polled at least every downPollWait (20s); an abandoned
 	// one is not, so 3× is comfortably clear of a slow but live command.
@@ -558,6 +862,11 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 		created, err = r.registerDeviceID(ns, deviceID, req.URL.Query().Get("name"), req.URL.Query().Get("fp"))
 	} else {
 		err = r.allowLegacyRegistration(ns, device)
+		// An agent from before device IDs may send no name, and is then
+		// labelled by its device name; one it does send is held to the rule.
+		if name := req.URL.Query().Get("name"); err == nil && name != "" && !validDeviceName(name) {
+			err = errors.New("invalid device name")
+		}
 		if err == nil {
 			created = r.recordDeviceRegistration(ns, device, req.URL.Query().Get("fp"))
 		}
@@ -667,7 +976,10 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 	sid := newID()
 	auth.Session = sid
 	r.hmu.Unlock()
-	r.newHTTPSession(sid, auth, access, token)
+	if _, err := r.newHTTPSession(sid, auth, access, token); err != nil {
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	}
 
 	select {
 	case a.open <- auth:
@@ -766,17 +1078,6 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
 	}
-	req.Body = http.MaxBytesReader(w, req.Body, limits.RelayHTTPUploadBytes)
-	body, err := io.ReadAll(req.Body)
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		http.Error(w, "read body", http.StatusBadRequest)
-		return
-	}
 	if s.lease != nil && !s.lease.credentialValid() {
 		r.closeHTTPSession(req.URL.Query().Get("session"), s)
 		http.Error(w, "session closed", http.StatusGone)
@@ -794,24 +1095,111 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 	if req.URL.Query().Get("role") == "agent" {
 		dst = s.toClient
 	}
+	var seq uint64
 	if seqParam := req.URL.Query().Get(httpconn.UpSeqParam); seqParam != "" {
-		seq, err := strconv.ParseUint(seqParam, 10, 64)
+		var err error
+		seq, err = strconv.ParseUint(seqParam, 10, 64)
 		if err != nil || seq == 0 {
 			http.Error(w, "bad seq", http.StatusBadRequest)
 			return
 		}
-		if !dst.pushSeq(seq, body) {
-			http.Error(w, "session closed or write out of window", http.StatusGone)
-			return
-		}
+	}
+	if taken, _ := acceptUpload(w, req, dst, seq); taken {
 		w.WriteHeader(http.StatusOK)
-		return
 	}
-	if len(body) > 0 && !dst.push(body) {
+}
+
+// acceptUpload takes the body of req into dst as write number seq, or as the
+// next write when seq is 0 (a writer that does not number its writes). Room for
+// the body is held before a byte of it is read, so a writer that has to wait
+// for room holds no memory while it waits: the bytes stay with the sender. It
+// answers the request itself when the write is not taken, and reports whether
+// it was, and whether it was refused because dst has closed.
+func acceptUpload(w http.ResponseWriter, req *http.Request, dst *sideQueue, seq uint64) (taken, closed bool) {
+	n := req.ContentLength
+	if n > maxUploadBytes {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return false, false
+	}
+	if n < 0 {
+		n = maxUploadBytes // not known until read; the room not used goes back
+	}
+	var err error
+	if seq == 0 {
+		err = dst.reserve(req.Context(), n)
+	} else {
+		err = dst.admitSeq(req.Context(), seq, n)
+	}
+	// The server's read timeout runs from the start of the request, and the
+	// wait for room may have used it up; the body gets a timeout of its own.
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(limits.HTTPReadTimeout))
+	switch {
+	case errors.Is(err, errRepeatWrite):
+		io.Copy(io.Discard, http.MaxBytesReader(w, req.Body, maxUploadBytes))
+		return true, false
+	case errors.Is(err, errOutOfWindow):
+		// Ahead of a write that has not landed yet, most likely one being
+		// retried. A 5xx is what makes the writer back off and send this one
+		// again, by which time the gap has usually filled; a 4xx would end its
+		// session, and holding the request would keep a connection the retry
+		// may be waiting for.
+		http.Error(w, "write too far ahead of the stream; retry", http.StatusServiceUnavailable)
+		return false, false
+	case errors.Is(err, errQueueClosed) && seq != 0:
+		http.Error(w, "session closed or write out of window", http.StatusGone)
+		return false, true
+	case errors.Is(err, errQueueClosed):
 		http.Error(w, "session closed", http.StatusGone)
-		return
+		return false, true
+	case err != nil:
+		// The writer went away while waiting for room. Nothing was taken, so a
+		// retry of this write starts afresh.
+		http.Error(w, "gave up waiting for room", http.StatusServiceUnavailable)
+		return false, false
 	}
-	w.WriteHeader(http.StatusOK)
+	body, err := readUpload(w, req, n)
+	if err != nil {
+		dst.unreserve(n)
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return false, false
+		}
+		http.Error(w, "read body", http.StatusBadRequest)
+		return false, false
+	}
+	if seq == 0 {
+		err = dst.enqueue(body, n)
+	} else {
+		err = dst.commitSeq(seq, body, n)
+	}
+	if err != nil {
+		http.Error(w, "session closed", http.StatusGone)
+		return false, true
+	}
+	return true, false
+}
+
+// readUpload reads a body of at most n bytes into a buffer no larger than it
+// needs, since the queue keeps the buffer itself. A declared length is read
+// into one allocation of that size; an undeclared one is trimmed after reading.
+func readUpload(w http.ResponseWriter, req *http.Request, n int64) ([]byte, error) {
+	r := http.MaxBytesReader(w, req.Body, n)
+	if req.ContentLength >= 0 {
+		body := make([]byte, req.ContentLength)
+		if _, err := io.ReadFull(r, body); err != nil {
+			return nil, err
+		}
+		return body, nil
+	}
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	if cap(body) > len(body)+len(body)/8 {
+		body = bytes.Clone(body)
+	}
+	return body, nil
 }
 
 func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
@@ -927,24 +1315,21 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 	// the close instead of in an /h/up of their own, saving the round trip
 	// that every command otherwise spends at the very end. They are queued
 	// in their place before the queues shut.
+	tailTaken := true
 	if seqParam := req.URL.Query().Get(httpconn.UpSeqParam); seqParam != "" {
 		seq, err := strconv.ParseUint(seqParam, 10, 64)
 		if err != nil || seq == 0 {
 			http.Error(w, "bad seq", http.StatusBadRequest)
 			return
 		}
-		req.Body = http.MaxBytesReader(w, req.Body, limits.RelayHTTPUploadBytes)
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			http.Error(w, "read body", http.StatusBadRequest)
-			return
-		}
 		dst := s.toAgent
 		if req.URL.Query().Get("role") == "agent" {
 			dst = s.toClient
 		}
-		if !dst.pushSeq(seq, body) {
-			http.Error(w, "session closed or write out of window", http.StatusGone)
+		// Refused because the far side has already gone, the last bytes
+		// cannot be delivered, but the close still is one.
+		var closed bool
+		if tailTaken, closed = acceptUpload(w, req, dst, seq); !tailTaken && !closed {
 			return
 		}
 	}
@@ -957,10 +1342,20 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 	// 404 them away. It leaves once both directions have been taken, or when
 	// the sweeper finds nobody polling it any more.
 	s.close()
+	// The side that closed does not read again — not even to acknowledge the
+	// last chunk it read — so what is left for it goes now. Kept, it would hold
+	// the session and its bytes until the sweeper's retention ran out.
+	if req.URL.Query().Get("role") == "agent" {
+		s.toAgent.free()
+	} else {
+		s.toClient.free()
+	}
 	// Closing the second queue can be the last thing a finished session was
 	// waiting for, and a poll that woke on the first one has already looked.
 	r.releaseDrainedSession(sid, s)
-	w.WriteHeader(http.StatusOK)
+	if tailTaken {
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 // releaseDrainedSession retires a gracefully closed session once *both*
@@ -994,7 +1389,13 @@ func (r *Relay) releaseDrainedSession(sid string, s *httpSession) {
 		delete(r.hsess, sid)
 	}
 	r.hmu.Unlock()
-	if retire && s.lease != nil {
+	if !retire {
+		return
+	}
+	// Both directions are empty; this gives back writes still waiting in
+	// seqHeld for a gap that will never fill.
+	s.free()
+	if s.lease != nil {
 		s.lease.close()
 	}
 }
@@ -1091,6 +1492,7 @@ func (r *Relay) reapHTTP(now time.Time) {
 			dead = append(dead, s)
 		}
 	}
+	sessions := len(r.hsess)
 	r.hmu.Unlock()
 	for _, a := range offline {
 		if !r.wsDeviceLive(a.ns + "/" + a.device) {
@@ -1098,11 +1500,12 @@ func (r *Relay) reapHTTP(now time.Time) {
 		}
 	}
 	for _, s := range dead {
-		s.close()
+		s.free()
 		if s.lease != nil {
 			s.lease.close()
 		}
 	}
+	r.resident.report(now, sessions)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

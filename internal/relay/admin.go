@@ -508,6 +508,8 @@ func (r *Relay) adminDeviceRemove(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Its shares went with it.
+	r.closeRevokedShares(body.Namespace)
 	// Evict any live registry entry so it disappears immediately.
 	key := body.Namespace + "/" + body.Device
 	r.hmu.Lock()
@@ -618,6 +620,9 @@ func (r *Relay) adminACLManage(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no live share of that device with that namespace", http.StatusNotFound)
 		return
 	}
+	if !body.Manage {
+		r.closeRevokedShares(body.Namespace)
+	}
 	writeJSON(w, map[string]any{"device": device, "grantee": body.Grantee, "manage": body.Manage})
 }
 
@@ -635,6 +640,7 @@ func (r *Relay) adminACLRevoke(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	r.closeRevokedShares(body.Namespace)
 	w.WriteHeader(http.StatusOK)
 }
 

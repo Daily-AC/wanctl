@@ -95,12 +95,16 @@ type Relay struct {
 	agents         map[string]*agentConn      // key "ns/device" (WebSocket transport)
 	pending        map[string]*pendingSession // key session id (WebSocket transport)
 
-	hmu        sync.Mutex
-	hagents    map[string]*httpAgent   // key "ns/device" (HTTP transport)
-	hsess      map[string]*httpSession // key session id (HTTP transport)
-	reaperOnce sync.Once
-	leaseMu    sync.Mutex
-	leases     map[string]*accessLease
+	hmu      sync.Mutex
+	hagents  map[string]*httpAgent   // key "ns/device" (HTTP transport)
+	hsess    map[string]*httpSession // key session id (HTTP transport)
+	resident *residency              // tunnel bytes held by every HTTP session
+	// maxSessions is httpSessionsTotal, a field so a test can reach it
+	// without opening thousands of sessions.
+	maxSessions int
+	reaperOnce  sync.Once
+	leaseMu     sync.Mutex
+	leases      map[string]*accessLease
 
 	enrollMu    sync.Mutex
 	enrollCodes map[string]*enrollCode // one-time device-enrollment codes
@@ -129,6 +133,8 @@ func New(ts TokenStore) *Relay {
 		pending:      map[string]*pendingSession{},
 		hagents:      map[string]*httpAgent{},
 		hsess:        map[string]*httpSession{},
+		resident:     newResidency(),
+		maxSessions:  httpSessionsTotal,
 		enrollCodes:  map[string]*enrollCode{},
 		notifyDedupe: map[notifyDedupeKey]time.Time{},
 		notifySend:   notify.NewSender(notify.Options{}),
@@ -272,10 +278,12 @@ func checkAdminJSONKeys(data []byte) error {
 }
 
 // bodyCapFor returns the body cap for a route, or 0 for routes that bound
-// themselves.
+// themselves. /h/close is one of those: a writer that knows the relay orders
+// writes sends its last bytes with the close, up to a whole write of them, and
+// the control-body cap cut those off.
 func bodyCapFor(path string) int64 {
 	switch {
-	case path == "/h/up":
+	case path == "/h/up", path == "/h/close":
 		return 0
 	case strings.HasPrefix(path, "/mcp"), strings.HasPrefix(path, "/wanctl-mcp"):
 		return limits.RelayMCPBodyBytes
@@ -448,7 +456,13 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	}
 	limits.ClearHijackedDeadline(req.Context())
 	nc := wsconn.FromAccepted(req.Context(), c)
-	dec := json.NewDecoder(nc)
+	// A JSON decoder holds a value whole before handing it over, and the
+	// control channel is one stream however it is split into messages, so each
+	// value is bounded here: to what a control request may carry. The channel
+	// carries a registration and, after it, nothing the relay acts on.
+	body := &io.LimitedReader{R: nc}
+	dec := json.NewDecoder(body)
+	body.N = limits.RelayControlBodyBytes
 	var reg struct {
 		Op, Device, Fingerprint, Inst, Name string
 		DeviceID                            string `json:"device_id"`
@@ -478,6 +492,13 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 		if err := r.allowLegacyRegistration(ns, reg.Device); err != nil {
 			r.registrationMu.Unlock()
 			c.Close(websocket.StatusPolicyViolation, err.Error())
+			return
+		}
+		// An agent from before device IDs may send no name, and is then
+		// labelled by its device name; one it does send is held to the rule.
+		if reg.Name != "" && !validDeviceName(reg.Name) {
+			r.registrationMu.Unlock()
+			c.Close(websocket.StatusPolicyViolation, "invalid device name")
 			return
 		}
 	}
@@ -512,6 +533,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	}()
 	// Keep the control connection alive; drain any further messages (e.g. pings).
 	for {
+		body.N = limits.RelayControlBodyBytes
 		var ignore json.RawMessage
 		if err := dec.Decode(&ignore); err != nil {
 			return
@@ -546,7 +568,7 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 	}
 	sid := newID()
 	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), done: make(chan struct{}), ownerNS: auth.OwnerNamespace}
-	lease := r.beginAccessLease(sid, targetKey, access, token)
+	lease := r.beginAccessLease(sid, targetKey, access, token, auth.Capabilities)
 	defer lease.close()
 	r.mu.Lock()
 	r.pending[sid] = ps

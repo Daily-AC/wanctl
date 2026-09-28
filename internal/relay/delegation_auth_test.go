@@ -143,7 +143,7 @@ func TestDelegatedLeaseExpiresAndRevokes(t *testing.T) {
 			}
 			s := &transportGrantStore{grants: map[string]delegation.Access{"a": a}}
 			r := New(s)
-			l := r.beginAccessLease("s", "alice/allowed", a, "a")
+			l := r.beginAccessLease("s", "alice/allowed", a, "a", sessionauth.UseCapabilities)
 			defer l.close()
 			closed := make(chan struct{})
 			l.addCloser(func() { close(closed) })
@@ -230,7 +230,7 @@ func TestDelegatedExpiryDoesNotWaitForSlowRevalidation(t *testing.T) {
 	store := slowDelegationTokens{release: make(chan struct{}), access: a}
 	defer close(store.release)
 	r := New(store)
-	l := r.beginAccessLease("session", "alice/allowed", a, "token")
+	l := r.beginAccessLease("session", "alice/allowed", a, "token", sessionauth.UseCapabilities)
 	defer l.close()
 	select {
 	case <-l.done:
