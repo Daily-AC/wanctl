@@ -629,7 +629,10 @@ func cmdExec(ctx context.Context, args []string) error {
 	// Legacy exec forwards Ctrl-C to the device. Workspace exec only stops
 	// waiting: its device-owned request can be polled or explicitly cancelled.
 	// Both controller paths use the shell's conventional 128+SIGINT exit code.
-	ctx, stopSignals := signal.NotifyContext(ctx, os.Interrupt)
+	// SIGTERM is treated the same way: it is what a tool that times a command
+	// out sends, and without it the device went on running the command and the
+	// relay held the abandoned session until its sweeper noticed.
+	ctx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 	fs := withHelp(flag.NewFlagSet("exec", flag.ExitOnError))
 	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
