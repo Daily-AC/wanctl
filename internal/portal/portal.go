@@ -83,6 +83,10 @@ type Config struct {
 
 // Server is the portal web app.
 type Server struct {
+	// waitCalls holds the /api/pending aggregate in progress per namespace.
+	waitMu    sync.Mutex
+	waitCalls map[string]*waitingCall
+
 	relayURL     string
 	relayPublic  string // user-reachable relay origin for download links
 	downloads    downloadsCache
@@ -1787,4 +1791,3 @@ func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request) {
 	w.Write(raw)
 	w.Write([]byte(`}`))
 }
-
