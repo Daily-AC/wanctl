@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -84,13 +83,12 @@ func hostedDeviceNamed(t *testing.T, name string) (h http.Handler, access, targe
 }
 
 // heapPeak samples the live heap until stop is called and reports the most it
-// saw above the level when it started. HeapAlloc counts garbage the collector
-// has not reached yet, and by default it waits for the heap to double; with a
-// large live heap left by earlier tests in the package that let 100 MiB of
-// already-dropped chunks show up as growth on CI. Collecting at 10% growth
-// while sampling makes the peak track what is actually held.
+// saw above the level when it started. HeapAlloc also counts garbage the
+// collector has not reached: on a small CI runner 100 MiB of output arrives
+// faster than a background collection keeps up, so already-dropped chunks read
+// as growth. Each sample therefore collects first and reads what survived,
+// which is what the test is about.
 func heapPeak() (stop func() uint64) {
-	gcPercent := debug.SetGCPercent(10)
 	runtime.GC()
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
@@ -106,6 +104,7 @@ func heapPeak() (stop func() uint64) {
 			case <-quit:
 				return
 			case <-tick.C:
+				runtime.GC()
 				var now runtime.MemStats
 				runtime.ReadMemStats(&now)
 				peak = max(peak, now.HeapAlloc)
@@ -115,7 +114,6 @@ func heapPeak() (stop func() uint64) {
 	return func() uint64 {
 		once.Do(func() { close(quit) })
 		<-done
-		debug.SetGCPercent(gcPercent)
 		return peak - base
 	}
 }
