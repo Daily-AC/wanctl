@@ -148,8 +148,12 @@ func (r *Relay) httpSessionConn(sid string, s *httpSession, role string) io.Read
 		writeQ: writeQ,
 		// The WebSocket leg ending is an ordinary end of session, so the HTTP
 		// peer keeps its queued bytes until it has read them, exactly as it
-		// does when that peer posts /h/close itself.
-		close:  func() { r.closeHTTPSessionDrainable(sid, s) },
+		// does when that peer posts /h/close itself. Nothing reads this side's
+		// direction any more, so that one goes at once.
+		close: func() {
+			readQ.free()
+			r.closeHTTPSessionDrainable(sid, s)
+		},
 		settle: func() { r.releaseDrainedSession(sid, s) },
 	}
 }

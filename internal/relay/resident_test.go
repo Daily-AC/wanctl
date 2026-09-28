@@ -448,13 +448,14 @@ func TestResidentBytesReleasedWhenSessionsEnd(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("close = %d", rec.Code)
 			}
-			// Everything before the gap comes out; the write after it never can.
+			// What was left for the controller went with its close. The device
+			// reads everything before the gap; the write after it never can.
+			if held := residentOf(s.toClient); held != 0 {
+				t.Fatalf("%d bytes still held for the controller that closed", held)
+			}
 			_, lastA := readAcked(t, r, sid, "agent", s.toAgent, 3*part, maxResidentPerDirection)
-			_, lastC := readAcked(t, r, sid, "client", s.toClient, mebibyte, maxResidentPerDirection)
-			for _, end := range []*httptest.ResponseRecorder{downPoll(t, r, sid, "agent", lastA), downPoll(t, r, sid, "client", lastC)} {
-				if end.Code != http.StatusGone {
-					t.Fatalf("poll past the end = %d, want 410", end.Code)
-				}
+			if end := downPoll(t, r, sid, "agent", lastA); end.Code != http.StatusGone {
+				t.Fatalf("poll past the end = %d, want 410", end.Code)
 			}
 		},
 	}

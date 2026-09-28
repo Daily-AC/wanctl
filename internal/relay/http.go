@@ -1091,7 +1091,7 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	if acceptUpload(w, req, dst, seq) {
+	if taken, _ := acceptUpload(w, req, dst, seq); taken {
 		w.WriteHeader(http.StatusOK)
 	}
 }
@@ -1101,12 +1101,12 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 // the body is held before a byte of it is read, so a writer that has to wait
 // for room holds no memory while it waits: the bytes stay with the sender. It
 // answers the request itself when the write is not taken, and reports whether
-// it was.
-func acceptUpload(w http.ResponseWriter, req *http.Request, dst *sideQueue, seq uint64) bool {
+// it was, and whether it was refused because dst has closed.
+func acceptUpload(w http.ResponseWriter, req *http.Request, dst *sideQueue, seq uint64) (taken, closed bool) {
 	n := req.ContentLength
 	if n > maxUploadBytes {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-		return false
+		return false, false
 	}
 	if n < 0 {
 		n = maxUploadBytes // not known until read; the room not used goes back
@@ -1123,7 +1123,7 @@ func acceptUpload(w http.ResponseWriter, req *http.Request, dst *sideQueue, seq 
 	switch {
 	case errors.Is(err, errRepeatWrite):
 		io.Copy(io.Discard, http.MaxBytesReader(w, req.Body, maxUploadBytes))
-		return true
+		return true, false
 	case errors.Is(err, errOutOfWindow):
 		// Ahead of a write that has not landed yet, most likely one being
 		// retried. A 5xx is what makes the writer back off and send this one
@@ -1131,18 +1131,18 @@ func acceptUpload(w http.ResponseWriter, req *http.Request, dst *sideQueue, seq 
 		// session, and holding the request would keep a connection the retry
 		// may be waiting for.
 		http.Error(w, "write too far ahead of the stream; retry", http.StatusServiceUnavailable)
-		return false
+		return false, false
 	case errors.Is(err, errQueueClosed) && seq != 0:
 		http.Error(w, "session closed or write out of window", http.StatusGone)
-		return false
+		return false, true
 	case errors.Is(err, errQueueClosed):
 		http.Error(w, "session closed", http.StatusGone)
-		return false
+		return false, true
 	case err != nil:
 		// The writer went away while waiting for room. Nothing was taken, so a
 		// retry of this write starts afresh.
 		http.Error(w, "gave up waiting for room", http.StatusServiceUnavailable)
-		return false
+		return false, false
 	}
 	body, err := readUpload(w, req, n)
 	if err != nil {
@@ -1150,10 +1150,10 @@ func acceptUpload(w http.ResponseWriter, req *http.Request, dst *sideQueue, seq 
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return false
+			return false, false
 		}
 		http.Error(w, "read body", http.StatusBadRequest)
-		return false
+		return false, false
 	}
 	if seq == 0 {
 		err = dst.enqueue(body, n)
@@ -1162,9 +1162,9 @@ func acceptUpload(w http.ResponseWriter, req *http.Request, dst *sideQueue, seq 
 	}
 	if err != nil {
 		http.Error(w, "session closed", http.StatusGone)
-		return false
+		return false, true
 	}
-	return true
+	return true, false
 }
 
 // readUpload reads a body of at most n bytes into a buffer no larger than it
@@ -1302,6 +1302,7 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 	// the close instead of in an /h/up of their own, saving the round trip
 	// that every command otherwise spends at the very end. They are queued
 	// in their place before the queues shut.
+	tailTaken := true
 	if seqParam := req.URL.Query().Get(httpconn.UpSeqParam); seqParam != "" {
 		seq, err := strconv.ParseUint(seqParam, 10, 64)
 		if err != nil || seq == 0 {
@@ -1312,7 +1313,10 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Query().Get("role") == "agent" {
 			dst = s.toClient
 		}
-		if !acceptUpload(w, req, dst, seq) {
+		// Refused because the far side has already gone, the last bytes
+		// cannot be delivered, but the close still is one.
+		var closed bool
+		if tailTaken, closed = acceptUpload(w, req, dst, seq); !tailTaken && !closed {
 			return
 		}
 	}
@@ -1325,10 +1329,20 @@ func (r *Relay) handleHClose(w http.ResponseWriter, req *http.Request) {
 	// 404 them away. It leaves once both directions have been taken, or when
 	// the sweeper finds nobody polling it any more.
 	s.close()
+	// The side that closed does not read again — not even to acknowledge the
+	// last chunk it read — so what is left for it goes now. Kept, it would hold
+	// the session and its bytes until the sweeper's retention ran out.
+	if req.URL.Query().Get("role") == "agent" {
+		s.toAgent.free()
+	} else {
+		s.toClient.free()
+	}
 	// Closing the second queue can be the last thing a finished session was
 	// waiting for, and a poll that woke on the first one has already looked.
 	r.releaseDrainedSession(sid, s)
-	w.WriteHeader(http.StatusOK)
+	if tailTaken {
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 // releaseDrainedSession retires a gracefully closed session once *both*
