@@ -49,6 +49,9 @@ func (c *Client) PrepareWorkspace(ctx context.Context, target string) (Workspace
 }
 
 func (c *Client) Workspace(ctx context.Context, ref WorkspaceRef, action string, req protocol.Message) (*protocol.WorkspaceResult, error) {
+	if req.As != "" {
+		return nil, fmt.Errorf("workspace exec does not support --as; use exec --target without a workspace")
+	}
 	req.Kind, req.Action, req.WorkspaceID = protocol.KindWorkspace, action, ref.ID
 	res, err := c.workspaceRoundTrip(ctx, ref, req)
 	if err != nil {

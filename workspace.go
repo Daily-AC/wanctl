@@ -117,8 +117,8 @@ func cmdWorkspace(ctx context.Context, args []string) error {
 // Return the remote exit code separately from transport errors. Interrupting
 // the waiter deliberately does not kill the device's shell or its command.
 func execWorkspace(ctx context.Context, c *client.Client, ref client.WorkspaceRef, req protocol.Message, sourcePath, interp string, async bool, out, diagnostic io.Writer) (int, error) {
-	if req.OneShot || req.Elevate || req.Via != "" {
-		return 1, fmt.Errorf("workspace exec does not support --oneshot, --elevate or --via")
+	if req.OneShot || req.Elevate || req.Via != "" || req.As != "" {
+		return 1, fmt.Errorf("workspace exec does not support --oneshot, --elevate, --via or --as")
 	}
 	if req.RequestID == "" {
 		req.RequestID = client.NewRequestID()

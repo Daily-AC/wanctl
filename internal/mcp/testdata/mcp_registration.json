@@ -48,6 +48,11 @@
     "name": "wanctl_exec",
     "params": [
       {
+        "name": "as",
+        "type": "string",
+        "required": false
+      },
+      {
         "name": "command",
         "type": "string",
         "required": false

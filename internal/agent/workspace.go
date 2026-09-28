@@ -273,8 +273,8 @@ func (a *Agent) startWorkspaceCommand(w *workspace, fp, peer string, m protocol.
 	if m.Command == "" {
 		return fmt.Errorf("command is required")
 	}
-	if m.OneShot || m.Elevate || m.Via != "" {
-		return fmt.Errorf("workspace exec does not support oneshot or elevation")
+	if m.OneShot || m.Elevate || m.Via != "" || m.As != "" {
+		return fmt.Errorf("workspace exec does not support oneshot, elevation or --as")
 	}
 	source, err := a.workspaceSource(m)
 	if err != nil {

@@ -764,7 +764,7 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 			continue
 		}
 		switch m.Kind {
-		case protocol.KindExec:
+		case protocol.KindExec, protocol.KindExecAs:
 			pending = a.doExecAuthorized(conn, fp, peerName, m, audit, check)
 		case protocol.KindCancel:
 			// Nothing is running on this stream: a cancel that lost the race
@@ -872,7 +872,7 @@ func (a *Agent) status() protocol.Message {
 
 func requiredCapability(kind string) sessionauth.Capabilities {
 	switch kind {
-	case protocol.KindExec, protocol.KindExecAsync, protocol.KindExecPoll:
+	case protocol.KindExec, protocol.KindExecAs, protocol.KindExecAsync, protocol.KindExecPoll:
 		return sessionauth.Exec
 	case protocol.KindFileGet, protocol.KindFileRead:
 		return sessionauth.Read
@@ -893,6 +893,14 @@ func (a *Agent) doExec(conn *tls.Conn, fp, peerName string, m protocol.Message, 
 }
 
 func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol.Message, audit sessionAudit, checks ...func() bool) <-chan peerRead {
+	if m.Kind == protocol.KindExecAs && m.As == "" {
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "exec_as requires a username"})
+		return nil
+	}
+	if m.As != "" && (m.Elevate || m.Via != "") {
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "--as cannot be combined with --elevate or --via"})
+		return nil
+	}
 	kind := policy.KindExec
 	// A desktop capture asks for elevation it will not use: the controller has
 	// to request it so an Android device can honour it, and no laptop has a
@@ -920,7 +928,7 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 		ok, decision = false, "delegation inactive"
 	}
 	if !ok {
-		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
+		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, As: m.As, Decision: decision, Via: string(via)})
 		reason := "command denied by device policy: " + m.Command
 		if kind == policy.KindExecElevated {
 			// CommandPattern, not CommandLabel: this text is read by whoever
@@ -956,6 +964,9 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 	var err error
 	var ranVia elevate.Kind
 	switch {
+	case m.As != "":
+		// Never reuse a SYSTEM shell or run an in-process builtin as SYSTEM.
+		code, err = server.RunAsUserContext(ctx, a.opts.Shell, m.Command, m.Cwd, m.As, out)
 	case m.Elevate:
 		// A desktop capture is the same verb through the same gate, with no
 		// elevation channel to run it through — there is none on a laptop, and
@@ -978,7 +989,7 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 			// A channel that could not be selected has not run anything, so
 			// this is a refusal to act rather than a failed command. Say which
 			// it is: the caller must not read it as "ran, and failed".
-			a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(via)})
+			a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, As: m.As, Decision: decision, Via: string(via)})
 			spill.Close()
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: err.Error()})
 			return pending
@@ -1017,7 +1028,7 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 			// failed, so it is passed through untouched.
 			err = fmt.Errorf("command cancelled by the controller")
 		}
-		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(ranVia)})
+		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, As: m.As, Decision: decision, Via: string(ranVia)})
 		if code == 0 {
 			code = -1
 		}
@@ -1032,7 +1043,7 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 		})
 		return pending
 	}
-	a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code, Via: string(ranVia)})
+	a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, As: m.As, Decision: decision, Exit: &code, Via: string(ranVia)})
 	a.notifyExecFinished(m.Command, m.Cwd, peerName, code)
 	spillPath, spilled, kept := spill.Close()
 	protocol.WriteMessage(conn, protocol.Message{
@@ -1049,6 +1060,10 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 // makes a once-orphaned process queryable (#16). Async jobs always run in a
 // fresh shell (no shared persistent-session state).
 func (a *Agent) doExecAsync(conn *tls.Conn, fp, peerName string, m protocol.Message) {
+	if m.As != "" {
+		protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: "exec_async does not support --as"})
+		return
+	}
 	ok, decision := a.gate(policy.Request{Kind: policy.KindExec, Cmd: m.Command, Cwd: m.Cwd, Peer: fp})
 	if !ok {
 		a.log.Append(eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: "[async] " + m.Command, Cwd: m.Cwd, Decision: decision})

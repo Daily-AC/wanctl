@@ -112,6 +112,7 @@ wanctl exec --target DEVICE "uname -a"
 
 ## Documentation
 
+- [Windows exec as a logged-on user](docs/windows-exec-as.md) — SYSTEM de-elevation and Windows verification
 - [Remote workspaces over CLI and MCP](docs/workspaces.md) — usage, recovery and validation
 - [MCP structured results](docs/mcp-output.md) — output schemas, completion state and compatibility
 - [远程工作区架构课程](https://wc.z10.dev/docs/remote-workspace-course/) — seven Chinese lessons, diagrams and optional self-checks, breadth-first

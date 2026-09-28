@@ -41,6 +41,7 @@ type Event struct {
 	// adb). Present only on elevated execs, which is what makes
 	// "what has run as root on this phone" a greppable question.
 	Via string `json:"via,omitempty"`
+	As  string `json:"as,omitempty"` // requested logged-on Windows user (de-elevation)
 }
 
 // Filter narrows a Read.
@@ -103,6 +104,7 @@ func redactEvent(e Event) Event {
 	e.PeerName = truncateText(RedactText(e.PeerName), maxContextBytes)
 	e.Detail = truncateText(RedactText(e.Detail), maxDetailBytes)
 	e.Cwd = truncateText(RedactText(e.Cwd), maxContextBytes)
+	e.As = truncateText(RedactText(e.As), maxContextBytes)
 	return e
 }
 

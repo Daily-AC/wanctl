@@ -458,6 +458,10 @@ func RunOneShot(shell, command, cwd string, out io.Writer) (int, error) {
 // RunOneShotContext executes a command in a fresh shell and terminates it when
 // ctx is cancelled or reaches its deadline. cwd is passed through exec.Cmd.Dir.
 func RunOneShotContext(ctx context.Context, shell, command, cwd string, out io.Writer) (int, error) {
+	return runOneShotCommand(ctx, oneShotCommand(ctx, shell, command, cwd, out))
+}
+
+func oneShotCommand(ctx context.Context, shell, command, cwd string, out io.Writer) *exec.Cmd {
 	if shell == "" {
 		shell = DefaultShell()
 	}
@@ -472,6 +476,10 @@ func RunOneShotContext(ctx context.Context, shell, command, cwd string, out io.W
 	cmd.Dir = cwd
 	cmd.Stdout = out
 	cmd.Stderr = out
+	return cmd
+}
+
+func runOneShotCommand(ctx context.Context, cmd *exec.Cmd) (int, error) {
 	err := cmd.Run()
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return -1, ctxErr
