@@ -91,15 +91,16 @@ func (b *oauthBackend) OAuthRefresh(hash string) (OAuthRefresh, bool, error) {
 	return t, ok, nil
 }
 
-func (b *oauthBackend) RevokeOAuthRefresh(hash string) error {
+func (b *oauthBackend) RevokeOAuthRefresh(hash string) (bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	t, ok := b.refresh[hash]
-	if ok {
-		t.RevokedAt = time.Now()
-		b.refresh[hash] = t
+	if !ok || !t.RevokedAt.IsZero() {
+		return false, nil
 	}
-	return nil
+	t.RevokedAt = time.Now()
+	b.refresh[hash] = t
+	return true, nil
 }
 
 func (b *oauthBackend) RevokeRelayTokenHash(_, hash string) error {

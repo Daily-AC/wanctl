@@ -72,7 +72,10 @@ type OAuthStore interface {
 	OAuthClient(id string) (OAuthClient, bool, error)
 	PutOAuthRefresh(OAuthRefresh) error
 	OAuthRefresh(hash string) (OAuthRefresh, bool, error)
-	RevokeOAuthRefresh(hash string) error
+	// RevokeOAuthRefresh reports whether this call is the one that revoked
+	// the row: false when it was already revoked or does not exist, so two
+	// requests racing to redeem one refresh token cannot both win.
+	RevokeOAuthRefresh(hash string) (bool, error)
 	// RevokeRelayTokenHash revokes the namespace token an OAuth grant minted,
 	// addressed by hash because the raw token is never stored in the clear.
 	RevokeRelayTokenHash(namespace, hash string) error
@@ -680,8 +683,14 @@ func (r *Relay) oauthTokenFromRefresh(w http.ResponseWriter, req *http.Request, 
 	// Rotate: the presented token dies here whether or not the client ever
 	// receives the replacement, so a stolen refresh token is usable at most
 	// once and the theft shows up as the real client being logged out.
-	if err := r.oauthStore.RevokeOAuthRefresh(row.Hash); err != nil {
+	revoked, err := r.oauthStore.RevokeOAuthRefresh(row.Hash)
+	if err != nil {
 		http.Error(w, "rotate refresh token: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !revoked {
+		// Another request redeemed it between the lookup and here.
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "refresh token is unknown, expired, revoked or issued to another client")
 		return
 	}
 	r.writeOAuthTokens(w, claim.Namespace, claim.Token, client.ID)
@@ -756,7 +765,7 @@ func (r *Relay) oauthRevoke(w http.ResponseWriter, req *http.Request) {
 // token the grant is standing on — otherwise a still-live access token would
 // keep working for up to an hour after the user revoked it.
 func (r *Relay) revokeOAuthGrant(row OAuthRefresh) {
-	_ = r.oauthStore.RevokeOAuthRefresh(row.Hash)
+	_, _ = r.oauthStore.RevokeOAuthRefresh(row.Hash)
 	if claim, err := mcpauth.OpenGrant(r.mcpSeed, row.Grant, time.Now()); err == nil {
 		_ = r.oauthStore.RevokeRelayTokenHash(claim.Namespace, HashToken(claim.Token))
 	}

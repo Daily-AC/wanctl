@@ -68,10 +68,14 @@ func (p *PGStore) OAuthRefresh(hash string) (OAuthRefresh, bool, error) {
 	return t, true, nil
 }
 
-func (p *PGStore) RevokeOAuthRefresh(hash string) error {
-	_, err := p.db.Exec(
+func (p *PGStore) RevokeOAuthRefresh(hash string) (bool, error) {
+	res, err := p.db.Exec(
 		`UPDATE oauth_refresh_tokens SET revoked_at = now() WHERE hash = $1 AND revoked_at IS NULL`, hash)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // RevokeRelayTokenHash stops the namespace token an OAuth grant minted. It
