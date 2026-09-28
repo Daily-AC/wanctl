@@ -77,7 +77,8 @@ type pendingPair struct {
 }
 
 // pairTTL bounds how long an undecided pairing request lives in memory waiting
-// for a user to click the URL the AI surfaced.
+// for a user to click the URL the AI surfaced, and how long an approval waits
+// for its controller to come back and collect it.
 const pairTTL = 5 * time.Minute
 
 // DefaultTimeout is how long an approval waits for a front-end decision when
@@ -183,6 +184,11 @@ func New(engine *policy.Engine, log *eventlog.Logger, info Info) *Service {
 // This decouples controller-dial timing from portal-tab timing: the AI gets a
 // reject + URL right away, the user clicks it whenever, the next dial finds the
 // fp already trusted and goes through.
+//
+// An approval is collected once. The dial that receives it is the one the
+// agent records in its trust store; keeping the verdict around afterwards
+// would answer "trusted" to that key again later — after the owner revoked it,
+// with nobody asked.
 func (s *Service) AskPair(fp, name, label string) bool {
 	return s.askPair(fp, name, label, true)
 }
@@ -200,10 +206,11 @@ func (s *Service) askPair(fp, name, label string, waitForDecision bool) bool {
 	p := s.pairs[fp]
 	created := false
 	if p != nil {
-		// Already decided? Return its verdict immediately.
+		// Already decided? Return its verdict, which this collects.
 		select {
 		case <-p.decided:
 			trust := p.trust
+			delete(s.pairs, fp)
 			s.mu.Unlock()
 			return trust
 		default:
@@ -246,6 +253,9 @@ func (s *Service) askPair(fp, name, label string, waitForDecision bool) bool {
 	case <-decided:
 		s.mu.Lock()
 		trust := p.trust
+		if s.pairs[fp] == p {
+			delete(s.pairs, fp) // collected, see AskPair
+		}
 		s.mu.Unlock()
 		return trust
 	case <-time.After(wait):
@@ -282,24 +292,24 @@ func (s *Service) DecidePair(fp string, trust bool) bool {
 	close(p.decided)
 	if !trust {
 		delete(s.pairs, fp)
+	} else {
+		// The approval waits pairTTL for its controller to collect it, and
+		// no longer: an approval left lying around would admit that key
+		// whenever it next showed up.
+		p.expires = time.Now().Add(pairTTL)
 	}
 	s.mu.Unlock()
 	s.notify()
 	return true
 }
 
-// pruneExpiredPairsLocked drops undecided pair entries past their TTL. Caller
-// holds s.mu. Decided entries are left for the next dial to consume.
+// pruneExpiredPairsLocked drops pair entries past their TTL: requests nobody
+// answered, and approvals nobody collected. Caller holds s.mu.
 func (s *Service) pruneExpiredPairsLocked() {
 	now := time.Now()
 	for fp, p := range s.pairs {
-		select {
-		case <-p.decided:
-			// keep; the next AskPair drains it
-		default:
-			if now.After(p.expires) {
-				delete(s.pairs, fp)
-			}
+		if now.After(p.expires) {
+			delete(s.pairs, fp)
 		}
 	}
 }

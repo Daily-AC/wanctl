@@ -19,15 +19,32 @@ import (
 // two seeds are two different controllers.
 func pipeController(t *testing.T, a *Agent, seed byte) *tls.Conn {
 	t.Helper()
-	id, err := transport.IdentityFromSeed(bytes.Repeat([]byte{seed}, 32), "pipe-controller")
-	if err != nil {
-		t.Fatal(err)
-	}
+	id := seededIdentity(t, seed)
 	if !a.known.Has(id.Fingerprint) {
 		if err := a.known.AddLabeled(id.Fingerprint, "pipe-controller", "test controller"); err != nil {
 			t.Fatal(err)
 		}
 	}
+	conn, reply := pipeHello(t, a, id)
+	if reply.Kind != protocol.KindOK {
+		t.Fatalf("hello: %+v", reply)
+	}
+	return conn
+}
+
+func seededIdentity(t *testing.T, seed byte) *transport.Identity {
+	t.Helper()
+	id, err := transport.IdentityFromSeed(bytes.Repeat([]byte{seed}, 32), "pipe-controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// pipeHello opens a session as id, trusted or not, and returns the device's
+// answer to the hello.
+func pipeHello(t *testing.T, a *Agent, id *transport.Identity) (*tls.Conn, protocol.Message) {
+	t.Helper()
 	dev, controller := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() { cancel(); controller.Close(); dev.Close() })
@@ -47,10 +64,11 @@ func pipeController(t *testing.T, a *Agent, seed byte) *tls.Conn {
 	if err := protocol.WriteMessage(dr.Conn, protocol.Message{Kind: protocol.KindHello, Role: "client", Name: "pipe-controller", Label: "test controller", Version: "1"}); err != nil {
 		t.Fatal(err)
 	}
-	if reply, err := protocol.ReadMessage(dr.Conn); err != nil || reply.Kind != protocol.KindOK {
-		t.Fatalf("hello: %+v %v", reply, err)
+	reply, err := protocol.ReadMessage(dr.Conn)
+	if err != nil {
+		t.Fatalf("hello: %v", err)
 	}
-	return dr.Conn
+	return dr.Conn, reply
 }
 
 // roundTrip sends one request and reads the one control message it answers
