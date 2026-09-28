@@ -60,8 +60,8 @@ func firstAudit(scopes []sessionAudit) sessionAudit {
 func rejectedRequestEvent(fp, name string, m protocol.Message, reason string) eventlog.Event {
 	e := eventlog.Event{Type: "request", PeerFP: fp, PeerName: name, Detail: m.Kind, Decision: "denied: " + reason}
 	switch m.Kind {
-	case protocol.KindExec, protocol.KindExecAsync, protocol.KindExecPoll:
-		e.Type, e.Detail, e.Cwd = "exec", m.Command, m.Cwd
+	case protocol.KindExec, protocol.KindExecAs, protocol.KindExecAsync, protocol.KindExecPoll:
+		e.Type, e.Detail, e.Cwd, e.As = "exec", m.Command, m.Cwd, m.As
 	case protocol.KindFilePut:
 		e.Type, e.Detail = "file", "PUT "+m.Path
 	case protocol.KindFileGet:

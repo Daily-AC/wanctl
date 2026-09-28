@@ -37,8 +37,11 @@ const MaxFileSize int64 = 1 << 30
 
 // Message kinds for FrameJSON control frames.
 const (
-	KindHello     = "hello"      // client -> server, opening greeting
-	KindExec      = "exec"       // client -> server, run a command
+	KindHello = "hello" // client -> server, opening greeting
+	KindExec  = "exec"  // client -> server, run a command
+	// A distinct kind makes old agents reject --as before executing anything.
+	// An unknown JSON field on ordinary exec would silently run as SYSTEM.
+	KindExecAs    = "exec_as"
 	KindCancel    = "cancel"     // client -> server, abort the command running on this stream
 	KindExecAsync = "exec_async" // client -> server, start a background job, return its id
 	KindExecPoll  = "exec_poll"  // client -> server, fetch a background job's new output + status
@@ -101,6 +104,7 @@ type Message struct {
 	Command string `json:"command,omitempty"`
 	OneShot bool   `json:"oneshot,omitempty"`
 	Cwd     string `json:"cwd,omitempty"` // working directory for the command (policy scope)
+	As      string `json:"as,omitempty"`  // exec_as: logged-on Windows user; always a fresh shell
 
 	// exec: when the output passes SpillAfter bytes, the device keeps the whole
 	// thing in a file under its temp dir and names that file in the exit

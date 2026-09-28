@@ -125,7 +125,7 @@ func mcpWorkspaceExec(ctx context.Context, req mcpapi.CallToolRequest, immediate
 	r, err := c.Workspace(ctx, ref, action, protocol.Message{
 		Command: command, RequestID: rid, Cwd: reqStr(req, "cwd", ""),
 		Script: source, Interp: interp, WaitMillis: wait,
-		OneShot: reqBool(req, "oneshot"), Elevate: reqBool(req, "elevate"), Via: reqStr(req, "via", ""),
+		OneShot: reqBool(req, "oneshot"), Elevate: reqBool(req, "elevate"), Via: reqStr(req, "via", ""), As: reqStr(req, "as", ""),
 	})
 	if err != nil {
 		return mcpapi.NewToolResultError(errorTextOf(dialErrorResult(sess, err)) + fmt.Sprintf("\nworkspace=%s request_id=%s", ref.String(), rid)), nil

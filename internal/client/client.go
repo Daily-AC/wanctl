@@ -711,6 +711,7 @@ type ExecRequest struct {
 	Command string
 	OneShot bool
 	Cwd     string
+	As      string // Windows SYSTEM agent: run in a fresh shell as this logged-on user
 	// Elevate asks the device to run this through an elevation channel
 	// (Android: root, or its own adbd). Via optionally pins one.
 	Elevate bool
@@ -727,6 +728,17 @@ type ExecRequest struct {
 	// caller that will have to truncate what it shows sets it to the size it
 	// can show; zero asks for nothing and leaves no file.
 	SpillAfter int64
+}
+
+func (req ExecRequest) message() protocol.Message {
+	m := protocol.Message{
+		Kind: protocol.KindExec, Command: req.Command, OneShot: req.OneShot, Cwd: req.Cwd,
+		Elevate: req.Elevate, Via: req.Via, As: req.As, SpillAfter: req.SpillAfter,
+	}
+	if req.As != "" {
+		m.Kind, m.OneShot = protocol.KindExecAs, true
+	}
+	return m
 }
 
 // ExecOutcome is everything one exec reports beyond its output bytes.
@@ -793,16 +805,15 @@ func (c *Client) ExecTo(ctx context.Context, req ExecRequest, stdout, stderr io.
 // whole output when the caller asked for a spill, and how long that output was.
 func (c *Client) ExecOut(ctx context.Context, req ExecRequest, stdout, stderr io.Writer) (ExecOutcome, error) {
 	failed := ExecOutcome{Code: -1}
+	if req.As != "" && (req.Elevate || req.Via != "") {
+		return failed, fmt.Errorf("--as cannot be combined with --elevate or --via")
+	}
 	conn, err := c.connectPipelined(ctx, req.Target)
 	if err != nil {
 		return failed, err
 	}
 	defer conn.Close()
-	msg := protocol.Message{
-		Kind: protocol.KindExec, Command: req.Command, OneShot: req.OneShot, Cwd: req.Cwd,
-		Elevate: req.Elevate, Via: req.Via, SpillAfter: req.SpillAfter,
-	}
-	if err := protocol.WriteMessage(conn, msg); err != nil {
+	if err := protocol.WriteMessage(conn, req.message()); err != nil {
 		return failed, err
 	}
 	// A cancelled context (Ctrl-C at the terminal, an MCP host abandoning the
@@ -859,6 +870,9 @@ func execOver(ctx context.Context, rw io.ReadWriter, req ExecRequest, stdout, st
 					Code: m.Code, SpillPath: m.Path, SpillBytes: m.Size, SpillKept: m.SpillKept,
 				}, elevationHonoured(req, m)
 			case protocol.KindError:
+				if req.As != "" && m.Reason == "unknown request: "+protocol.KindExecAs {
+					return failed, fmt.Errorf("device agent does not support --as; update the device agent (command was not run)")
+				}
 				// The spill rides on the error frame too, and is carried out
 				// with it: a command that failed after emitting megabytes is
 				// exactly when the caller most needs to know where the rest of

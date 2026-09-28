@@ -637,6 +637,7 @@ func cmdExec(ctx context.Context, args []string) error {
 	requestID := fs.String("request-id", "", "workspace command ID; reuse unchanged after an uncertain result")
 	async := fs.Bool("async", false, "workspace only: return JSON immediately; collect with workspace poll")
 	oneShot := fs.Bool("oneshot", false, "fresh shell, no session state")
+	as := fs.String("as", "", "Windows SYSTEM agent: run as a logged-on user in a fresh shell (not elevation)")
 	cwd := fs.String("cwd", "", "working directory on the device (also the policy scope)")
 	scriptPath := fs.String("script", "", "run a local script file on the device instead of a command string;\n"+
 		"\tno shell quoting or encoding hazards — the file is sent base64-encoded.\n"+
@@ -653,6 +654,9 @@ func cmdExec(ctx context.Context, args []string) error {
 		// -via without -elevate would otherwise be silently ignored, and the
 		// command would run unprivileged while looking like it asked not to.
 		*elevateFlag = true
+	}
+	if *as != "" && *elevateFlag {
+		return fmt.Errorf("--as cannot be combined with --elevate or --via")
 	}
 	commandArgs := fs.Args()
 	ref, routeErr := workspaceRoute(*target, *workspace)
@@ -713,7 +717,7 @@ func cmdExec(ctx context.Context, args []string) error {
 	if ref.ID != "" {
 		code, err := execWorkspace(ctx, c, ref, protocol.Message{
 			Command: command, RequestID: *requestID, Cwd: *cwd,
-			OneShot: *oneShot, Elevate: *elevateFlag, Via: *via,
+			OneShot: *oneShot, Elevate: *elevateFlag, Via: *via, As: *as,
 		}, *scriptPath, *interp, *async, os.Stdout, os.Stderr)
 		if ctx.Err() != nil {
 			fmt.Fprintln(os.Stderr, "wanctl: stopped waiting; the remote command may still be running. Use workspace poll with the request_id above, or workspace cancel to stop it")
@@ -726,7 +730,7 @@ func cmdExec(ctx context.Context, args []string) error {
 	}
 	code, err := c.Exec(ctx, client.ExecRequest{
 		Target: *target, Command: command, OneShot: *oneShot, Cwd: *cwd,
-		Elevate: *elevateFlag, Via: *via,
+		Elevate: *elevateFlag, Via: *via, As: *as,
 	})
 	if err != nil {
 		if ctx.Err() != nil {

@@ -1309,6 +1309,7 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		Command: command,
 		OneShot: reqBool(req, "oneshot"),
 		Cwd:     reqStr(req, "cwd", ""),
+		As:      reqStr(req, "as", ""),
 		Elevate: reqBool(req, "elevate"),
 		Via:     reqStr(req, "via", ""),
 		// Ask the device to keep the whole output once it passes what can be

@@ -13,6 +13,7 @@ func TestRequiredCapability(t *testing.T) {
 		want sessionauth.Capabilities
 	}{
 		{protocol.KindExec, sessionauth.Exec},
+		{protocol.KindExecAs, sessionauth.Exec},
 		{protocol.KindExecAsync, sessionauth.Exec},
 		{protocol.KindExecPoll, sessionauth.Exec},
 		{protocol.KindFileGet, sessionauth.Read},
