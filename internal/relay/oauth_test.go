@@ -111,6 +111,38 @@ func (b *oauthBackend) PutOAuthClient(c OAuthClient) error {
 	return nil
 }
 
+// RegisterOAuthClient mirrors the Postgres store: stale clients that never
+// completed an authorization go first (unless one is under way), and the new
+// client is refused if it would push the count of such clients past maxUnused.
+func (b *oauthBackend) RegisterOAuthClient(c OAuthClient, maxUnused int, staleBefore time.Time, inFlight []string) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	used := map[string]bool{}
+	for _, row := range b.refresh {
+		used[row.ClientID] = true
+	}
+	keep := map[string]bool{}
+	for _, id := range inFlight {
+		keep[id] = true
+	}
+	unused := 0
+	for id, existing := range b.clients {
+		if used[id] {
+			continue
+		}
+		if existing.CreatedAt.Before(staleBefore) && !keep[id] {
+			delete(b.clients, id)
+			continue
+		}
+		unused++
+	}
+	if unused >= maxUnused {
+		return false, nil
+	}
+	b.clients[c.ID] = c
+	return true, nil
+}
+
 func (b *oauthBackend) OAuthClient(id string) (OAuthClient, bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
