@@ -14,7 +14,7 @@ import (
 // oauthRegisterLock serializes registrations (pg_advisory_xact_lock), so two
 // cannot both see room for the last place under the ceiling. The value is
 // arbitrary; it only has to be this statement's own.
-const oauthRegisterLock = 0x77636f5f726567 // "wco_reg"
+const oauthRegisterLock int64 = 0x77636f5f726567 // "wco_reg"
 
 // A client "never completed an authorization" when no refresh token names it:
 // the first refresh token is written by the code exchange that ends one.
