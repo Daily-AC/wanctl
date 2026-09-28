@@ -120,6 +120,15 @@ public final class AgentService extends Service {
         // called this within a few seconds of being started, whatever else it
         // was asked to do.
         startForegroundCompat(notification(getString(R.string.state_retrying), ""));
+        if (deviceState != null) {
+            // The elevation switch may have flipped since the service started,
+            // and it decides whether the wireless-debugging port is watched.
+            // Before the restart branch, not after it: flipping 提权通道 on a
+            // running agent arrives as exactly that restart, and its early
+            // return used to skip this — so the new child got elevation with
+            // no port to dial until the service itself was recreated.
+            deviceState.refreshAdbPortWatch();
+        }
         if (ACTION_RESTART.equals(action) && supervisor != null) {
             restarting = true;
             Process p = child;
@@ -128,11 +137,6 @@ public final class AgentService extends Service {
             }
             supervisor.interrupt();
             return START_STICKY;
-        }
-        if (deviceState != null) {
-            // The elevation switch may have flipped since the service started,
-            // and it decides whether the wireless-debugging port is watched.
-            deviceState.refreshAdbPortWatch();
         }
         if (supervisor == null) {
             stopping = false;

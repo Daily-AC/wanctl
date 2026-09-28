@@ -85,9 +85,9 @@ final class DeviceState {
 
     /**
      * Starts or stops the wireless-debugging port watch to match the app's
-     * 提权通道 switch. Called on every service start, because flipping that
-     * switch restarts the agent child rather than the service — see
-     * MainActivity — so onCreate() alone would miss the change.
+     * 提权通道 switch. Called on every onStartCommand(), the restart included,
+     * because flipping that switch restarts the agent child rather than the
+     * service — see MainActivity — so onCreate() alone would miss the change.
      *
      * <p>Nothing is watched while the switch is off. Discovery is cheap but it
      * is not free, and a device whose owner has not turned elevation on should

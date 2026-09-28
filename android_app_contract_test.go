@@ -54,6 +54,7 @@ const agentFatalMarkers = "--token | rejected token | registered this device nam
 // than globbed, because a glob over a directory that is not there matches
 // nothing and passes.
 var androidAppSources = []string{
+	"AdbPortWatcher.java",
 	"AgentService.java",
 	"AgentState.java",
 	"BootReceiver.java",
@@ -108,4 +109,52 @@ func TestAppKeysOnMarkersItCanActuallySee(t *testing.T) {
 			t.Errorf("AgentService.java does not match on %q, so a permanent failure would be retried forever", marker)
 		}
 	}
+}
+
+// TestElevationSwitchReachesThePortWatch pins an ordering inside
+// AgentService.onStartCommand that nothing on the Go side can observe.
+//
+// Flipping 提权通道 while the agent runs reaches the service as ACTION_RESTART,
+// and that branch returns as soon as it has killed the child. The call that
+// starts or stops the wireless-debugging port watch sat below it from the day
+// discovery was written, so it never ran for the one change that decides it:
+// the respawned agent had elevation and a state file with no port in it, and
+// told a phone whose wireless debugging was on to turn wireless debugging on,
+// until something recreated the service. Switching the channel off left the
+// watch and its MulticastLock running the same way.
+func TestElevationSwitchReachesThePortWatch(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("android", "java", "dev", "wanctl", "agent", "AgentService.java"))
+	if err != nil {
+		t.Fatalf("read AgentService.java: %v", err)
+	}
+	body := javaMethodBody(t, string(src), "public int onStartCommand(")
+	refresh := strings.Index(body, "deviceState.refreshAdbPortWatch();")
+	restart := strings.Index(body, "ACTION_RESTART.equals(action)")
+	if refresh < 0 {
+		t.Fatal("onStartCommand no longer refreshes the adb port watch, so 提权通道 would only take effect when the service is recreated")
+	}
+	if restart < 0 {
+		t.Fatal("onStartCommand has no ACTION_RESTART branch any more; check how a settings change reaches the port watch, then update this test")
+	}
+	if refresh > restart {
+		t.Error("onStartCommand refreshes the adb port watch after the ACTION_RESTART branch, which returns early: " +
+			"switching 提权通道 on a running agent would not start the watch")
+	}
+}
+
+// javaMethodBody returns the source of the method whose declaration starts with
+// signature, up to its closing brace. The app's sources are indented four
+// spaces per level, so a method ends at the first line that is a brace at
+// member depth.
+func javaMethodBody(t *testing.T, src, signature string) string {
+	t.Helper()
+	start := strings.Index(src, signature)
+	if start < 0 {
+		t.Fatalf("no method %q", signature)
+	}
+	end := strings.Index(src[start:], "\n    }\n")
+	if end < 0 {
+		t.Fatalf("method %q has no closing brace at member depth", signature)
+	}
+	return src[start : start+end]
 }
