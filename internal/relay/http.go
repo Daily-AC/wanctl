@@ -1501,8 +1501,10 @@ func (r *Relay) reapHTTP(now time.Time) {
 		// A controller that closed gracefully is excluded: the device may still
 		// be collecting what it left.
 		if !s.clientBridged && !serveC && s.closedAt.IsZero() && !s.clientSeen.IsZero() {
+			// Either side may be a reader still downloading a chunk on a
+			// slow link; those bytes keep the longer retention either way.
 			clientIdle := httpSessionIdle
-			if heldC {
+			if heldC || heldA {
 				clientIdle = unackedRetention
 			}
 			if now.Sub(s.clientSeen) > clientIdle {
