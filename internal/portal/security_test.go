@@ -244,3 +244,15 @@ func TestMarkdownLinksAllowSafeRelativeOrHTTPURLs(t *testing.T) {
 		t.Fatal("markdown renderer does not allow safe relative URLs")
 	}
 }
+
+// No page the portal serves runs inline script, so the policy does not allow
+// it: an injected attribute or tag then has nothing to execute with.
+func TestCSPDoesNotAllowInlineScript(t *testing.T) {
+	rec := httptest.NewRecorder()
+	New(Config{}).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	for _, d := range strings.Split(rec.Header().Get("Content-Security-Policy"), ";") {
+		if d = strings.TrimSpace(d); strings.HasPrefix(d, "script-src ") && strings.Contains(d, "'unsafe-inline'") {
+			t.Fatalf("script-src allows inline script: %q", d)
+		}
+	}
+}
