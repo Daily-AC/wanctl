@@ -559,6 +559,20 @@ pre code{background:none;padding:0;font-size:1em}
 .card + .card{margin-top:14px}
 .card .note{margin:10px 0 0;font-size:12.5px;color:var(--ink-2)}
 .card .note.warn{color:var(--red)}
+/* 设置 → 邮箱：一张卡三种样子（index.html 里 #eCard 的注释）。
+   地址可能很长，手机上宁可折行也不能把「修改」挤出卡片。 */
+.email-card .txt{overflow-wrap:anywhere}
+.email-card .e-pending{margin-top:12px}
+.email-card .e-pending,.email-card .e-form{display:none}
+.email-card[data-mode="pending"] .e-pending{display:flex}
+.email-card[data-mode="edit"] .e-form{display:block}
+.email-card:not([data-mode="view"]) #eEdit{display:none}
+/* 手机上展开时：输入框自己占一行，按钮排在下面。一行塞三样，
+   英文的「Send confirmation」会把输入框挤成一个方块。 */
+@media (max-width:640px){
+  .email-card .fieldrow{flex-wrap:wrap}
+  .email-card .fieldrow input{flex:1 1 100%;max-width:none}
+}
 
 /* 一次性凭据。三句话说同一件事已经砍掉，只剩码和一句。 */
 .slip{
@@ -734,6 +748,18 @@ pre code{background:none;padding:0;font-size:1em}
 .auth[data-req="pending"] .req[data-req-state="pending"],
 .auth[data-req="approved"] .req[data-req-state="approved"],
 .auth[data-req="declined"] .req[data-req-state="declined"]{display:block}
+/* 绑定邮箱（email.html）和确认链接（email-confirm.html）用同一套：
+   form / sent 是门页的两段，live / done / used / expired / unknown 是确认页。 */
+.auth[data-req="form"] .req[data-req-state="form"],
+.auth[data-req="sent"] .req[data-req-state="sent"],
+.auth[data-req="live"] .req[data-req-state="live"],
+.auth[data-req="done"] .req[data-req-state="done"],
+.auth[data-req="used"] .req[data-req-state="used"],
+.auth[data-req="expired"] .req[data-req-state="expired"],
+.auth[data-req="unknown"] .req[data-req-state="unknown"]{display:block}
+.auth .req .acts .sep{margin:0 4px;color:var(--hairline)}
+.auth .req[data-req-state="expired"] .go,
+.auth .req[data-req-state="unknown"] .go{margin-top:28px}
 
 /* 页脚那一行里的头像：跟 12.5px 的字同高一档。首字母那层在 GitHub
    图床拉不到时露出来。 */

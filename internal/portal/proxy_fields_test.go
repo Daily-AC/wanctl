@@ -17,8 +17,13 @@ type tokenIssueStore struct {
 	issued []string
 }
 
-func (s *tokenIssueStore) ResolveIdentity(provider, subject, login, name, reserved, email string) (string, string, error) {
+func (s *tokenIssueStore) ResolveIdentity(provider, subject, login, name, reserved string) (string, string, error) {
 	return "attacker", "user", nil
+}
+
+func (s *tokenIssueStore) ContactEmail(provider, subject string) (relay.ContactEmail, error) {
+	at := time.Now()
+	return relay.ContactEmail{Address: "attacker@example.com", ConfirmedAt: &at}, nil
 }
 
 func (s *tokenIssueStore) IssueToken(ns, label string, days int) (string, error) {
@@ -86,12 +91,14 @@ func TestProxyPostForwardsTheFieldsThePortalSends(t *testing.T) {
 	}
 }
 
-func TestAccessEmailCannotOverrideSessionFields(t *testing.T) {
-	for _, trustedEmail := range []string{"", "github@example.com"} {
+// The body of an application is a note. Identity comes from the session, and
+// an address in the body (the form had one until v0.18.0) is not forwarded:
+// the relay reads the confirmed contact address itself.
+func TestAccessRequestCannotOverrideSessionFields(t *testing.T) {
+	{
 		var calls []string
 		s := accessPortal(t, resolvePendingInvite, &calls)
-		s.mail = newFakeMailSender()
-		cookie, err := s.encodeSession(&principal{Provider: "github", Subject: "100", Login: "attacker", Email: trustedEmail, Expires: time.Now().Add(time.Hour).Unix()})
+		cookie, err := s.encodeSession(&principal{Provider: "github", Subject: "100", Login: "attacker", Expires: time.Now().Add(time.Hour).Unix()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -102,11 +109,7 @@ func TestAccessEmailCannotOverrideSessionFields(t *testing.T) {
 		if rr.Code != 200 {
 			t.Fatalf("response = %d %s", rr.Code, rr.Body.String())
 		}
-		wantEmail := trustedEmail
-		if wantEmail == "" {
-			wantEmail = "typed@example.com"
-		}
-		want := `POST /admin/access-requests {"email":"` + wantEmail + `","login":"attacker","note":"","provider":"github","subject":"100"}`
+		want := `POST /admin/access-requests {"login":"attacker","note":"","provider":"github","subject":"100"}`
 		if len(calls) != 1 || calls[0] != want {
 			t.Fatalf("calls = %v", calls)
 		}

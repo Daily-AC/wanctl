@@ -154,6 +154,11 @@ const STATES = [
   { id: 'pending-approved', page: 'pending-approved.html' },
   { id: 'pending-declined', page: 'pending-declined.html' },
   { id: 'enroll', page: 'enroll.html' },
+  // 绑定邮箱的门和确认链接的页面（v0.18.0）。
+  { id: 'email', page: 'email.html' },
+  { id: 'email-sent', page: 'email-sent.html' },
+  { id: 'confirm', page: 'confirm.html' },
+  { id: 'confirm-expired', page: 'confirm-expired.html' },
 ];
 
 /* ── 页内量具 ─────────────────────────────────────────────────────────

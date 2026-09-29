@@ -36,13 +36,6 @@
         <input id="note" maxlength="{{.NoteMax}}" autocomplete="off" placeholder=" ">
         <span data-en="A note for the admin (optional)" data-zh="给管理员的一句话（选填）">A note for the admin (optional)</span>
       </label>
-      {{if .ShowEmail}}
-      <!-- 只在 GitHub 没给出已验证邮箱时出现：有邮箱的人不该被多问一遍。 -->
-      <label class="fl">
-        <input id="email" type="email" maxlength="254" autocomplete="email" placeholder=" ">
-        <span data-en="Email for the answer (optional)" data-zh="接收结果的邮箱（选填）">Email for the answer (optional)</span>
-      </label>
-      {{end}}
       <button class="btn go" type="submit" data-en="Send request" data-zh="提交申请">Send request</button>
     </form>
     <p class="err" id="askErr" role="alert"></p>

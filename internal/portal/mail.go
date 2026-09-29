@@ -124,7 +124,7 @@ func (s *smtpSender) sendConn(conn net.Conn, host, port string, config *tls.Conf
 	}
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
-		return err
+		return smtpStep("greeting", err)
 	}
 	defer client.Close()
 	if port != "465" {
@@ -132,36 +132,62 @@ func (s *smtpSender) sendConn(conn net.Conn, host, port string, config *tls.Conf
 			return fmt.Errorf("SMTP server does not offer STARTTLS")
 		}
 		if err := client.StartTLS(config); err != nil {
-			return err
+			return smtpStep("starttls", err)
 		}
 	}
 	if err := client.Auth(smtp.PlainAuth("", s.user, s.password, host)); err != nil {
-		return err
+		return smtpStep("auth", err)
 	}
 	if err := client.Mail(from.Address); err != nil {
-		return err
+		return smtpStep("mail from", err)
 	}
 	if err := client.Rcpt(to.Address); err != nil {
-		return err
+		return smtpStep("rcpt to", err)
 	}
 	writer, err := client.Data()
 	if err != nil {
-		return err
+		return smtpStep("data", err)
 	}
 	if _, err := writer.Write(mailMessage(from, to, m)); err != nil {
-		return err
+		return smtpStep("data", err)
 	}
 	if err := writer.Close(); err != nil {
-		return err
+		return smtpStep("data", err)
 	}
-	return client.Quit()
+	// The server accepted the message when DATA closed with 250. A server that
+	// hangs up on QUIT has still taken it, and reporting that as a failure
+	// would withdraw a confirmation link that is already in someone's inbox.
+	_ = client.Quit()
+	return nil
+}
+
+// smtpStepError names the SMTP step that failed: "EOF" alone does not say
+// whether the server hung up on the greeting or after accepting the message.
+type smtpStepError struct {
+	step string
+	err  error
+}
+
+func (e *smtpStepError) Error() string { return "smtp " + e.step + ": " + e.err.Error() }
+func (e *smtpStepError) Unwrap() error { return e.err }
+
+func smtpStep(step string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &smtpStepError{step, err}
 }
 
 // SMTP reply text may echo mailbox addresses; retain the status, not the text.
 func mailError(err error, recipient string) string {
+	prefix := ""
+	var step *smtpStepError
+	if errors.As(err, &step) {
+		prefix = "smtp " + step.step + ": "
+	}
 	var reply *textproto.Error
 	if errors.As(err, &reply) {
-		return fmt.Sprintf("SMTP status %d", reply.Code)
+		return fmt.Sprintf("%sSMTP status %d", prefix, reply.Code)
 	}
 	return strings.ReplaceAll(err.Error(), recipient, "[recipient]")
 }

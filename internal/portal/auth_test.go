@@ -62,7 +62,9 @@ func newOAuthPortal(t *testing.T, resolve func(body map[string]string, w http.Re
 
 func resolveOKAs(ns, role string) func(map[string]string, http.ResponseWriter) {
 	return func(body map[string]string, w http.ResponseWriter) {
-		json.NewEncoder(w).Encode(map[string]string{"namespace": ns, "role": role})
+		// An admitted identity in these tests has confirmed its contact
+		// address; the email door has tests of its own (email_test.go).
+		json.NewEncoder(w).Encode(map[string]any{"namespace": ns, "role": role, "email_confirmed": true})
 	}
 }
 

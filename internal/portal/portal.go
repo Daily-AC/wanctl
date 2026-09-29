@@ -192,6 +192,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/auth/callback", s.handleAuthCallback)
 	mux.HandleFunc("/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("/auth/request-access", s.handleAccessRequest)
+	mux.HandleFunc("/auth/email", s.handleEmailPage)
+	mux.HandleFunc("/auth/email/status", s.handleEmailStatus)
+	mux.HandleFunc("/auth/email/send", s.handleEmailSend)
+	mux.HandleFunc("/auth/email/cancel", s.handleEmailCancel)
+	mux.HandleFunc("/auth/email/confirm", s.handleEmailConfirm)
 	mux.HandleFunc("/pending", s.handlePending)
 	mux.HandleFunc("/api/access-requests", s.handleAccessRequests)
 	mux.HandleFunc("/api/access-requests/decide", s.handleAccessDecide)
@@ -307,6 +312,9 @@ var mutationPaths = map[string]bool{
 	"/api/docs/groups/delete":      true,
 	"/auth/logout":                 true,
 	"/auth/request-access":         true,
+	"/auth/email/send":             true,
+	"/auth/email/cancel":           true,
+	"/auth/email/confirm":          true,
 	"/api/access-requests/decide":  true,
 	"/api/friends/request":         true,
 	"/api/friends/accept":          true,
@@ -323,6 +331,8 @@ var readWritePaths = map[string]bool{
 	"/api/devices/notify": true,
 	"/api/notify":         true,
 	"/api/invites":        true,
+	// GET is the page behind the link; only the POST confirms.
+	"/auth/email/confirm": true,
 }
 
 func (s *Server) securityMiddleware(next http.Handler) http.Handler {
@@ -769,6 +779,8 @@ func (s *Server) requireNS(w http.ResponseWriter, r *http.Request) (string, bool
 	switch status {
 	case resolveOK:
 		return ns, true
+	case resolveNeedsEmail:
+		http.Error(w, emailRequiredBody, http.StatusForbidden)
 	case resolvePending:
 		http.Error(w, pendingInviteBody, http.StatusForbidden)
 	case resolveConflict:
@@ -849,6 +861,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	ns, role, status, detail := s.resolveNamespace(p)
 	switch status {
 	case resolveOK:
+	case resolveNeedsEmail:
+		http.Error(w, emailRequiredBody, http.StatusForbidden)
+		return
 	case resolvePending:
 		http.Error(w, pendingInviteBody, http.StatusForbidden)
 		return
@@ -874,6 +889,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"identity": p.Login, "login": p.Login, "name": p.Name,
 		"namespace": ns, "provider": p.Provider, "role": role,
 		"lark": s.larkEnabled(),
+		// Whether this instance has contact addresses at all: the settings
+		// page shows its email section only where one can be confirmed.
+		"mail": s.emailGate(),
 		// The SPA composes copy-pasteable `wanctl config set relay=…` lines,
 		// which need the public relay origin this instance runs on.
 		"relay_origin": s.relayPublic,
@@ -951,6 +969,10 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (string, b
 		return "", false
 	}
 	ns, role, status, detail := s.resolveNamespace(p)
+	if status == resolveNeedsEmail {
+		http.Error(w, emailRequiredBody, http.StatusForbidden)
+		return "", false
+	}
 	if status != resolveOK {
 		http.Error(w, detail, http.StatusBadGateway)
 		return "", false

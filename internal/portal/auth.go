@@ -41,7 +41,6 @@ type principal struct {
 	Subject  string `json:"sub"`   // header value, or the GitHub numeric id
 	Login    string `json:"login"` // display identity; namespace is derived from it
 	Name     string `json:"name"`
-	Email    string `json:"email,omitempty"`
 	Expires  int64  `json:"exp"`
 	Issued   int64  `json:"iat"`
 }
@@ -210,9 +209,11 @@ func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
 	q.Set("client_id", s.ghClientID)
 	q.Set("redirect_uri", s.requestOrigin(r)+"/auth/callback")
 	q.Set("state", nonce)
-	if s.mailEnabled() {
-		q.Set("scope", "user:email")
-	}
+	// No scope: the public profile is all the portal reads. Until v0.18.0 a
+	// mail-enabled instance asked for user:email to learn the primary
+	// address; every address is now confirmed by a link instead, which left
+	// GitHub's answer good only for prefilling a field the browser's own
+	// autofill already fills (owner's call, 2026-09-29).
 	http.Redirect(w, r, s.ghAuthBase+"/login/oauth/authorize?"+q.Encode(), http.StatusFound)
 }
 
@@ -268,7 +269,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	p := &principal{
-		Provider: providerGitHub, Subject: gh.subject, Login: gh.login, Name: gh.name, Email: gh.email,
+		Provider: providerGitHub, Subject: gh.subject, Login: gh.login, Name: gh.name,
 		Issued: now.Unix(), Expires: now.Add(sessionTTL).Unix(),
 	}
 	sess, err := s.encodeSession(p)
@@ -278,9 +279,14 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSessionCookie(w, r, sess, int(sessionTTL.Seconds()))
 	// Resolve once now so a not-yet-invited user lands on the pending page
-	// instead of a wall of failing API calls.
-	if _, _, status, _ := s.resolveNamespace(p); status == resolvePending {
+	// instead of a wall of failing API calls. The email door sits in front of
+	// both, and each of them sends a visitor through it on arrival.
+	switch _, _, status, _ := s.resolveNamespace(p); status {
+	case resolvePending:
 		http.Redirect(w, r, pendingNext(st.Next), http.StatusSeeOther)
+		return
+	case resolveNeedsEmail:
+		http.Redirect(w, r, emailNext(st.Next), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, st.Next, http.StatusSeeOther)
@@ -292,7 +298,7 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 type githubUser struct {
-	subject, login, name, email string
+	subject, login, name string
 }
 
 func (s *Server) githubUserForCode(r *http.Request, code string) (*githubUser, error) {
@@ -345,11 +351,7 @@ func (s *Server) githubUserForCode(r *http.Request, code string) (*githubUser, e
 	if u.ID.String() == "" || u.Login == "" {
 		return nil, errors.New("GitHub user response missing id/login")
 	}
-	user := &githubUser{subject: u.ID.String(), login: u.Login, name: u.Name}
-	if s.mailEnabled() {
-		user.email = s.githubEmail(r, tok.AccessToken)
-	}
-	return user, nil
+	return &githubUser{subject: u.ID.String(), login: u.Login, name: u.Name}, nil
 }
 
 // requestOrigin is the externally visible origin for redirect URIs. An
@@ -380,6 +382,9 @@ type resolveStatus int
 
 const (
 	resolveOK resolveStatus = iota
+	// resolveNeedsEmail is an admitted identity without a confirmed contact
+	// address, on an instance where the email door is up.
+	resolveNeedsEmail
 	resolvePending
 	resolveConflict
 	resolveError
@@ -393,11 +398,7 @@ func (s *Server) resolveNamespace(p *principal) (ns, role string, status resolve
 	if p.Provider == providerHeader {
 		body = map[string]string{"identity": p.Subject}
 	} else {
-		m := map[string]string{"provider": p.Provider, "subject": p.Subject, "login": p.Login, "name": p.Name}
-		if p.Email != "" {
-			m["email"] = p.Email
-		}
-		body = m
+		body = map[string]string{"provider": p.Provider, "subject": p.Subject, "login": p.Login, "name": p.Name}
 	}
 	resp, err := s.adminReq("POST", "/admin/resolve-user", nil, body)
 	if err != nil {
@@ -406,10 +407,16 @@ func (s *Server) resolveNamespace(p *principal) (ns, role string, status resolve
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusOK:
-		var out struct{ Namespace, Role string }
+		var out struct {
+			Namespace, Role string
+			EmailConfirmed  bool `json:"email_confirmed"`
+		}
 		json.NewDecoder(resp.Body).Decode(&out)
 		if out.Namespace == "" {
 			return "", "", resolveError, "could not resolve namespace"
+		}
+		if s.emailGate() && !out.EmailConfirmed {
+			return out.Namespace, out.Role, resolveNeedsEmail, ""
 		}
 		return out.Namespace, out.Role, resolveOK, ""
 	case http.StatusForbidden:
@@ -450,6 +457,8 @@ func (s *Server) pageAuth(w http.ResponseWriter, r *http.Request, next string) (
 	switch status {
 	case resolveOK:
 		return ns, true
+	case resolveNeedsEmail:
+		http.Redirect(w, r, emailNext(next), http.StatusSeeOther)
 	case resolvePending:
 		http.Redirect(w, r, pendingNext(next), http.StatusSeeOther)
 	case resolveConflict:
@@ -482,8 +491,15 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Already admitted? Resume enrollment if this login started on a device.
-	if _, _, status, _ := s.resolveNamespace(p); status == resolveOK {
+	switch _, _, status, _ := s.resolveNamespace(p); status {
+	case resolveOK, resolveNeedsEmail:
 		http.Redirect(w, r, next, http.StatusSeeOther)
+		return
+	}
+	// An applicant passes the same door as everyone else: an approval nobody
+	// can be told about is the problem the door exists for.
+	if s.atDoor(p) {
+		http.Redirect(w, r, emailNext(pendingNext(next)), http.StatusSeeOther)
 		return
 	}
 	// The page renders one of four states, and which one is a server-side
@@ -493,8 +509,8 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 	// application does not exist.
 	state, retryDays, notify := "none", 0, ""
 	if status, err := s.accessStatusFor(p); err == nil {
-		// Mail goes out on approval only, and only to the address filed with
-		// the request; the page says where, masked, so the applicant knows
+		// Mail goes out on approval only, to the applicant's confirmed
+		// address; the page says where, masked, so the applicant knows
 		// whether to expect it.
 		if s.mailEnabled() && status.Status == "pending" {
 			notify = status.EmailHint
@@ -513,8 +529,8 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, "pending.html", map[string]any{
-		"ShowEmail": s.mailEnabled() && p.Email == "", "NotifyEmail": notify,
-		"Avatar": githubAvatarURL(p), "Initial": loginInitial(p.Login),
+		"NotifyEmail": notify,
+		"Avatar":      githubAvatarURL(p), "Initial": loginInitial(p.Login),
 		"Next": next, "Login": p.Login, "Req": state, "RetryDays": retryDays, "NoteMax": accessNoteMax,
 	})
 }
@@ -526,33 +542,4 @@ func loginInitial(login string) string {
 		return string(r)
 	}
 	return "?"
-}
-
-// An unavailable email endpoint must not prevent an otherwise valid login.
-func (s *Server) githubEmail(r *http.Request, token string) string {
-	req, _ := http.NewRequestWithContext(r.Context(), "GET", s.ghAPIBase+"/user/emails", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := s.githubHTTP().Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return ""
-	}
-	var emails []struct {
-		Email    string `json:"email"`
-		Primary  bool   `json:"primary"`
-		Verified bool   `json:"verified"`
-	}
-	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&emails) != nil {
-		return ""
-	}
-	for _, e := range emails {
-		if e.Primary && e.Verified && !strings.HasSuffix(strings.ToLower(e.Email), "@users.noreply.github.com") {
-			return e.Email
-		}
-	}
-	return ""
 }

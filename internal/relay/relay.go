@@ -166,6 +166,7 @@ func (r *Relay) Handler() http.Handler {
 	r.registerDocs(mux)
 	r.registerAdmin(mux)
 	r.registerAccess(mux)
+	r.registerContact(mux)
 	r.registerUser(mux)
 	r.registerDist(mux)
 	r.registerOAuth(mux)
