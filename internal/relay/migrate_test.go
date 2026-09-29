@@ -195,6 +195,7 @@ func TestEmbeddedMigrationsApplyEveryVersion(t *testing.T) {
 		{10, "CREATE TABLE oauth_clients"},
 		{11, "ALTER TABLE access_requests ADD COLUMN email"},
 		{12, "CREATE TABLE IF NOT EXISTS contact_emails"},
+		{13, "ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at"},
 	}
 	if len(state.committedBodies) != len(want) {
 		t.Fatalf("applied %d migrations, want %d: %#v",
