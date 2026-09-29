@@ -32,7 +32,7 @@ type regParam struct {
 func currentRegistration(t *testing.T) []registration {
 	t.Helper()
 	s := server.NewMCPServer("wanctl", "1.0.0")
-	registerMCPTools(s)
+	registerMCPTools(s, false)
 	tools := s.ListTools()
 
 	names := make([]string, 0, len(tools))
@@ -93,7 +93,7 @@ func TestRegistrationMatchesSnapshot(t *testing.T) {
 // The catalog is only a single source if nothing registers behind its back.
 func TestEveryCatalogToolIsRegistered(t *testing.T) {
 	s := server.NewMCPServer("wanctl", "1.0.0")
-	registerMCPTools(s)
+	registerMCPTools(s, false)
 	tools := s.ListTools()
 
 	for _, c := range catalog.MCPCommands() {
@@ -119,7 +119,7 @@ func TestEveryCatalogToolIsRegistered(t *testing.T) {
 // caller pays for, silently, in the field.
 func TestDescriptionsKeepTheRules(t *testing.T) {
 	s := server.NewMCPServer("wanctl", "1.0.0")
-	registerMCPTools(s)
+	registerMCPTools(s, false)
 	tools := s.ListTools()
 
 	mustKeep := map[string][]string{
@@ -142,7 +142,7 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 			"CLAUDE.md",
 			"and follow it",
 		},
-		"wanctl_login": {"LOGIN REQUIRED", "rebind"},
+		"wanctl_login": {"LOGIN REQUIRED", "one-time code", "OAuth"},
 		"wanctl_pair":  {"PAIRING REQUIRED", "DEVICE IDENTITY CONFIRMATION REQUIRED"},
 		"wanctl_trust_server": {
 			"DEVICE IDENTITY CONFIRMATION REQUIRED",
@@ -240,7 +240,7 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 // real round trip rather than a field read: what matters is that a client sees
 // it, not that the struct holds it.
 func TestInitializeCarriesTheInstructions(t *testing.T) {
-	s := newMCPServer()
+	s := newMCPServer(false)
 	raw := s.HandleMessage(context.Background(), []byte(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`))
 	encoded, err := json.Marshal(raw)
@@ -265,5 +265,52 @@ func TestInitializeCarriesTheInstructions(t *testing.T) {
 	// The one rule no tool description can carry on its own.
 	if !strings.Contains(resp.Result.Instructions, "AGENTS.md") {
 		t.Error("the instructions a host receives do not mention AGENTS.md")
+	}
+}
+
+// The hosted endpoint is OAuth only: a bearer is the login, so nothing it hands
+// a host may send the model after a login tool or a code (CX-04 removed that
+// path). Everything else is the same registration the local server has.
+func TestHostedEndpointOffersNoLogin(t *testing.T) {
+	local, hosted := server.NewMCPServer("wanctl", "1.0.0"), server.NewMCPServer("wanctl", "1.0.0")
+	registerMCPTools(local, false)
+	registerMCPTools(hosted, true)
+	if _, ok := hosted.ListTools()["wanctl_login"]; ok {
+		t.Fatal("the hosted endpoint registers wanctl_login")
+	}
+	for name := range local.ListTools() {
+		if _, ok := hosted.ListTools()[name]; !ok && name != "wanctl_login" {
+			t.Errorf("%s is registered locally but not on the hosted endpoint", name)
+		}
+	}
+	for name, tool := range hosted.ListTools() {
+		for _, stale := range []string{"rebind", "wrb1"} {
+			if strings.Contains(tool.Tool.Description, stale) {
+				t.Errorf("hosted %s description still mentions %q", name, stale)
+			}
+		}
+	}
+
+	raw := newMCPServer(true).HandleMessage(context.Background(), []byte(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`))
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp struct {
+		Result struct {
+			Instructions string `json:"instructions"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(encoded, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Result.Instructions != catalog.HostedInstructions() {
+		t.Errorf("hosted initialize instructions are not the catalog's hosted text:\n%s", resp.Result.Instructions)
+	}
+	for _, stale := range []string{"wanctl_login", "rebind", "LOGIN REQUIRED", "one-time code"} {
+		if strings.Contains(resp.Result.Instructions, stale) {
+			t.Errorf("hosted instructions mention %q:\n%s", stale, resp.Result.Instructions)
+		}
 	}
 }

@@ -86,7 +86,7 @@ func decodedJSON(t *testing.T, value any) map[string]any {
 func registeredOutputSchemas(t *testing.T) wireOutputChecker {
 	t.Helper()
 	var wire []any
-	for _, tool := range newMCPServer().ListTools() {
+	for _, tool := range newMCPServer(false).ListTools() {
 		wire = append(wire, decodedJSON(t, tool.Tool))
 	}
 	return outputSchemasFromWire(t, wire)
@@ -136,7 +136,7 @@ func TestOutputSchemaRejectsAmbiguousFieldTypes(t *testing.T) {
 }
 
 func TestServerRejectsNonconformingStructuredOutput(t *testing.T) {
-	s := newMCPServer()
+	s := newMCPServer(false)
 	tool := s.ListTools()["wanctl_write"].Tool
 	s.AddTool(tool, func(context.Context, mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
 		return structuredResult("looks successful", map[string]any{"path": "file", "created": "false", "size_bytes": 0, "sha256": "hash"}), nil

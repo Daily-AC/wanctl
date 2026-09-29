@@ -103,7 +103,7 @@ wanctl 默认用有限长度的 HTTP 长轮询请求，所以不需要 WebSocket
 
 不过 relay 需要知道每个请求来自哪个客户端。它有些额度是按客户端算的，比如一个
 客户端能新建多少个 WebFetch 请求、注册多少个 OAuth 客户端、同时从 `/dl` 下载几个
-文件、开着多少个还没登录的托管 MCP 会话。经过代理之后，所有请求都来自代理本身，
+文件。经过代理之后，所有请求都来自代理本身，
 所以 relay 从 `X-Real-IP` 取客户端地址；只有连接来自回环或私有地址（也就是代理）
 时才相信这个头，而且从不看 `X-Forwarded-For`，因为那里面是客户端自己想写什么就
 写什么。上面两份配置都设置了 `X-Real-IP`；不设的话，所有客户端会共用同一份额度。
@@ -170,19 +170,38 @@ docker compose up -d portal
 ### 可选：打开托管的 MCP 端点
 
 起不了本地 `wanctl` 进程的 AI 宿主——网页版聊天、云端 agent 运行器——可以改用
-HTTP 连 relay 内置的 MCP server。给 relay 一个种子，然后重建它：
+HTTP 连 relay 内置的 MCP server。这个端点只认 OAuth 2.1，所以离不开门户：relay
+同时有种子、数据库、公网 origin 和门户，才会把它打开。`selfhost/` 里的 compose
+文件已经给了 relay 后三样（`DATABASE_URL`、从 `RELAY_PUBLIC_ORIGIN` 来的
+`WANCTL_PUBLIC_ORIGIN`、从 `PORTAL_PUBLIC_ORIGIN` 来的 `WANCTL_PORTAL`），只差一个
+种子：
 
 ```bash
 openssl rand -hex 32   # paste the value into WANCTL_MCP_SEED in selfhost/.env
 docker compose up -d --no-deps relay
 ```
 
-relay 启动时会打印 `MCP server enabled at /mcp`，并开始提供
-`https://relay.example.com/mcp`。如果你的边缘代理已经占掉了 `/mcp` 前缀，就让
-宿主改填 `https://relay.example.com/wanctl-mcp`：它是同一个 handler、同一批
-会话的别名，别的什么都不用改。每个 MCP 会话各自通过门户登录；
-[让 AI 通过 MCP 连上来](#docs/mcp) 是写给登录的人看的那一篇。种子要稳定——
-换掉它等于把所有会话登出，所有存下来的 rebind 凭证一起作废。
+relay 启动时会打印 `MCP server enabled at /mcp (alias /wanctl-mcp, Streamable
+HTTP, OAuth; …)`，开始提供 `https://relay.example.com/mcp`，并发布
+`/.well-known/oauth-protected-resource` 和
+`/.well-known/oauth-authorization-server`；人真正看见的那张同意页由门户在
+`/oauth/authorize` 上提供。如果你的边缘代理已经占掉了 `/mcp` 前缀，就让宿主改填
+`https://relay.example.com/wanctl-mcp`：它是同一个 handler 的别名，别的什么都
+不用改。
+
+不带 bearer 的请求会收到 `401` 和
+`WWW-Authenticate: Bearer resource_metadata="https://relay.example.com/.well-known/oauth-protected-resource"`，
+MCP 客户端就是靠它知道该去授权；它拿不到会话，也看不见任何设备。客户端是自己注册
+的，注册本身不给任何权限——权限从一个已登录的人点头那一刻才开始，每次点头都会以
+客户端名字出现在他的令牌列表里，也在那里吊销。[让 AI 通过 MCP 连上来](#docs/mcp)
+是写给授权的人看的那一篇。这需要迁移 010 建两张表，所以跟任何一次结构变更一样，
+第一次升上带它的版本前先备份数据库。种子要稳定：所有访问令牌和存下来的授权都用它
+密封，换掉它等于全部作废，每个连接器都得重新授权一次。
+
+如果设了 `WANCTL_MCP_SEED`，却缺数据库、`WANCTL_PUBLIC_ORIGIN` 或
+`WANCTL_PORTAL` 中的任何一样，谁都没法通过鉴权，relay 就不开会话：它会打印
+`hosted MCP is off on this relay: it authenticates with OAuth only, which needs …`
+说明缺的是哪一样，`/mcp` 用同一句话回 `503`。
 
 托管会话的设备信任只存在内存里，所以它第一次连上某台设备时会停在一个自己无法确认的
 指纹上：这个会话能列出设备，但什么都跑不了。打开那个开关的代价，就是承认你自己的
@@ -193,25 +212,17 @@ relay 不是它要防的那个攻击者；不打开，这个端点就只能读�
 WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1
 ```
 
-### 可选：让网页 AI 用 OAuth 登录
+**升级到 v0.19.0。** v0.19.0 起公网 MCP 端点必须有门户（OAuth）。以前不带
+`Authorization` 头的客户端可以在自己的 MCP 会话里用门户给的一次性 code 登录
+（`wanctl_login`），再拿一串 7 天有效的 `wrb1.` rebind 凭证。这条登录已经删掉：
+它的登出只记在 relay 内存里，relay 一重启，登出过的凭证又能用。对你的影响：
 
-每调用一次工具就新开一个 MCP 会话的连接器——ChatGPT 就是——永远拿不住一份按会话
-存的登录。这类客户端改用 OAuth 2.1 的 bearer 认人，而只要 relay 同时备齐数据库、
-公网 origin 和门户三样，它自己就会把这条路打开：
-
-```ini
-# selfhost/.env, then: docker compose up -d --no-deps relay
-WANCTL_PUBLIC_ORIGIN=https://relay.example.com
-WANCTL_PORTAL=https://portal.example.com
-```
-
-relay 会打印 `MCP OAuth enabled`，并开始提供
-`/.well-known/oauth-protected-resource` 和
-`/.well-known/oauth-authorization-server`；人真正看见的那张同意页由门户在
-`/oauth/authorize` 上提供。客户端是自己注册的，注册本身不给任何权限——权限从一个
-已登录的人点头那一刻才开始，每次点头都会以客户端名字出现在他的令牌列表里，也在那里
-吊销。不带 bearer 的客户端什么都不变，照旧按会话登录。这需要迁移 010 建两张表，所以
-跟任何一次结构变更一样，升上这个版本前先备份数据库。
+- 不支持 OAuth 的第三方托管 AI 用不了公网端点了。能在用户机器上起进程的 AI 宿主，
+  改用本机 stdio 的 `wanctl mcp`，它没有任何变化。
+- 存下来的 `wrb1.` 凭证升级后即失效，不需要清理什么。
+- 独立运行的 `wanctl mcp --http` 和容器角色 `WANCTL_ROLE=mcp` 删掉了：它们唯一的
+  登录方式就是上面那条。托管端点在 relay 里。
+- 没有门户的 relay 不再提供 MCP 会话；`/mcp` 按上面说的回 `503`。
 
 ### 可选：给设备提供签名过的发布包
 

@@ -8,53 +8,35 @@ import (
 	"strings"
 	"time"
 
-	"wanctl/internal/clientip"
-
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/server"
 )
 
 // Hosted (HTTP) MCP sessions are bounded in number and closed when idle.
 //
-// Opening one needs no credential — logging in is a tool call made inside a
-// session — and each is state in the relay process every tenant shares: mcp-go
-// keeps a notification buffer and bookkeeping per session, and this package a
-// remoteSession. mcp-go frees its part only when a client ends the session with
-// DELETE, which a client that simply goes away never sends, so without these
-// bounds anyone could grow the process one initialize at a time.
+// Opening one needs an OAuth bearer (oauthGate), and each is state in the relay
+// process every tenant shares: mcp-go keeps a notification buffer and
+// bookkeeping per session, and this package a record of it. mcp-go frees its
+// part only when a client ends the session with DELETE, which a client that
+// simply goes away never sends, so without these bounds a client could grow
+// the process one initialize at a time.
 const (
 	// maxHostedSessions bounds the sessions open at once. One costs about
 	// 10 KiB here, so this is a few tens of MiB at most.
 	maxHostedSessions = 2048
-	// maxAnonymousSessionsPerClient bounds the sessions one client address
-	// (clientip.Key) holds open without logging in, so that no single caller
-	// can take the whole ceiling. A client normally has one or two, and a
-	// session stops counting once it logs in. Sessions opened with an OAuth
-	// bearer are not counted per address: a hosted AI's connectors all arrive
-	// from the same few addresses, and a bearer names an account instead.
-	maxAnonymousSessionsPerClient = 32
-	// anonymousSessionIdle is how long a session nobody has logged in to is
-	// kept without a request. So is one opened with a bearer: its login travels
-	// with every request, so closing it loses nothing, and a connector that
-	// opens a new session for every tool call would otherwise leave hundreds.
-	anonymousSessionIdle = 10 * time.Minute
-	// loggedInSessionIdle is how long a session logged in with wanctl_login
-	// keeps that login without a request. Past it the model finds the session
-	// logged out and restores it with its rebind credential, without the user.
-	loggedInSessionIdle = 2 * time.Hour
+	// sessionIdle is how long a session is kept without a request. Closing
+	// one loses nothing: the login travels with every request in the bearer,
+	// and a connector that opens a new session for every tool call would
+	// otherwise leave hundreds.
+	sessionIdle = 10 * time.Minute
 )
 
 const sessionIDPrefix = "mcp-session-"
 
-var (
-	errTooManySessions       = errors.New("too many MCP sessions are open on this server; try again in a few minutes")
-	errTooManyClientSessions = errors.New("too many MCP sessions are open from this address without logging in; log in to one you have, or let them expire, then try again")
-)
+var errTooManySessions = errors.New("too many MCP sessions are open on this server; try again in a few minutes")
 
 // transportSession is one transport session the endpoint has admitted.
 type transportSession struct {
-	client   string // clientip.Key of whoever opened it
-	bearer   bool   // opened with an OAuth bearer, whose login is not the session's
 	lastUsed time.Time
 }
 
@@ -65,58 +47,28 @@ func (s *sessionStore) now() time.Time {
 	return time.Now()
 }
 
-// loggedInLocked reports whether the session keyed id has logged in with
-// wanctl_login. Caller holds s.mu.
-func (s *sessionStore) loggedInLocked(id string) bool {
-	r := s.m[id]
-	if r == nil {
-		return false
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.token != ""
-}
-
-// roomLocked says why one more session for client may not be opened, if it may
-// not. Caller holds s.mu.
-func (s *sessionStore) roomLocked(client string, bearer bool) error {
+func (s *sessionStore) room() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if len(s.open) >= maxHostedSessions {
 		return errTooManySessions
-	}
-	if bearer {
-		return nil
-	}
-	n := 0
-	for id, o := range s.open {
-		if o.client == client && !o.bearer && !s.loggedInLocked(id) {
-			n++
-		}
-	}
-	if n >= maxAnonymousSessionsPerClient {
-		return errTooManyClientSessions
 	}
 	return nil
 }
 
-func (s *sessionStore) room(client string, bearer bool) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.roomLocked(client, bearer)
-}
-
 // admit records a request on session id, taking it in if it is not already
 // open and there is room for it.
-func (s *sessionStore) admit(id, client string, bearer bool) error {
+func (s *sessionStore) admit(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if o := s.open[id]; o != nil {
 		o.lastUsed = s.now()
 		return nil
 	}
-	if err := s.roomLocked(client, bearer); err != nil {
-		return err
+	if len(s.open) >= maxHostedSessions {
+		return errTooManySessions
 	}
-	s.open[id] = &transportSession{client: client, bearer: bearer, lastUsed: s.now()}
+	s.open[id] = &transportSession{lastUsed: s.now()}
 	return nil
 }
 
@@ -125,38 +77,24 @@ func (s *sessionStore) forget(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.open, id)
-	delete(s.m, id)
 }
 
 // sweep closes the sessions idle past their limit and has mcp-go free its own
-// state for each. It also drops login state no open session refers to: an
-// OAuth session (keyed by its token, not by a transport session) once that
-// token has expired or gone unused.
+// state for each. It also drops a bearer's state (keyed by its token, not by a
+// transport session) once that token has expired or gone unused.
 func (s *sessionStore) sweep() {
 	now := s.now()
 	var closed []string
 	s.mu.Lock()
 	for id, o := range s.open {
-		idle := anonymousSessionIdle
-		if !o.bearer && s.loggedInLocked(id) {
-			idle = loggedInSessionIdle
-		}
-		if now.Sub(o.lastUsed) > idle {
+		if now.Sub(o.lastUsed) > sessionIdle {
 			delete(s.open, id)
-			delete(s.m, id)
 			closed = append(closed, id)
 		}
 	}
 	for id, r := range s.m {
-		if _, open := s.open[id]; open {
-			continue
-		}
 		r.mu.Lock()
-		idle := anonymousSessionIdle
-		if r.token != "" {
-			idle = loggedInSessionIdle
-		}
-		gone := now.Sub(r.lastUsed) > idle || (r.oauth && !now.Before(r.oauthClaim.Expiry()))
+		gone := now.Sub(r.lastUsed) > sessionIdle || !now.Before(r.oauthClaim.Expiry())
 		r.mu.Unlock()
 		if gone {
 			delete(s.m, id)
@@ -180,8 +118,7 @@ func (s *sessionStore) gate(next http.Handler) http.Handler {
 		opening := (req.Method == http.MethodPost || req.Method == http.MethodGet) &&
 			req.Header.Get(server.HeaderKeySessionID) == ""
 		if opening {
-			_, bearer := oauthClaimFrom(req.Context())
-			if err := s.room(clientip.Key(req), bearer); err != nil {
+			if err := s.room(); err != nil {
 				refuseSession(w, err)
 				return
 			}
@@ -191,44 +128,25 @@ func (s *sessionStore) gate(next http.Handler) http.Handler {
 }
 
 func refuseSession(w http.ResponseWriter, err error) {
-	status := http.StatusServiceUnavailable
-	if errors.Is(err, errTooManyClientSessions) {
-		status = http.StatusTooManyRequests
-	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Retry-After", strconv.Itoa(int(time.Minute/time.Second)))
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusServiceUnavailable)
 	json.NewEncoder(w).Encode(map[string]any{
 		"jsonrpc": "2.0", "id": nil,
 		"error": map[string]any{"code": -32000, "message": err.Error()},
 	})
 }
 
-// sessionIDs hands mcp-go a SessionIdManager that knows who is asking, which a
-// plain SessionIdManager cannot: its methods see only the session ID.
+// sessionIDs is the SessionIdManager mcp-go names, checks and ends sessions
+// through, so that every one it knows is one this store bounds and expires.
 type sessionIDs struct{ store *sessionStore }
-
-func (i sessionIDs) ResolveSessionIdManager(req *http.Request) server.SessionIdManager {
-	a := sessionAdmission{store: i.store}
-	if req != nil {
-		a.client = clientip.Key(req)
-		_, a.bearer = oauthClaimFrom(req.Context())
-	}
-	return a
-}
-
-type sessionAdmission struct {
-	store  *sessionStore
-	client string
-	bearer bool
-}
 
 // Generate names a new session. The gate has already checked there is room;
 // if another request took the last place since, the answer is no session at
 // all, and the client, finding it has none, comes back to the gate's error.
-func (a sessionAdmission) Generate() string {
+func (a sessionIDs) Generate() string {
 	id := sessionIDPrefix + uuid.NewString()
-	if a.store.admit(id, a.client, a.bearer) != nil {
+	if a.store.admit(id) != nil {
 		return ""
 	}
 	return id
@@ -236,10 +154,10 @@ func (a sessionAdmission) Generate() string {
 
 // Validate takes back a well-formed ID this process does not know rather than
 // refusing it. A relay restart forgets every session, and so does idling out;
-// a client carrying on with its old ID finds a logged-out session, which the
-// model's rebind credential repairs, where a refusal would leave the client
-// to notice and reconnect by itself. Taking one back still needs room.
-func (a sessionAdmission) Validate(id string) (bool, error) {
+// the login rides in the bearer, so a client carrying on with its old ID loses
+// nothing, where a refusal would leave the client to notice and reconnect by
+// itself. Taking one back still needs room.
+func (a sessionIDs) Validate(id string) (bool, error) {
 	rest, ok := strings.CutPrefix(id, sessionIDPrefix)
 	if !ok {
 		return false, errors.New("invalid session id")
@@ -247,11 +165,11 @@ func (a sessionAdmission) Validate(id string) (bool, error) {
 	if _, err := uuid.Parse(rest); err != nil {
 		return false, errors.New("invalid session id")
 	}
-	return false, a.store.admit(id, a.client, a.bearer)
+	return false, a.store.admit(id)
 }
 
 // Terminate is a client ending its session with DELETE, or sweep ending it.
-func (a sessionAdmission) Terminate(id string) (bool, error) {
+func (a sessionIDs) Terminate(id string) (bool, error) {
 	a.store.forget(id)
 	return false, nil
 }

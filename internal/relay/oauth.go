@@ -94,9 +94,9 @@ type OAuthRefresh struct {
 	RevokedAt time.Time
 }
 
-// OAuthStore is the durable half. It is separate from AdminStore because a
-// relay can run the MCP endpoint without one and because these rows have
-// nothing to do with the portal's admin surface.
+// OAuthStore is the durable half. It is separate from AdminStore because these
+// rows have nothing to do with the portal's admin surface. Without one there is
+// no hosted MCP endpoint: it authenticates with OAuth only (v0.19.0).
 type OAuthStore interface {
 	// RegisterOAuthClient stores c unless that would leave more than
 	// maxUnused clients that have never completed an authorization (no

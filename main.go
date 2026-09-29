@@ -343,38 +343,47 @@ func cmdRelay(args []string) error {
 		if err != nil {
 			return fmt.Errorf("WANCTL_MCP_SEED must be hex-encoded: %w", err)
 		}
-		opts := mcppkg.Options{Seed: seed, EndpointPath: "/mcp"}
-		// OAuth needs three things the session path does not: somewhere durable
-		// to keep clients and refresh tokens, a public origin to publish as the
-		// issuer, and a portal to host the consent page. Without all three the
-		// endpoint keeps working exactly as before, on Mcp-Session-Id.
+		// The hosted endpoint authenticates with OAuth only (v0.19.0, ADR 0008),
+		// and OAuth needs three things: somewhere durable to keep clients and
+		// refresh tokens, a public origin to publish as the issuer, and a portal
+		// to host the consent page. Without all three nobody could get in, so
+		// /mcp says why instead of serving sessions no one can use.
+		missing := ""
 		switch {
 		case pgStore == nil:
-			log.Print("wanctl relay: MCP OAuth off (needs DATABASE_URL for clients and refresh tokens)")
+			missing = "DATABASE_URL (for OAuth clients and refresh tokens)"
 		case os.Getenv("WANCTL_PUBLIC_ORIGIN") == "":
-			log.Print("wanctl relay: MCP OAuth off (needs WANCTL_PUBLIC_ORIGIN as the issuer)")
+			missing = "WANCTL_PUBLIC_ORIGIN (the OAuth issuer)"
 		case os.Getenv("WANCTL_PORTAL") == "":
-			log.Print("wanctl relay: MCP OAuth off (needs WANCTL_PORTAL to host the consent page)")
-		default:
+			missing = "WANCTL_PORTAL (hosts the OAuth consent page)"
+		}
+		if missing != "" {
+			reason := "hosted MCP is off on this relay: it authenticates with OAuth only, which needs " + missing +
+				". AI hosts on your own machines can run the local stdio server, `wanctl mcp`."
+			log.Print("wanctl relay: " + reason)
+			r.SetMCPHandler(mcppkg.Unavailable(reason))
+		} else {
 			r.SetMCPOAuth(seed, pgStore)
-			opts.OAuth = &mcppkg.OAuthConfig{
-				ResourceMetadataURL: strings.TrimRight(os.Getenv("WANCTL_PUBLIC_ORIGIN"), "/") +
-					"/.well-known/oauth-protected-resource",
-				Live:   r.ResolveOAuthToken,
-				Revoke: r.RevokeOAuthRelayToken,
+			h, err := mcppkg.Handler(mcppkg.Options{
+				Seed:         seed,
+				EndpointPath: "/mcp",
+				OAuth: &mcppkg.OAuthConfig{
+					ResourceMetadataURL: strings.TrimRight(os.Getenv("WANCTL_PUBLIC_ORIGIN"), "/") +
+						"/.well-known/oauth-protected-resource",
+					Live:   r.ResolveOAuthToken,
+					Revoke: r.RevokeOAuthRelayToken,
+				},
+			})
+			if err != nil {
+				return fmt.Errorf("mcp handler: %w", err)
 			}
-			log.Print("wanctl relay: MCP OAuth enabled (authorize on the portal, tokens at /oauth/token)")
+			r.SetMCPHandler(h)
+			// The MCP server keeps its pinned device identities in this process's
+			// memory. Unbinding a device has to reach them, the same way it reaches
+			// the portal's own store (ADR 0002).
+			r.SetPinForgetter(mcppkg.ForgetPinnedDevice)
+			log.Print("wanctl relay: MCP server enabled at /mcp (alias /wanctl-mcp, Streamable HTTP, OAuth; authorize on the portal, tokens at /oauth/token)")
 		}
-		h, err := mcppkg.HandlerWithOptions(opts)
-		if err != nil {
-			return fmt.Errorf("mcp handler: %w", err)
-		}
-		r.SetMCPHandler(h)
-		// The MCP server keeps its pinned device identities in this process's
-		// memory. Unbinding a device has to reach them, the same way it reaches
-		// the portal's own store (ADR 0002).
-		r.SetPinForgetter(mcppkg.ForgetPinnedDevice)
-		log.Print("wanctl relay: MCP server enabled at /mcp (alias /wanctl-mcp, Streamable HTTP)")
 	}
 	if seedHex := os.Getenv("WANCTL_WEBFETCH_SEED"); seedHex != "" {
 		if pgStore == nil {

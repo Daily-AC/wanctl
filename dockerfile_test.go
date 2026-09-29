@@ -22,7 +22,6 @@ func TestContainerRuntimeIsPinnedAndNonRoot(t *testing.T) {
 		"EXPOSE 8080",
 		"USER wanctl",
 		"relay|portal",
-		"mcp)",
 	} {
 		if !strings.Contains(dockerfile, want) {
 			t.Errorf("Dockerfile missing security/runtime contract %q", want)

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ func newOAuthHandler(t *testing.T, probe *oauthProbe) http.Handler {
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	t.Setenv("WANCTL_RELAY", "https://relay.example")
 	t.Setenv("WANCTL_PORTAL", "https://portal.example")
-	h, err := HandlerWithOptions(Options{
+	h, err := Handler(Options{
 		Seed:         []byte(testSeed),
 		EndpointPath: "/mcp",
 		OAuth: &OAuthConfig{
@@ -144,9 +145,9 @@ func callTool(t *testing.T, h http.Handler, access, sessionID, name string) stri
 
 // This is the case the whole feature exists for. ChatGPT's MCP client opens a
 // fresh session for every tool call: it re-sends initialize and gets a new
-// Mcp-Session-Id each time. Under the session-keyed login that meant the call
-// right after a successful wanctl_login reported LOGIN REQUIRED. With a bearer,
-// both sessions are the same authenticated person.
+// Mcp-Session-Id each time. Under the session-keyed login this endpoint used to
+// have, the call right after a successful login reported LOGIN REQUIRED. With a
+// bearer, both sessions are the same authenticated person.
 func TestOneBearerIsLoggedInAcrossTwoSessions(t *testing.T) {
 	h := newOAuthHandler(t, &oauthProbe{live: true})
 	access := bearer(t, "alice", "tok-alice", "client-1", time.Hour)
@@ -233,36 +234,64 @@ func TestInvalidBearerAnswers401WithTheChallenge(t *testing.T) {
 	}
 }
 
-// The old path is the one Claude Code, Codex and Cursor are on. Turning OAuth
-// on must not change it: no Authorization header, no bearer, same per-session
-// login as before.
-func TestNoBearerKeepsThePerSessionPath(t *testing.T) {
+// A request with no Authorization is where every MCP client starts. It gets
+// the bare challenge (no error code: RFC 6750 §3.1), which sends the client to
+// the resource metadata and into the authorization flow, and nothing else: no
+// session, no instructions, no tool. Before v0.19.0 it opened a session that
+// logged in with a portal code and a rebind credential whose logout lived in
+// process memory (CX-04); that path is gone.
+func TestNoBearerGetsTheChallengeAndNoSession(t *testing.T) {
 	h := newOAuthHandler(t, &oauthProbe{live: true})
-	sid := openSession(t, h, "")
-	status := callTool(t, h, "", sid, "wanctl_status")
-	if !strings.Contains(status, "NOT logged in") {
-		t.Fatalf("a session with no bearer should start logged out: %s", status)
+	rr, out := rpc(t, h, "", "", initializeBody)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("initialize without Authorization: %d %s", rr.Code, rr.Body.String())
 	}
-	if strings.Contains(status, "OAuth") {
-		t.Errorf("a session with no bearer should not mention OAuth: %s", status)
+	want := `Bearer resource_metadata="https://relay.example/.well-known/oauth-protected-resource"`
+	if got := rr.Header().Get("WWW-Authenticate"); got != want {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, want)
 	}
-	// And wanctl_login still opens the portal-code flow rather than being short
-	// circuited by the OAuth branch.
-	login := callTool(t, h, "", sid, "wanctl_login")
-	if !strings.Contains(login, "/enroll") {
-		t.Errorf("wanctl_login on the session path = %s", login)
+	if sid := rr.Header().Get("Mcp-Session-Id"); sid != "" {
+		t.Errorf("an unauthenticated initialize was given session %s", sid)
+	}
+	if _, ok := out["result"]; ok {
+		t.Errorf("an unauthenticated initialize got a result: %s", rr.Body.String())
 	}
 }
 
-func TestLoginOnTheBearerPathSaysItIsAlreadyDone(t *testing.T) {
+// Nor can a tool call without a bearer reach a device, even on a session a
+// bearer opened: the session id is not a credential.
+func TestNoBearerToolCallReachesNoDevice(t *testing.T) {
+	var hits atomic.Int32
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		http.Error(w, "unexpected", http.StatusTeapot)
+	}))
+	defer relay.Close()
 	h := newOAuthHandler(t, &oauthProbe{live: true})
+	t.Setenv("WANCTL_RELAY", relay.URL)
 	access := bearer(t, "alice", "tok-alice", "client-1", time.Hour)
 	sid := openSession(t, h, access)
-	login := callTool(t, h, access, sid, "wanctl_login")
-	// It must not hand back the portal URL the code flow prints: that would
-	// send someone who is already signed in round the browser a second time.
-	if !strings.Contains(login, "alice") || strings.Contains(login, "https://portal.example/enroll") {
-		t.Fatalf("wanctl_login on the bearer path = %s", login)
+
+	for _, session := range []string{"", sid} {
+		for _, call := range []string{
+			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wanctl_peers","arguments":{}}}`,
+			`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wanctl_exec","arguments":{"target":"alice/box","command":"echo hi"}}}`,
+			`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"wanctl_login","arguments":{"code":"ABCD-1234"}}}`,
+		} {
+			rr, out := rpc(t, h, "", session, call)
+			if rr.Code != http.StatusUnauthorized || out["result"] != nil {
+				t.Errorf("session %q, %s: %d %s", session, call, rr.Code, rr.Body.String())
+			}
+		}
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("unauthenticated tool calls reached the relay %d times", n)
+	}
+	// The same call with the bearer does dial out, so the count above is
+	// measuring something.
+	callTool(t, h, access, sid, "wanctl_peers")
+	if hits.Load() == 0 {
+		t.Fatal("an authenticated wanctl_peers never reached the relay; the probe is not wired")
 	}
 }
 
@@ -299,22 +328,15 @@ func TestBearersForDifferentNamespacesDoNotShareASession(t *testing.T) {
 	}
 }
 
-// Without OAuth configured the gate is not installed at all, so an Authorization
-// header a proxy happened to add cannot make the endpoint start answering 401.
-func TestHandlerWithoutOAuthIgnoresAuthorization(t *testing.T) {
-	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
-	t.Setenv("WANCTL_RELAY", "https://relay.example")
-	h, err := Handler([]byte(testSeed), "/mcp")
-	if err != nil {
-		t.Fatal(err)
+// Without OAuth there is no way into the hosted endpoint, so there is no
+// handler: the relay mounts Unavailable instead, which says why.
+func TestHandlerNeedsOAuth(t *testing.T) {
+	if _, err := Handler(Options{Seed: []byte(testSeed), EndpointPath: "/mcp"}); err == nil {
+		t.Fatal("a hosted handler without OAuth was built")
 	}
-	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(initializeBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("Authorization", "Bearer whatever")
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status %d, want 200: %s", rr.Code, rr.Body.String())
+	Unavailable("hosted MCP is off on this relay").ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(initializeBody)))
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "hosted MCP is off") {
+		t.Fatalf("Unavailable: %d %s", rr.Code, rr.Body.String())
 	}
 }

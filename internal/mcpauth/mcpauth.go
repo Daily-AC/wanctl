@@ -4,8 +4,9 @@
 // (internal/relay, which owns the database and the admin API) and the MCP
 // server verifies them (internal/mcp, which owns the tools).
 //
-// The format is the one internal/mcp already uses for rebind credentials: an
-// AES-GCM envelope whose key is HKDF-derived from the relay's MCP seed. That
+// The format is the one internal/mcp used for its rebind credentials until
+// v0.19.0 removed them: an AES-GCM envelope whose key is HKDF-derived from the
+// relay's MCP seed. That
 // matters more than it sounds. It means an OAuth access token needs no new
 // key, no new rotation story and no server-side lookup to be useful: the MCP
 // server opens it and has the namespace and the relay token in hand. Rotating

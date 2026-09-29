@@ -51,7 +51,7 @@ func hostedDeviceNamed(t *testing.T, name string) (h http.Handler, access, targe
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	t.Setenv("WANCTL_RELAY", relayServer.URL)
 	t.Setenv("WANCTL_TRANSPORT", "http")
-	h, err = HandlerWithOptions(Options{Seed: []byte(testSeed), EndpointPath: "/mcp", OAuth: &OAuthConfig{
+	h, err = Handler(Options{Seed: []byte(testSeed), EndpointPath: "/mcp", OAuth: &OAuthConfig{
 		ResourceMetadataURL: "https://example.invalid/resource",
 		Live:                func(ns, token string) bool { return ns == "alice" && token == "exec-test" },
 	}})
