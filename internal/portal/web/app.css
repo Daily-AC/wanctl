@@ -215,6 +215,21 @@ h2{margin:0;font-size:20px;font-weight:600;line-height:1.2;letter-spacing:-.3px}
    它在两处挂载、是同一个组件：主屏顶部（跨设备聚合）与设备下钻的待审批页
    （过滤到这一台）。 */
 .asks{display:grid;gap:14px;margin-bottom:clamp(30px,4vw,46px)}
+/* 邀请页上的申请入口：一行，写着几个人在等，点开才是卡片。浅灰实心、18px
+   圆角（大面），蓝色的只有人数 —— 这一行里唯一需要你去做点什么的信息。 */
+.reqbox{margin-top:22px}
+.reqbox summary{
+  display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;
+  padding:14px 18px;border-radius:18px;background:var(--canvas-2);font-weight:600;
+  transition:background .16s var(--ease);
+}
+.reqbox summary::-webkit-details-marker{display:none}
+.reqbox summary:hover{background:#ececf0}
+.reqbox summary .n{font-weight:400;color:var(--blue)}
+.reqbox summary .chev{width:16px;height:16px;margin-left:auto;color:var(--ink-2);transition:transform .18s var(--ease)}
+.reqbox[open] summary .chev{transform:rotate(90deg)}
+.reqbox .asks{margin:14px 0 0}
+@media (prefers-reduced-motion:reduce){.reqbox summary .chev{transition:none}}
 .asks:empty{display:none}
 .ask{
   border:1px solid var(--hairline);border-radius:18px;overflow:hidden;

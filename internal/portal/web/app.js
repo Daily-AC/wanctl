@@ -1382,6 +1382,14 @@
       // 它本来就以一条邀请的形式留在下面那张表里。
       var xs = (d.requests || []).filter(function (r) { return r.status === 'pending'; });
       $('#reqs').innerHTML = xs.map(reqCard).join('');
+      // 入口那一行：几个人在等。一个都没有时整行藏起来，也收回去 ——
+      // 下一个申请来的时候，它该以一行入口的样子出现，而不是自己摊开。
+      $('#reqBox').hidden = !xs.length;
+      if (!xs.length) $('#reqBox').open = false;
+      var n = $('#reqN');
+      n.setAttribute('data-en', xs.length + ' waiting');
+      n.setAttribute('data-zh', xs.length + ' 个待处理');
+      n.textContent = n.getAttribute('data-' + lang);
       $$('#reqs .ask').forEach(function (el) {
         $$('.btn[data-rv]', el).forEach(function (b) {
           b.onclick = function () {
