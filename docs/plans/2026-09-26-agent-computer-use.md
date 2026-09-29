@@ -1,7 +1,8 @@
 # Agents that operate a remote desktop through wanctl
 
-Status: idea, recorded 2026-09-26. Nothing built. Android is out of scope for
-now and will be handled separately.
+Status: idea, recorded 2026-09-26. No wanctl code written. A zero-code trial
+on the 5090 passed on 2026-09-30; see "Trial on the 5090" below. Android is out
+of scope for now and will be handled separately.
 
 ## The owner's ask
 
@@ -66,8 +67,8 @@ Python, Windows), `microsoft/UFO` (MIT, Python, Windows UIA agent),
 (Apache-2.0, Go input library, cgo), `rustdesk/rustdesk` (AGPL, remote
 desktop; design reference only).
 
-We have not run cua-driver ourselves yet. Everything above comes from its
-repository.
+The list above comes from cua-driver's repository. The 2026-09-30 trial below
+checked the Windows parts that matter to us on a real machine.
 
 ## What wanctl would add
 
@@ -117,7 +118,79 @@ interactive session.
 - The owner can stop a running control session within one second.
 - The wanctl binary does not grow.
 
+## Trial on the 5090 (2026-09-30)
+
+The owner decided on 2026-09-29 to try this without writing wanctl code: the
+agent calls cua-driver through the existing `wanctl exec`. This session was
+the agent, and it used only `wanctl exec`, `push` and `pull`.
+
+**Setup.** cua-driver-rs v0.30.4, `windows-x86_64-binary.zip`, SHA-256 matched
+the release's `checksums.txt`. Defender flagged nothing. It ran from a trial
+directory, not on `PATH`, and everything was removed afterwards (scheduled
+tasks and processes listed before and after matched).
+
+**The session barrier is real.** `cua-driver serve`, started in the desktop
+session by an interactive-token scheduled task, listens on
+`\\.\pipe\cua-driver`, and that pipe admits only the account that owns the
+daemon. `cua-driver call` from the wanctl agent (SYSTEM, session 0) gets
+`Access is denied`. What worked: a second interactive-token task runs
+`cua-driver call <tool> < req.json` in the desktop session and writes the
+result to a file; the wanctl side writes the request, starts the task and
+waits for the result. The task adds a median 64 ms. From session 0,
+`wanctl screenshot` returns a blank 1024x768 image and no window has a title,
+so screenshots came from cua-driver (`screenshot_out_file`, then `wanctl pull`)
+and the independent title check ran in the desktop session through a third
+task that used plain PowerShell, not cua-driver.
+
+**Acceptance: all passed with no human input.**
+
+1. A test page pushed with `wanctl push`, opened in a Chrome with a throwaway
+   profile. The input was filled with `set_value` (UIA ValuePattern) and the
+   Save button was clicked by its accessibility element token, not by
+   coordinates. `Get-Process` in the desktop session found the window titled
+   with the sentence, and a window screenshot shows the same.
+2. `https://wanctl.z10.dev`: the address bar was filled by element, clicked by
+   element to take focus, and Enter was sent in the foreground. The page's only
+   link while signed out, "Continue with GitHub", was clicked by element, and
+   the window title changed to "Sign in to GitHub · GitHub".
+
+**What the agent has to know about Chrome on Windows.**
+
+- The first UIA snapshot shows only the browser frame; page content appears
+  from the second snapshot, once Chrome has noticed an accessibility client.
+- A click by element on page content is delivered as a posted mouse click at
+  the element's position (`route: synthetic_events`), not as UIA Invoke. It
+  still needs no coordinates from the agent.
+- Keys are dropped in background mode (`background_unavailable`); Enter needed
+  `delivery_mode: "foreground"`. `set_value` does not move focus.
+- Element tokens (`snapshot_id:index`) live in the daemon, so they work across
+  separate `cua-driver call` processes: no action needed a persistent
+  connection. Any new `get_window_state` of the same window, even a
+  screenshot-only one, makes the old tokens stale.
+
+**Timing, 38 actions (33 succeeded).** Medians per action: 889 ms seen by the
+controller, of which wanctl 663 ms, the task hop 64 ms and cua-driver 120 ms.
+wanctl's median share of an action's tool time is 76%. `wanctl exec 'echo 1'`
+alone has a median of 723 ms (7 runs), so the wanctl part is the plain `exec`
+round trip. Slow driver calls were Chrome-specific: clicks on page content
+about 1.6 s, `launch_app` 9.8 s. Across acceptance tasks 1 and 2 (19 actions,
+149 s wall clock), wanctl accounted for 13.8 s (9%); the agent's own thinking
+took most of the rest. The 0.3 s overhead target in the milestone above is not
+met (0.66 s).
+
+**What a stdio bridge would and would not fix.** It would remove most of the
+0.66 s per action. It would not remove the session barrier: an agent running
+as SYSTEM in session 0 still cannot open the daemon's pipe, so a bridge would
+also need a helper in the desktop session. Cheaper steps with no wanctl code:
+send several `cua-driver call`s in one `exec` when the agent already knows the
+tokens (snapshot, fill, click), and keep the dispatcher recipe in a skill.
+
 ## Open questions for the owner
+
+Answered on 2026-09-29: taking over the screen is acceptable; no extra
+approval beyond what `exec` already gets; no live view in the first version;
+the 5090 is the first target. The original questions:
+
 
 1. Must the agent work in the background while you use the machine, or is it
    acceptable for it to take over the screen?
@@ -129,7 +202,6 @@ interactive session.
 
 ## Next step
 
-Run cua-driver by hand on the Mac and a Windows machine before any wanctl
-code: install it, drive it from a local MCP client, and check the background
-and accessibility claims on real apps. If it holds up, write the design for
-the stdio bridge.
+The trial answered the hand test above for Windows. Whether to package the
+zero-code recipe as a skill or to build the stdio bridge is for the owner to
+decide; the numbers are in "Trial on the 5090".
