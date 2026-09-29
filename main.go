@@ -448,6 +448,10 @@ func cmdPortal(args []string) error {
 		return err
 	}
 	p := portal.New(portal.Config{
+		SMTPAddr:        os.Getenv("WANCTL_SMTP_ADDR"),
+		SMTPUser:        os.Getenv("WANCTL_SMTP_USER"),
+		SMTPPassword:    os.Getenv("WANCTL_SMTP_PASSWORD"),
+		MailFrom:        os.Getenv("WANCTL_MAIL_FROM"),
 		GitHubTransport: githubTransport,
 		RelayAdminURL:   os.Getenv("RELAY_ADMIN_URL"),
 		AdminSecret:     os.Getenv("WANCTL_ADMIN_SECRET"),

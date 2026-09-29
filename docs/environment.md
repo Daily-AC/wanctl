@@ -31,6 +31,10 @@ Variables marked "conditional" are required only for the feature described.
 | `WANCTL_GITHUB_PROXY` | portal | No | none | HTTP(S) or SOCKS5 proxy for GitHub token/user requests only. Relay and other outbound traffic are unaffected. |
 | `WANCTL_GITHUB_AUTH_BASE` | portal | No | `https://github.com` | OAuth authorization/token base URL; useful for GitHub Enterprise. |
 | `WANCTL_GITHUB_API_BASE` | portal | No | `https://api.github.com` | GitHub user API base URL; useful for GitHub Enterprise. |
+| `WANCTL_SMTP_ADDR` | portal | No | none | SMTP `host:port`; mail is enabled only with all four mail variables set. Port 465 uses implicit TLS; other ports require STARTTLS (typically 587). Plaintext authentication and delivery are refused. Overall timeout: 15 seconds per message. |
+| `WANCTL_SMTP_USER` | portal | Conditional | none | SMTP username; uses PLAIN authentication. |
+| `WANCTL_SMTP_PASSWORD` | portal | Conditional | none | SMTP password. |
+| `WANCTL_MAIL_FROM` | portal | Conditional | none | RFC 5322 sender, e.g. `wanctl <wanctl@portal.example.com>`. Enabling mail adds GitHub's `user:email` permission to read the verified primary address (excluding noreply); applicants without one may enter an optional address. Approvals send an asynchronous Chinese/English notification; declines send none and mail failures do not undo approval. |
 | `PORTAL_USER_HEADER` | portal | Conditional | `X-Auth-Request-Email` | Trusted reverse-proxy identity header for header-auth mode. The proxy must strip client-supplied copies. Mutually exclusive with GitHub OAuth. |
 | `PORTAL_PUBLIC_ORIGIN` | portal | No | derived from request | External portal origin used for OAuth redirects and secure cookies. Set it when TLS terminates at a proxy. |
 | `PORTAL_DEBUG_WHOAMI` | portal | No | `0` | Set to `1` to enable the diagnostic `/whoami` endpoint. Do not enable routinely. |

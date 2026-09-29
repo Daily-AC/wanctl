@@ -1,11 +1,14 @@
 package portal
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The identity badge is the only third-party image the portal loads. img-src
@@ -254,5 +257,22 @@ func TestCSPDoesNotAllowInlineScript(t *testing.T) {
 		if d = strings.TrimSpace(d); strings.HasPrefix(d, "script-src ") && strings.Contains(d, "'unsafe-inline'") {
 			t.Fatalf("script-src allows inline script: %q", d)
 		}
+	}
+}
+
+func TestSessionEmailCannotBeTampered(t *testing.T) {
+	s := newOAuthPortal(t, resolveOKAs("octocat", "user"))
+	value, err := s.encodeSession(&principal{Provider: "github", Subject: "8437", Login: "octocat", Email: "primary@example.com", Expires: time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(value, ".")
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts[1] = base64.RawURLEncoding.EncodeToString(bytes.ReplaceAll(raw, []byte("primary@example.com"), []byte("attacker@example.com")))
+	if _, err := s.decodeSession(strings.Join(parts, ".")); err == nil {
+		t.Fatal("tampered email accepted")
 	}
 }

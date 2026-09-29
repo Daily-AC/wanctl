@@ -196,6 +196,7 @@ func (r *Relay) adminResolveUser(w http.ResponseWriter, req *http.Request) {
 		Subject    string `json:"subject"`
 		Login      string `json:"login"`
 		Name       string `json:"name"`
+		Email      string `json:"email"`
 		InviteCode string `json:"invite_code"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
@@ -207,7 +208,7 @@ func (r *Relay) adminResolveUser(w http.ResponseWriter, req *http.Request) {
 		body.Subject = body.Identity
 	}
 	ns, role, err := r.admin.ResolveIdentity(
-		body.Provider, body.Subject, body.Login, body.Name, body.InviteCode, r.portalNS,
+		body.Provider, body.Subject, body.Login, body.Name, body.InviteCode, r.portalNS, body.Email,
 	)
 	if err != nil {
 		if errors.Is(err, ErrPendingInvite) {
@@ -662,7 +663,7 @@ func (r *Relay) adminAudit(w http.ResponseWriter, req *http.Request) {
 // AdminStore is the DB surface the admin endpoints need.
 type AdminStore interface {
 	ResolveUser(identity string) (string, error)
-	ResolveIdentity(provider, subject, login, name, inviteCode, reservedNS string) (ns, role string, err error)
+	ResolveIdentity(provider, subject, login, name, inviteCode, reservedNS, email string) (ns, role string, err error)
 	CreateInvite(githubLogin string) (Invite, string, error)
 	ListInvites() ([]Invite, error)
 	RevokeInvite(id int) (bool, error)
@@ -676,7 +677,7 @@ type AdminStore interface {
 	ListUsers() ([]string, error)
 	ListAdminNamespaces() ([]string, error)
 	LookupUser(namespace string) (bool, error)
-	CreateAccessRequest(provider, subject, login, note string) (AccessRequest, error)
+	CreateAccessRequest(provider, subject, login, note, email string) (AccessRequest, error)
 	LatestAccessRequest(provider, subject string) (AccessRequest, bool, error)
 	ListAccessRequests() ([]AccessRequest, error)
 	DecideAccessRequest(id int, status, decidedBy string) (AccessRequest, bool, error)
@@ -740,22 +741,28 @@ type identityQuerier interface {
 
 // ResolveUser maps an SSO identity to a namespace, creating/linking the row.
 func (p *PGStore) ResolveUser(identity string) (string, error) {
-	ns, _, err := p.ResolveIdentity("header", identity, "", "", "", "")
+	ns, _, err := p.ResolveIdentity("header", identity, "", "", "", "", "")
 	return ns, err
 }
 
 // ResolveIdentity maps an immutable provider identity to a namespace, creating
 // the user when the provider's admission policy permits it.
-func (p *PGStore) ResolveIdentity(provider, subject, login, name, inviteCode, reservedNS string) (string, string, error) {
+func (p *PGStore) ResolveIdentity(provider, subject, login, name, inviteCode, reservedNS, email string) (string, string, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	subject = strings.TrimSpace(subject)
 	login = strings.TrimSpace(login)
 	name = strings.TrimSpace(name)
+	email = strings.TrimSpace(email)
 	if subject == "" {
 		return "", "", sql.ErrNoRows
 	}
 
 	if ns, role, err := lookupIdentity(p.db, provider, subject); err == nil {
+		if email != "" {
+			if _, err := p.db.Exec(`UPDATE users SET email = $3 WHERE provider = $1 AND provider_subject = $2`, provider, subject, email); err != nil {
+				return "", "", err
+			}
+		}
 		return ns, role, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return "", "", err
@@ -767,7 +774,7 @@ func (p *PGStore) ResolveIdentity(provider, subject, login, name, inviteCode, re
 		if err := guardNamespace(preferredNS, reservedNS); err != nil {
 			return "", "", err
 		}
-		return insertIdentity(p.db, provider, subject, preferredNS, subject, "user")
+		return insertIdentity(p.db, provider, subject, preferredNS, subject, "user", email)
 	case "github":
 		if !decimalString(subject) {
 			return "", "", fmt.Errorf("invalid GitHub subject %q", subject)
@@ -779,7 +786,7 @@ func (p *PGStore) ResolveIdentity(provider, subject, login, name, inviteCode, re
 		if err := guardNamespace(preferredNS, reservedNS); err != nil {
 			return "", "", err
 		}
-		return p.resolveGitHubIdentity(subject, preferredNS, name, inviteCode)
+		return p.resolveGitHubIdentity(subject, preferredNS, name, inviteCode, email)
 	default:
 		return "", "", fmt.Errorf("unsupported identity provider %q", provider)
 	}
@@ -794,14 +801,15 @@ func lookupIdentity(q identityQuerier, provider, subject string) (string, string
 	return ns, role, err
 }
 
-func insertIdentity(q identityQuerier, provider, subject, namespace, name, role string) (string, string, error) {
+func insertIdentity(q identityQuerier, provider, subject, namespace, name, role, email string) (string, string, error) {
 	var insertedNS, insertedRole string
 	err := q.QueryRow(
-		`INSERT INTO users (provider, provider_subject, namespace, name, role)
-		 VALUES ($1,$2,$3,NULLIF($4,''),$5)
+		`INSERT INTO users (provider, provider_subject, namespace, name, role, email)
+		 VALUES ($1,$2,$3,NULLIF($4,''),$5,COALESCE(NULLIF($6,''),
+		   (SELECT email FROM access_requests WHERE provider = $1 AND subject = $2 AND status = 'approved' ORDER BY id DESC LIMIT 1),''))
 		 ON CONFLICT (namespace) DO NOTHING
 		 RETURNING namespace, role`,
-		provider, subject, namespace, name, role,
+		provider, subject, namespace, name, role, email,
 	).Scan(&insertedNS, &insertedRole)
 	if errors.Is(err, sql.ErrNoRows) {
 		// A concurrent request for the same immutable identity is idempotent:
@@ -819,7 +827,7 @@ func insertIdentity(q identityQuerier, provider, subject, namespace, name, role 
 	return insertedNS, insertedRole, err
 }
 
-func (p *PGStore) resolveGitHubIdentity(subject, namespace, name, inviteCode string) (ns, role string, err error) {
+func (p *PGStore) resolveGitHubIdentity(subject, namespace, name, inviteCode, email string) (ns, role string, err error) {
 	tx, err := p.db.Begin()
 	if err != nil {
 		return "", "", err
@@ -833,6 +841,11 @@ func (p *PGStore) resolveGitHubIdentity(subject, namespace, name, inviteCode str
 		return "", "", err
 	}
 	if ns, role, err = lookupIdentity(tx, "github", subject); err == nil {
+		if email != "" {
+			if _, err = tx.Exec(`UPDATE users SET email = $3 WHERE provider = $1 AND provider_subject = $2`, "github", subject, email); err != nil {
+				return "", "", err
+			}
+		}
 		if err = tx.Commit(); err != nil {
 			return "", "", err
 		}
@@ -880,7 +893,7 @@ func (p *PGStore) resolveGitHubIdentity(subject, namespace, name, inviteCode str
 	if profileName == "" {
 		profileName = namespace
 	}
-	if ns, role, err = insertIdentity(tx, "github", subject, namespace, profileName, role); err != nil {
+	if ns, role, err = insertIdentity(tx, "github", subject, namespace, profileName, role, email); err != nil {
 		return "", "", err
 	}
 	if inviteID != 0 {

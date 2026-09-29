@@ -68,7 +68,11 @@ type Config struct {
 	Identity      *transport.Identity
 	Known         *transport.Store
 	PublicOrigin  string // optional canonical origin when TLS terminates upstream
-	DebugWhoami   bool   // enable the diagnostic endpoint; never enable routinely
+	SMTPAddr      string
+	SMTPUser      string
+	SMTPPassword  string
+	MailFrom      string
+	DebugWhoami   bool // enable the diagnostic endpoint; never enable routinely
 
 	// GitHub OAuth login (self-hosted deployments). Setting GitHubClientID
 	// switches the portal to OAuth mode: identity comes only from the signed
@@ -96,6 +100,7 @@ type Server struct {
 	ghc          *http.Client
 	publicOrigin string
 	debugWhoami  bool
+	mail         mailSender
 	skillURL     string
 	transport    string // the transport this instance's controllers/devices use ("ws" or "http")
 	logs         *serverlog.Buffer
@@ -143,6 +148,9 @@ func New(cfg Config) *Server {
 		sessionKey:     []byte(cfg.SessionSecret),
 		ghAuthBase:     strings.TrimRight(orDefault(cfg.GitHubAuthBase, "https://github.com"), "/"),
 		ghAPIBase:      strings.TrimRight(orDefault(cfg.GitHubAPIBase, "https://api.github.com"), "/"),
+	}
+	if cfg.SMTPAddr != "" && cfg.SMTPUser != "" && cfg.SMTPPassword != "" && cfg.MailFrom != "" {
+		s.mail = &smtpSender{addr: cfg.SMTPAddr, user: cfg.SMTPUser, password: cfg.SMTPPassword, from: cfg.MailFrom}
 	}
 	if cfg.GitHubTransport != nil {
 		s.ghc = &http.Client{Transport: cfg.GitHubTransport, Timeout: 15 * time.Second}

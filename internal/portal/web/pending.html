@@ -48,6 +48,13 @@
        data-en="No code? Ask for access and the administrator will see it here."
        data-zh="没有邀请码？可以直接申请，管理员会在门户里看到。">No code? Ask for access and the administrator will see it here.</p>
     <form id="ask">
+      {{if .ShowEmail}}
+      <input id="email" type="email" maxlength="254" autocomplete="email"
+             data-ph-en="Optional: email, to hear when you are approved"
+             data-ph-zh="选填：邮箱，通过后通知你"
+             data-lbl-en="Email address" data-lbl-zh="邮箱地址"
+             placeholder="Optional: email, to hear when you are approved" aria-label="Email address">
+      {{end}}
       <input id="note" maxlength="{{.NoteMax}}" autocomplete="off"
              data-ph-en="Optional: who you are, in one line"
              data-ph-zh="选填：一行字说明你是谁"
