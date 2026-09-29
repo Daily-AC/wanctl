@@ -24,12 +24,6 @@
 </header>
 
 <main>
-  <!-- 这一页的主体是你自己：留白中央要有一个镇得住的东西（DESIGN.md §2），
-       而这里唯一真实、又跟你有关的东西就是你登录的那个账号。
-       首字母垫在底下：头像拉不到（GitHub 的图床在有些网络里进不来）时，
-       露出来的是它，不是一个破图标。 -->
-  <div class="me" aria-hidden="true"><span>{{.Initial}}</span>{{if .Avatar}}<img src="{{.Avatar}}" alt="" width="56" height="56" referrerpolicy="no-referrer" decoding="async">{{end}}</div>
-
   <section class="req" data-req-state="none">
     <h1 data-en="Request access" data-zh="申请访问">Request access</h1>
     <p class="lead"
@@ -84,9 +78,13 @@
     <p class="lead" id="retry" data-days="{{.RetryDays}}"></p>
   </section>
 
-  <!-- 你是谁、登错了怎么走，放在同一行：登错账号是这张页面上最容易发生的事，
-       而出口就该挨着让人发现登错的那个名字。 -->
+  <!-- 你是谁只说一次，就在这一行，出口挨着它：登错账号是这张页面上最容易
+       发生的事，而退出就该挨着让人发现登错的那个名字。
+       （Google 文档「你需要访问权限」那一页用途相同，也是这么摆的。）
+       首字母垫在头像底下：GitHub 的图床在有些网络里进不来，露出来的是字母，
+       不是一个破图标。 -->
   <p class="fine out">
+    <span class="me" aria-hidden="true"><span>{{.Initial}}</span>{{if .Avatar}}<img src="{{.Avatar}}" alt="" width="20" height="20" referrerpolicy="no-referrer" decoding="async">{{end}}</span>
     <span data-en="Signed in as" data-zh="以">Signed in as</span>
     <b class="mono">{{.Login}}</b><span data-en="" data-zh=" 登录"></span>
     <span class="sep" aria-hidden="true">·</span>

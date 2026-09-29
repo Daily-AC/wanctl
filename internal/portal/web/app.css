@@ -720,13 +720,13 @@ pre code{background:none;padding:0;font-size:1em}
 .auth[data-req="approved"] .req[data-req-state="approved"],
 .auth[data-req="declined"] .req[data-req-state="declined"]{display:block}
 
-/* 头像是这一页的主体（见 pending.html）。56px：在 25rem 的列里压得住标题，
-   又不至于把一张表单页变成个人主页。首字母那层在 GitHub 图床拉不到时露出来。 */
+/* 页脚那一行里的头像：跟 12.5px 的字同高一档。首字母那层在 GitHub
+   图床拉不到时露出来。 */
 .auth .me{
-  position:relative;width:56px;height:56px;margin-bottom:22px;flex:none;
-  border-radius:50%;overflow:hidden;background:var(--canvas-2);
-  display:grid;place-items:center;
-  font-size:22px;font-weight:600;line-height:1;color:var(--ink-2);text-transform:uppercase;
+  position:relative;display:inline-grid;place-items:center;vertical-align:middle;
+  width:20px;height:20px;margin-right:7px;border-radius:50%;overflow:hidden;
+  background:var(--canvas-2);font-size:10px;font-weight:600;line-height:1;
+  color:var(--ink-2);text-transform:uppercase;
 }
 .auth .me img{
   position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%;
@@ -744,22 +744,22 @@ pre code{background:none;padding:0;font-size:1em}
    聚焦时会整页放大。 */
 .auth .fl{position:relative;display:block}
 .auth .fl input{
-  height:56px;padding:25px 15px 7px;border-radius:8px;
+  height:52px;padding:23px 15px 5px;border-radius:8px;
   font-family:inherit;font-size:16px;text-align:left;
 }
 .auth .fl span{
-  position:absolute;left:16px;top:17px;max-width:calc(100% - 32px);
+  position:absolute;left:16px;top:15px;max-width:calc(100% - 32px);
   font-size:16px;line-height:22px;color:var(--ink-2);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   pointer-events:none;transform-origin:0 0;
   transition:transform .18s var(--ease);
 }
 .auth .fl input:focus + span,
-.auth .fl input:not(:placeholder-shown) + span{transform:translateY(-9px) scale(.75)}
+.auth .fl input:not(:placeholder-shown) + span{transform:translateY(-8px) scale(.75)}
 @media (prefers-reduced-motion:reduce){.auth .fl span{transition:none}}
 
-/* 申请页上的主按钮跟输入框一样高：它们是一组东西。 */
-.auth .req .go{padding:14px 18px;font-size:16px}
+/* 申请页上的主按钮跟输入框一样高（52）：它们是一组东西。 */
+.auth .req .go{height:52px;padding:0 18px;font-size:16px}
 .auth .req[data-req-state="approved"] .go{margin-top:28px}
 
 /* 页脚出口：退出登录只在这一处，任何状态下都在。 */
