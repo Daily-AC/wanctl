@@ -43,7 +43,7 @@ func (a *accessAdmin) latest(provider, subject string) (AccessRequest, bool) {
 	return AccessRequest{}, false
 }
 
-func (a *accessAdmin) CreateAccessRequest(provider, subject, login, note string) (AccessRequest, error) {
+func (a *accessAdmin) CreateAccessRequest(provider, subject, login, note, email string) (AccessRequest, error) {
 	latest, found := a.latest(provider, subject)
 	if err := accessRequestGate(latest, found, a.at()); err != nil {
 		return AccessRequest{}, err
@@ -51,7 +51,7 @@ func (a *accessAdmin) CreateAccessRequest(provider, subject, login, note string)
 	a.nextID++
 	row := AccessRequest{
 		ID: a.nextID, Provider: provider, Subject: subject, Login: login,
-		Note: note, Status: accessPending, CreatedAt: a.at(),
+		Email: email, Note: note, Status: accessPending, CreatedAt: a.at(),
 	}
 	a.rows = append(a.rows, row)
 	return row, nil
@@ -303,4 +303,53 @@ type accessEventSender struct{ events chan notify.Event }
 func (s *accessEventSender) Send(_ context.Context, _ notify.Destination, event notify.Event) (notify.Result, error) {
 	s.events <- event
 	return notify.Result{HTTPStatus: 200, Attempts: 1, Event: event.Event}, nil
+}
+
+func TestAccessRequestEmailValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, email string
+		valid       bool
+	}{
+		{"valid", "person@example.com", true},
+		{"trim", " person@example.com ", true},
+		{"missing", "", true},
+		{"display name", "Person <person@example.com>", false},
+		{"noreply", "123@users.noreply.github.com", false},
+		{"noreply case", "123@USERS.NOREPLY.GITHUB.COM", false},
+		{"255 bytes", strings.Repeat("x", 243) + "@example.com", false},
+		{"no dot", "person@localhost", false},
+		{"header injection", "person@example.com\r\nBcc: other@example.com", false},
+		{"control", "person\x00@example.com", false},
+		{"trailing control", "person@example.com\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			admin := &accessAdmin{}
+			r := accessRelay(t, admin)
+			body, _ := json.Marshal(map[string]string{"provider": "github", "subject": "8437", "login": "octocat", "email": tc.email})
+			rr := accessDo(t, r, "POST", "/admin/access-requests", string(body), "s3cret")
+			if !tc.valid {
+				if rr.Code != 400 || strings.TrimSpace(rr.Body.String()) != "email-invalid" || len(admin.rows) != 0 {
+					t.Fatalf("invalid email response = %d %s", rr.Code, rr.Body.String())
+				}
+				return
+			}
+			if rr.Code != 200 || len(admin.rows) != 1 || admin.rows[0].Email != strings.TrimSpace(tc.email) {
+				t.Fatalf("create = %d %s; rows = %#v", rr.Code, rr.Body.String(), admin.rows)
+			}
+			rr = accessDo(t, r, "GET", "/admin/access-requests", "", "s3cret")
+			var list struct {
+				Requests []AccessRequest `json:"requests"`
+			}
+			json.Unmarshal(rr.Body.Bytes(), &list)
+			if len(list.Requests) != 1 || list.Requests[0].Email != strings.TrimSpace(tc.email) {
+				t.Fatalf("list = %s", rr.Body.String())
+			}
+			rr = accessDo(t, r, "GET", "/admin/access-requests/status?provider=github&subject=8437", "", "s3cret")
+			var status map[string]any
+			json.Unmarshal(rr.Body.Bytes(), &status)
+			if _, ok := status["email"]; ok {
+				t.Fatalf("status leaked email: %s", rr.Body.String())
+			}
+		})
+	}
 }

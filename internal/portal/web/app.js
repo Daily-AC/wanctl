@@ -1367,6 +1367,7 @@
         '<span class="host">' + esc(r.login) + '</span>' +
         '<span class="what">' + esc(t().reqWants) + '</span>' +
         '<span class="wait">' + esc(ago(r.created_at)) + '</span></div>' +
+      (r.email ? '<div class="body"><p class="cmd">' + esc(r.email) + '</p></div>' : '') +
       (note ? '<div class="body"><p class="cmd" style="font-family:inherit">' + esc(note) + '</p></div>' : '') +
       '<div class="acts">' +
         '<button class="btn" data-rv="approved">' + esc(t().approve) + '</button>' +

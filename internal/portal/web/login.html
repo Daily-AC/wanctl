@@ -42,10 +42,16 @@
   </a>
 
   <!-- 授权一个 OAuth 应用是一次真实的权限授予。说清索取范围，是这一页
-       跟一封钓鱼邮件之间的差别。请求里没有 scope 参数，所以这句是真的。 -->
+       跟一封钓鱼邮件之间的差别。只有配置邮件时才请求 user:email。 -->
+  {{if .MailEnabled}}
+  <p class="fine"
+     data-en="Only your public profile and your email address, to tell you about your account."
+     data-zh="只读取你的公开资料和邮箱地址，用于通知你账户相关的事。">Only your public profile and your email address, to tell you about your account.</p>
+  {{else}}
   <p class="fine"
      data-en="No GitHub permissions are requested — only your public profile."
      data-zh="不向 GitHub 申请任何权限，只读你的公开资料。">No GitHub permissions are requested — only your public profile.</p>
+  {{end}}
 </main>
 
 <script src="/assets/auth.js?v={{.V}}"></script>

@@ -269,7 +269,7 @@
       e.preventDefault();
       askErr.textContent = '';
       askBtn.disabled = true;
-      post('/auth/request-access', { note: $('#note').value.trim() }).then(function (r) {
+      post('/auth/request-access', { note: $('#note').value.trim(), email: $('#email') ? $('#email').value.trim() : '' }).then(function (r) {
         if (r.ok) { location.reload(); return; }
         return r.text().then(function (t) {
           askBtn.disabled = false;
@@ -277,6 +277,10 @@
           // 中继用固定的错误 token 说话（形状同好友那套），认识的翻译成
           // 人话，不认识的原样透出——少见的时候原因比语言一致更值钱。
           if (token === 'request-open' || token === 'request-approved') { location.reload(); return; }
+          if (token === 'email-invalid') {
+            askErr.textContent = lang === 'en' ? 'That email address does not look right.' : '邮箱格式不对。';
+            return;
+          }
           if (token === 'request-cooldown') {
             askErr.textContent = lang === 'en'
               ? 'You asked recently. Try again later.' : '你刚申请过，过些天再来。';

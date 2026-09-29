@@ -130,11 +130,12 @@ func TestAccessRequestsAdminPassThrough(t *testing.T) {
 func TestAccessRequestUsesTheSessionIdentity(t *testing.T) {
 	var calls []string
 	s := accessPortal(t, resolvePendingInvite, &calls)
+	s.mail = newFakeMailSender()
 	h := s.Handler()
 	cookies := inviteSession(t, s, h)
 
 	// A body that tries to apply as somebody else.
-	body := `{"note":"please","login":"someone-else","subject":"1","provider":"header"}`
+	body := `{"note":"please","email":" typed@example.com ","login":"someone-else","subject":"1","provider":"header"}`
 	rec := inviteReq(h, "POST", "/auth/request-access", body, cookies)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("request: status %d body %q", rec.Code, rec.Body.String())
@@ -145,9 +146,28 @@ func TestAccessRequestUsesTheSessionIdentity(t *testing.T) {
 			create = c
 		}
 	}
-	want := `POST /admin/access-requests {"login":"octocat","note":"please","provider":"github","subject":"8437"}`
+	want := `POST /admin/access-requests {"email":"typed@example.com","login":"octocat","note":"please","provider":"github","subject":"8437"}`
 	if create != want {
 		t.Fatalf("relay create call = %q, want %q", create, want)
+	}
+}
+
+// Without mail configured the portal has no use for an address, so a typed
+// one is dropped rather than stored.
+func TestAccessRequestDropsTypedEmailWithoutMail(t *testing.T) {
+	var calls []string
+	s := accessPortal(t, resolvePendingInvite, &calls)
+	h := s.Handler()
+	cookies := inviteSession(t, s, h)
+
+	rec := inviteReq(h, "POST", "/auth/request-access", `{"note":"please","email":"typed@example.com"}`, cookies)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request: status %d body %q", rec.Code, rec.Body.String())
+	}
+	for _, c := range calls {
+		if strings.HasPrefix(c, "POST /admin/access-requests ") && strings.Contains(c, "typed@example.com") {
+			t.Fatalf("typed email forwarded without mail configured: %q", c)
+		}
 	}
 }
 

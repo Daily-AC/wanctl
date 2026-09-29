@@ -6,8 +6,10 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/mail"
 	"strings"
 	"time"
+	"unicode"
 
 	"wanctl/internal/notify"
 )
@@ -47,6 +49,7 @@ type AccessRequest struct {
 	Provider  string     `json:"provider"`
 	Subject   string     `json:"subject"`
 	Login     string     `json:"login"`
+	Email     string     `json:"email"`
 	Note      string     `json:"note"`
 	Status    string     `json:"status"`
 	CreatedAt time.Time  `json:"created_at"`
@@ -160,6 +163,7 @@ func (r *Relay) adminAccessRequests(w http.ResponseWriter, req *http.Request) {
 			Subject  string `json:"subject"`
 			Login    string `json:"login"`
 			Note     string `json:"note"`
+			Email    string `json:"email"`
 		}
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -172,8 +176,13 @@ func (r *Relay) adminAccessRequests(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "provider, subject and login required", http.StatusBadRequest)
 			return
 		}
+		email, err := accessEmail(body.Email)
+		if err != nil {
+			writeErrorToken(w, http.StatusBadRequest, "email-invalid")
+			return
+		}
 		out, err := r.admin.CreateAccessRequest(
-			body.Provider, body.Subject, body.Login, normalizeAccessNote(body.Note))
+			body.Provider, body.Subject, body.Login, normalizeAccessNote(body.Note), email)
 		if err != nil {
 			accessError(w, err)
 			return
@@ -282,7 +291,7 @@ func (r *Relay) emitAccessRequested(request AccessRequest) {
 
 // --- PGStore ---
 
-const accessRequestColumns = `id, provider, subject, login, note, status,
+const accessRequestColumns = `id, provider, subject, login, note, email, status,
 	created_at, decided_at, COALESCE(decided_by, '')`
 
 type rowScanner interface {
@@ -292,7 +301,7 @@ type rowScanner interface {
 func scanAccessRequest(row rowScanner) (AccessRequest, error) {
 	var out AccessRequest
 	var decidedAt sql.NullTime
-	err := row.Scan(&out.ID, &out.Provider, &out.Subject, &out.Login, &out.Note,
+	err := row.Scan(&out.ID, &out.Provider, &out.Subject, &out.Login, &out.Note, &out.Email,
 		&out.Status, &out.CreatedAt, &decidedAt, &out.DecidedBy)
 	if decidedAt.Valid {
 		at := decidedAt.Time
@@ -305,7 +314,7 @@ func scanAccessRequest(row rowScanner) (AccessRequest, error) {
 // already has one open, was approved, or was declined too recently. The whole
 // decision happens inside one transaction with the row locked, so two clicks
 // on submit cannot both win.
-func (p *PGStore) CreateAccessRequest(provider, subject, login, note string) (AccessRequest, error) {
+func (p *PGStore) CreateAccessRequest(provider, subject, login, note, email string) (AccessRequest, error) {
 	tx, err := p.db.Begin()
 	if err != nil {
 		return AccessRequest{}, err
@@ -320,9 +329,9 @@ func (p *PGStore) CreateAccessRequest(provider, subject, login, note string) (Ac
 		return AccessRequest{}, err
 	}
 	out, err := scanAccessRequest(tx.QueryRow(
-		`INSERT INTO access_requests (provider, subject, login, note)
-		 VALUES ($1, $2, $3, $4)
-		 RETURNING `+accessRequestColumns, provider, subject, login, note))
+		`INSERT INTO access_requests (provider, subject, login, note, email)
+		 VALUES ($1, $2, $3, $4, $5)
+		 RETURNING `+accessRequestColumns, provider, subject, login, note, email))
 	if err != nil {
 		return AccessRequest{}, err
 	}
@@ -442,4 +451,29 @@ func (p *PGStore) ListAdminNamespaces() ([]string, error) {
 		out = append(out, ns)
 	}
 	return out, rows.Err()
+}
+
+func accessEmail(input string) (string, error) {
+	// Reject controls before trimming so CR/LF cannot disappear into whitespace.
+	for _, c := range input {
+		if unicode.IsControl(c) {
+			return "", errors.New("email-invalid")
+		}
+	}
+	email := strings.TrimSpace(input)
+	if email == "" {
+		return "", nil
+	}
+	if len(email) > 254 {
+		return "", errors.New("email-invalid")
+	}
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr.Address != email || addr.Name != "" {
+		return "", errors.New("email-invalid")
+	}
+	domain := email[strings.LastIndex(email, "@")+1:]
+	if !strings.Contains(domain, ".") || strings.EqualFold(domain, "users.noreply.github.com") {
+		return "", errors.New("email-invalid")
+	}
+	return email, nil
 }

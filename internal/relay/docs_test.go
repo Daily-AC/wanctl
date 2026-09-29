@@ -152,7 +152,7 @@ func (a *roleAdmin) RoleForNamespace(ns string) (string, error) {
 type noopAdmin struct{}
 
 func (n *noopAdmin) ResolveUser(string) (string, error) { return "", nil }
-func (n *noopAdmin) ResolveIdentity(string, string, string, string, string, string) (string, string, error) {
+func (n *noopAdmin) ResolveIdentity(string, string, string, string, string, string, string) (string, string, error) {
 	return "", "", nil
 }
 func (n *noopAdmin) CreateInvite(string) (Invite, string, error)    { return Invite{}, "", nil }
@@ -172,7 +172,7 @@ func (n *noopAdmin) UpsertLarkApproval(cfg DeviceLarkApproval) (DeviceLarkApprov
 func (n *noopAdmin) ListUsers() ([]string, error)           { return nil, nil }
 func (n *noopAdmin) ListAdminNamespaces() ([]string, error) { return nil, nil }
 func (n *noopAdmin) LookupUser(string) (bool, error)        { return false, nil }
-func (n *noopAdmin) CreateAccessRequest(string, string, string, string) (AccessRequest, error) {
+func (n *noopAdmin) CreateAccessRequest(string, string, string, string, string) (AccessRequest, error) {
 	return AccessRequest{}, nil
 }
 func (n *noopAdmin) LatestAccessRequest(string, string) (AccessRequest, bool, error) {

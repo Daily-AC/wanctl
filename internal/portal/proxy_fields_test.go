@@ -17,7 +17,7 @@ type tokenIssueStore struct {
 	issued []string
 }
 
-func (s *tokenIssueStore) ResolveIdentity(provider, subject, login, name, invite, reserved string) (string, string, error) {
+func (s *tokenIssueStore) ResolveIdentity(provider, subject, login, name, invite, reserved, email string) (string, string, error) {
 	return "attacker", "user", nil
 }
 
@@ -83,5 +83,32 @@ func TestProxyPostForwardsTheFieldsThePortalSends(t *testing.T) {
 	}
 	if len(store.issued) != 1 || store.issued[0] != "attacker" {
 		t.Fatalf("issued = %v, want [attacker]", store.issued)
+	}
+}
+
+func TestAccessEmailCannotOverrideSessionFields(t *testing.T) {
+	for _, trustedEmail := range []string{"", "github@example.com"} {
+		var calls []string
+		s := accessPortal(t, resolvePendingInvite, &calls)
+		s.mail = newFakeMailSender()
+		cookie, err := s.encodeSession(&principal{Provider: "github", Subject: "100", Login: "attacker", Email: trustedEmail, Expires: time.Now().Add(time.Hour).Unix()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest("POST", "https://portal.test/auth/request-access", strings.NewReader(`{"email":" typed@example.com ","provider":"header","Provider":"header","subject":"1","ſubject":"2","login":"victim","Login":"admin","namespace":"portal","nameſpace":"portal"}`))
+		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: cookie})
+		rr := httptest.NewRecorder()
+		s.handleAccessRequest(rr, req)
+		if rr.Code != 200 {
+			t.Fatalf("response = %d %s", rr.Code, rr.Body.String())
+		}
+		wantEmail := trustedEmail
+		if wantEmail == "" {
+			wantEmail = "typed@example.com"
+		}
+		want := `POST /admin/access-requests {"email":"` + wantEmail + `","login":"attacker","note":"","provider":"github","subject":"100"}`
+		if len(calls) != 1 || calls[0] != want {
+			t.Fatalf("calls = %v", calls)
+		}
 	}
 }

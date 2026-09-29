@@ -41,6 +41,7 @@ type principal struct {
 	Subject  string `json:"sub"`   // header value, or the GitHub numeric id
 	Login    string `json:"login"` // display identity; namespace is derived from it
 	Name     string `json:"name"`
+	Email    string `json:"email,omitempty"`
 	Expires  int64  `json:"exp"`
 	Issued   int64  `json:"iat"`
 }
@@ -179,8 +180,9 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, "login.html", map[string]any{
-		"Host":  s.publicHost(r),
-		"Start": "/auth/github?next=" + url.QueryEscape(next),
+		"MailEnabled": s.mailEnabled(),
+		"Host":        s.publicHost(r),
+		"Start":       "/auth/github?next=" + url.QueryEscape(next),
 	})
 }
 
@@ -208,6 +210,9 @@ func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
 	q.Set("client_id", s.ghClientID)
 	q.Set("redirect_uri", s.requestOrigin(r)+"/auth/callback")
 	q.Set("state", nonce)
+	if s.mailEnabled() {
+		q.Set("scope", "user:email")
+	}
 	http.Redirect(w, r, s.ghAuthBase+"/login/oauth/authorize?"+q.Encode(), http.StatusFound)
 }
 
@@ -263,7 +268,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	p := &principal{
-		Provider: providerGitHub, Subject: gh.subject, Login: gh.login, Name: gh.name,
+		Provider: providerGitHub, Subject: gh.subject, Login: gh.login, Name: gh.name, Email: gh.email,
 		Issued: now.Unix(), Expires: now.Add(sessionTTL).Unix(),
 	}
 	sess, err := s.encodeSession(p)
@@ -287,7 +292,7 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 type githubUser struct {
-	subject, login, name string
+	subject, login, name, email string
 }
 
 func (s *Server) githubUserForCode(r *http.Request, code string) (*githubUser, error) {
@@ -340,7 +345,11 @@ func (s *Server) githubUserForCode(r *http.Request, code string) (*githubUser, e
 	if u.ID.String() == "" || u.Login == "" {
 		return nil, errors.New("GitHub user response missing id/login")
 	}
-	return &githubUser{subject: u.ID.String(), login: u.Login, name: u.Name}, nil
+	user := &githubUser{subject: u.ID.String(), login: u.Login, name: u.Name}
+	if s.mailEnabled() {
+		user.email = s.githubEmail(r, tok.AccessToken)
+	}
+	return user, nil
 }
 
 // requestOrigin is the externally visible origin for redirect URIs. An
@@ -384,6 +393,9 @@ func (s *Server) resolveNamespace(p *principal, inviteCode string) (ns, role str
 		body = map[string]string{"identity": p.Subject}
 	} else {
 		m := map[string]string{"provider": p.Provider, "subject": p.Subject, "login": p.Login, "name": p.Name}
+		if p.Email != "" {
+			m["email"] = p.Email
+		}
 		if inviteCode != "" {
 			m["invite_code"] = inviteCode
 		}
@@ -497,7 +509,8 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, "pending.html", map[string]any{
-		"Next": next, "Login": p.Login, "Req": state, "RetryDays": retryDays, "NoteMax": accessNoteMax,
+		"ShowEmail": s.mailEnabled() && p.Email == "",
+		"Next":      next, "Login": p.Login, "Req": state, "RetryDays": retryDays, "NoteMax": accessNoteMax,
 	})
 }
 
@@ -532,4 +545,33 @@ func (s *Server) handleAuthRedeem(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, detail, http.StatusBadGateway)
 	}
+}
+
+// An unavailable email endpoint must not prevent an otherwise valid login.
+func (s *Server) githubEmail(r *http.Request, token string) string {
+	req, _ := http.NewRequestWithContext(r.Context(), "GET", s.ghAPIBase+"/user/emails", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := s.githubHTTP().Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var emails []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&emails) != nil {
+		return ""
+	}
+	for _, e := range emails {
+		if e.Primary && e.Verified && !strings.HasSuffix(strings.ToLower(e.Email), "@users.noreply.github.com") {
+			return e.Email
+		}
+	}
+	return ""
 }

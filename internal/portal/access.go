@@ -1,8 +1,11 @@
 package portal
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -54,7 +57,7 @@ func (s *Server) accessStatusFor(p *principal) (accessStatus, error) {
 }
 
 // handleAccessRequest files an application on behalf of the signed-in
-// applicant. Only the note comes from the client.
+// applicant. Only the note and fallback email come from the client.
 func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 	if !s.oauthEnabled() {
 		http.NotFound(w, r)
@@ -72,16 +75,24 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Note string `json:"note"`
+		Note  string `json:"note"`
+		Email string `json:"email"`
 	}
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&in)
+	}
+	// A typed address is only a fallback for a GitHub account without a
+	// verified one, and only worth keeping when this portal can send mail.
+	email := p.Email
+	if email == "" && s.mailEnabled() {
+		email = strings.TrimSpace(in.Email)
 	}
 	resp, err := s.adminReq("POST", "/admin/access-requests", nil, map[string]string{
 		"provider": p.Provider,
 		"subject":  p.Subject,
 		"login":    p.Login,
 		"note":     strings.TrimSpace(in.Note),
+		"email":    email,
 	})
 	if err != nil {
 		http.Error(w, "relay unreachable", http.StatusBadGateway)
@@ -127,5 +138,27 @@ func (s *Server) handleAccessDecide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK && strings.EqualFold(strings.TrimSpace(in.Decision), "approved") && s.mailEnabled() {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(w, "relay response incomplete", http.StatusBadGateway)
+			return
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		var request struct {
+			ID     int    `json:"id"`
+			Login  string `json:"login"`
+			Email  string `json:"email"`
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(body, &request) == nil && request.Status == "approved" && request.Email != "" {
+			origin := s.requestOrigin(r)
+			go func() {
+				if err := s.mail.Send(request.Email, approvalMailSubject, approvalMailBody(request.Login, origin)); err != nil {
+					log.Printf("portal: approval mail request %d: %s", request.ID, mailError(err, request.Email))
+				}
+			}()
+		}
+	}
 	copyResp(w, resp)
 }
