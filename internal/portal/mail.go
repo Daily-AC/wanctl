@@ -7,20 +7,30 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"html/template"
 	"mime"
+	"mime/multipart"
 	"mime/quotedprintable"
 	"net"
 	"net/mail"
 	"net/smtp"
 	"net/textproto"
+	"net/url"
 	"strings"
 	"time"
 )
 
-const approvalMailSubject = "wanctl：你的访问申请已通过 / Your wanctl access request was approved"
+const approvalMailSubject = "wanctl 访问申请已通过 · Access approved"
+
+// mailContent is one message in both forms a mail client may show: the HTML
+// where it renders HTML, the text where it does not. Notification previews
+// often read the text part even in clients that render the HTML.
+type mailContent struct {
+	subject, text, html string
+}
 
 type mailSender interface {
-	Send(to, subject, body string) error
+	Send(to string, m mailContent) error
 }
 
 type smtpSender struct {
@@ -29,22 +39,59 @@ type smtpSender struct {
 
 func (s *Server) mailEnabled() bool { return s.mail != nil }
 
-func approvalMailBody(login, origin string) string {
-	return fmt.Sprintf("你好，%s：\n\n你在 %s 的访问申请已通过。\n请登录：%s/\n\n欢迎使用 wanctl。\n\nHello %s,\n\nYour access request on %s was approved.\nSign in: %s/\n\nWelcome to wanctl.\n", login, origin, origin, login, origin, origin)
+// The approval mail is a file under web/ for the reasons the auth pages are
+// (see pages.go): tools/portalpreview renders the exact bytes that are sent,
+// and html/template escapes the GitHub login by context. handleAsset never
+// serves .html, so the template is not reachable as a URL.
+var approvalMailPage = template.Must(template.ParseFS(assets, "web/mail-approved.html"))
+
+// approvalMail tells an applicant they are in. It says three things: they
+// were approved, where to sign in (the one link, once), and why this mail
+// reached them. Both languages, because the address is all we know of them.
+func approvalMail(login, origin string) (mailContent, error) {
+	host := origin
+	if u, err := url.Parse(origin); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	link := origin + "/"
+	var page bytes.Buffer
+	if err := approvalMailPage.Execute(&page, struct{ Login, Host, Link string }{login, host, link}); err != nil {
+		return mailContent{}, err
+	}
+	text := fmt.Sprintf("访问申请已通过 · Your access request was approved\n\n"+
+		"现在可以登录 %[2]s，接入你的第一台设备。\n"+
+		"You can now sign in to %[2]s and connect your first device.\n\n"+
+		"登录 · Sign in: %[3]s\n\n"+
+		"你收到这封邮件，是因为 GitHub 账号 %[1]s 申请了访问。\n"+
+		"You received this because the GitHub account %[1]s asked for access.\n", login, host, link)
+	return mailContent{subject: approvalMailSubject, text: text, html: page.String()}, nil
 }
 
-func mailMessage(from, to *mail.Address, subject, body string) []byte {
+// mailMessage is multipart/alternative, text first: a client shows the last
+// part it can render.
+func mailMessage(from, to *mail.Address, m mailContent) []byte {
+	var body bytes.Buffer
+	parts := multipart.NewWriter(&body)
+	for _, part := range []struct{ contentType, content string }{
+		{"text/plain; charset=UTF-8", m.text},
+		{"text/html; charset=UTF-8", m.html},
+	} {
+		w, _ := parts.CreatePart(textproto.MIMEHeader{"Content-Type": {part.contentType}, "Content-Transfer-Encoding": {"quoted-printable"}})
+		enc := quotedprintable.NewWriter(w)
+		_, _ = enc.Write([]byte(part.content))
+		_ = enc.Close()
+	}
+	_ = parts.Close()
 	var out bytes.Buffer
-	fmt.Fprintf(&out, "From: %s\r\nTo: %s\r\nSubject: %s\r\nDate: %s\r\nMessage-ID: <%s@%s>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n",
-		from.String(), to.String(), mime.QEncoding.Encode("UTF-8", subject), time.Now().Format(time.RFC1123Z),
-		rand.Text(), from.Address[strings.LastIndex(from.Address, "@")+1:])
-	enc := quotedprintable.NewWriter(&out)
-	_, _ = enc.Write([]byte(body))
-	_ = enc.Close()
+	fmt.Fprintf(&out, "From: %s\r\nTo: %s\r\nSubject: %s\r\nDate: %s\r\nMessage-ID: <%s@%s>\r\nMIME-Version: 1.0\r\nContent-Type: %s\r\n\r\n",
+		from.String(), to.String(), mime.QEncoding.Encode("UTF-8", m.subject), time.Now().Format(time.RFC1123Z),
+		rand.Text(), from.Address[strings.LastIndex(from.Address, "@")+1:],
+		mime.FormatMediaType("multipart/alternative", map[string]string{"boundary": parts.Boundary()}))
+	out.Write(body.Bytes())
 	return out.Bytes()
 }
 
-func (s *smtpSender) Send(to, subject, body string) error {
+func (s *smtpSender) Send(to string, m mailContent) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	from, err := mail.ParseAddress(s.from)
@@ -68,10 +115,10 @@ func (s *smtpSender) Send(to, subject, body string) error {
 	if err := conn.SetDeadline(deadline); err != nil {
 		return err
 	}
-	return s.sendConn(conn, host, port, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}, from, recipient, subject, body)
+	return s.sendConn(conn, host, port, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}, from, recipient, m)
 }
 
-func (s *smtpSender) sendConn(conn net.Conn, host, port string, config *tls.Config, from, to *mail.Address, subject, body string) error {
+func (s *smtpSender) sendConn(conn net.Conn, host, port string, config *tls.Config, from, to *mail.Address, m mailContent) error {
 	if port == "465" {
 		conn = tls.Client(conn, config)
 	}
@@ -101,7 +148,7 @@ func (s *smtpSender) sendConn(conn net.Conn, host, port string, config *tls.Conf
 	if err != nil {
 		return err
 	}
-	if _, err := writer.Write(mailMessage(from, to, subject, body)); err != nil {
+	if _, err := writer.Write(mailMessage(from, to, m)); err != nil {
 		return err
 	}
 	if err := writer.Close(); err != nil {

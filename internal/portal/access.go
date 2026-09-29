@@ -154,7 +154,11 @@ func (s *Server) handleAccessDecide(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal(body, &request) == nil && request.Status == "approved" && request.Email != "" {
 			origin := s.requestOrigin(r)
 			go func() {
-				if err := s.mail.Send(request.Email, approvalMailSubject, approvalMailBody(request.Login, origin)); err != nil {
+				message, err := approvalMail(request.Login, origin)
+				if err == nil {
+					err = s.mail.Send(request.Email, message)
+				}
+				if err != nil {
 					log.Printf("portal: approval mail request %d: %s", request.ID, mailError(err, request.Email))
 				}
 			}()

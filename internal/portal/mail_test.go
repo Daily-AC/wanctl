@@ -13,6 +13,7 @@ import (
 	"io"
 	"math/big"
 	"mime"
+	"mime/multipart"
 	"mime/quotedprintable"
 	"net"
 	"net/mail"
@@ -25,8 +26,11 @@ import (
 func TestMailMessage(t *testing.T) {
 	from := &mail.Address{Name: "wanctl", Address: "wanctl@example.com"}
 	to := &mail.Address{Address: "recipient@example.com"}
-	body := approvalMailBody("octocat", "https://portal.example")
-	raw := mailMessage(from, to, approvalMailSubject, body)
+	content, err := approvalMail("octocat", "https://portal.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := mailMessage(from, to, content)
 	message, err := mail.ReadMessage(strings.NewReader(string(raw)))
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +39,7 @@ func TestMailMessage(t *testing.T) {
 	if err != nil || subject != approvalMailSubject {
 		t.Fatalf("subject = %q, %v", subject, err)
 	}
-	for key, want := range map[string]string{"From": from.String(), "To": to.String(), "MIME-Version": "1.0", "Content-Type": "text/plain; charset=UTF-8", "Content-Transfer-Encoding": "quoted-printable"} {
+	for key, want := range map[string]string{"From": from.String(), "To": to.String(), "MIME-Version": "1.0"} {
 		if message.Header.Get(key) != want {
 			t.Errorf("%s = %q", key, message.Header.Get(key))
 		}
@@ -46,14 +50,78 @@ func TestMailMessage(t *testing.T) {
 	if id := message.Header.Get("Message-ID"); !strings.HasPrefix(id, "<") || !strings.HasSuffix(id, "@example.com>") {
 		t.Fatalf("message id = %q", id)
 	}
-	decoded, err := io.ReadAll(quotedprintable.NewReader(message.Body))
-	if err != nil || strings.ReplaceAll(string(decoded), "\r\n", "\n") != body {
-		t.Fatalf("body = %q, %v", decoded, err)
+	mediaType, params, err := mime.ParseMediaType(message.Header.Get("Content-Type"))
+	if err != nil || mediaType != "multipart/alternative" || params["boundary"] == "" {
+		t.Fatalf("content type = %q, %v", message.Header.Get("Content-Type"), err)
+	}
+	// Text first: a client shows the last part it can render. NextRawPart,
+	// because NextPart would decode quoted-printable and hide the header.
+	parts := multipart.NewReader(message.Body, params["boundary"])
+	for _, want := range []struct{ contentType, body string }{
+		{"text/plain; charset=UTF-8", content.text},
+		{"text/html; charset=UTF-8", content.html},
+	} {
+		part, err := parts.NextRawPart()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := part.Header.Get("Content-Type"); got != want.contentType {
+			t.Errorf("part type = %q, want %q", got, want.contentType)
+		}
+		if got := part.Header.Get("Content-Transfer-Encoding"); got != "quoted-printable" {
+			t.Errorf("%s encoding = %q", want.contentType, got)
+		}
+		decoded, err := io.ReadAll(quotedprintable.NewReader(part))
+		if err != nil || strings.ReplaceAll(string(decoded), "\r\n", "\n") != want.body {
+			t.Fatalf("%s body = %q, %v", want.contentType, decoded, err)
+		}
+	}
+	if _, err := parts.NextRawPart(); err != io.EOF {
+		t.Fatalf("after two parts: %v", err)
 	}
 	for _, line := range strings.Split(string(raw), "\r\n") {
 		if len(line) > 998 {
 			t.Fatalf("oversized line: %d", len(line))
 		}
+	}
+}
+
+// The applicant needs three things from this mail: that they are in, where to
+// sign in, and why it reached them. The link is there once, the internal
+// notes in the template are not sent, and the GitHub login — the one value
+// from outside — cannot become markup.
+func TestApprovalMailContent(t *testing.T) {
+	m, err := approvalMail("octocat", "https://portal.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.subject != approvalMailSubject {
+		t.Errorf("subject = %q", m.subject)
+	}
+	if n := strings.Count(m.text, "https://"); n != 1 || !strings.Contains(m.text, "https://portal.example/") {
+		t.Errorf("text has %d links:\n%s", n, m.text)
+	}
+	if n := strings.Count(m.html, "<a "); n != 1 || !strings.Contains(m.html, `href="https://portal.example/"`) {
+		t.Errorf("html has %d links, want the one button to https://portal.example/", n)
+	}
+	for _, want := range []string{"octocat", "portal.example"} {
+		if !strings.Contains(m.text, want) || !strings.Contains(m.html, want) {
+			t.Errorf("%q missing from a part", want)
+		}
+	}
+	for _, unwanted := range []string{"<!--", "<script", "<style", "<img", "<svg", "<link"} {
+		if strings.Contains(m.html, unwanted) {
+			t.Errorf("html carries %s", unwanted)
+		}
+	}
+
+	hostile := "<script>alert(1)</script>"
+	m, err = approvalMail(hostile, "https://portal.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(m.html, hostile) || !strings.Contains(m.html, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Errorf("login reached the html unescaped")
 	}
 }
 
@@ -160,7 +228,7 @@ func TestSMTPEncryptedDelivery(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					if !strings.Contains(string(data), "Content-Transfer-Encoding: quoted-printable") {
+					if !strings.Contains(string(data), "multipart/alternative") || !strings.Contains(string(data), "Content-Transfer-Encoding: quoted-printable") {
 						return fmt.Errorf("missing MIME message")
 					}
 					if err := reply("250 queued"); err != nil {
@@ -178,7 +246,7 @@ func TestSMTPEncryptedDelivery(t *testing.T) {
 				done <- run()
 			}()
 			sender := &smtpSender{user: "user", password: "password"}
-			err := sender.sendConn(client, "smtp.example", port, clientTLS, &mail.Address{Address: "wanctl@example.com"}, &mail.Address{Address: "recipient@example.com"}, approvalMailSubject, "你好\nHello\n")
+			err := sender.sendConn(client, "smtp.example", port, clientTLS, &mail.Address{Address: "wanctl@example.com"}, &mail.Address{Address: "recipient@example.com"}, mailContent{subject: approvalMailSubject, text: "你好\nHello\n", html: "<p>你好</p>\n"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -206,7 +274,7 @@ func TestSMTPRefusesPlaintext(t *testing.T) {
 		done <- string(rest)
 	}()
 	sender := &smtpSender{user: "user", password: "password"}
-	err := sender.sendConn(client, "smtp.example", "587", &tls.Config{ServerName: "smtp.example", MinVersion: tls.VersionTLS12}, &mail.Address{Address: "wanctl@example.com"}, &mail.Address{Address: "recipient@example.com"}, "subject", "body")
+	err := sender.sendConn(client, "smtp.example", "587", &tls.Config{ServerName: "smtp.example", MinVersion: tls.VersionTLS12}, &mail.Address{Address: "wanctl@example.com"}, &mail.Address{Address: "recipient@example.com"}, mailContent{subject: "subject", text: "body", html: "<p>body</p>"})
 	if err == nil || !strings.Contains(err.Error(), "STARTTLS") {
 		t.Fatalf("error = %v", err)
 	}
