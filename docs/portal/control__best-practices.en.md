@@ -1,4 +1,4 @@
-# Getting the best out of wanctl
+# Making wanctl fast: proxies, large files, and checking the path
 
 Every wanctl command goes through the relay, and it makes several round trips
 there: it opens a connection, runs an end-to-end TLS handshake with the device,
@@ -89,29 +89,6 @@ starts over from the beginning. So:
   machines can reach each other over SSH, use `scp` or `rsync` (`rsync` can
   resume); if they cannot, go through cloud storage or an object store.
 
-## Install controlled machines as a service, not just wanctl start
-
-`wanctl start` puts the agent in the background. It survives closing the
-terminal, but not logging out or rebooting; `wanctl login` only saves a
-credential and starts no agent at all. A machine that has only ever run those
-two goes offline at the first reboot. For a machine you want to control long
-term, sign in once and then install the service (stop the agent `wanctl start`
-launched first, so the two do not fight over one config directory):
-
-```
-wanctl stop
-wanctl service install
-wanctl service status
-```
-
-`service install` sets up a launchd agent on macOS, a systemd user service on
-Linux and a scheduled task on Windows, and restarts the agent if it exits
-unexpectedly. On macOS and Windows it starts once a user logs in, so an
-unattended machine needs automatic login. On Linux it also tries
-`loginctl enable-linger`; if that works the agent comes up at boot without a
-login, and if not it tells you to run it again with sudo. To retire the service
-later, run `wanctl service uninstall`.
-
 ## When it feels slow, check yourself
 
 Go through these in order; each step rules out one cause.
@@ -121,13 +98,8 @@ Go through these in order; each step rules out one cause.
 agent version. HTTP/3 arrived in v0.13.0. Agents update themselves by default;
 on the controller, run `wanctl update`.
 
-**Then check for a detour.** `env | grep -i proxy` shows whether your terminal
-sets a proxy variable. With TUN on, find the relay's domain in your proxy
-client's connection list and check that it is DIRECT. If it is not, go back to
-the first two sections.
-
-**Then measure the path itself.** Once the first two steps are sorted, run this
-a few times. It prints the time to first byte from the relay, in seconds:
+**Then measure the path itself.** Once the first two sections have you going
+direct, run this a few times. It prints the time to first byte from the relay, in seconds:
 
 ```
 curl --noproxy '*' -so /dev/null -w '%{time_starttransfer}\n' https://relay.example.com/healthz

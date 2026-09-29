@@ -51,27 +51,13 @@ wanctl: upload size 1073741825 outside supported range 0..1073741824
 - 目录或一堆小文件，先打成一个压缩包再传。`push` 和 `pull` 一次只传一个文件，每个文件都要和设备重新建一次连接。
 - 超过 1 GiB 的，或者很大还要反复传的，两台机器能直接 SSH 就用 `scp` 或 `rsync`（`rsync` 能续传）；连不上就走网盘、对象存储这类中转。
 
-## 被控的机器装成服务，别只跑 wanctl start
-
-`wanctl start` 把 agent 放到后台，关掉终端它还在，但注销或重启之后就没了；`wanctl login` 只保存凭证，不启动 agent。只跑过这两条的机器，重启一次就离线。要长期被控的机器，登录过一次之后改成系统服务（先停掉 `wanctl start` 起的那个，免得两个抢同一个配置目录）：
-
-```
-wanctl stop
-wanctl service install
-wanctl service status
-```
-
-`service install` 在 macOS 上装 launchd 代理，在 Linux 上装 systemd 用户服务，在 Windows 上装计划任务，agent 意外退出会被自动拉起。macOS 和 Windows 上它在用户登录系统之后才启动，没人值守的机器要开自动登录；Linux 上它会顺手尝试 `loginctl enable-linger`，成功了开机不用登录也能起来，失败时会提示你用 sudo 再跑一次。以后要停用它，跑 `wanctl service uninstall`。
-
 ## 慢的时候怎么自查
 
 按下面的顺序查，每一步排除一种原因。
 
 **先看版本。** 本机跑 `wanctl version`，对端跑 `wanctl status --target DEVICE`，它会报对端的 agent 版本。HTTP/3 从 v0.13.0 起才有。agent 默认会自己更新，控制端用 `wanctl update` 升级。
 
-**再看流量有没有绕路。** `env | grep -i proxy` 看终端里有没有代理变量；开着 TUN 的话，到代理软件的连接列表里找 relay 的域名，看它是不是 DIRECT。不是的话，回到前两节。
-
-**然后量这段路本身。** 前两步都处理好之后，连跑几次下面这条，它打印的是到 relay 的首字节时间（秒）：
+**再量这段路本身。** 按前两节确认已经直连之后，连跑几次下面这条，它打印的是到 relay 的首字节时间（秒）：
 
 ```
 curl --noproxy '*' -so /dev/null -w '%{time_starttransfer}\n' https://relay.example.com/healthz
