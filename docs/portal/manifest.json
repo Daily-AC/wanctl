@@ -49,6 +49,13 @@
       "file": "control__control-device.md"
     },
     {
+      "slug": "best-practices",
+      "title": "让 wanctl 快起来：代理、大文件和自查",
+      "group": "control",
+      "position": 20,
+      "file": "control__best-practices.md"
+    },
+    {
       "slug": "ai-skill",
       "title": "让你的 AI 来控制设备",
       "group": "ai",

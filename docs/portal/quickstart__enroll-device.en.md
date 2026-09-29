@@ -34,8 +34,27 @@ only then writes anything to disk (with the system's own `openssl` — macOS's
 LibreSSL works too). The release source and your relay are independent of each
 other, so a relay having a bad day does not stop an install.
 
-To start at boot, run `wanctl service install` — it writes the relay address and
-transport you configured into the service unit, so a reboot does not depend on
-environment variables (`--relay` / `--transport` set them explicitly).
+## Install it as a service to survive a reboot
+
+An agent started by `wanctl start` survives closing the terminal, but not
+logging out or rebooting. For a machine you want to control long term, sign in
+once and then install the service (stop the agent `wanctl start` launched
+first, so the two do not fight over one config directory):
+
+```
+wanctl stop
+wanctl service install
+wanctl service status
+```
+
+`service install` sets up a launchd agent on macOS, a systemd user service on
+Linux and a scheduled task on Windows, and restarts the agent if it exits
+unexpectedly. It writes the relay address and transport you configured into the
+service unit, so a reboot does not depend on environment variables
+(`--relay` / `--transport` set them explicitly). On macOS and Windows it starts
+once a user logs in, so an unattended machine needs automatic login. On Linux it
+also tries `loginctl enable-linger`; if that works the agent comes up at boot
+without a login, and if not it tells you to run it again with sudo. To retire
+the service later, run `wanctl service uninstall`.
 
 Windows machines: see the [next page](#docs/windows-install).
