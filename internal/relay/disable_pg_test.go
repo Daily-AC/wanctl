@@ -138,8 +138,13 @@ func TestAdminDisableEndsTheAccountsSessions(t *testing.T) {
 		r.Handler().ServeHTTP(rec, req.WithContext(ctx))
 		return rec.Code
 	}
-	if code := pollAs(bob); code != http.StatusUnauthorized {
-		t.Fatalf("bob's device polled back in with %d", code)
+	// Refused, but not with the 401 an agent gives up on: it keeps polling and
+	// is back on its own once bob is enabled.
+	if code := pollAs(bob); code != http.StatusForbidden {
+		t.Fatalf("bob's device polled back in, or was told to give up, with %d", code)
+	}
+	if code := pollAs("not-a-token"); code != http.StatusUnauthorized {
+		t.Fatalf("an unknown token answered %d, want 401", code)
 	}
 	if code, out := admin(http.MethodGet, nil); code != http.StatusOK || out["disabled"] != true {
 		t.Fatalf("status answered %d %v", code, out)

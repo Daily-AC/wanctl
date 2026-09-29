@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"wanctl/internal/admission"
 )
 
 // Disabling an account (security review S-05) is one flag on the user row,
@@ -35,6 +37,31 @@ type AccountDisabler interface {
 // (the portal's own, a static token) is never disabled.
 func namespaceEnabled(col string) string {
 	return `NOT EXISTS (SELECT 1 FROM users du WHERE du.namespace = ` + col + ` AND du.disabled_at IS NOT NULL)`
+}
+
+// TokenAccountDisabled reports that token is a live token of a disabled
+// account, which Resolve refuses like any other.
+func (p *PGStore) TokenAccountDisabled(token string) bool {
+	var disabled bool
+	err := p.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM tokens t JOIN users u ON u.namespace = t.namespace
+		WHERE t.hash = $1 AND t.revoked_at IS NULL AND t.kind <> 'delegated'
+		  AND (t.expires_at IS NULL OR t.expires_at > now()) AND u.disabled_at IS NOT NULL)`, HashToken(token)).Scan(&disabled)
+	return err == nil && disabled
+}
+
+// refuseAgent answers an agent whose token did not resolve. A disabled
+// account's device gets 403 account-disabled rather than 401: an agent stops
+// for good on 401, while on any other refusal it keeps polling every couple of
+// seconds, so it comes back by itself once the account is enabled again, with
+// no one having to restart it on the device.
+func (r *Relay) refuseAgent(w http.ResponseWriter, req *http.Request) {
+	if store, ok := r.ts.(interface{ TokenAccountDisabled(string) bool }); ok {
+		if token, ok := admission.Token(req); ok && store.TokenAccountDisabled(token) {
+			http.Error(w, accountDisabledBody, http.StatusForbidden)
+			return
+		}
+	}
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
 }
 
 func (p *PGStore) AccountDisabled(namespace string) (*time.Time, bool, error) {

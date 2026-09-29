@@ -843,7 +843,7 @@ const (
 func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	ns, ok := r.auth(w, req)
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		r.refuseAgent(w, req)
 		return
 	}
 	device := req.URL.Query().Get("device")

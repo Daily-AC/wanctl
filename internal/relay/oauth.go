@@ -806,6 +806,14 @@ func (r *Relay) oauthTokenFromRefresh(w http.ResponseWriter, req *http.Request, 
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "this authorization is no longer valid; authorize again")
 		return
 	}
+	// A grant that no longer resolves (logged out, or its account disabled)
+	// is refused before rotating. Rotation would spend the refresh token, and
+	// an account that is enabled again should find its connectors where they
+	// were rather than asking for a new authorization.
+	if !r.ResolveOAuthToken(claim.Namespace, claim.Token) {
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "this authorization is no longer valid; authorize again")
+		return
+	}
 	// Rotate: the presented token dies here whether or not the client ever
 	// receives the replacement, so a stolen refresh token is usable at most
 	// once and the theft shows up as the real client being logged out.
