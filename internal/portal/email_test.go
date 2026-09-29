@@ -70,6 +70,13 @@ func (d *doorRelay) serve(req *http.Request, rr *httptest.ResponseRecorder) bool
 		rr.WriteHeader(http.StatusNoContent)
 	case "/admin/contact-email/sent":
 		rr.WriteHeader(http.StatusNoContent)
+	case "/admin/contact-email/cancel":
+		if body["provider"] != "github" || body["subject"] != "8437" {
+			rr.WriteHeader(http.StatusBadRequest)
+			return true
+		}
+		d.pending = ""
+		rr.WriteHeader(http.StatusNoContent)
 	case "/admin/contact-email/peek":
 		if d.peekState == "" {
 			rr.WriteHeader(http.StatusNotFound)
@@ -375,6 +382,20 @@ func TestDoorSendsTheLink(t *testing.T) {
 	// Signed out, nothing is sent.
 	if rr := post(h, "/auth/email/send", `{"address":"person@example.com"}`); rr.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous send = %d", rr.Code)
+	}
+
+	// Cancelling a change reaches the relay for the session's identity only,
+	// and only with the CSRF pair.
+	d.pending = "person@example.com"
+	req := httptest.NewRequest("POST", "/auth/email/cancel", strings.NewReader(`{"subject":"1"}`))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || d.pending == "" {
+		t.Fatalf("cancel without CSRF = %d", rec.Code)
+	}
+	if rr := post(h, "/auth/email/cancel", `{"subject":"1"}`, cookie); rr.Code != http.StatusNoContent || d.pending != "" {
+		t.Fatalf("cancel = %d %s", rr.Code, rr.Body.String())
 	}
 }
 

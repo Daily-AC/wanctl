@@ -108,8 +108,8 @@
       eNotFriends: 'You are not friends yet.',
       ePending: 'That invite has not been accepted yet.',
       emailNone: 'No address confirmed yet.',
-      emailPending: function (a) { return 'A link is waiting at ' + a + '. It takes effect once opened.'; },
       emailSent: function (a) { return 'Sent. Open the link in the mail to ' + a + '.'; },
+      emailDropped: 'Change cancelled. Your address stays as it was.',
       'email-invalid': 'That address does not look right.',
       'email-unchanged': 'That is already your address.',
       'rate-address': 'A link just went to this address. Try again in a few minutes.',
@@ -234,8 +234,8 @@
       eNotFriends: '你们还不是好友。',
       ePending: '这条邀请还没被接受。',
       emailNone: '还没有确认过的邮箱。',
-      emailPending: function (a) { return '确认信在 ' + a + '，点开链接后生效。'; },
       emailSent: function (a) { return '已发送。去 ' + a + ' 点开信里的链接。'; },
+      emailDropped: '已取消修改，邮箱保持不变。',
       'email-invalid': '邮箱格式不对。',
       'email-unchanged': '这已经是你现在的邮箱了。',
       'rate-address': '刚给这个地址发过一封，过几分钟再试。',
@@ -1335,33 +1335,60 @@
   copier($('#tCopy'), '#tVal');
 
   /* ── 邮箱 ──────────────────────────────────────────────────────────
-     地址归中继管，这里只读和发确认信；确认在信里那个链接上完成。 */
-  /* 有一封确认信在路上时，这一节隔几秒自己再问一次：人多半在手机上点链接，
+     地址归中继管，这里只读、发确认信、撤回没确认的修改；确认在信里那个
+     链接上完成。卡片的样子只由 data-mode 决定：view / edit / pending。
+
+     有一封确认信在路上时，这一节隔几秒自己再问一次：人多半在手机上点链接，
      桌面上开着的这一页不该还要人回来刷新才看到新地址。 */
-  var emailTimer = null;
+  var emailTimer = null, emailPending = '';
+  function emailMode(m) { $('#eCard').dataset.mode = m; }
   function loadEmail() {
     clearTimeout(emailTimer);
     jget('/auth/email/status').then(function (c) {
       $('#eCur').textContent = c.confirmed || t().emailNone;
-      $('#ePending').hidden = !c.pending;
-      $('#ePending').textContent = c.pending ? t().emailPending(c.pending) : '';
-      if (c.pending) {
+      emailPending = c.pending || '';
+      $('#ePendAddr').textContent = emailPending;
+      // 正在改的时候不打断：轮询只更新文字，不把展开的输入框收起来。
+      if ($('#eCard').dataset.mode !== 'edit') emailMode(emailPending ? 'pending' : 'view');
+      if (emailPending) {
         emailTimer = setTimeout(function () {
           if (curSet === 'email' && $('[data-view="settings"]').classList.contains('show')) loadEmail();
         }, 5000);
       }
     }).catch(oops);
   }
-  $('#eSend').onclick = function () {
-    var address = $('#eIn').value.trim();
-    if (!address) { $('#eIn').focus(); return; }
-    $('#eSend').disabled = true;
-    jpost('/auth/email/send', { address: address, next: '/#settings/email' }).then(function (r) {
+  function sendEmail(address, btn) {
+    btn.disabled = true;
+    return jpost('/auth/email/send', { address: address, next: '/#settings/email' }).then(function (r) {
       return r.json();
     }).then(function (b) {
       toast(t().emailSent(b.address || address));
+      $('#eIn').value = '';
+      emailMode('pending');
       loadEmail();
-    }).catch(oops).then(function () { $('#eSend').disabled = false; });
+    }).catch(oops).then(function () { btn.disabled = false; });
+  }
+  $('#eEdit').onclick = function () {
+    emailMode('edit');
+    $('#eIn').focus();
+  };
+  $('#eCancel').onclick = function () {
+    $('#eIn').value = '';
+    emailMode(emailPending ? 'pending' : 'view');
+  };
+  $('#eSend').onclick = function () {
+    var address = $('#eIn').value.trim();
+    if (!address) { $('#eIn').focus(); return; }
+    sendEmail(address, $('#eSend'));
+  };
+  $('#eIn').onkeydown = function (e) { if (e.key === 'Enter') $('#eSend').click(); };
+  $('#eResend').onclick = function () { if (emailPending) sendEmail(emailPending, $('#eResend')); };
+  $('#eDrop').onclick = function () {
+    $('#eDrop').disabled = true;
+    jpost('/auth/email/cancel', {}).then(function () {
+      toast(t().emailDropped);
+      loadEmail();
+    }).catch(oops).then(function () { $('#eDrop').disabled = false; });
   };
 
   /* ── 通知 ────────────────────────────────────────────────────────── */

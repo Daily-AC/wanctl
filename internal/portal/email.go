@@ -229,6 +229,31 @@ func (s *Server) handleEmailSend(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"address": sent.Address, "expires_at": sent.ExpiresAt})
 }
 
+// handleEmailCancel withdraws a pending address change from the settings
+// page: the link in the mail stops working and the current address stays.
+func (s *Server) handleEmailCancel(w http.ResponseWriter, r *http.Request) {
+	if !s.emailGate() {
+		http.NotFound(w, r)
+		return
+	}
+	p := s.principalFrom(r)
+	if p == nil {
+		http.Error(w, "not signed in", http.StatusUnauthorized)
+		return
+	}
+	resp, err := s.adminReq("POST", "/admin/contact-email/cancel", nil, map[string]string{"provider": p.Provider, "subject": p.Subject})
+	if err != nil {
+		writeErrorJSON(w, http.StatusBadGateway, "relay_unreachable", nil)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		writeErrorJSON(w, http.StatusBadGateway, "relay_error", nil)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleEmailConfirm is the page behind the link (GET) and the button on it
 // (POST). The GET only describes the link, so a mail scanner that fetches
 // every URL in a message confirms nothing. No session is needed: the link is

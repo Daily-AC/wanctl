@@ -224,20 +224,33 @@
       </section>
 
       <!-- 邮箱。只有配了邮件的实例才有这一节（/api/me 的 mail）。
-           改地址走跟门页同一条路：发确认信，点链接才生效；确认之前信照旧发到原来的地址。 -->
+           改地址走跟门页同一条路：发确认信，点链接才生效；确认之前信照旧发到原来的地址。
+           平时只有一行：地址加「修改」。输入框收在修改后面 —— 常驻一个空框，
+           看着像是在催人填什么（甲方 09-30 01:53）。三种样子由 #eCard 的
+           data-mode 决定：view（只看）、edit（改）、pending（信已发出、等确认）。 -->
       <section class="sview" data-s="email">
         <div class="vhead"><h1 data-en="Email" data-zh="邮箱">Email</h1></div>
         <p class="lead" data-en="Where this instance writes to you: when an access request is answered, and when something about your account needs you."
                         data-zh="这个实例联系你的地址：申请有了结果、账号有需要你知道的事，都发到这里。">Where this instance writes to you.</p>
-        <div class="card" style="margin-top:20px">
-          <div class="row"><span class="txt mono" id="eCur">—</span></div>
-          <p class="note" id="ePending" hidden></p>
-          <div class="row fieldrow">
-            <input id="eIn" type="email" maxlength="254" autocomplete="email" spellcheck="false">
-            <button class="btn" id="eSend" data-en="Send confirmation" data-zh="发送确认信">Send confirmation</button>
+        <div class="card email-card" id="eCard" data-mode="view" style="margin-top:20px">
+          <div class="row">
+            <span class="txt mono" id="eCur">—</span>
+            <button class="act" id="eEdit" data-en="Edit" data-zh="修改">Edit</button>
           </div>
-          <p class="note" data-en="A new address takes effect once you open the link we send to it. Until then, mail keeps going to the current one."
-             data-zh="新地址要点开确认信里的链接才生效；在那之前，信照旧发到现在的地址。">A new address takes effect once you open the link we send to it.</p>
+          <div class="row e-pending">
+            <span class="txt"><span class="dim" data-en="Pending:" data-zh="待确认：">Pending:</span> <span class="mono" id="ePendAddr"></span></span>
+            <button class="act" id="eResend" data-en="Resend" data-zh="重发">Resend</button>
+            <button class="act" id="eDrop" data-en="Cancel change" data-zh="取消修改">Cancel change</button>
+          </div>
+          <div class="e-form">
+            <div class="row fieldrow">
+              <input id="eIn" type="email" maxlength="254" autocomplete="email" spellcheck="false">
+              <button class="btn" id="eSend" data-en="Send confirmation" data-zh="发送确认信">Send confirmation</button>
+              <button class="btn ghost" id="eCancel" data-en="Cancel" data-zh="取消">Cancel</button>
+            </div>
+            <p class="note" data-en="A new address takes effect once you open the link we send to it. Until then, mail keeps going to the current one."
+               data-zh="新地址要点开确认信里的链接才生效；在那之前，信照旧发到现在的地址。">A new address takes effect once you open the link we send to it.</p>
+          </div>
         </div>
       </section>
 

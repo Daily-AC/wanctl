@@ -690,6 +690,7 @@ type AdminStore interface {
 	IssueEmailConfirmation(provider, subject, login, address, next string) (EmailConfirmation, string, error)
 	MarkEmailConfirmationSent(id int) error
 	FailEmailConfirmation(id int) error
+	CancelEmailConfirmations(provider, subject string) error
 	PeekEmailConfirmation(token string) (EmailConfirmation, error)
 	ConfirmEmail(token string) (EmailConfirmation, error)
 	FriendRequest(requester, addressee, reservedNS string) (string, error)

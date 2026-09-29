@@ -145,6 +145,7 @@ func (r *Relay) registerContact(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/contact-email/send", r.adminContactEmailSend)
 	mux.HandleFunc("/admin/contact-email/sent", r.adminContactEmailSent)
 	mux.HandleFunc("/admin/contact-email/failed", r.adminContactEmailFailed)
+	mux.HandleFunc("/admin/contact-email/cancel", r.adminContactEmailCancel)
 	mux.HandleFunc("/admin/contact-email/peek", r.adminContactEmailPeek)
 	mux.HandleFunc("/admin/contact-email/confirm", r.adminContactEmailConfirm)
 }
@@ -273,6 +274,32 @@ func (r *Relay) adminContactEmailFailed(w http.ResponseWriter, req *http.Request
 		return
 	}
 	if err := r.admin.FailEmailConfirmation(id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// adminContactEmailCancel withdraws an address change: every live link for
+// the identity dies, and the confirmed address stays what it was.
+func (r *Relay) adminContactEmailCancel(w http.ResponseWriter, req *http.Request) {
+	if !r.requireAdminStore(w, req) || !requireMethod(w, req, http.MethodPost) {
+		return
+	}
+	var body struct {
+		Provider string `json:"provider"`
+		Subject  string `json:"subject"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	provider, subject, ok := identityParams(body.Provider, body.Subject)
+	if !ok {
+		http.Error(w, "provider and subject required", http.StatusBadRequest)
+		return
+	}
+	if err := r.admin.CancelEmailConfirmations(provider, subject); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -473,6 +500,16 @@ func (p *PGStore) FailEmailConfirmation(id int) error {
 	_, err := p.db.Exec(
 		`UPDATE email_confirmations SET failed_at = now(), expires_at = LEAST(expires_at, now())
 		  WHERE id = $1 AND used_at IS NULL`, id)
+	return err
+}
+
+// CancelEmailConfirmations kills every live link for one identity. The rows
+// stay: they were sends, and the daily allowance counts them.
+func (p *PGStore) CancelEmailConfirmations(provider, subject string) error {
+	_, err := p.db.Exec(
+		`UPDATE email_confirmations SET expires_at = now()
+		  WHERE provider = $1 AND subject = $2 AND used_at IS NULL AND expires_at > now()`,
+		provider, subject)
 	return err
 }
 

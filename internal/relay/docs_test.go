@@ -181,6 +181,9 @@ func (n *noopAdmin) IssueEmailConfirmation(string, string, string, string, strin
 }
 func (n *noopAdmin) MarkEmailConfirmationSent(int) error { return nil }
 func (n *noopAdmin) FailEmailConfirmation(int) error     { return nil }
+func (n *noopAdmin) CancelEmailConfirmations(string, string) error {
+	return nil
+}
 func (n *noopAdmin) PeekEmailConfirmation(string) (EmailConfirmation, error) {
 	return EmailConfirmation{}, ErrTokenUnknown
 }

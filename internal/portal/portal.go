@@ -195,6 +195,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/auth/email", s.handleEmailPage)
 	mux.HandleFunc("/auth/email/status", s.handleEmailStatus)
 	mux.HandleFunc("/auth/email/send", s.handleEmailSend)
+	mux.HandleFunc("/auth/email/cancel", s.handleEmailCancel)
 	mux.HandleFunc("/auth/email/confirm", s.handleEmailConfirm)
 	mux.HandleFunc("/pending", s.handlePending)
 	mux.HandleFunc("/api/access-requests", s.handleAccessRequests)
@@ -312,6 +313,7 @@ var mutationPaths = map[string]bool{
 	"/auth/logout":                 true,
 	"/auth/request-access":         true,
 	"/auth/email/send":             true,
+	"/auth/email/cancel":           true,
 	"/auth/email/confirm":          true,
 	"/api/access-requests/decide":  true,
 	"/api/friends/request":         true,

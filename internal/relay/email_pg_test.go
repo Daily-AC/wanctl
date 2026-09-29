@@ -197,6 +197,23 @@ func TestContactEmailPostgresLifecycle(t *testing.T) {
 	if c, _ := p.ContactEmail("github", "2"); c.Confirmed() != "second@example.com" || c.Pending != "" {
 		t.Fatalf("after expiry = %#v", c)
 	}
+	// Cancelling a change kills the live link and keeps the address.
+	sent4, token4, err := p.IssueEmailConfirmation("github", "2", "applicant", "fourth@example.com", "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.MarkEmailConfirmationSent(sent4.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CancelEmailConfirmations("github", "2"); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := p.ContactEmail("github", "2"); c.Confirmed() != "second@example.com" || c.Pending != "" {
+		t.Fatalf("after cancel = %#v", c)
+	}
+	if _, err := p.ConfirmEmail(token4); !errors.Is(err, ErrTokenExpired) {
+		t.Fatalf("cancelled link confirm = %v", err)
+	}
 
 	// The access queue reads the confirmed address.
 	request, err := p.CreateAccessRequest("github", "2", "applicant", "hello")
