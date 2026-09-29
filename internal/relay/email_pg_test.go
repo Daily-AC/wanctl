@@ -9,7 +9,7 @@ func TestEmailPostgresPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &PGStore{db: db}
-	if _, _, err := p.ResolveIdentity("github", "1", "owner", "Owner", "", "portal", "owner@example.com"); err != nil {
+	if _, _, err := p.ResolveIdentity("github", "1", "owner", "Owner", "portal", "owner@example.com"); err != nil {
 		t.Fatal(err)
 	}
 	request, err := p.CreateAccessRequest("github", "2", "applicant", "hello", "typed@example.com")
@@ -39,7 +39,7 @@ func TestEmailPostgresPersistence(t *testing.T) {
 	}
 	resolve := func(email, want string) {
 		t.Helper()
-		if _, _, err := p.ResolveIdentity("github", "2", "applicant", "", "", "portal", email); err != nil {
+		if _, _, err := p.ResolveIdentity("github", "2", "applicant", "", "portal", email); err != nil {
 			t.Fatal(err)
 		}
 		var stored string

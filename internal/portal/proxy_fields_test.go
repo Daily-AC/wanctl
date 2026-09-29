@@ -17,7 +17,7 @@ type tokenIssueStore struct {
 	issued []string
 }
 
-func (s *tokenIssueStore) ResolveIdentity(provider, subject, login, name, invite, reserved, email string) (string, string, error) {
+func (s *tokenIssueStore) ResolveIdentity(provider, subject, login, name, reserved, email string) (string, string, error) {
 	return "attacker", "user", nil
 }
 

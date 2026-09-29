@@ -8,19 +8,19 @@ becomes the administrator, and everyone after that has to be invited.
 The **Invites** page in the navigation bar, which only administrators see, lets
 you:
 
-- generate a **one-time invite code** — shown once, at the moment you generate
-  it, to pass to your friend;
-- or **pre-register their GitHub username** — they sign in to the portal with
-  GitHub and are straight in, no code;
+- invite someone by their **GitHub username** — they sign in to the portal
+  with that GitHub account and are straight in, with no code to pass along;
 - revoke an invite nobody has used yet.
 
-The invited person signs in to the portal with a GitHub account; anyone holding
-a code redeems it on the page that greets them.
+Since v0.17.0 there are no one-time invite codes: an invite is bound to a
+GitHub username, so there is no secret to hand over. Codes generated earlier
+and never used can no longer be redeemed; the **Invites** page lists them as
+"code (retired)", and revoking them tidies the list.
 
 ## Requesting access
 
-There is a path for people who hold no code: sign in with GitHub, land on the
-waiting page, and press **Request access**, optionally with one line of at most
+There is a path for people nobody has invited: sign in with GitHub, land on the
+request page, and press **Send request**, optionally with one line of at most
 200 characters saying who you are.
 
 - one account can have one application waiting at a time; after a decline it

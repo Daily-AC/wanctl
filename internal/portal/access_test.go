@@ -189,8 +189,8 @@ func TestAccessRequestRefusedForAdmittedUser(t *testing.T) {
 	}
 }
 
-// The double-submit guard covers the new write, the same as /auth/redeem: a
-// cross-site POST carrying only the session cookie must not file anything.
+// The double-submit guard covers the write: a cross-site POST carrying only
+// the session cookie must not file anything.
 func TestAccessRequestRejectsMissingCSRF(t *testing.T) {
 	var calls []string
 	s := accessPortal(t, resolvePendingInvite, &calls)
@@ -253,7 +253,7 @@ func TestPendingPageRendersTheRequestState(t *testing.T) {
 }
 
 // A relay that cannot be reached must not tell an applicant their application
-// does not exist — the page falls back to offering both doors.
+// does not exist — the page falls back to the request form.
 func TestPendingPageFallsBackWhenTheRelayIsDown(t *testing.T) {
 	var calls []string
 	s := accessPortal(t, resolvePendingInvite, &calls)
@@ -271,5 +271,64 @@ func TestPendingPageFallsBackWhenTheRelayIsDown(t *testing.T) {
 	rec := inviteReq(h, "GET", "/pending", "", cookies)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `data-req="none"`) {
 		t.Fatalf("status %d, page missing the form: %q", rec.Code, rec.Body.String())
+	}
+}
+
+// The request page is one door: asking. Invites are bound to a GitHub login and
+// admit on sign-in, so there is no code to redeem and no second form.
+func TestPendingPageHasNoInviteCodeForm(t *testing.T) {
+	var calls []string
+	s := accessPortal(t, resolvePendingInvite, &calls)
+	h := s.Handler()
+	cookies := inviteSession(t, s, h)
+	body := inviteReq(h, "GET", "/pending", "", cookies).Body.String()
+	for _, gone := range []string{`id="redeem"`, `id="code"`, "winv_", "/auth/redeem"} {
+		if strings.Contains(body, gone) {
+			t.Fatalf("request page still carries %s", gone)
+		}
+	}
+	if !strings.Contains(body, `id="ask"`) || !strings.Contains(body, `class="me"`) {
+		t.Fatal("request page lost its form or its account")
+	}
+}
+
+// While a request waits, the page says where the approval will be mailed —
+// masked, and only when this portal sends mail and the request has an address.
+func TestPendingPageSaysWhereTheAnswerGoes(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		mail   bool
+		status map[string]any
+		want   string
+	}{
+		{"pending with address", true, map[string]any{"status": "pending", "can_apply": false, "email_hint": "r•••@qq.com"}, "r•••@qq.com"},
+		{"pending without address", true, map[string]any{"status": "pending", "can_apply": false}, ""},
+		{"mail off", false, map[string]any{"status": "pending", "can_apply": false, "email_hint": "r•••@qq.com"}, ""},
+		{"not pending", true, map[string]any{"status": "none", "can_apply": true, "email_hint": "r•••@qq.com"}, ""},
+	} {
+		var calls []string
+		s := accessPortal(t, resolvePendingInvite, &calls)
+		if c.mail {
+			s.mail = newFakeMailSender()
+		}
+		status := c.status
+		inner := s.hc.Transport
+		s.hc = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path == "/admin/access-requests/status" {
+				rr := httptest.NewRecorder()
+				json.NewEncoder(rr).Encode(status)
+				return rr.Result(), nil
+			}
+			return inner.RoundTrip(req)
+		})}
+		h := s.Handler()
+		cookies := inviteSession(t, s, h)
+		body := inviteReq(h, "GET", "/pending", "", cookies).Body.String()
+		if c.want != "" && !strings.Contains(body, c.want) {
+			t.Fatalf("%s: page does not say %s", c.name, c.want)
+		}
+		if c.want == "" && strings.Contains(body, "•••") {
+			t.Fatalf("%s: page promises mail it will not send", c.name)
+		}
 	}
 }

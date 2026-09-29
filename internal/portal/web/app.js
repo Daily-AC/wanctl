@@ -81,9 +81,10 @@
       rulePlaceholder: 'echo *   or   /data',
       issue: 'Issue', label: 'Label', labelPlaceholder: 'laptop, ci, …',
       expiry: 'Expires in days (0 = never)',
-      newInvite: 'New invite', inviteLogin: 'GitHub login (optional)',
-      invitePlaceholder: 'fill in to pre-register; leave empty for a one-time code',
-      inviteCode: 'code', invitePre: 'pre-registered', invitePending: 'unused', inviteUsed: 'used by',
+      newInvite: 'New invite', inviteLogin: 'GitHub login',
+      invitePlaceholder: 'they are admitted when they sign in with this account',
+      inviteNeedLogin: 'Enter the GitHub login to invite.',
+      inviteCode: 'code (retired)', invitePre: 'pre-registered', invitePending: 'unused', inviteUsed: 'used by',
       reqWants: 'is asking for access', approve: 'Approve',
       reqOK: 'Approved — that login is now invited.', reqNo: 'Declined.',
       addFriend: 'Add friend', friendNS: "Their username (namespace)", send: 'Send request',
@@ -199,9 +200,10 @@
       rulePlaceholder: 'echo *   或   /data',
       issue: '签发', label: '标签', labelPlaceholder: 'laptop、ci…',
       expiry: '多少天后过期（0 = 永不）',
-      newInvite: '新建邀请', inviteLogin: 'GitHub 用户名（可选）',
-      invitePlaceholder: '填了就预录对方；留空则生成一次性邀请码',
-      inviteCode: '邀请码', invitePre: '已预录', invitePending: '待使用', inviteUsed: '已用于',
+      newInvite: '新建邀请', inviteLogin: 'GitHub 用户名',
+      invitePlaceholder: '对方用这个 GitHub 账号登录即自动获准',
+      inviteNeedLogin: '请填写要邀请的 GitHub 用户名。',
+      inviteCode: '邀请码（已停用）', invitePre: '已预录', invitePending: '待使用', inviteUsed: '已用于',
       reqWants: '申请访问', approve: '通过',
       reqOK: '已通过 —— 这个登录名现在有邀请了。', reqNo: '已拒绝。',
       addFriend: '加好友', friendNS: '对方的用户名（命名空间）', send: '发送请求',
@@ -1309,7 +1311,6 @@
     };
   }
   copier($('#tCopy'), '#tVal');
-  copier($('#iCopy'), '#iVal');
 
   /* ── 通知 ────────────────────────────────────────────────────────── */
   var notify = {};
@@ -1381,6 +1382,14 @@
       // 它本来就以一条邀请的形式留在下面那张表里。
       var xs = (d.requests || []).filter(function (r) { return r.status === 'pending'; });
       $('#reqs').innerHTML = xs.map(reqCard).join('');
+      // 入口那一行：几个人在等。一个都没有时整行藏起来，也收回去 ——
+      // 下一个申请来的时候，它该以一行入口的样子出现，而不是自己摊开。
+      $('#reqBox').hidden = !xs.length;
+      if (!xs.length) $('#reqBox').open = false;
+      var n = $('#reqN');
+      n.setAttribute('data-en', xs.length + ' waiting');
+      n.setAttribute('data-zh', xs.length + ' 个待处理');
+      n.textContent = n.getAttribute('data-' + lang);
       $$('#reqs .ask').forEach(function (el) {
         $$('.btn[data-rv]', el).forEach(function (b) {
           b.onclick = function () {
@@ -1429,13 +1438,12 @@
       { key: 'login', label: t().inviteLogin, hint: t().invitePlaceholder }
     ]).then(function (v) {
       if (!v) return;
-      jpost('/api/invites', { github_login: (v.login || '').trim() })
+      var login = (v.login || '').trim();
+      if (!login) return toast(t().inviteNeedLogin, true);
+      jpost('/api/invites', { github_login: login })
         .then(function (r) { return r.json(); })
-        .then(function (j) {
-          if (j.code) { $('#iVal').textContent = j.code; $('#iSlip').classList.add('show'); }
-          else toast(t().saved);
-          loadInvites();
-        }).catch(oops);
+        .then(function () { toast(t().saved); loadInvites(); })
+        .catch(oops);
     });
   };
 

@@ -122,17 +122,17 @@ curl -s -o /dev/null -w '%{http_code}\n' https://portal.example.com/   # 303 (re
 ## 4. 登录并接入设备
 
 打开 `https://portal.example.com`。在一个全新的数据库上，第一个走完 GitHub 登录的账号
-成为管理员。之后的账号会停在等待页上，直到被邀请。
+成为管理员。之后的账号会停在申请页上，直到被邀请或申请获准。
 
-用 relay 容器里已经带着的管理 CLI 给第二个用户开一个邀请码
+用 relay 容器里已经带着的管理 CLI，按 GitHub 用户名邀请第二个用户
 （主机上除了 Docker 什么都不需要）：
 
 ```bash
-docker compose exec -e WANCTL_RELAY=http://127.0.0.1:8080 relay wanctl admin invite
+docker compose exec -e WANCTL_RELAY=http://127.0.0.1:8080 relay wanctl admin invite --github LOGIN
 ```
 
-也可以加上 `--github LOGIN` 直接预先放行某个 GitHub 账号。把一次性的码给那个人，
-等待页收这个码。
+那个账号下次登录就直接进来，没有要传递的码。管理员也可以在门户的「邀请」页做同样的事，
+申请页交上来的申请也在那里等审批。
 
 在设备上，从项目发布页装上签名过的二进制，把它指向你这套实例
 （会持久化；之后用 `wanctl config` 查看和修改），然后接入并启动：

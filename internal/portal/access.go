@@ -36,6 +36,9 @@ type accessStatus struct {
 	Status   string     `json:"status"`
 	CanApply bool       `json:"can_apply"`
 	RetryAt  *time.Time `json:"retry_at,omitempty"`
+	// EmailHint is the masked address an approval would be mailed to; the
+	// relay never hands the portal the address itself on this path.
+	EmailHint string `json:"email_hint,omitempty"`
 }
 
 // accessStatusFor asks the relay about one principal's own application.
@@ -70,7 +73,7 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	// Someone who already has a namespace has nothing to apply for, and an
 	// application from them would sit in the queue forever.
-	if _, _, status, _ := s.resolveNamespace(p, ""); status == resolveOK {
+	if _, _, status, _ := s.resolveNamespace(p); status == resolveOK {
 		http.Error(w, "already admitted", http.StatusConflict)
 		return
 	}
@@ -154,7 +157,11 @@ func (s *Server) handleAccessDecide(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal(body, &request) == nil && request.Status == "approved" && request.Email != "" {
 			origin := s.requestOrigin(r)
 			go func() {
-				if err := s.mail.Send(request.Email, approvalMailSubject, approvalMailBody(request.Login, origin)); err != nil {
+				message, err := approvalMail(request.Login, origin)
+				if err == nil {
+					err = s.mail.Send(request.Email, message)
+				}
+				if err != nil {
 					log.Printf("portal: approval mail request %d: %s", request.ID, mailError(err, request.Email))
 				}
 			}()

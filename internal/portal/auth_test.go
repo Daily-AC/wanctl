@@ -222,11 +222,14 @@ func TestSessionCodecTamperAndExpiry(t *testing.T) {
 	}
 }
 
-func TestPendingFlowAndRedeem(t *testing.T) {
+// Admission is by GitHub login: an invite bound to the login, or an approved
+// request (which writes one), lets the same session in on its next request.
+// There is no code to type, and the endpoint that took one is gone.
+func TestPendingFlowAdmitsByLogin(t *testing.T) {
 	admitted := false
 	s := newOAuthPortal(t, func(body map[string]string, w http.ResponseWriter) {
-		if body["invite_code"] == "winv_good" {
-			admitted = true
+		if _, ok := body["invite_code"]; ok {
+			t.Errorf("the portal still sends an invite code: %v", body)
 		}
 		if admitted {
 			resolveOKAs("octocat", "user")(body, w)
@@ -249,26 +252,24 @@ func TestPendingFlowAndRedeem(t *testing.T) {
 		t.Fatalf("pending /api/me: %d %q", rec2.Code, rec2.Body.String())
 	}
 
-	// A bad code is refused; the good one admits.
-	redeem := func(code string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest("POST", "/auth/redeem", strings.NewReader(`{"code":"`+code+`"}`))
-		req.AddCookie(c)
-		rr := httptest.NewRecorder()
-		s.handleAuthRedeem(rr, req)
-		return rr
-	}
-	if rr := redeem("winv_bad"); rr.Code != http.StatusForbidden {
-		t.Fatalf("bad code: %d", rr.Code)
-	}
-	if rr := redeem("winv_good"); rr.Code != http.StatusOK {
-		t.Fatalf("good code: %d %s", rr.Code, rr.Body.String())
-	}
+	// The administrator invites the login; nothing else happens on this side.
+	admitted = true
 	rec3 := httptest.NewRecorder()
 	me2 := httptest.NewRequest("GET", "/api/me", nil)
 	me2.AddCookie(c)
 	s.handleMe(rec3, me2)
 	if rec3.Code != http.StatusOK {
-		t.Fatalf("post-redeem /api/me: %d", rec3.Code)
+		t.Fatalf("admitted /api/me: %d", rec3.Code)
+	}
+
+	redeem := httptest.NewRequest("POST", "https://portal.test/auth/redeem", strings.NewReader(`{"code":"winv_x"}`))
+	redeem.Header.Set("Origin", "https://portal.test")
+	redeem.AddCookie(c)
+	rec4 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec4, redeem)
+	// The method guard answers first: nothing on this path takes a write.
+	if rec4.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("/auth/redeem: %d, want 405", rec4.Code)
 	}
 }
 

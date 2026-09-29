@@ -21,30 +21,24 @@ import (
 // invites are needed.
 func cmdAdmin(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: wanctl admin invite [--github LOGIN] | invites | invite-revoke ID")
+		return fmt.Errorf("usage: wanctl admin invite --github LOGIN | invites | invite-revoke ID")
 	}
 	switch args[0] {
 	case "invite":
 		fs := withHelp(flag.NewFlagSet("admin invite", flag.ExitOnError))
-		github := fs.String("github", "", "pre-approve this GitHub login instead of minting a code")
+		github := fs.String("github", "", "the GitHub login to admit on its first sign-in (required)")
 		fs.Parse(args[1:])
-		body := map[string]string{}
-		if *github != "" {
-			body["github_login"] = *github
+		if strings.TrimSpace(*github) == "" {
+			return fmt.Errorf("usage: wanctl admin invite --github LOGIN")
 		}
 		var out struct {
 			ID          int    `json:"id"`
-			Code        string `json:"code"`
 			GitHubLogin string `json:"github_login"`
 		}
-		if err := adminCall("POST", "/admin/invites", body, &out); err != nil {
+		if err := adminCall("POST", "/admin/invites", map[string]string{"github_login": *github}, &out); err != nil {
 			return err
 		}
-		if out.Code != "" {
-			fmt.Printf("invite #%d created — share this code (shown only once):\n%s\n", out.ID, out.Code)
-		} else {
-			fmt.Printf("invite #%d created — GitHub user %q can now sign in\n", out.ID, out.GitHubLogin)
-		}
+		fmt.Printf("invite #%d created — GitHub user %q is admitted on sign-in\n", out.ID, out.GitHubLogin)
 		return nil
 	case "invites":
 		var invites []struct {
@@ -63,7 +57,7 @@ func cmdAdmin(args []string) error {
 			return nil
 		}
 		for _, in := range invites {
-			kind := "code"
+			kind := "code (retired)"
 			if in.GitHubLogin != "" {
 				kind = "github:" + in.GitHubLogin
 			}

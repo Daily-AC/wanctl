@@ -12,11 +12,14 @@ import (
 	"time"
 )
 
-type sentMail struct{ to, subject, body string }
+type sentMail struct {
+	to string
+	mailContent
+}
 type fakeMailSender struct{ messages chan sentMail }
 
-func (f *fakeMailSender) Send(to, subject, body string) error {
-	f.messages <- sentMail{to, subject, body}
+func (f *fakeMailSender) Send(to string, m mailContent) error {
+	f.messages <- sentMail{to, m}
 	return nil
 }
 func newFakeMailSender() *fakeMailSender { return &fakeMailSender{make(chan sentMail, 10)} }
@@ -175,8 +178,13 @@ func TestApprovalMailDecisions(t *testing.T) {
 					if origin == "" {
 						origin = "https://portal.test"
 					}
-					if message.to != tc.email || message.subject != approvalMailSubject || !strings.Contains(message.body, origin+"/") || !strings.Contains(message.body, "octocat") {
+					if message.to != tc.email || message.subject != approvalMailSubject {
 						t.Fatalf("message = %#v", message)
+					}
+					for _, part := range []string{message.text, message.html} {
+						if !strings.Contains(part, origin+"/") || !strings.Contains(part, "octocat") {
+							t.Fatalf("message = %#v", message)
+						}
 					}
 				case <-time.After(time.Second):
 					t.Fatal("no approval email")

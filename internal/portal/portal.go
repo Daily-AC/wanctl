@@ -191,7 +191,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/auth/github", s.handleAuthStart)
 	mux.HandleFunc("/auth/callback", s.handleAuthCallback)
 	mux.HandleFunc("/auth/logout", s.handleAuthLogout)
-	mux.HandleFunc("/auth/redeem", s.handleAuthRedeem)
 	mux.HandleFunc("/auth/request-access", s.handleAccessRequest)
 	mux.HandleFunc("/pending", s.handlePending)
 	mux.HandleFunc("/api/access-requests", s.handleAccessRequests)
@@ -307,7 +306,6 @@ var mutationPaths = map[string]bool{
 	"/api/docs/groups":             true,
 	"/api/docs/groups/delete":      true,
 	"/auth/logout":                 true,
-	"/auth/redeem":                 true,
 	"/auth/request-access":         true,
 	"/api/access-requests/decide":  true,
 	"/api/friends/request":         true,
@@ -767,7 +765,7 @@ func (s *Server) requireNS(w http.ResponseWriter, r *http.Request) (string, bool
 		}
 		return "", false
 	}
-	ns, _, status, detail := s.resolveNamespace(p, "")
+	ns, _, status, detail := s.resolveNamespace(p)
 	switch status {
 	case resolveOK:
 		return ns, true
@@ -848,7 +846,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not signed in", http.StatusUnauthorized)
 		return
 	}
-	ns, role, status, detail := s.resolveNamespace(p, "")
+	ns, role, status, detail := s.resolveNamespace(p)
 	switch status {
 	case resolveOK:
 	case resolvePending:
@@ -952,7 +950,7 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (string, b
 		http.Error(w, "not signed in", http.StatusUnauthorized)
 		return "", false
 	}
-	ns, role, status, detail := s.resolveNamespace(p, "")
+	ns, role, status, detail := s.resolveNamespace(p)
 	if status != resolveOK {
 		http.Error(w, detail, http.StatusBadGateway)
 		return "", false

@@ -131,18 +131,19 @@ note that the applications answer GET, not HEAD.
 ## 4. Sign in and enroll devices
 
 Open `https://portal.example.com`. On a new database, the first GitHub account
-to complete login becomes the administrator. Later accounts remain on the
-pending page until invited.
+to complete login becomes the administrator. Later accounts land on the
+request page until invited or approved.
 
-Create an invite code for a second user with the admin CLI already inside the
-relay container (nothing beyond Docker is needed on the host):
+Invite a second user by their GitHub login with the admin CLI already inside
+the relay container (nothing beyond Docker is needed on the host):
 
 ```bash
-docker compose exec -e WANCTL_RELAY=http://127.0.0.1:8080 relay wanctl admin invite
+docker compose exec -e WANCTL_RELAY=http://127.0.0.1:8080 relay wanctl admin invite --github LOGIN
 ```
 
-Alternatively, pre-approve a specific GitHub login by appending `--github
-LOGIN`. Give the one-time code to the user; the pending page accepts it.
+That account is admitted the next time it signs in; there is no code to pass
+along. The administrator can do the same from the portal's **Invites** page,
+where requests from the request page also wait for approval.
 
 On a device, install the signed binary from the project release page, point it
 at your instance (persisted; `wanctl config` shows and edits it later), then

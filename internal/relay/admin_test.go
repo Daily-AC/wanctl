@@ -301,15 +301,6 @@ func (s resolveUserStmt) Query(args []driver.Value) (driver.Rows, error) {
 		}
 		return &adminRows{columns: []string{"exists"}, values: [][]driver.Value{{hasAdmin}}}, nil
 	}
-	if strings.Contains(s.query, "WHERE code_hash") {
-		hash := args[0].(string)
-		for id, invite := range s.state.invites {
-			if invite.codeHash == hash && invite.usedBy == "" {
-				return &adminRows{columns: []string{"id"}, values: [][]driver.Value{{int64(id)}}}, nil
-			}
-		}
-		return &adminRows{columns: []string{"id"}}, nil
-	}
 	if strings.Contains(s.query, "lower(github_login)") {
 		login := strings.ToLower(args[0].(string))
 		for id, invite := range s.state.invites {
@@ -353,7 +344,7 @@ func TestPGStoreResolveUserDoesNotReassignNamespace(t *testing.T) {
 
 type namespaceConflictAdmin struct{ noopAdmin }
 
-func (*namespaceConflictAdmin) ResolveIdentity(string, string, string, string, string, string, string) (string, string, error) {
+func (*namespaceConflictAdmin) ResolveIdentity(string, string, string, string, string, string) (string, string, error) {
 	return "", "", fmt.Errorf("%w: %q", ErrNamespaceConflict, "alice")
 }
 
@@ -415,7 +406,7 @@ type resolveIdentityAdmin struct {
 	err                                  error
 }
 
-func (a *resolveIdentityAdmin) ResolveIdentity(provider, subject, _, _, _, reservedNS, email string) (string, string, error) {
+func (a *resolveIdentityAdmin) ResolveIdentity(provider, subject, _, _, reservedNS, email string) (string, string, error) {
 	a.provider, a.subject, a.reservedNS, a.email = provider, subject, reservedNS, email
 	if a.err != nil {
 		return "", "", a.err
@@ -490,11 +481,11 @@ type invitesAdmin struct {
 	revokedID int
 }
 
-func (a *invitesAdmin) CreateInvite(login string) (Invite, string, error) {
+func (a *invitesAdmin) CreateInvite(login string) (Invite, error) {
 	if login == "" {
-		return Invite{ID: 3, HasCode: true}, "winv_secret", nil
+		return Invite{}, fmt.Errorf("%w: a GitHub login is required", ErrInviteLogin)
 	}
-	return Invite{ID: 4, GitHubLogin: login}, "", nil
+	return Invite{ID: 4, GitHubLogin: login}, nil
 }
 
 func (a *invitesAdmin) ListInvites() ([]Invite, error) { return a.invites, nil }
@@ -523,8 +514,9 @@ func TestAdminInvitesContractAndNoHashLeak(t *testing.T) {
 		return rr
 	}
 
-	if rr := request("POST", "/admin/invites", `{}`); rr.Code != http.StatusOK || rr.Body.String() != "{\"code\":\"winv_secret\",\"id\":3}\n" {
-		t.Fatalf("code invite response = %d %q", rr.Code, rr.Body.String())
+	// One-time codes are retired: an invite names the login that will use it.
+	if rr := request("POST", "/admin/invites", `{}`); rr.Code != http.StatusBadRequest || strings.Contains(rr.Body.String(), "winv_") {
+		t.Fatalf("invite without a login = %d %q, want 400", rr.Code, rr.Body.String())
 	}
 	if rr := request("POST", "/admin/invites", `{"github_login":"monalisa"}`); rr.Code != http.StatusOK || rr.Body.String() != "{\"github_login\":\"monalisa\",\"id\":4}\n" {
 		t.Fatalf("login invite response = %d %q", rr.Code, rr.Body.String())
@@ -587,26 +579,24 @@ func TestPGStoreGitHubAdmission(t *testing.T) {
 	}
 	p := newResolveUserTestPGStore(t, state)
 
-	ns, role, err := p.ResolveIdentity("github", "100", "FirstUser", "First User", "", "portal", "")
+	ns, role, err := p.ResolveIdentity("github", "100", "FirstUser", "First User", "portal", "")
 	if err != nil || ns != "firstuser" || role != "admin" {
 		t.Fatalf("first GitHub identity = %q, %q, %v; want firstuser, admin", ns, role, err)
 	}
-	if _, _, err := p.ResolveIdentity("github", "101", "uninvited", "", "", "portal", ""); !errors.Is(err, ErrPendingInvite) {
+	if _, _, err := p.ResolveIdentity("github", "101", "uninvited", "", "portal", ""); !errors.Is(err, ErrPendingInvite) {
 		t.Fatalf("second GitHub identity error = %v, want ErrPendingInvite", err)
 	}
 
-	ns, role, err = p.ResolveIdentity("github", "102", "code-user", "", "winv_once", "portal", "")
-	if err != nil || ns != "code-user" || role != "user" {
-		t.Fatalf("code invite identity = %q, %q, %v", ns, role, err)
+	// A code invite left over from before v0.17.0 admits no one: admission is
+	// by login, and nothing presents a code any more.
+	if _, _, err := p.ResolveIdentity("github", "102", "code-user", "", "portal", ""); !errors.Is(err, ErrPendingInvite) {
+		t.Fatalf("legacy code invite admitted someone: %v", err)
 	}
-	if got := state.invites[1].usedBy; got != "code-user" {
-		t.Fatalf("code invite used_by = %q", got)
-	}
-	if _, _, err := p.ResolveIdentity("github", "103", "reuse", "", "winv_once", "portal", ""); !errors.Is(err, ErrPendingInvite) {
-		t.Fatalf("reused code error = %v, want ErrPendingInvite", err)
+	if got := state.invites[1].usedBy; got != "" {
+		t.Fatalf("legacy code invite used_by = %q", got)
 	}
 
-	ns, role, err = p.ResolveIdentity("github", "104", "prerecorded", "", "", "portal", "")
+	ns, role, err = p.ResolveIdentity("github", "104", "prerecorded", "", "portal", "")
 	if err != nil || ns != "prerecorded" || role != "user" {
 		t.Fatalf("login invite identity = %q, %q, %v", ns, role, err)
 	}
@@ -630,7 +620,7 @@ func TestPGStoreResolveIdentityRejectsReservedNamespace(t *testing.T) {
 		{provider: "header", subject: "portal@example.com"},
 		{provider: "github", subject: "200", login: "Portal"},
 	} {
-		if _, _, err := p.ResolveIdentity(tc.provider, tc.subject, tc.login, "", "", "portal", ""); !errors.Is(err, ErrNamespaceConflict) {
+		if _, _, err := p.ResolveIdentity(tc.provider, tc.subject, tc.login, "", "portal", ""); !errors.Is(err, ErrNamespaceConflict) {
 			t.Fatalf("ResolveIdentity(%q) error = %v, want ErrNamespaceConflict", tc.provider, err)
 		}
 	}
