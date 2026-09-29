@@ -143,7 +143,8 @@ func newEmailToken() string {
 func (r *Relay) registerContact(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/contact-email", r.adminContactEmail)
 	mux.HandleFunc("/admin/contact-email/send", r.adminContactEmailSend)
-	mux.HandleFunc("/admin/contact-email/unsend", r.adminContactEmailUnsend)
+	mux.HandleFunc("/admin/contact-email/sent", r.adminContactEmailSent)
+	mux.HandleFunc("/admin/contact-email/failed", r.adminContactEmailFailed)
 	mux.HandleFunc("/admin/contact-email/peek", r.adminContactEmailPeek)
 	mux.HandleFunc("/admin/contact-email/confirm", r.adminContactEmailConfirm)
 }
@@ -233,21 +234,45 @@ func (r *Relay) adminContactEmailSend(w http.ResponseWriter, req *http.Request) 
 	writeJSON(w, map[string]any{"id": sent.ID, "token": token, "address": sent.Address, "expires_at": sent.ExpiresAt})
 }
 
-// adminContactEmailUnsend withdraws a link whose mail never left, so a failed
-// SMTP attempt costs the person neither a daily send nor the address's
-// interval.
-func (r *Relay) adminContactEmailUnsend(w http.ResponseWriter, req *http.Request) {
-	if !r.requireAdminStore(w, req) || !requireMethod(w, req, http.MethodPost) {
-		return
-	}
+func linkID(w http.ResponseWriter, req *http.Request) (int, bool) {
 	var body struct {
 		ID int `json:"id"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.ID <= 0 {
 		http.Error(w, "id required", http.StatusBadRequest)
+		return 0, false
+	}
+	return body.ID, true
+}
+
+// adminContactEmailSent records that a link's mail was accepted by the SMTP
+// server. Only now does it supersede the identity's older live link: a send
+// that fails must not kill a link already sitting in the person's inbox.
+func (r *Relay) adminContactEmailSent(w http.ResponseWriter, req *http.Request) {
+	if !r.requireAdminStore(w, req) || !requireMethod(w, req, http.MethodPost) {
 		return
 	}
-	if err := r.admin.DropEmailConfirmation(body.ID); err != nil {
+	id, ok := linkID(w, req)
+	if !ok {
+		return
+	}
+	if err := r.admin.MarkEmailConfirmationSent(id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// adminContactEmailFailed kills a link whose mail the SMTP server refused.
+func (r *Relay) adminContactEmailFailed(w http.ResponseWriter, req *http.Request) {
+	if !r.requireAdminStore(w, req) || !requireMethod(w, req, http.MethodPost) {
+		return
+	}
+	id, ok := linkID(w, req)
+	if !ok {
+		return
+	}
+	if err := r.admin.FailEmailConfirmation(id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -362,9 +387,11 @@ func scanEmailConfirmation(row rowScanner) (EmailConfirmation, error) {
 
 // IssueEmailConfirmation records a new link and returns its raw token. The
 // checks and the insert share one transaction under one advisory lock, so two
-// clicks on "send" cannot both slip under a limit. A new link supersedes any
-// live one for the same identity: only the newest mail works, which is what a
-// person who pressed "resend" or corrected a typo expects.
+// clicks on "send" cannot both slip under a limit. Every link minted counts
+// against the identity's daily allowance, whether or not its mail went out:
+// each is an SMTP session the instance's account pays for, and a refused
+// recipient must not be a free way to make the portal dial again. The
+// mailbox interval counts only mail that was not refused.
 func (p *PGStore) IssueEmailConfirmation(provider, subject, login, address, next string) (EmailConfirmation, string, error) {
 	tx, err := p.db.Begin()
 	if err != nil {
@@ -402,7 +429,8 @@ func (p *PGStore) IssueEmailConfirmation(provider, subject, login, address, next
 	var last sql.NullTime
 	if err := tx.QueryRow(
 		`SELECT max(created_at) FROM email_confirmations
-		  WHERE lower(address) = lower($1) AND created_at > now() - make_interval(secs => $2)`,
+		  WHERE lower(address) = lower($1) AND failed_at IS NULL
+		    AND created_at > now() - make_interval(secs => $2)`,
 		address, emailAddressInterval.Seconds(),
 	).Scan(&last); err != nil {
 		return EmailConfirmation{}, "", err
@@ -411,13 +439,6 @@ func (p *PGStore) IssueEmailConfirmation(provider, subject, login, address, next
 		return EmailConfirmation{}, "", &EmailRateError{Kind: ErrEmailRateAddress, RetryAt: last.Time.Add(emailAddressInterval)}
 	}
 
-	if _, err := tx.Exec(
-		`UPDATE email_confirmations SET expires_at = now()
-		  WHERE provider = $1 AND subject = $2 AND used_at IS NULL AND expires_at > now()`,
-		provider, subject,
-	); err != nil {
-		return EmailConfirmation{}, "", err
-	}
 	token := newEmailToken()
 	out, err := scanEmailConfirmation(tx.QueryRow(
 		`INSERT INTO email_confirmations (token_hash, provider, subject, login, address, next, expires_at)
@@ -434,10 +455,24 @@ func (p *PGStore) IssueEmailConfirmation(provider, subject, login, address, next
 	return out, token, nil
 }
 
-// DropEmailConfirmation deletes a link that was never delivered. A used link
-// is history and stays.
-func (p *PGStore) DropEmailConfirmation(id int) error {
-	_, err := p.db.Exec(`DELETE FROM email_confirmations WHERE id = $1 AND used_at IS NULL`, id)
+// MarkEmailConfirmationSent makes a delivered link the only live one for its
+// identity: only the newest mail works, which is what a person who pressed
+// "resend" or corrected a typo expects.
+func (p *PGStore) MarkEmailConfirmationSent(id int) error {
+	_, err := p.db.Exec(
+		`UPDATE email_confirmations o SET expires_at = now()
+		   FROM email_confirmations n
+		  WHERE n.id = $1 AND o.provider = n.provider AND o.subject = n.subject
+		    AND o.id <> n.id AND o.used_at IS NULL AND o.expires_at > now()`, id)
+	return err
+}
+
+// FailEmailConfirmation kills a link whose mail was refused. The row stays:
+// it is one of the identity's sends for the day.
+func (p *PGStore) FailEmailConfirmation(id int) error {
+	_, err := p.db.Exec(
+		`UPDATE email_confirmations SET failed_at = now(), expires_at = LEAST(expires_at, now())
+		  WHERE id = $1 AND used_at IS NULL`, id)
 	return err
 }
 

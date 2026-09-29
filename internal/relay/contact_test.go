@@ -42,7 +42,7 @@ type contactAdmin struct {
 	confirmErr error
 	peekErr    error
 	issued     []string
-	dropped    []int
+	outcomes   []string
 }
 
 func (a *contactAdmin) IssueEmailConfirmation(provider, subject, login, address, next string) (EmailConfirmation, string, error) {
@@ -53,8 +53,13 @@ func (a *contactAdmin) IssueEmailConfirmation(provider, subject, login, address,
 	return EmailConfirmation{ID: 7, Address: address, ExpiresAt: time.Now().Add(emailTokenTTL)}, "raw-token", nil
 }
 
-func (a *contactAdmin) DropEmailConfirmation(id int) error {
-	a.dropped = append(a.dropped, id)
+func (a *contactAdmin) MarkEmailConfirmationSent(id int) error {
+	a.outcomes = append(a.outcomes, "sent "+strconv.Itoa(id))
+	return nil
+}
+
+func (a *contactAdmin) FailEmailConfirmation(id int) error {
+	a.outcomes = append(a.outcomes, "failed "+strconv.Itoa(id))
 	return nil
 }
 
@@ -111,12 +116,16 @@ func TestContactEmailSendEndpoint(t *testing.T) {
 		t.Fatalf("unchanged = %d %q", rr.Code, rr.Body.String())
 	}
 
-	rr = relayRequest(t, r, "POST", "/admin/contact-email/unsend", `{"id":7}`, "", "s3cret")
-	if rr.Code != http.StatusNoContent || len(admin.dropped) != 1 || admin.dropped[0] != 7 {
-		t.Fatalf("unsend = %d, dropped %v", rr.Code, admin.dropped)
+	for _, path := range []string{"/admin/contact-email/sent", "/admin/contact-email/failed"} {
+		if rr := relayRequest(t, r, "POST", path, `{"id":7}`, "", "s3cret"); rr.Code != http.StatusNoContent {
+			t.Fatalf("%s = %d", path, rr.Code)
+		}
+	}
+	if strings.Join(admin.outcomes, ",") != "sent 7,failed 7" {
+		t.Fatalf("outcomes = %v", admin.outcomes)
 	}
 	// Everything here sits behind the admin secret.
-	for _, path := range []string{"/admin/contact-email/send", "/admin/contact-email/confirm", "/admin/contact-email/peek"} {
+	for _, path := range []string{"/admin/contact-email/send", "/admin/contact-email/confirm", "/admin/contact-email/peek", "/admin/contact-email/sent"} {
 		if rr := relayRequest(t, r, "POST", path, `{"token":"x"}`, "", "wrong"); rr.Code != http.StatusForbidden {
 			t.Fatalf("%s without secret = %d", path, rr.Code)
 		}

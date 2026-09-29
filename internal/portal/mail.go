@@ -154,7 +154,11 @@ func (s *smtpSender) sendConn(conn net.Conn, host, port string, config *tls.Conf
 	if err := writer.Close(); err != nil {
 		return smtpStep("data", err)
 	}
-	return smtpStep("quit", client.Quit())
+	// The server accepted the message when DATA closed with 250. A server that
+	// hangs up on QUIT has still taken it, and reporting that as a failure
+	// would withdraw a confirmation link that is already in someone's inbox.
+	_ = client.Quit()
+	return nil
 }
 
 // smtpStepError names the SMTP step that failed: "EOF" alone does not say

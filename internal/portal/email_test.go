@@ -65,8 +65,10 @@ func (d *doorRelay) serve(req *http.Request, rr *httptest.ResponseRecorder) bool
 		}
 		d.pending, _ = body["address"].(string)
 		json.NewEncoder(rr).Encode(map[string]any{"id": 5, "token": "tok+/=", "address": d.pending, "expires_at": "2026-10-01T00:00:00Z"})
-	case "/admin/contact-email/unsend":
+	case "/admin/contact-email/failed":
 		d.pending = ""
+		rr.WriteHeader(http.StatusNoContent)
+	case "/admin/contact-email/sent":
 		rr.WriteHeader(http.StatusNoContent)
 	case "/admin/contact-email/peek":
 		if d.peekState == "" {
@@ -326,6 +328,9 @@ func TestDoorSendsTheLink(t *testing.T) {
 			t.Fatalf("send call %s lacks %s", sendCall, want)
 		}
 	}
+	if last := d.calls[len(d.calls)-1]; last != `/admin/contact-email/sent {"id":5}` {
+		t.Fatalf("after a delivered mail the relay heard %s", last)
+	}
 	message := <-mail.messages
 	link := "http://portal.test/auth/email/confirm?t=tok%2B%2F%3D"
 	if message.to != "person@example.com" || message.subject != confirmMailSubject {
@@ -353,8 +358,9 @@ func TestDoorSendsTheLink(t *testing.T) {
 		t.Fatalf("rate = %d %s", rr.Code, rr.Body.String())
 	}
 
-	// A mail server that refuses is reported on the spot, and the link is
-	// withdrawn so the attempt costs nothing.
+	// A mail server that refuses is reported on the spot, and the relay is
+	// told, so the dead link neither supersedes the live one nor holds the
+	// mailbox's interval.
 	d.sendCode, d.retry = 0, ""
 	failing := &failingMail{}
 	s.mail = failing
@@ -362,7 +368,7 @@ func TestDoorSendsTheLink(t *testing.T) {
 	if rr.Code != http.StatusBadGateway || !strings.Contains(rr.Body.String(), "mail-failed") || failing.tried != 1 {
 		t.Fatalf("mail failure = %d %s", rr.Code, rr.Body.String())
 	}
-	if last := d.calls[len(d.calls)-1]; last != `/admin/contact-email/unsend {"id":5}` {
+	if last := d.calls[len(d.calls)-1]; last != `/admin/contact-email/failed {"id":5}` {
 		t.Fatalf("last relay call = %s", last)
 	}
 

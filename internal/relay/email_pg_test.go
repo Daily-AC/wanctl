@@ -129,14 +129,33 @@ func TestContactEmailPostgresLifecycle(t *testing.T) {
 		t.Fatalf("unknown peek = %v", err)
 	}
 
-	// A resend supersedes the first link; the first then reads as expired.
-	// (Same address inside ten minutes is refused, so the resend is to a
-	// corrected address.)
+	if err := p.MarkEmailConfirmationSent(sent.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A resend supersedes the first link once its mail is out; the first then
+	// reads as expired. (Same address inside ten minutes is refused, so the
+	// resend is to a corrected address.) A refused mail supersedes nothing.
 	if _, _, err := p.IssueEmailConfirmation("github", "2", "applicant", "first@example.com", "/"); !errors.Is(err, ErrEmailRateAddress) {
 		t.Fatalf("same address within interval = %v", err)
 	}
+	refused, _, err := p.IssueEmailConfirmation("github", "2", "applicant", "typo@example.com", "/pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.FailEmailConfirmation(refused.ID); err != nil {
+		t.Fatal(err)
+	}
+	if link, err := p.PeekEmailConfirmation(token); err != nil || link.Address != "first@example.com" {
+		t.Fatalf("first link after a refused resend = %#v, %v", link, err)
+	}
+	if c, _ := p.ContactEmail("github", "2"); c.Pending != "first@example.com" {
+		t.Fatalf("pending after a refused resend = %#v", c)
+	}
 	second, token2, err := p.IssueEmailConfirmation("github", "2", "applicant", "second@example.com", "/pending")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.MarkEmailConfirmationSent(second.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := p.ConfirmEmail(token); !errors.Is(err, ErrTokenExpired) {
@@ -201,15 +220,16 @@ func TestContactEmailPostgresRateLimits(t *testing.T) {
 	}
 	p := &PGStore{db: db}
 
-	// A send whose mail failed is withdrawn and costs nothing.
+	// A send whose mail was refused leaves the mailbox free at once, but it
+	// was a send: it counts toward the day's five.
 	failed, _, err := p.IssueEmailConfirmation("github", "9", "busy", "a@example.com", "/")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.DropEmailConfirmation(failed.ID); err != nil {
+	if err := p.FailEmailConfirmation(failed.ID); err != nil {
 		t.Fatal(err)
 	}
-	for i, address := range []string{"a@example.com", "b@example.com", "c@example.com", "d@example.com", "e@example.com"} {
+	for i, address := range []string{"a@example.com", "b@example.com", "c@example.com", "d@example.com"} {
 		if _, _, err := p.IssueEmailConfirmation("github", "9", "busy", address, "/"); err != nil {
 			t.Fatalf("send %d: %v", i+1, err)
 		}
@@ -228,7 +248,7 @@ func TestContactEmailPostgresRateLimits(t *testing.T) {
 		t.Fatalf("other identity = %v", err)
 	}
 	// A day later the oldest send ages out and one slot frees.
-	if _, err := db.Exec(`UPDATE email_confirmations SET created_at = created_at - interval '25 hours' WHERE subject = '9' AND address = 'a@example.com'`); err != nil {
+	if _, err := db.Exec(`UPDATE email_confirmations SET created_at = created_at - interval '25 hours' WHERE id = $1`, failed.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := p.IssueEmailConfirmation("github", "9", "busy", "f@example.com", "/"); err != nil {

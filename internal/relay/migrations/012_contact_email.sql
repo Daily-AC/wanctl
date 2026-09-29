@@ -11,9 +11,12 @@ CREATE TABLE IF NOT EXISTS contact_emails (
     PRIMARY KEY (provider, subject)
 );
 
--- One row per confirmation link sent. The link carries the token; only its
+-- One row per confirmation link minted. The link carries the token; only its
 -- SHA-256 is stored. The rows double as the send log the rate limits count,
--- so a used or superseded link stays until it ages out of interest.
+-- so a used, superseded or failed link stays. failed_at marks a link whose
+-- mail the SMTP server refused: it still counts against the identity's daily
+-- allowance (each one cost an SMTP session), but not against the mailbox's
+-- interval (nothing reached the mailbox).
 CREATE TABLE IF NOT EXISTS email_confirmations (
     id serial PRIMARY KEY,
     token_hash bytea NOT NULL UNIQUE,
@@ -24,7 +27,8 @@ CREATE TABLE IF NOT EXISTS email_confirmations (
     next text NOT NULL DEFAULT '/',
     created_at timestamptz NOT NULL DEFAULT now(),
     expires_at timestamptz NOT NULL,
-    used_at timestamptz
+    used_at timestamptz,
+    failed_at timestamptz
 );
 
 CREATE INDEX IF NOT EXISTS email_confirmations_identity_idx

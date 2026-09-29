@@ -154,9 +154,9 @@ func (s *Server) handleEmailStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleEmailSend asks the relay for a link and mails it, synchronously: the
 // person is looking at a button that says "send", and a mail server that
-// refused has to be said on that screen, not in a log. A refused send is
-// withdrawn so it costs neither the daily allowance nor the address's
-// interval.
+// refused has to be said on that screen, not in a log. The relay is told how
+// it went: a delivered link supersedes the older one, a refused one is dead
+// and does not hold the mailbox's interval.
 func (s *Server) handleEmailSend(w http.ResponseWriter, r *http.Request) {
 	if !s.emailGate() {
 		http.NotFound(w, r)
@@ -211,11 +211,17 @@ func (s *Server) handleEmailSend(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = s.mail.Send(sent.Address, message)
 	}
+	outcome := "/admin/contact-email/sent"
 	if err != nil {
 		log.Printf("portal: confirmation mail for %s: %s", p.Login, mailError(err, sent.Address))
-		if resp, err := s.adminReq("POST", "/admin/contact-email/unsend", nil, map[string]int{"id": sent.ID}); err == nil {
-			resp.Body.Close()
-		}
+		outcome = "/admin/contact-email/failed"
+	}
+	if resp, err := s.adminReq("POST", outcome, nil, map[string]int{"id": sent.ID}); err == nil {
+		resp.Body.Close()
+	} else {
+		log.Printf("portal: confirmation link %d: relay unreachable recording %s", sent.ID, outcome)
+	}
+	if err != nil {
 		writeErrorJSON(w, http.StatusBadGateway, "mail-failed", nil)
 		return
 	}

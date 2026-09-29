@@ -179,7 +179,8 @@ func (n *noopAdmin) ContactEmail(string, string) (ContactEmail, error) { return 
 func (n *noopAdmin) IssueEmailConfirmation(string, string, string, string, string) (EmailConfirmation, string, error) {
 	return EmailConfirmation{}, "", nil
 }
-func (n *noopAdmin) DropEmailConfirmation(int) error { return nil }
+func (n *noopAdmin) MarkEmailConfirmationSent(int) error { return nil }
+func (n *noopAdmin) FailEmailConfirmation(int) error     { return nil }
 func (n *noopAdmin) PeekEmailConfirmation(string) (EmailConfirmation, error) {
 	return EmailConfirmation{}, ErrTokenUnknown
 }

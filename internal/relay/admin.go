@@ -688,7 +688,8 @@ type AdminStore interface {
 	DecideAccessRequest(id int, status, decidedBy string) (AccessRequest, bool, error)
 	ContactEmail(provider, subject string) (ContactEmail, error)
 	IssueEmailConfirmation(provider, subject, login, address, next string) (EmailConfirmation, string, error)
-	DropEmailConfirmation(id int) error
+	MarkEmailConfirmationSent(id int) error
+	FailEmailConfirmation(id int) error
 	PeekEmailConfirmation(token string) (EmailConfirmation, error)
 	ConfirmEmail(token string) (EmailConfirmation, error)
 	FriendRequest(requester, addressee, reservedNS string) (string, error)
