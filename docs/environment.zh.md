@@ -33,7 +33,7 @@
 | `WANCTL_SMTP_ADDR` | portal | 否 | 无 | SMTP `host:port`；与下面三项全部设置后启用邮件。465 使用隐式 TLS，其他端口必须支持 STARTTLS（通常用 587），拒绝明文认证或发送。每封邮件总超时 15 秒。 |
 | `WANCTL_SMTP_USER` | portal | 条件必需 | 无 | SMTP 用户名；使用 PLAIN 认证。 |
 | `WANCTL_SMTP_PASSWORD` | portal | 条件必需 | 无 | SMTP 密码。 |
-| `WANCTL_MAIL_FROM` | portal | 条件必需 | 无 | RFC 5322 发件地址，例如 `wanctl <wanctl@example.com>`。启用邮件后 GitHub 登录会请求 `user:email`，读取已验证的主邮箱（排除 noreply）；没有可用邮箱时，申请人可选填一个。申请通过后异步发送中英双语通知；拒绝不发信，发送失败不撤销审批。 |
+| `WANCTL_MAIL_FROM` | portal | 条件必需 | 无 | RFC 5322 发件地址，例如 `wanctl <wanctl@portal.example.com>`。启用邮件后 GitHub 登录会请求 `user:email`，读取已验证的主邮箱（排除 noreply）；没有可用邮箱时，申请人可选填一个。申请通过后异步发送中英双语通知；拒绝不发信，发送失败不撤销审批。 |
 | `PORTAL_USER_HEADER` | portal | 视情况 | `X-Auth-Request-Email` | header 认证模式下，来自可信反向代理的身份头。代理必须剥掉客户端自带的同名头。与 GitHub OAuth 互斥。 |
 | `PORTAL_PUBLIC_ORIGIN` | portal | 否 | 由请求推导 | 门户对外的 origin，用于 OAuth 重定向和安全 cookie。TLS 在代理上终结时要设。 |
 | `PORTAL_DEBUG_WHOAMI` | portal | 否 | `0` | 设成 `1` 打开诊断用的 `/whoami` 端点。不要常开。 |
