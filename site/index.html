@@ -57,9 +57,12 @@
     </div>
 
     <figure class="film">
-      <video id="film" muted loop playsinline preload="auto" poster="assets/film-zh.webp"
+      <!-- 中英各一支，同一条时间轴。换语言时 app.js 换片源、接着当前这一帧放；
+           片源写在 data-* 上是因为 deploy.sh 只给 HTML 里的 assets/ 引用打指纹。 -->
+      <video id="film" muted loop playsinline preload="auto" src="assets/film-en.mp4" poster="assets/film-en.webp"
+             data-src-en="assets/film-en.mp4" data-poster-en="assets/film-en.webp"
+             data-src-zh="assets/film-zh.mp4" data-poster-zh="assets/film-zh.webp"
              width="1920" height="1080" aria-label="A 79-second film: an agent in a terminal sets up wanctl, gets trusted on each machine, then fixes and checks things on its own.">
-        <source src="assets/film-zh.mp4" type="video/mp4">
       </video>
       <button class="sound" id="sound" type="button" hidden>
         <svg viewBox="0 0 20 20" aria-hidden="true"><path class="spk" d="M3.5 7.5h3l4-3.5v12l-4-3.5h-3z"/><path class="off" d="M13.5 7.5l4 5m0-5l-4 5"/><path class="on" d="M13.4 7.2a4 4 0 0 1 0 5.6M15.6 5a7 7 0 0 1 0 10"/><path class="play" d="M6 4.2v11.6L15.8 10z"/></svg>

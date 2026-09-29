@@ -1,7 +1,7 @@
 /* wanctl product site.
  *
- * 首屏是一支片子（assets/film-zh.mp4），这个文件管四件事：
- *   片子      静音自动循环（甲方 09-27 定），一个按钮开声音；它也是播放键
+ * 首屏是一支片子（中英各一支，assets/film-{en,zh}.mp4），这个文件管四件事：
+ *   片子      静音自动循环（甲方 09-27 定），一个按钮开声音；它也是播放键；手机上开声音顺带横屏全屏
  *   语言      data-en / data-zh 两份文案，按浏览器语言和上次的选择切
  *   安装      系统 × 下载源两个分段控件，命令永远只有一份（两行：装上、启动）
  *   配对卡    门户里那张「控制端想连进来」放大出来，按钮真能按
@@ -74,14 +74,49 @@
     sound.className = 'sound is-' + state;
     soundlbl.textContent = t().sound[state];
   }
+  /* 手机上 1920 宽的画面挤进 390 宽的屏，片子里的字读不了。点开声音就是要认真看了，
+     这一下顺带横屏全屏：安卓 Chrome 元素全屏再锁横屏；iPhone 的 Safari 只有视频自己的
+     全屏（webkitEnterFullscreen），方向跟着手机转，锁不了。平板和电脑不动。 */
+  var PHONE = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches &&
+                 Math.min(screen.width, screen.height) <= 500);
+  function bigScreen() {
+    if (film.requestFullscreen) {
+      film.requestFullscreen().then(function () {
+        if (screen.orientation && screen.orientation.lock) return screen.orientation.lock('landscape');
+      }).catch(function () {});
+    } else if (film.webkitEnterFullscreen) {
+      try { film.webkitEnterFullscreen(); } catch (_) {}
+    }
+  }
+  document.addEventListener('fullscreenchange', function () {
+    if (!document.fullscreenElement && screen.orientation && screen.orientation.unlock) {
+      try { screen.orientation.unlock(); } catch (_) {}
+    }
+  });
+
+  /* 中英两支片子是同一条时间轴，换语言时接着当前这一帧放，有声没声、停没停都照旧。 */
+  function filmLang(l) {
+    var src = film.getAttribute('data-src-' + l);
+    if (!src || film.getAttribute('src') === src) return;
+    var at = film.currentTime, playing = !film.paused;
+    film.poster = film.getAttribute('data-poster-' + l);
+    film.src = src;
+    if (at) film.addEventListener('loadedmetadata', function seek() {
+      film.removeEventListener('loadedmetadata', seek);
+      film.currentTime = at;
+    });
+    if (playing) film.play().catch(function () {});
+  }
+
   if (film && sound) {
     ['play', 'pause', 'volumechange'].forEach(function (e) { film.addEventListener(e, renderSound); });
     sound.addEventListener('click', function () {
+      var on = film.paused || film.muted;
       if (film.paused) { film.muted = false; film.play().catch(function () {}); }
       else film.muted = !film.muted;
+      if (on && PHONE) bigScreen();
     });
     sound.hidden = false;
-    if (!REDUCED) film.play().catch(function () {});
     renderSound();
   }
 
@@ -172,7 +207,7 @@
     });
     if (!pick.srcTouched) pick.src = l === 'zh' ? 'cn' : 'gh';
     renderInstall();
-    if (film && sound) renderSound();
+    if (film && sound) { filmLang(l); renderSound(); }
     if (toast.textContent) toast.textContent = pair.classList.contains('refused') ? t().refused : t().trusted;
     try { localStorage.setItem('wanctl.lang', l); } catch (_) {}
   }
@@ -182,6 +217,8 @@
   try { saved = localStorage.getItem('wanctl.lang'); } catch (_) {}
   if (saved === 'zh' || (!saved && /^zh/i.test(navigator.language || ''))) applyLang('zh');
   else renderInstall();
+  // 语言定下来、片源换好之后再自动播，免得中文访客先拉一段英文片
+  if (film && sound && !REDUCED) film.play().catch(function () {});
 
   window.__site = {
     film: function () {
