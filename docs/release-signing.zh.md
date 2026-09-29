@@ -113,6 +113,39 @@ Unix 安装器带的是 PEM，Windows 那个带的是 .NET XML。
 把 `release-public.pem` 对着上一个发布（或者一份保存在产物之外的副本）钉住——
 一个既提供密钥又提供签名的产物，只能证明它自己内部自洽。
 
+## 容器镜像
+
+Release workflow 还会为 linux/amd64 发布 `ghcr.io/daily-ac/wanctl:vX.Y.Z`，
+不发布 `latest`。relay 和 portal 共用这一镜像。它内嵌原有二进制构建计算出的完整
+`TRUSTED_KEYS`，包括 release environment variable 中的
+`WANCTL_RELEASE_PREVIOUS_PUBLIC_KEYS`。workflow 从官方 release 下载 cosign v2.6.1，
+执行前核对硬编码的 SHA-256，然后使用 GitHub Actions OIDC 对推送后的 digest 做
+无密钥签名。任何步骤失败都会阻止创建 GitHub Release。
+
+**设备更新清单和发布附件列表保持不变，清单不覆盖镜像。** 镜像信任来自 cosign 签名，
+必须按下方命令核对精确的 workflow/tag 身份和 GitHub OIDC issuer。
+已有设备更新器、安装器和 relay dist 验证无需迁移。
+
+从发布 job summary 读取 digest，或用以下命令查询 tag 的 `Digest:`：
+
+```sh
+docker buildx imagetools inspect ghcr.io/daily-ac/wanctl:vX.Y.Z
+```
+
+将 `vX.Y.Z` 替换为目标 tag，`<digest>` 替换为 `sha256:` 后的 64 位十六进制。
+先验证签名，再拉取同一个不可变引用：
+
+```sh
+set -eu
+cosign verify --certificate-identity "https://github.com/Daily-AC/wanctl/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  'ghcr.io/daily-ac/wanctl@sha256:<digest>'
+docker pull 'ghcr.io/daily-ac/wanctl@sha256:<digest>'
+```
+
+两个角色都使用该 digest，relay 照常挂载签名 dist 目录。
+手动发布器保持不变；它不发布或签名容器镜像。
+
 ## 轮换与吊销
 
 1. 生成一把新的离线密钥，把它作为新的 CI 签名秘钥保护起来。

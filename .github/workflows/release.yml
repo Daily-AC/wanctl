@@ -5,9 +5,6 @@ on:
     tags:
       - 'v*.*.*'
 
-permissions:
-  contents: write
-
 # Every `uses:` is pinned to a commit SHA rather than a floating tag: a
 # retargeted actions/* tag would otherwise run inside the job that holds the
 # release signing keys (audit 2026-08-28, SEC-F-03). Bump the SHA and the
@@ -16,7 +13,12 @@ jobs:
   release:
     runs-on: ubuntu-latest
     environment: release
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
     env:
+      WANCTL_RELEASE_PREVIOUS_PUBLIC_KEYS: ${{ vars.WANCTL_RELEASE_PREVIOUS_PUBLIC_KEYS }}
       # Baked into binaries (`wanctl update`) and installers as the place
       # release artifacts are downloaded from, decoupled from any relay.
       WANCTL_RELEASE_BASE: https://github.com/${{ github.repository }}/releases/latest/download
@@ -71,17 +73,71 @@ jobs:
       # The manifest hashes the APK, so build-release.sh creates or stages it
       # before signing the complete release directory.
       - name: Build signed release
+        id: release
         env:
           WANCTL_RELEASE_SIGNING_KEY: ${{ secrets.WANCTL_RELEASE_SIGNING_KEY }}
           WANCTL_RELEASE_RSA_KEY: ${{ secrets.WANCTL_RELEASE_RSA_KEY }}
           WANCTL_ANDROID_KEYSTORE_B64: ${{ secrets.WANCTL_ANDROID_KEYSTORE_B64 }}
           WANCTL_ANDROID_KEYSTORE_PASS: ${{ secrets.WANCTL_ANDROID_KEYSTORE_PASS }}
-        run: ./scripts/build-release.sh "$GITHUB_REF_NAME"
+        # Source the unchanged builder so its computed TRUSTED_KEYS can be
+        # passed to Docker without duplicating key derivation. Set $0 to the
+        # script path because the builder uses it to locate the repository.
+        run: |
+          sh -eu -c '
+            . ./scripts/build-release.sh
+            printf "keys=%s\n" "$TRUSTED_KEYS" >> "$GITHUB_OUTPUT"
+          ' ./scripts/build-release.sh "$GITHUB_REF_NAME"
 
       # The same completeness checks the manual publisher runs
       # (audit 2026-08-28, SEC-F-04).
       - name: Validate release directory
         run: ./scripts/validate-release.sh "$GITHUB_REF_NAME" release
+
+      # These steps receive no release signing or Android keystore secrets
+      # (SEC-F-03). Cosign uses the job's GitHub OIDC identity instead.
+      - name: Install cosign
+        run: |
+          set -euo pipefail
+          # Published checksum: https://github.com/sigstore/cosign/releases/download/v2.6.1/cosign_checksums.txt
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' \
+            https://github.com/sigstore/cosign/releases/download/v2.6.1/cosign-linux-amd64 \
+            --output "$RUNNER_TEMP/cosign"
+          printf '%s  %s\n' \
+            '064954c5d8c7e3b28188eee5b1727b31c411550bc5fefd41aa672d3c761d103a' \
+            "$RUNNER_TEMP/cosign" | sha256sum --check --strict
+          chmod 0755 "$RUNNER_TEMP/cosign"
+
+      - name: Build, push and sign container image
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          WANCTL_RELEASE_PUBLIC_KEYS: ${{ steps.release.outputs.keys }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          image="ghcr.io/daily-ac/wanctl:$tag"
+          test -n "$WANCTL_RELEASE_PUBLIC_KEYS"
+          export DOCKER_CONFIG
+          DOCKER_CONFIG=$(mktemp -d)
+          push_log=$(mktemp)
+          trap 'rm -rf "$DOCKER_CONFIG"; rm -f "$push_log"' EXIT
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker build --platform linux/amd64 \
+            --build-arg "WANCTL_VERSION=$tag" \
+            --build-arg "WANCTL_RELEASE_PUBLIC_KEYS=$WANCTL_RELEASE_PUBLIC_KEYS" \
+            --label "org.opencontainers.image.source=https://github.com/Daily-AC/wanctl" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$tag" \
+            --tag "$image" .
+          docker push "$image" | tee "$push_log"
+          # The push response carries the registry digest, not a local image ID.
+          digest=$(awk -v tag="$tag:" '$1 == tag && $2 == "digest:" && $4 == "size:" { print $3 }' "$push_log")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo 'docker push did not report one valid registry digest' >&2
+            exit 1
+          }
+          "$RUNNER_TEMP/cosign" sign --yes "ghcr.io/daily-ac/wanctl@$digest"
+          printf '### Signed container image\n\nghcr.io/daily-ac/wanctl@%s\n' "$digest" >> "$GITHUB_STEP_SUMMARY"
 
       # The portal's embedded changelog is the release notes. It used to be
       # optional here, falling back to an empty body — which is how v0.7.0 went
