@@ -163,10 +163,12 @@ task that used plain PowerShell, not cua-driver.
   still needs no coordinates from the agent.
 - Keys are dropped in background mode (`background_unavailable`); Enter needed
   `delivery_mode: "foreground"`. `set_value` does not move focus.
-- Element tokens (`snapshot_id:index`) live in the daemon, so they work across
-  separate `cua-driver call` processes: no action needed a persistent
-  connection. Any new `get_window_state` of the same window, even a
-  screenshot-only one, makes the old tokens stale.
+- Element tokens (`snapshot_id:index`) live in the daemon and work across
+  separate `cua-driver call` processes as long as every call carries the same
+  `session` label; without one, `set_value` and `click` refuse the token from
+  the previous call. So no action needed a persistent connection. Any new
+  `get_window_state` of the same window, even a screenshot-only one, makes the
+  old tokens stale.
 
 **Timing, 38 actions (33 succeeded).** Medians per action: 889 ms seen by the
 controller, of which wanctl 663 ms, the task hop 64 ms and cua-driver 120 ms.
@@ -182,8 +184,14 @@ met (0.66 s).
 0.66 s per action. It would not remove the session barrier: an agent running
 as SYSTEM in session 0 still cannot open the daemon's pipe, so a bridge would
 also need a helper in the desktop session. Cheaper steps with no wanctl code:
-send several `cua-driver call`s in one `exec` when the agent already knows the
-tokens (snapshot, fill, click), and keep the dispatcher recipe in a skill.
+send several `cua-driver call`s in one `exec` when the tokens can be picked on
+the device (a follow-up run did find window, two snapshots, fill and click in
+one `exec`: 3.2 s end to end, 2.2 s of it on the device), and keep the
+dispatcher recipe in a skill.
+
+**Decision (2026-09-30).** No stdio bridge for now; the zero-code recipe goes
+into the owner's device notes. Reopen the bridge when real tasks show the
+0.66 s per action slowing them down.
 
 ## Open questions for the owner
 
@@ -202,6 +210,6 @@ the 5090 is the first target. The original questions:
 
 ## Next step
 
-The trial answered the hand test above for Windows. Whether to package the
-zero-code recipe as a skill or to build the stdio bridge is for the owner to
-decide; the numbers are in "Trial on the 5090".
+The trial answered the hand test above for Windows. The zero-code recipe is in
+use; the stdio bridge waits for evidence from real tasks (see the decision in
+"Trial on the 5090").
