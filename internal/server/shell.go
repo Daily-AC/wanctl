@@ -162,15 +162,18 @@ func (s *ShellSession) endOutput(cause error) {
 }
 
 // cancelNow is what a cancellation does: end the session's processes and stop
-// waiting on their output. The two are separate steps on purpose. Killing the
-// container does not guarantee the output pipe closes, because a descendant
-// that escaped the container still holds it, so the reader is cut here rather
-// than left to a copier that may never see EOF. That is also what makes a kill
-// that *failed* reach the caller immediately instead of when the command it
-// could not stop happens to end.
+// waiting on them. The two are separate steps on purpose. Killing the container
+// does not guarantee either pipe closes, because a descendant that escaped the
+// container still holds both, and a kill can fail outright. So both waits are
+// cut here: the reader, which a copier that never sees EOF would otherwise feed
+// forever, and stdin, where a command larger than the pipe sits blocked in
+// writeCommand behind a shell that has stopped reading (#112). That is also what
+// makes a kill that *failed* reach the caller immediately instead of when the
+// command it could not stop happens to end.
 func (s *ShellSession) cancelNow() error {
 	s.closed.Store(true)
 	err := s.killContainer()
+	s.stdin.Close()
 	s.endOutput(ErrSessionCancelled)
 	return err
 }
@@ -246,11 +249,15 @@ func NewShellSessionInDir(shell, cwd string) (*ShellSession, error) {
 		return abandon(err)
 	}
 	go func() {
+		// Wait for the shell alone, not cmd.Wait: that also waits for the
+		// output copiers, up to WaitDelay after the shell is gone when an
+		// escaped descendant holds stdout (#110). Reaping releases the shell's
+		// pid, and with it the process-group id that is the same number, so the
+		// container's one kill is spent now: it ends whatever the shell left in
+		// its group (#111), and nothing can signal that number later.
+		cmd.Process.Wait()
+		container.Kill()
 		cmd.Wait()
-		// Reaping releases the shell's pid, and with it the process-group id
-		// that is the same number. The container must stop using it at exactly
-		// this point, before anything can be given that number again.
-		container.reap()
 		pw.Close()
 	}()
 

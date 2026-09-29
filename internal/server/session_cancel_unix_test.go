@@ -310,6 +310,47 @@ func TestFailedKillIsReportedWhileTheCommandStillRuns(t *testing.T) {
 	}
 }
 
+// Issue #112: a failed kill used to cut only the output reader. A command still
+// blocked in writeCommand — the shell is inside sleep, so a megabyte of comment
+// fills the stdin pipe — never returned, even though Closed() was already true.
+func TestFailedKillUnblocksABlockedStdinWrite(t *testing.T) {
+	session := newTestSession(t)
+	session.killContainer = func() error {
+		return errors.New("no permission to signal the group")
+	}
+
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	// First line records the pid, second parks the shell so it stops reading
+	// stdin, then enough comment to overflow a typical pipe buffer (~64KiB).
+	command := "echo $$ > " + pidFile + "\n/bin/sleep 600\n" + strings.Repeat("# padding\n", 80_000)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := runAsync(session, ctx, command)
+	pid := waitForPIDFile(t, pidFile)
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+
+	// Give writeCommand time to fill the pipe and block. The pid file means
+	// the shell has consumed the first line and is now inside sleep.
+	time.Sleep(200 * time.Millisecond)
+
+	start := time.Now()
+	cancel()
+	r := awaitExec(t, done, 5*time.Second)
+	if took := time.Since(start); took > sessionWaitDelay/2 {
+		t.Fatalf("blocked stdin write took %s to return after a failed kill", took)
+	}
+	if !errors.Is(r.err, ErrSessionCancelled) {
+		t.Fatalf("blocked submit = (%d, %v), want ErrSessionCancelled", r.code, r.err)
+	}
+	if !strings.Contains(r.err.Error(), "no permission to signal the group") {
+		t.Fatalf("blocked submit reported %q without the kill error", r.err)
+	}
+	if !session.Closed() {
+		t.Fatal("Closed() was false after a cancel that could not kill")
+	}
+}
+
 // A watcher can wake after its own request disarmed and after the next request
 // armed. A gate that only asks "is anything armed" reads true in that state and
 // destroys a session nobody cancelled — 50 times in 100 under the scheduling
@@ -450,49 +491,81 @@ func TestEscapedDescendantCannotHoldACancelledSession(t *testing.T) {
 	}
 }
 
-// A container is signalled at most once and never after the shell is reaped,
-// because a process-group id is only a number and can be given to another group
-// once this one is gone.
-func TestContainerKillsOnceAndNeverAfterReap(t *testing.T) {
-	t.Run("only the first kill signals", func(t *testing.T) {
-		cmd := exec.Command("/bin/sh", "-c", "sleep 30")
-		prepareSessionContainer(cmd)
-		if err := cmd.Start(); err != nil {
-			t.Fatal(err)
-		}
-		container, err := captureSessionContainer(cmd)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
-		if err := container.Kill(); err != nil {
-			t.Fatalf("first kill = %v", err)
-		}
-		pgid := container.pgid
-		if err := container.Kill(); err != nil {
-			t.Fatalf("second kill = %v, want a no-op", err)
-		}
-		if container.pgid != pgid {
-			t.Fatal("the second kill changed the container's state")
-		}
-		if !container.killed {
-			t.Fatal("the container does not remember that it killed")
-		}
-	})
+// A container is signalled at most once, because a process-group id is only a
+// number and can be given to another group once this one is gone.
+func TestContainerKillsOnce(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "sleep 30")
+	prepareSessionContainer(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	container, err := captureSessionContainer(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	if err := container.Kill(); err != nil {
+		t.Fatalf("first kill = %v", err)
+	}
+	pgid := container.pgid
+	if err := container.Kill(); err != nil {
+		t.Fatalf("second kill = %v, want a no-op", err)
+	}
+	if container.pgid != pgid {
+		t.Fatal("the second kill changed the container's state")
+	}
+	if !container.killed {
+		t.Fatal("the container does not remember that it killed")
+	}
+}
 
-	t.Run("a reaped container stops naming its group", func(t *testing.T) {
-		container := &sessionContainer{pgid: 424242}
-		container.reap()
-		if container.pgid != 0 {
-			t.Fatalf("a reaped container still holds pgid %d, which may belong to someone else now", container.pgid)
+// The container's one kill must be spent when the kernel reaps the shell, not
+// when cmd.Wait returns. cmd.Wait also waits for the output copiers — up to
+// sessionWaitDelay when an escaped descendant holds stdout — and all that time
+// the group's number may already belong to someone else (#110).
+func TestContainerIsSpentWhenTheShellIsReaped(t *testing.T) {
+	session := newTestSession(t)
+	shell := session.cmd.Process.Pid
+	pidFile := filepath.Join(t.TempDir(), "escaped.pid")
+	// The escaped sleep keeps stdout open, so cmd.Wait cannot return before
+	// sessionWaitDelay, while the shell itself exits at once.
+	done := runAsync(session, context.Background(), "set -m; /bin/sleep 600 & echo $! > "+pidFile+"; exit")
+	escaped := waitForPIDFile(t, pidFile)
+	t.Cleanup(func() { syscall.Kill(escaped, syscall.SIGKILL) })
+	if !processGone(shell, 5*time.Second) {
+		t.Fatal("the shell never exited")
+	}
+
+	// Well inside sessionWaitDelay, so only a kill spent at the reap passes.
+	deadline := time.Now().Add(sessionWaitDelay / 4)
+	for {
+		session.container.mu.Lock()
+		spent, pgid := session.container.killed, session.container.pgid
+		session.container.mu.Unlock()
+		if spent {
+			break
 		}
-		if err := container.Kill(); err != nil {
-			t.Fatalf("kill after reap = %v, want a no-op", err)
+		if time.Now().After(deadline) {
+			t.Fatalf("shell %d was reaped but its container could still signal group %d", shell, pgid)
 		}
-		if container.killed {
-			t.Fatal("kill after reap signalled a group id that no longer names this session")
-		}
-	})
+		time.Sleep(time.Millisecond)
+	}
+	awaitExec(t, done, 2*sessionWaitDelay)
+}
+
+// A background job the shell never waited for is in the shell's group, so it
+// ends when the shell does. Before #111 a natural `exit` reaped the shell and
+// dropped the group's number, and the job kept running with nothing left that
+// could name it.
+func TestBackgroundJobEndsWithTheShell(t *testing.T) {
+	session := newTestSession(t)
+	pidFile := filepath.Join(t.TempDir(), "bg.pid")
+	session.Exec("/bin/sleep 600 </dev/null >/dev/null 2>&1 & echo $! > "+pidFile+"; exit", io.Discard)
+	pid := waitForPIDFile(t, pidFile)
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	if !processGone(pid, 3*time.Second) {
+		t.Fatalf("background job %d outlived the shell that started it", pid)
+	}
 }
 
 // A shell that could not be contained must be killed, reaped and have both ends
