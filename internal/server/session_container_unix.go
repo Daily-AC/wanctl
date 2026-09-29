@@ -22,16 +22,21 @@ import (
 //   - The group is signalled at most once in a container's lifetime. A second
 //     kill would be the one that could hit a stranger, and there is never a
 //     reason for it: the first either worked or reported why not.
-//   - No signal is sent after the shell has been reaped. Until then the shell
-//     is at worst a zombie, and the kernel does not reuse a group leader's pid
-//     while its zombie exists, so the number still names this group and nothing
-//     else. reap is called the moment cmd.Wait returns, under the same lock the
-//     kill takes, so the two cannot interleave.
+//   - That one signal is spent when the shell is reaped: the reaper calls Kill
+//     the moment the kernel has waited the shell. Until the reap the shell is
+//     at worst a zombie, and the kernel does not reuse a group leader's pid
+//     while its zombie exists; after it, the number stays reserved only while
+//     members are left in the group. So the reaper's kill reaches those members
+//     and nothing else, except in one case: an empty group whose number the
+//     kernel hands out again in the few instructions between the reap and the
+//     kill. Pids are allocated cyclically, so that means wrapping the whole pid
+//     space in that gap. Closing it would take waiting for the exit without
+//     reaping — waitid(WNOWAIT) on Linux, a kqueue on macOS — which is not
+//     worth two platform files.
 type sessionContainer struct {
 	mu     sync.Mutex
 	pgid   int
 	killed bool
-	reaped bool
 }
 
 // prepareSessionContainer runs before cmd.Start. It adds to SysProcAttr rather
@@ -55,15 +60,15 @@ func captureSessionContainer(cmd *exec.Cmd) (*sessionContainer, error) {
 }
 
 // Kill ends the shell and every process still in its group. It is a no-op after
-// the first call and after the shell has been reaped; see the type comment for
-// why both are required rather than merely tidy.
+// the first call; see the type comment for why that is required rather than
+// merely tidy.
 func (c *sessionContainer) Kill() error {
 	if c == nil {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.pgid <= 0 || c.killed || c.reaped {
+	if c.pgid <= 0 || c.killed {
 		return nil
 	}
 	c.killed = true
@@ -74,18 +79,6 @@ func (c *sessionContainer) Kill() error {
 		return fmt.Errorf("kill session process group %d: %w", c.pgid, err)
 	}
 	return nil
-}
-
-// reap records that the shell has been waited on, so its pid — and the group id
-// that is the same number — may now belong to something else.
-func (c *sessionContainer) reap() {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	c.reaped = true
-	c.pgid = 0
-	c.mu.Unlock()
 }
 
 // Close has nothing to release: a process group is not a handle.

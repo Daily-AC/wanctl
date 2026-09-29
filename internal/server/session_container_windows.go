@@ -144,11 +144,6 @@ func (c *sessionContainer) Kill() error {
 	return nil
 }
 
-// reap exists for symmetry with the Unix container, where a reaped pid stops
-// naming the group. A job handle keeps naming its job until it is closed, so
-// there is nothing to invalidate here.
-func (c *sessionContainer) reap() {}
-
 // Close releases the job handle, which also ends anything still in it.
 func (c *sessionContainer) Close() error {
 	if c == nil {

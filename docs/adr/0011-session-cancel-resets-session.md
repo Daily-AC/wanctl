@@ -72,14 +72,21 @@ sessions still takes them with it.
 **The two containers are not equally strong, and the weaker one is fenced rather
 than trusted.** A job handle names its job; a process-group id is only a number,
 and once the group is gone that number can be given to another group. So the
-Unix container signals at most once in its lifetime, and never after the shell
-has been reaped. Until the reap the shell is at worst a zombie, and the kernel
-does not reuse a group leader's pid while its zombie exists, so the number still
-names this group and nothing else. `reap` is called the moment `cmd.Wait`
-returns, under the same lock the kill takes, so the two cannot interleave. The
-earlier claim in this ADR that the mechanism "cannot be defeated by pid reuse"
-was too strong: what holds is that the one signal it sends is sent while the
-number is still unambiguous.
+Unix container signals at most once in its lifetime, and that one signal is
+spent when the shell is reaped: the reaper waits for the shell alone, not for
+`cmd.Wait`, which also waits up to `WaitDelay` for the output copiers (#110),
+and calls the kill the moment the kernel has waited it. That kill also ends any
+background job the shell left in its group, which a natural `exit` used to leave
+running (#111). Until the reap the shell is at worst a zombie, and the kernel
+does not reuse a group leader's pid while its zombie exists; after it, the
+number stays reserved only while members are left in the group. The earlier
+claim in this ADR that the mechanism "cannot be defeated by pid reuse" was too
+strong: what holds is that the one signal is sent while the number is
+unambiguous, except for an empty group whose number the kernel hands out again
+in the few instructions between the reap and the kill — with cyclic pid
+allocation, a wrap of the whole pid space in that gap. Waiting for the exit
+without reaping would close it, at the price of a waitid(WNOWAIT) path for Linux
+and a kqueue path for macOS; that was judged not worth it.
 
 **Cancelling does not wait for the shell's descendants.** The shell's stdout is
 an OS pipe inherited by everything it forks, so a process that escaped the
@@ -88,7 +95,9 @@ feeding the session's reader then never sees EOF. If the cancellation waited for
 it, the command would never return, `Closed()` would never answer, and — because
 the agent asks `Closed()` while holding the lock that guards every session on
 the device — one escaped process would stall every session on the machine. The
-cancellation therefore closes the read half itself, and the reaper carries a
+cancellation therefore closes the read half itself — and the shell's stdin,
+where a command larger than the pipe can sit blocked behind a shell that has
+stopped reading (#112) — and the reaper carries a
 `WaitDelay` so its own goroutine and the pipe's descriptors are released on a
 bound rather than never. Cutting the output is also what makes a kill that
 *failed* reach the caller immediately instead of whenever the command it could
