@@ -439,6 +439,11 @@ func (c *conn) Read(p []byte) (int, error) {
 	if len(c.leftover) > 0 {
 		n := copy(p, c.leftover)
 		c.leftover = c.leftover[n:]
+		if len(c.leftover) == 0 {
+			// An empty tail still points into the chunk; drop it so the
+			// chunk is freed now rather than when the next one arrives.
+			c.leftover = nil
+		}
 		return n, nil
 	}
 	if c.eof {
