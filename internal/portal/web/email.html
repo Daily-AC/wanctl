@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Your email · wanctl</title>
+<link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css?v={{.V}}">
+</head>
+<!-- 绑定邮箱。登录以后、进门户或者提交申请之前的一道门：没有确认过的邮箱，
+     申请通过了也没法告诉你，出了事也没法联系你。新申请人、老用户、管理员
+     都一样过这道门（甲方 09-29 定）。
+     两段：填地址（form），和信已经发出（sent）。哪一段由服务端按
+     「有没有还没用掉的确认链接」决定，跟申请页一样由 data-req 选。
+     信发出以后这一页会自己去问确认了没有，确认了就往下走 ——
+     多数人会在手机上点链接，电脑上这一页不该还要人回来刷新。 -->
+<body class="auth" data-req="{{.Req}}" data-next="{{.Next}}">
+
+<header class="top">
+  <span class="brand"><svg class="mk" viewBox="0 0 32 32" aria-hidden="true"><path d="M5.6 12.4 10.2 21.8 15.2 14.6 19.6 21.8 26.4 7.6" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"/></svg>wanctl</span>
+  <div class="tools">
+    <button class="chip" id="lang">中文</button>
+  </div>
+</header>
+
+<main>
+  <section class="req" data-req-state="form">
+    <h1 data-en="Add your email" data-zh="绑定邮箱">Add your email</h1>
+    <!-- 先说为什么要，再要。 -->
+    <p class="lead"
+       data-en="It's how we tell you when you're approved, or when something about your account needs you. We'll send a link to make sure it reaches you."
+       data-zh="申请通过、账号有需要你知道的事，都靠它通知你。我们会发一封信，确认这个地址收得到。">It's how we tell you when you're approved, or when something about your account needs you. We'll send a link to make sure it reaches you.</p>
+    <form id="emailForm">
+      <label class="fl">
+        <input id="emailIn" type="email" maxlength="254" autocomplete="email" required placeholder=" " value="{{.Prefill}}">
+        <span data-en="Email" data-zh="邮箱">Email</span>
+      </label>
+      <button class="btn go" type="submit" data-en="Send confirmation" data-zh="发送确认信">Send confirmation</button>
+    </form>
+    <p class="err" id="emailErr" role="alert"></p>
+  </section>
+
+  <section class="req" data-req-state="sent">
+    <h1 data-en="Check your inbox" data-zh="去邮箱点链接">Check your inbox</h1>
+    <p class="lead">
+      <span data-en="We sent a link to" data-zh="确认信已发到">We sent a link to</span>
+      <b id="sentTo">{{.SentTo}}</b><span
+        data-en=". Open it on any device — this page carries on once you confirm."
+        data-zh="。在哪台设备上点开都行，确认后这一页会自己继续。">. Open it on any device — this page carries on once you confirm.</span>
+    </p>
+    <p class="fine"
+       data-en="Nothing after a few minutes? Check spam, or send it again. The link works for 24 hours."
+       data-zh="几分钟还没收到？看看垃圾邮件，或者重发一封。链接 24 小时内有效。">Nothing after a few minutes? Check spam, or send it again. The link works for 24 hours.</p>
+    <p class="fine acts">
+      <button class="act" id="resend" data-en="Send again" data-zh="重发">Send again</button>
+      <span class="sep" aria-hidden="true">·</span>
+      <button class="act" id="change" data-en="Use another address" data-zh="换一个地址">Use another address</button>
+    </p>
+    <p class="err" id="sentErr" role="alert"></p>
+  </section>
+
+  <p class="fine out">
+    <span class="me" aria-hidden="true"><span>{{.Initial}}</span>{{if .Avatar}}<img src="{{.Avatar}}" alt="" width="20" height="20" referrerpolicy="no-referrer" decoding="async">{{end}}</span>
+    <span data-en="Signed in as" data-zh="以">Signed in as</span>
+    <b class="mono">{{.Login}}</b><span data-en="" data-zh=" 登录"></span>
+    <span class="sep" aria-hidden="true">·</span>
+    <button class="act" id="out" data-en="Sign out" data-zh="退出登录">Sign out</button>
+  </p>
+</main>
+
+<script src="/assets/auth.js?v={{.V}}"></script>
+</body>
+</html>

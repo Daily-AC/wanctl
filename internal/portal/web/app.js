@@ -107,6 +107,14 @@
       eNoFriend: 'That is not one of your friends.',
       eNotFriends: 'You are not friends yet.',
       ePending: 'That invite has not been accepted yet.',
+      emailNone: 'No address confirmed yet.',
+      emailPending: function (a) { return 'A link is waiting at ' + a + '. It takes effect once opened.'; },
+      emailSent: function (a) { return 'Sent. Open the link in the mail to ' + a + '.'; },
+      'email-invalid': 'That address does not look right.',
+      'email-unchanged': 'That is already your address.',
+      'rate-address': 'A link just went to this address. Try again in a few minutes.',
+      'rate-identity': 'That is the most links for one day. Try again tomorrow.',
+      'mail-failed': "We couldn't send it. Check the address, or try again later.",
       eBadCode: 'That code is not valid.',
       ePairGone: 'That pairing request expired or was already answered. Ask the AI to try again.',
       failedGeneric: 'That did not work.',
@@ -225,6 +233,14 @@
       eNoFriend: '这不是你的好友。',
       eNotFriends: '你们还不是好友。',
       ePending: '这条邀请还没被接受。',
+      emailNone: '还没有确认过的邮箱。',
+      emailPending: function (a) { return '确认信在 ' + a + '，点开链接后生效。'; },
+      emailSent: function (a) { return '已发送。去 ' + a + ' 点开信里的链接。'; },
+      'email-invalid': '邮箱格式不对。',
+      'email-unchanged': '这已经是你现在的邮箱了。',
+      'rate-address': '刚给这个地址发过一封，过几分钟再试。',
+      'rate-identity': '今天发得太多了，明天再试。',
+      'mail-failed': '信没发出去。检查一下地址，或者稍后再试。',
       eBadCode: '这个码不对。',
       ePairGone: '这条配对请求已经过期或被人答过了。让 AI 再试一次。',
       failedGeneric: '没成功。',
@@ -389,7 +405,12 @@
     'no-such-friend': 'eNoFriend',
     'not-friends': 'eNotFriends',
     'invalid-friend': 'eNotFriends',
-    'pending-invite': 'ePending'
+    'pending-invite': 'ePending',
+    'email-invalid': 'email-invalid',
+    'email-unchanged': 'email-unchanged',
+    'rate-address': 'rate-address',
+    'rate-identity': 'rate-identity',
+    'mail-failed': 'mail-failed'
   };
 
   function errCode(e) {
@@ -1229,7 +1250,7 @@
 
   var curSet = 'tokens';
   var setLoaders = {
-    tokens: loadTokens, notify: loadNotify,
+    tokens: loadTokens, notify: loadNotify, email: loadEmail,
     invites: function () { loadRequests(); return loadInvites(); },
     friends: loadFriends, acl: loadACL, downloads: loadDownloads, audit: loadAudit
   };
@@ -1239,6 +1260,7 @@
   function allowedSet(s) {
     if (!setLoaders[s]) return 'tokens';
     if (s === 'invites' && !(me && me.role === 'admin')) return 'tokens';
+    if (s === 'email' && !(me && me.mail)) return 'tokens';
     return s;
   }
   // 设置有两级，空的那一级就是清单本身：`#settings` 是清单，
@@ -1311,6 +1333,36 @@
     };
   }
   copier($('#tCopy'), '#tVal');
+
+  /* ── 邮箱 ──────────────────────────────────────────────────────────
+     地址归中继管，这里只读和发确认信；确认在信里那个链接上完成。 */
+  /* 有一封确认信在路上时，这一节隔几秒自己再问一次：人多半在手机上点链接，
+     桌面上开着的这一页不该还要人回来刷新才看到新地址。 */
+  var emailTimer = null;
+  function loadEmail() {
+    clearTimeout(emailTimer);
+    jget('/auth/email/status').then(function (c) {
+      $('#eCur').textContent = c.confirmed || t().emailNone;
+      $('#ePending').hidden = !c.pending;
+      $('#ePending').textContent = c.pending ? t().emailPending(c.pending) : '';
+      if (c.pending) {
+        emailTimer = setTimeout(function () {
+          if (curSet === 'email' && $('[data-view="settings"]').classList.contains('show')) loadEmail();
+        }, 5000);
+      }
+    }).catch(oops);
+  }
+  $('#eSend').onclick = function () {
+    var address = $('#eIn').value.trim();
+    if (!address) { $('#eIn').focus(); return; }
+    $('#eSend').disabled = true;
+    jpost('/auth/email/send', { address: address, next: '/#settings/email' }).then(function (r) {
+      return r.json();
+    }).then(function (b) {
+      toast(t().emailSent(b.address || address));
+      loadEmail();
+    }).catch(oops).then(function () { $('#eSend').disabled = false; });
+  };
 
   /* ── 通知 ────────────────────────────────────────────────────────── */
   var notify = {};
@@ -1897,7 +1949,14 @@
     me = m;
     paintWho(m);
     if (m.role === 'admin') $('#sInvites').hidden = false;
-  }).catch(function () {
+    if (m.mail) $('#sEmail').hidden = false;
+  }).catch(function (e) {
+    // 页面本身是门后面的，正常走不到这里；开着的旧标签页在门立起来之后
+    // 刷新数据时会碰到，送它去门页。
+    if (e && e.status === 403 && ('' + e.message).trim() === 'email-required') {
+      location.href = '/auth/email?next=%2F';
+      return;
+    }
     $('#who').hidden = false;
     $('#whoName').textContent = t().notSignedIn;
   });

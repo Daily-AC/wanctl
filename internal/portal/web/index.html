@@ -172,6 +172,7 @@
         <div class="t" data-en="Account" data-zh="账号">Account</div>
         <button data-s="tokens" class="on" data-en="Access tokens" data-zh="访问令牌">Access tokens</button>
         <button id="webfetchConnect" data-en="Connect web AI" data-zh="连接网页 AI">Connect web AI</button>
+        <button data-s="email" id="sEmail" hidden data-en="Email" data-zh="邮箱">Email</button>
         <button data-s="notify" data-en="Notifications" data-zh="通知">Notifications</button>
         <button data-s="invites" id="sInvites" hidden data-en="Invites" data-zh="邀请">Invites</button>
       </div>
@@ -219,6 +220,24 @@
           <div class="once" data-en="Shown once. Set it as WANCTL_TOKEN on the controller."
                             data-zh="只显示这一次。把它设为控制端的 WANCTL_TOKEN。">Shown once.</div>
           <button class="btn soft" id="tCopy" data-en="Copy" data-zh="复制">Copy</button>
+        </div>
+      </section>
+
+      <!-- 邮箱。只有配了邮件的实例才有这一节（/api/me 的 mail）。
+           改地址走跟门页同一条路：发确认信，点链接才生效；确认之前信照旧发到原来的地址。 -->
+      <section class="sview" data-s="email">
+        <div class="vhead"><h1 data-en="Email" data-zh="邮箱">Email</h1></div>
+        <p class="lead" data-en="Where this instance writes to you: when an access request is answered, and when something about your account needs you."
+                        data-zh="这个实例联系你的地址：申请有了结果、账号有需要你知道的事，都发到这里。">Where this instance writes to you.</p>
+        <div class="card" style="margin-top:20px">
+          <div class="row"><span class="txt mono" id="eCur">—</span></div>
+          <p class="note" id="ePending" hidden></p>
+          <div class="row fieldrow">
+            <input id="eIn" type="email" maxlength="254" autocomplete="email" spellcheck="false">
+            <button class="btn" id="eSend" data-en="Send confirmation" data-zh="发送确认信">Send confirmation</button>
+          </div>
+          <p class="note" data-en="A new address takes effect once you open the link we send to it. Until then, mail keeps going to the current one."
+             data-zh="新地址要点开确认信里的链接才生效；在那之前，信照旧发到现在的地址。">A new address takes effect once you open the link we send to it.</p>
         </div>
       </section>
 

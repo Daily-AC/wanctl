@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Confirm email · wanctl</title>
+<link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css?v={{.V}}">
+</head>
+<!-- 确认信里那个链接打开的页面。打开它什么都不会发生，按了按钮（POST）
+     才算确认：企业邮箱的安全扫描会把信里每个链接先抓一遍，要是 GET 就生效，
+     替人确认的就是扫描器。
+     这一页常常是在手机上、没登录的浏览器里打开的，所以它不要求登录，
+     链接里的令牌就是凭据。页面写清是哪个 GitHub 账号、哪个地址：
+     点开的人未必是填地址的人（有人手滑填错了别人的邮箱）。
+     live / used / expired / unknown 四段由服务端选，done 由脚本在确认成功后切过去。 -->
+<body class="auth" data-req="{{.Req}}">
+
+<header class="top">
+  <span class="brand"><svg class="mk" viewBox="0 0 32 32" aria-hidden="true"><path d="M5.6 12.4 10.2 21.8 15.2 14.6 19.6 21.8 26.4 7.6" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"/></svg>wanctl</span>
+  <div class="tools">
+    <button class="chip" id="lang">中文</button>
+  </div>
+</header>
+
+<main>
+  <section class="req" data-req-state="live">
+    <h1 data-en="Confirm your email" data-zh="确认邮箱">Confirm your email</h1>
+    <p class="lead"><b id="confirmAddr">{{.Address}}</b></p>
+    <p class="fine">
+      <span data-en="Contact address for the GitHub account" data-zh="作为 GitHub 账号">Contact address for the GitHub account</span>
+      <b class="mono">{{.Login}}</b>
+      <span data-en="on" data-zh="在">on</span>
+      <span class="mono">{{.Host}}</span><span data-en="." data-zh=" 上的联系邮箱。">.</span>
+    </p>
+    <form id="confirmForm" data-token="{{.Token}}">
+      <button class="btn go" type="submit" data-en="Confirm" data-zh="确认">Confirm</button>
+    </form>
+    <p class="err" id="confirmErr" role="alert"></p>
+    <p class="fine" data-en="Didn't ask for this? Close the page; nothing changes."
+       data-zh="不是你填的？关掉这一页就好，什么都不会改。">Didn't ask for this? Close the page; nothing changes.</p>
+  </section>
+
+  <section class="req" data-req-state="done">
+    <h1 data-en="Email confirmed" data-zh="邮箱已确认">Email confirmed</h1>
+    <p class="lead"
+       data-en="You can close this page. The page that sent the link carries on by itself."
+       data-zh="可以关掉这一页了。发信的那一页会自己继续。">You can close this page. The page that sent the link carries on by itself.</p>
+  </section>
+
+  <section class="req" data-req-state="used">
+    <h1 data-en="Link already used" data-zh="链接已经用过">Link already used</h1>
+    <p class="lead"
+       data-en="This address was confirmed with it. There's nothing more to do here."
+       data-zh="这个地址已经用它确认过了，这里没有别的要做。">This address was confirmed with it. There's nothing more to do here.</p>
+  </section>
+
+  <section class="req" data-req-state="expired">
+    <h1 data-en="Link expired" data-zh="链接已失效">Link expired</h1>
+    <p class="lead"
+       data-en="Links work for 24 hours, and only the newest one does. Sign in to send a fresh one."
+       data-zh="链接 24 小时内有效，而且只有最新的一封能用。登录后可以重发。">Links work for 24 hours, and only the newest one does. Sign in to send a fresh one.</p>
+    <a class="btn go" href="/auth/email" data-en="Send a new link" data-zh="重发确认信">Send a new link</a>
+  </section>
+
+  <section class="req" data-req-state="unknown">
+    <h1 data-en="Link not recognised" data-zh="链接无效">Link not recognised</h1>
+    <p class="lead"
+       data-en="It may have been cut short when copied. Open it straight from the mail, or sign in to send a new one."
+       data-zh="可能复制时被截断了。直接从邮件里点开，或者登录后重发一封。">It may have been cut short when copied. Open it straight from the mail, or sign in to send a new one.</p>
+    <a class="btn go" href="/auth/email" data-en="Send a new link" data-zh="重发确认信">Send a new link</a>
+  </section>
+</main>
+
+<script src="/assets/auth.js?v={{.V}}"></script>
+</body>
+</html>

@@ -186,11 +186,9 @@ type resolveUserState struct {
 	byNamespace map[string]string
 	invites     map[int]*inviteRecord
 	inserts     int
-	requests    []AccessRequest
 }
 
 type identityRecord struct {
-	email     string
 	namespace string
 	role      string
 }
@@ -235,13 +233,6 @@ func (s resolveUserStmt) Exec(args []driver.Value) (driver.Result, error) {
 	if strings.Contains(s.query, "pg_advisory_xact_lock") {
 		return driver.RowsAffected(0), nil
 	}
-	if strings.Contains(s.query, "UPDATE users SET email") {
-		key := identityKey(args[0].(string), args[1].(string))
-		record := s.state.byIdentity[key]
-		record.email = args[2].(string)
-		s.state.byIdentity[key] = record
-		return driver.RowsAffected(1), nil
-	}
 	if strings.Contains(s.query, "UPDATE invites SET used_at") {
 		id, namespace := int(args[0].(int64)), args[1].(string)
 		invite := s.state.invites[id]
@@ -272,19 +263,7 @@ func (s resolveUserStmt) Query(args []driver.Value) (driver.Rows, error) {
 		if _, exists := s.state.byNamespace[ns]; exists {
 			return &adminRows{columns: []string{"namespace", "role"}}, nil
 		}
-		email := args[5].(string)
-		if email == "" {
-			if !strings.Contains(s.query, "WHERE provider = $1 AND subject = $2 AND status = 'approved' ORDER BY id DESC LIMIT 1") {
-				return nil, fmt.Errorf("missing approved-email fallback query")
-			}
-			latestID := 0
-			for _, request := range s.state.requests {
-				if request.Provider == provider && request.Subject == subject && request.Status == accessApproved && request.ID > latestID {
-					email, latestID = request.Email, request.ID
-				}
-			}
-		}
-		s.state.byIdentity[key] = identityRecord{namespace: ns, role: role, email: email}
+		s.state.byIdentity[key] = identityRecord{namespace: ns, role: role}
 		s.state.byNamespace[ns] = key
 		return &adminRows{
 			columns: []string{"namespace", "role"},
@@ -344,7 +323,7 @@ func TestPGStoreResolveUserDoesNotReassignNamespace(t *testing.T) {
 
 type namespaceConflictAdmin struct{ noopAdmin }
 
-func (*namespaceConflictAdmin) ResolveIdentity(string, string, string, string, string, string) (string, string, error) {
+func (*namespaceConflictAdmin) ResolveIdentity(string, string, string, string, string) (string, string, error) {
 	return "", "", fmt.Errorf("%w: %q", ErrNamespaceConflict, "alice")
 }
 
@@ -402,12 +381,13 @@ func TestAdminACLRequiresIdentifiersAndIgnoresPermissions(t *testing.T) {
 
 type resolveIdentityAdmin struct {
 	noopAdmin
-	provider, subject, reservedNS, email string
-	err                                  error
+	provider, subject, reservedNS string
+	err                           error
+	confirmed                     bool
 }
 
-func (a *resolveIdentityAdmin) ResolveIdentity(provider, subject, _, _, reservedNS, email string) (string, string, error) {
-	a.provider, a.subject, a.reservedNS, a.email = provider, subject, reservedNS, email
+func (a *resolveIdentityAdmin) ResolveIdentity(provider, subject, _, _, reservedNS string) (string, string, error) {
+	a.provider, a.subject, a.reservedNS = provider, subject, reservedNS
 	if a.err != nil {
 		return "", "", a.err
 	}
@@ -435,12 +415,39 @@ func TestAdminResolveUserLegacyRequestIncludesRole(t *testing.T) {
 	if admin.reservedNS != "portal" {
 		t.Fatalf("reserved namespace = %q, want portal", admin.reservedNS)
 	}
-	var body map[string]string
+	var body map[string]any
 	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body["namespace"] != "legacy" || body["role"] != "user" {
+	if body["namespace"] != "legacy" || body["role"] != "user" || body["email_confirmed"] != false {
 		t.Fatalf("response = %#v", body)
+	}
+}
+
+func (a *resolveIdentityAdmin) ContactEmail(string, string) (ContactEmail, error) {
+	if !a.confirmed {
+		return ContactEmail{Address: "legacy@example.com"}, nil
+	}
+	at := time.Now()
+	return ContactEmail{Address: "person@example.com", ConfirmedAt: &at}, nil
+}
+
+// The portal's door reads one flag off the resolve answer: an address carried
+// over but never confirmed does not count.
+func TestAdminResolveUserReportsConfirmedEmail(t *testing.T) {
+	for _, confirmed := range []bool{false, true} {
+		r := New(envTokens{})
+		r.SetAdminSecret("secret")
+		r.SetAdmin(&resolveIdentityAdmin{confirmed: confirmed})
+		req := httptest.NewRequest("POST", "/admin/resolve-user", strings.NewReader(`{"provider":"github","subject":"7","login":"octocat"}`))
+		req.Header.Set("X-Admin-Secret", "secret")
+		rr := httptest.NewRecorder()
+		r.Handler().ServeHTTP(rr, req)
+		var body map[string]any
+		json.NewDecoder(rr.Body).Decode(&body)
+		if rr.Code != http.StatusOK || body["email_confirmed"] != confirmed {
+			t.Fatalf("confirmed=%v: response = %d %#v", confirmed, rr.Code, body)
+		}
 	}
 }
 
@@ -579,24 +586,24 @@ func TestPGStoreGitHubAdmission(t *testing.T) {
 	}
 	p := newResolveUserTestPGStore(t, state)
 
-	ns, role, err := p.ResolveIdentity("github", "100", "FirstUser", "First User", "portal", "")
+	ns, role, err := p.ResolveIdentity("github", "100", "FirstUser", "First User", "portal")
 	if err != nil || ns != "firstuser" || role != "admin" {
 		t.Fatalf("first GitHub identity = %q, %q, %v; want firstuser, admin", ns, role, err)
 	}
-	if _, _, err := p.ResolveIdentity("github", "101", "uninvited", "", "portal", ""); !errors.Is(err, ErrPendingInvite) {
+	if _, _, err := p.ResolveIdentity("github", "101", "uninvited", "", "portal"); !errors.Is(err, ErrPendingInvite) {
 		t.Fatalf("second GitHub identity error = %v, want ErrPendingInvite", err)
 	}
 
 	// A code invite left over from before v0.17.0 admits no one: admission is
 	// by login, and nothing presents a code any more.
-	if _, _, err := p.ResolveIdentity("github", "102", "code-user", "", "portal", ""); !errors.Is(err, ErrPendingInvite) {
+	if _, _, err := p.ResolveIdentity("github", "102", "code-user", "", "portal"); !errors.Is(err, ErrPendingInvite) {
 		t.Fatalf("legacy code invite admitted someone: %v", err)
 	}
 	if got := state.invites[1].usedBy; got != "" {
 		t.Fatalf("legacy code invite used_by = %q", got)
 	}
 
-	ns, role, err = p.ResolveIdentity("github", "104", "prerecorded", "", "portal", "")
+	ns, role, err = p.ResolveIdentity("github", "104", "prerecorded", "", "portal")
 	if err != nil || ns != "prerecorded" || role != "user" {
 		t.Fatalf("login invite identity = %q, %q, %v", ns, role, err)
 	}
@@ -620,7 +627,7 @@ func TestPGStoreResolveIdentityRejectsReservedNamespace(t *testing.T) {
 		{provider: "header", subject: "portal@example.com"},
 		{provider: "github", subject: "200", login: "Portal"},
 	} {
-		if _, _, err := p.ResolveIdentity(tc.provider, tc.subject, tc.login, "", "portal", ""); !errors.Is(err, ErrNamespaceConflict) {
+		if _, _, err := p.ResolveIdentity(tc.provider, tc.subject, tc.login, "", "portal"); !errors.Is(err, ErrNamespaceConflict) {
 			t.Fatalf("ResolveIdentity(%q) error = %v, want ErrNamespaceConflict", tc.provider, err)
 		}
 	}
@@ -772,50 +779,5 @@ func TestAdminDevicesUsesOwnerNamespaceForSharedLiveness(t *testing.T) {
 	json.NewDecoder(rr.Body).Decode(&out)
 	if len(out.Devices) != 1 || out.Devices[0]["online"] != true {
 		t.Fatalf("shared device should be online via owner namespace, got %+v", out.Devices)
-	}
-}
-
-func TestResolveUserEmail(t *testing.T) {
-	state := &resolveUserState{
-		byIdentity: map[string]identityRecord{}, byNamespace: map[string]string{}, invites: map[int]*inviteRecord{},
-		requests: []AccessRequest{
-			{ID: 1, Provider: "github", Subject: "100", Email: "older@example.com", Status: accessApproved},
-			{ID: 2, Provider: "github", Subject: "100", Email: "typed@example.com", Status: accessApproved},
-			{ID: 3, Provider: "github", Subject: "100", Email: "declined@example.com", Status: accessDeclined},
-			{ID: 4, Provider: "github", Subject: "other", Email: "other@example.com", Status: accessApproved},
-			{ID: 5, Provider: "header", Subject: "100", Email: "header@example.com", Status: accessApproved},
-		},
-	}
-	p := newResolveUserTestPGStore(t, state)
-	r := New(envTokens{})
-	r.SetAdminSecret("s3cret")
-	r.SetAdmin(p)
-	resolve := func(email string) {
-		t.Helper()
-		body, _ := json.Marshal(map[string]string{"provider": "github", "subject": "100", "login": "octocat", "email": email})
-		rr := relayRequest(t, r, "POST", "/admin/resolve-user", string(body), "", "s3cret")
-		if rr.Code != 200 {
-			t.Fatalf("resolve = %d %s", rr.Code, rr.Body.String())
-		}
-	}
-	resolve("")
-	key := identityKey("github", "100")
-	if state.byIdentity[key].email != "typed@example.com" {
-		t.Fatalf("fallback = %#v", state.byIdentity[key])
-	}
-	resolve("primary@example.com")
-	if state.byIdentity[key].email != "primary@example.com" {
-		t.Fatalf("update = %#v", state.byIdentity[key])
-	}
-	resolve("")
-	if state.byIdentity[key].email != "primary@example.com" {
-		t.Fatal("empty email overwrote stored address")
-	}
-	// On creation, a principal email takes precedence over the typed fallback.
-	delete(state.byIdentity, key)
-	delete(state.byNamespace, "octocat")
-	resolve("new@example.com")
-	if state.byIdentity[key].email != "new@example.com" {
-		t.Fatalf("insert = %#v", state.byIdentity[key])
 	}
 }

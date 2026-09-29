@@ -2,11 +2,8 @@ package portal
 
 import (
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -34,96 +31,6 @@ func TestMailConfiguration(t *testing.T) {
 		if s.mailEnabled() != (missing == -1) {
 			t.Fatalf("missing %d: mail enabled = %v", missing, s.mailEnabled())
 		}
-	}
-}
-
-func TestOAuthEmailAndPages(t *testing.T) {
-	// Email fixtures follow GitHub's documented /user/emails response schema.
-	for _, tc := range []struct {
-		name, response, want string
-		on                   bool
-		status               int
-	}{
-		{"off", `[{"email":"primary@example.com","primary":true,"verified":true}]`, "", false, 200},
-		{"primary verified", `[{"email":"other@example.com","primary":false,"verified":true},{"email":"unverified@example.com","primary":true,"verified":false},{"email":"8437@users.noreply.github.com","primary":true,"verified":true},{"email":"primary@example.com","primary":true,"verified":true}]`, "primary@example.com", true, 200},
-		{"noreply", `[{"email":"8437@USERS.NOREPLY.GITHUB.COM","primary":true,"verified":true}]`, "", true, 200},
-		{"no primary", `[{"email":"other@example.com","primary":false,"verified":true}]`, "", true, 200},
-		{"unverified", `[{"email":"other@example.com","primary":true,"verified":false}]`, "", true, 200},
-		{"empty", `[]`, "", true, 200},
-		{"upstream failure", `{"message":"Bad credentials"}`, "", true, 401},
-		{"malformed", `{`, "", true, 200},
-		{"transport failure", ``, "", true, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var calls []string
-			s := accessPortal(t, func(b map[string]string, w http.ResponseWriter) {
-				if b["email"] != tc.want {
-					t.Errorf("resolved email = %q, want %q", b["email"], tc.want)
-				}
-				resolvePendingInvite(b, w)
-			}, &calls)
-			if tc.on {
-				s.mail = newFakeMailSender()
-			}
-			emailCalls := 0
-			inner := s.hc.Transport
-			// A separate GitHub transport also verifies proxy routing for /user/emails.
-			s.ghc = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				if r.URL.Path != "/user/emails" {
-					return inner.RoundTrip(r)
-				}
-				emailCalls++
-				if r.Header.Get("Authorization") != "Bearer gho_test" {
-					t.Error("email request lost user token")
-				}
-				if tc.status == 0 {
-					return nil, fmt.Errorf("unreachable")
-				}
-				w := httptest.NewRecorder()
-				w.WriteHeader(tc.status)
-				io.WriteString(w, tc.response)
-				return w.Result(), nil
-			})}
-			rr := httptest.NewRecorder()
-			s.handleAuthStart(rr, httptest.NewRequest("GET", "/auth/github", nil))
-			loc, _ := url.Parse(rr.Header().Get("Location"))
-			if tc.on && loc.Query().Get("scope") != "user:email" {
-				t.Fatal("missing scope")
-			}
-			if !tc.on && loc.Query().Has("scope") {
-				t.Fatal("unexpected scope")
-			}
-			rr = httptest.NewRecorder()
-			s.handleAuthLogin(rr, httptest.NewRequest("GET", "/auth/login", nil))
-			old := "No GitHub permissions are requested — only your public profile."
-			current := "Only your public profile and your email address, to tell you about your account."
-			if strings.Contains(rr.Body.String(), old) == tc.on || strings.Contains(rr.Body.String(), current) != tc.on {
-				t.Fatal("wrong permission copy")
-			}
-			cb := loginThroughCallback(t, s, "")
-			if cb.Code != http.StatusSeeOther {
-				t.Fatalf("callback = %d %s", cb.Code, cb.Body.String())
-			}
-			cookie := sessionCookie(t, cb)
-			p, err := s.decodeSession(cookie.Value)
-			if err != nil || p.Email != tc.want {
-				t.Fatalf("principal = %#v, %v", p, err)
-			}
-			wantCalls := 0
-			if tc.on {
-				wantCalls = 1
-			}
-			if emailCalls != wantCalls {
-				t.Fatalf("email calls = %d", emailCalls)
-			}
-			rr = httptest.NewRecorder()
-			req := httptest.NewRequest("GET", "/pending", nil)
-			req.AddCookie(cookie)
-			s.handlePending(rr, req)
-			if strings.Contains(rr.Body.String(), `type="email"`) != (tc.on && tc.want == "") {
-				t.Fatal("wrong email field visibility")
-			}
-		})
 	}
 }
 

@@ -260,9 +260,9 @@ func TestCSPDoesNotAllowInlineScript(t *testing.T) {
 	}
 }
 
-func TestSessionEmailCannotBeTampered(t *testing.T) {
+func TestSessionNameCannotBeTampered(t *testing.T) {
 	s := newOAuthPortal(t, resolveOKAs("octocat", "user"))
-	value, err := s.encodeSession(&principal{Provider: "github", Subject: "8437", Login: "octocat", Email: "primary@example.com", Expires: time.Now().Add(time.Hour).Unix()})
+	value, err := s.encodeSession(&principal{Provider: "github", Subject: "8437", Login: "octocat", Name: "primary display name", Expires: time.Now().Add(time.Hour).Unix()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,8 +271,8 @@ func TestSessionEmailCannotBeTampered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parts[1] = base64.RawURLEncoding.EncodeToString(bytes.ReplaceAll(raw, []byte("primary@example.com"), []byte("attacker@example.com")))
+	parts[1] = base64.RawURLEncoding.EncodeToString(bytes.ReplaceAll(raw, []byte("primary display name"), []byte("attacker display name")))
 	if _, err := s.decodeSession(strings.Join(parts, ".")); err == nil {
-		t.Fatal("tampered email accepted")
+		t.Fatal("tampered session accepted")
 	}
 }

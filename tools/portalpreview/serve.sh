@@ -32,9 +32,10 @@ sed -e 's/__V__/dev/g' \
 #   指纹    SHA256: 加 44 个 base64 字符（internal/transport/identity.go）
 #   有效期  5 分钟（enrollCodeTTL），不是随手写的 10
 #   申请状态 none / pending / approved / declined（internal/portal/auth.go）
-#   发信    开着（线上 v0.16.0 起）：登录页写明要邮箱权限，pending-email 是
-#           GitHub 没给出已验证邮箱时那张带邮箱栏的申请页
-# 访问申请通过的那封信（mail-approved.html）也是同一个办法渲染：它就是寄出去的那份 HTML。
+#   发信    开着（线上 v0.16.0 起）：登录页预告要绑邮箱；email / email-sent 是登录后那道门，
+#           confirm-* 是确认信里那个链接打开的页面（v0.18.0）
+# 两封信（mail-approved.html 申请通过、mail-confirm.html 确认邮箱）也是同一个办法渲染：
+# 它们就是寄出去的那份 HTML。
 go run "$ROOT/tools/portalpreview/render.go" "$SRC" "$OUT"
 
 # app.css / app.js / fonts 在页面里是 /assets/... 的绝对路径。
@@ -55,8 +56,9 @@ fi
 LAN=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')
 echo "预览： http://127.0.0.1:$PORT/"
 echo "认证： /login.html · /pending.html · /enroll.html（静态渲染，提交申请与退出登录点了没反应）"
-echo "申请： /pending-email.html · /pending-sent.html · /pending-approved.html · /pending-declined.html"
-echo "邮件： /mail-approved.html（访问申请通过的通知信，HTML 部分）"
+echo "邮箱： /email.html · /email-sent.html · /confirm.html · /confirm-done.html · /confirm-used.html · /confirm-expired.html · /confirm-unknown.html"
+echo "申请： /pending-sent.html · /pending-approved.html · /pending-declined.html"
+echo "邮件： /mail-approved.html（申请通过） · /mail-confirm.html（确认邮箱），HTML 部分"
 [ -n "$LAN" ] && echo "手机： http://$LAN:$PORT/"
 echo "目录： $OUT"
 cd "$OUT" && exec python3 -m http.server "$PORT"

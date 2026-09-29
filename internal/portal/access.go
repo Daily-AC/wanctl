@@ -60,7 +60,9 @@ func (s *Server) accessStatusFor(p *principal) (accessStatus, error) {
 }
 
 // handleAccessRequest files an application on behalf of the signed-in
-// applicant. Only the note and fallback email come from the client.
+// applicant. Only the note comes from the client; the address an approval is
+// mailed to is the applicant's confirmed contact address, which the door in
+// front of this form made sure exists.
 func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 	if !s.oauthEnabled() {
 		http.NotFound(w, r)
@@ -73,29 +75,34 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	// Someone who already has a namespace has nothing to apply for, and an
 	// application from them would sit in the queue forever.
-	if _, _, status, _ := s.resolveNamespace(p); status == resolveOK {
+	if _, _, status, _ := s.resolveNamespace(p); status == resolveOK || status == resolveNeedsEmail {
 		http.Error(w, "already admitted", http.StatusConflict)
 		return
 	}
+	// Checked here, not only by the page's redirect: the form is one POST
+	// away from anyone with a session. A relay that cannot say fails closed.
+	if s.emailGate() {
+		c, err := s.contactFor(p)
+		if err != nil {
+			http.Error(w, "relay unreachable", http.StatusBadGateway)
+			return
+		}
+		if c.confirmed() == "" {
+			http.Error(w, emailRequiredBody, http.StatusForbidden)
+			return
+		}
+	}
 	var in struct {
-		Note  string `json:"note"`
-		Email string `json:"email"`
+		Note string `json:"note"`
 	}
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&in)
-	}
-	// A typed address is only a fallback for a GitHub account without a
-	// verified one, and only worth keeping when this portal can send mail.
-	email := p.Email
-	if email == "" && s.mailEnabled() {
-		email = strings.TrimSpace(in.Email)
 	}
 	resp, err := s.adminReq("POST", "/admin/access-requests", nil, map[string]string{
 		"provider": p.Provider,
 		"subject":  p.Subject,
 		"login":    p.Login,
 		"note":     strings.TrimSpace(in.Note),
-		"email":    email,
 	})
 	if err != nil {
 		http.Error(w, "relay unreachable", http.StatusBadGateway)

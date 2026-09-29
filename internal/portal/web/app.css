@@ -734,6 +734,18 @@ pre code{background:none;padding:0;font-size:1em}
 .auth[data-req="pending"] .req[data-req-state="pending"],
 .auth[data-req="approved"] .req[data-req-state="approved"],
 .auth[data-req="declined"] .req[data-req-state="declined"]{display:block}
+/* 绑定邮箱（email.html）和确认链接（email-confirm.html）用同一套：
+   form / sent 是门页的两段，live / done / used / expired / unknown 是确认页。 */
+.auth[data-req="form"] .req[data-req-state="form"],
+.auth[data-req="sent"] .req[data-req-state="sent"],
+.auth[data-req="live"] .req[data-req-state="live"],
+.auth[data-req="done"] .req[data-req-state="done"],
+.auth[data-req="used"] .req[data-req-state="used"],
+.auth[data-req="expired"] .req[data-req-state="expired"],
+.auth[data-req="unknown"] .req[data-req-state="unknown"]{display:block}
+.auth .req .acts .sep{margin:0 4px;color:var(--hairline)}
+.auth .req[data-req-state="expired"] .go,
+.auth .req[data-req-state="unknown"] .go{margin-top:28px}
 
 /* 页脚那一行里的头像：跟 12.5px 的字同高一档。首字母那层在 GitHub
    图床拉不到时露出来。 */

@@ -6,10 +6,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"net/mail"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"wanctl/internal/notify"
@@ -164,7 +162,6 @@ func (r *Relay) adminAccessRequests(w http.ResponseWriter, req *http.Request) {
 			Subject  string `json:"subject"`
 			Login    string `json:"login"`
 			Note     string `json:"note"`
-			Email    string `json:"email"`
 		}
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -177,13 +174,8 @@ func (r *Relay) adminAccessRequests(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "provider, subject and login required", http.StatusBadRequest)
 			return
 		}
-		email, err := accessEmail(body.Email)
-		if err != nil {
-			writeErrorToken(w, http.StatusBadRequest, "email-invalid")
-			return
-		}
 		out, err := r.admin.CreateAccessRequest(
-			body.Provider, body.Subject, body.Login, normalizeAccessNote(body.Note), email)
+			body.Provider, body.Subject, body.Login, normalizeAccessNote(body.Note))
 		if err != nil {
 			accessError(w, err)
 			return
@@ -223,8 +215,9 @@ func (r *Relay) adminAccessRequestStatus(w http.ResponseWriter, req *http.Reques
 		out["status"] = latest.Status
 		out["id"] = latest.ID
 		out["note"] = latest.Note
-		// The address stays in the queue; the applicant's own page only needs
-		// enough of it to recognise where an approval will be mailed.
+		// The address is the identity's confirmed contact address. The
+		// applicant's own page only needs enough of it to recognise where an
+		// approval will be mailed.
 		if hint := maskEmail(latest.Email); hint != "" {
 			out["email_hint"] = hint
 		}
@@ -297,8 +290,14 @@ func (r *Relay) emitAccessRequested(request AccessRequest) {
 
 // --- PGStore ---
 
-const accessRequestColumns = `id, provider, subject, login, note, email, status,
-	created_at, decided_at, COALESCE(decided_by, '')`
+// email is not the column of that name, which v0.18.0 stopped writing: it is
+// the applicant's confirmed contact address, read at the moment of asking, so
+// an approval mail goes to wherever they confirmed last.
+const accessRequestColumns = `id, provider, subject, login, note,
+	COALESCE((SELECT c.address FROM contact_emails c
+	           WHERE c.provider = access_requests.provider AND c.subject = access_requests.subject
+	             AND c.confirmed_at IS NOT NULL), ''),
+	status, created_at, decided_at, COALESCE(decided_by, '')`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -320,7 +319,7 @@ func scanAccessRequest(row rowScanner) (AccessRequest, error) {
 // already has one open, was approved, or was declined too recently. The whole
 // decision happens inside one transaction with the row locked, so two clicks
 // on submit cannot both win.
-func (p *PGStore) CreateAccessRequest(provider, subject, login, note, email string) (AccessRequest, error) {
+func (p *PGStore) CreateAccessRequest(provider, subject, login, note string) (AccessRequest, error) {
 	tx, err := p.db.Begin()
 	if err != nil {
 		return AccessRequest{}, err
@@ -335,9 +334,9 @@ func (p *PGStore) CreateAccessRequest(provider, subject, login, note, email stri
 		return AccessRequest{}, err
 	}
 	out, err := scanAccessRequest(tx.QueryRow(
-		`INSERT INTO access_requests (provider, subject, login, note, email)
-		 VALUES ($1, $2, $3, $4, $5)
-		 RETURNING `+accessRequestColumns, provider, subject, login, note, email))
+		`INSERT INTO access_requests (provider, subject, login, note)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING `+accessRequestColumns, provider, subject, login, note))
 	if err != nil {
 		return AccessRequest{}, err
 	}
@@ -457,31 +456,6 @@ func (p *PGStore) ListAdminNamespaces() ([]string, error) {
 		out = append(out, ns)
 	}
 	return out, rows.Err()
-}
-
-func accessEmail(input string) (string, error) {
-	// Reject controls before trimming so CR/LF cannot disappear into whitespace.
-	for _, c := range input {
-		if unicode.IsControl(c) {
-			return "", errors.New("email-invalid")
-		}
-	}
-	email := strings.TrimSpace(input)
-	if email == "" {
-		return "", nil
-	}
-	if len(email) > 254 {
-		return "", errors.New("email-invalid")
-	}
-	addr, err := mail.ParseAddress(email)
-	if err != nil || addr.Address != email || addr.Name != "" {
-		return "", errors.New("email-invalid")
-	}
-	domain := email[strings.LastIndex(email, "@")+1:]
-	if !strings.Contains(domain, ".") || strings.EqualFold(domain, "users.noreply.github.com") {
-		return "", errors.New("email-invalid")
-	}
-	return email, nil
 }
 
 // maskEmail keeps the first character of the mailbox and the whole domain:
