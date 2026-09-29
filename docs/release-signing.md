@@ -132,6 +132,42 @@ public keys shipped in the release directory. Pin `release-public.pem` against
 the previous release (or a copy kept outside the artifact) — an artifact that
 supplies both key and signature only proves internal consistency.
 
+## Container image
+
+The Release workflow also publishes `ghcr.io/daily-ac/wanctl:vX.Y.Z` for
+linux/amd64, with no `latest` tag. Relay and portal use the same image. It embeds
+the exact `TRUSTED_KEYS` computed by the existing binary build, including
+`WANCTL_RELEASE_PREVIOUS_PUBLIC_KEYS` from the release environment variable.
+Cosign v2.6.1 is downloaded from its official release and checked against a
+hard-coded SHA-256 before execution. The workflow signs the pushed digest
+keylessly using GitHub Actions OIDC; any failure blocks GitHub Release creation.
+
+**The device update manifest and release asset list are unchanged. The manifest
+does not cover the image.** Image trust comes from the cosign signature, with
+the exact workflow/tag identity and GitHub OIDC issuer verified below. Existing
+device updaters, installers and relay dist verification need no migration.
+
+Read the digest in the release job summary, or look up the tag's `Digest:` with:
+
+```sh
+docker buildx imagetools inspect ghcr.io/daily-ac/wanctl:vX.Y.Z
+```
+
+Replace `vX.Y.Z` and `<digest>` with the intended tag and the 64 hex digits after
+`sha256:`. Verify first, then pull the same immutable reference:
+
+```sh
+set -eu
+cosign verify --certificate-identity "https://github.com/Daily-AC/wanctl/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  'ghcr.io/daily-ac/wanctl@sha256:<digest>'
+docker pull 'ghcr.io/daily-ac/wanctl@sha256:<digest>'
+```
+
+Run both roles from that digest and mount the usual signed dist directory for
+the relay. The manual release publisher remains unchanged; it does not publish
+or sign a container image.
+
 ## Rotation and revocation
 
 1. Generate a new offline key and protect it as the new CI signing secret.
