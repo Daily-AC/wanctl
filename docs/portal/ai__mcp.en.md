@@ -5,7 +5,7 @@ MCP is how an AI calls wanctl directly — no skill to read, no command line to 
 | | Use | Typically |
 | --- | --- | --- |
 | It can | Local stdio | Claude Code, Codex, Cursor |
-| It cannot | Hosted endpoint | claude.ai on the web, cloud agent runners, an AI someone else hosts |
+| It cannot | Hosted endpoint (the host must support OAuth) | ChatGPT, claude.ai on the web, cloud agent runners |
 
 ## Local (stdio)
 
@@ -25,52 +25,31 @@ args = ["mcp"]
 
 It uses the identity `wanctl login` already stored on that machine, so a restart is the whole setup and there is no second login. If the machine has never logged in, walk through [Let your AI control a device](#docs/ai-skill) first.
 
-## Hosted (HTTP)
+## Hosted (HTTP, OAuth)
 
-The endpoint is `https://relay.example.com/mcp`. In Claude Code:
+The endpoint is `https://relay.example.com/mcp`. Some relays answer on `/wanctl-mcp` instead, because the proxy in front of them has claimed the `/mcp` prefix; ask whoever runs it which one to use. It needs no file from your machine, and you never hand it a token.
 
-```sh
-claude mcp add --transport http wanctl https://relay.example.com/mcp
-```
+OAuth is the only way in. The first time a host connects it gets a 401 whose header names where to discover the authorization server; it follows that and sends you to the portal. You sign in with GitHub as usual, the page names the client that is asking and the host your authorization will be delivered to, and you click **Allow**. No code to copy, nothing to paste back.
 
-Any other host takes the same URL in its "MCP server / HTTP" field. It needs no file from your machine, and you never hand it a token. Some relays answer on `/wanctl-mcp` instead, because the proxy in front of them has claimed the `/mcp` prefix; ask whoever runs it which one to use.
+- **Claude Code**: `claude mcp add --transport http wanctl https://relay.example.com/mcp`, then type `/mcp` in Claude Code, pick wanctl and walk through the authorization.
+- **A web AI such as ChatGPT or claude.ai**: in its custom connector, give it the same URL and set authentication to **OAuth** (not "no authentication"); it works out the rest of the discovery itself.
 
-> The endpoint is public and anyone can complete a handshake with it — and see no devices at all afterwards. What a session can see is decided entirely by the login below.
+> The endpoint is public, but a request without an authorization gets 401: no handshake, and no devices.
 
-## Web AI that keeps no session (ChatGPT, claude.ai)
-
-A web AI like ChatGPT or claude.ai may recreate its MCP session between tool calls. The per-session login below cannot survive that: the call right after a successful login reports LOGIN REQUIRED. There is a second path for them.
-
-In its custom connector, give it the same endpoint URL and set authentication to **OAuth** (not "no authentication"); it works out the rest of the discovery itself. On save it sends you to the portal: you sign in with GitHub as usual, the page names the client that is asking and the host your authorization will be delivered to, and you click **Allow**. No code to copy, nothing to paste back.
-
-The authorization belongs to the connector rather than to a session, so every new session it opens is still signed in. To withdraw it, revoke the token labelled `oauth:` plus the client's name on the portal's access-token page, or ask the AI to call `wanctl_logout` — same effect. A connector in use renews its authorization by itself; one left unused for 30 days loses it, token included, and has to be authorized again.
-
-> This path needs the operator to have given the relay a database, `WANCTL_PUBLIC_ORIGIN` and `WANCTL_PORTAL`, all three. Without any one of them the endpoint keeps only the session login below, and an AI's connector finds no authorization server to discover.
-
-## Without OAuth: logging in the first time
-
-Tell the AI to log in to wanctl. It calls `wanctl_login`, and you follow it:
-
-1. The AI gives you a `https://portal.example.com/enroll` link. Open it in your browser.
-2. The portal recognizes your account (usually you are already signed in) and shows a one-time code, good for five minutes.
-3. Paste the code back to the AI. It calls `wanctl_login` again, this time with the code.
-
-A login belongs to **one session**. Other people and other conversations on the same endpoint log in on their own, and none of them sees anyone else's devices.
+The authorization belongs to the connector rather than to a session, so every new session it opens is still signed in, and other people and other connectors on the same endpoint authorize on their own without seeing anyone else's devices. To withdraw it, revoke the token labelled `oauth:` plus the client's name on the portal's access-token page, or ask the AI to call `wanctl_logout` — same effect. A connector in use renews its authorization by itself; one left unused for 30 days loses it, token included, and has to be authorized again.
 
 The first time it then reaches a device, that device's **Waiting** page raises a **pairing request** signed "AI 助手 · MCP 会话". Click **Trust it** and it gets through — every command after that still follows whatever approval mode the device is in, exactly like any other controller.
 
-## When the session drops
-
-The code-based session login above lives only in relay memory; OAuth connectors do not depend on it. Restart the relay, or reset the connection, and the AI gets `LOGIN REQUIRED`. So does a session left idle: the relay closes one that has logged in after two hours without a request, and one that never logged in after ten minutes.
-
-A successful login also handed the AI a **rebind credential** starting with `wrb1.`, good for seven days. It keeps that itself and uses it to recover on the spot, without sending you back to the browser. Losing it costs nothing — the three steps above work again.
+> From v0.19.0 the hosted endpoint accepts OAuth only. The path that worked without it (`wanctl_login` with a one-time code, and a rebind credential starting with `wrb1.`) is gone: its logout was remembered only in relay memory, so a relay restart made a logged-out credential work again. A third-party hosted AI that does not support OAuth cannot use the hosted endpoint; an AI that can start a process on your machine uses the local stdio setup above.
+>
+> The hosted endpoint needs the operator to have given the relay a database, `WANCTL_PUBLIC_ORIGIN` and `WANCTL_PORTAL`, all three. Without any one of them `/mcp` answers 503 and names the one that is missing.
 
 ## What it can and cannot touch
 
-- **Identity follows the connection mode.** Code-based credentials live in relay session memory; OAuth uses persistent, revocable authorization.
+- **Identity follows the authorization.** Every request carries an OAuth access token that names the account; after a revoke on the portal or `wanctl_logout`, the next request gets 401.
 - **File transfer is upload-only.** `wanctl_push` and `wanctl_pull` are off on the hosted endpoint — that "local path" would be a path on the server, not yours. Send files to a device with `wanctl_push_blob`.
-- **Rotating the seed logs everyone out.** If the operator changes the relay's MCP seed, every session and every rebind credential dies immediately.
-- **Say so when you are done.** Ask the AI to call `wanctl_logout`; that session's credential and its rebind credential expire together. Withdrawing a device's trust is done on that device's page.
+- **Rotating the seed means authorizing again.** Access tokens and stored authorizations are sealed with the relay's MCP seed; if the operator changes it, every authorization dies at once and each connector has to be authorized again.
+- **Say so when you are done.** Ask the AI to call `wanctl_logout`, or revoke the token on the portal's access-token page; the authorization ends immediately. Withdrawing a device's trust is done on that device's page.
 
 ## v0.12.0: persistent remote workspaces
 

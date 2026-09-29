@@ -107,9 +107,8 @@ response buffering is sufficient for the connection itself.
 
 The relay does need to know who each client is. It keeps some budgets per
 client — how many new WebFetch requests or OAuth client registrations one
-client may start, how many `/dl` downloads it may run at once, and how many
-hosted MCP sessions it may hold open without logging in — and behind a proxy
-every request arrives from the proxy. It therefore takes the
+client may start and how many `/dl` downloads it may run at once — and behind
+a proxy every request arrives from the proxy. It therefore takes the
 client's address from `X-Real-IP`, which it believes only when the connection
 comes from a loopback or private address (that is, from the proxy), and never
 from `X-Forwarded-For`, which carries whatever the client chose to send. Both
@@ -186,21 +185,44 @@ docker compose up -d portal
 
 An AI host that cannot start a local `wanctl` process — a browser chat, a
 cloud agent runner — can talk to the relay's built-in MCP server over HTTP
-instead. Give the relay a seed and recreate it:
+instead. The endpoint authenticates with OAuth 2.1 only, so it needs the
+portal: the relay turns it on once it has a seed, a database, a public origin
+and a portal. The compose file in `selfhost/` already gives the relay the
+last three (`DATABASE_URL`, `WANCTL_PUBLIC_ORIGIN` from `RELAY_PUBLIC_ORIGIN`,
+`WANCTL_PORTAL` from `PORTAL_PUBLIC_ORIGIN`), so a seed is all it is missing:
 
 ```bash
 openssl rand -hex 32   # paste the value into WANCTL_MCP_SEED in selfhost/.env
 docker compose up -d --no-deps relay
 ```
 
-The relay logs `MCP server enabled at /mcp` on startup and serves
-`https://relay.example.com/mcp`. If your edge proxy has already claimed the
-`/mcp` prefix, point hosts at `https://relay.example.com/wanctl-mcp` instead:
-it is an alias onto the same handler and the same sessions, so nothing else
-changes. Each MCP session signs in separately
-through the portal; [Connect an AI over MCP](#docs/mcp) is the guide for
-whoever does that. Keep the seed stable — changing it signs every session out
-and voids every saved rebind credential.
+The relay logs `MCP server enabled at /mcp (alias /wanctl-mcp, Streamable
+HTTP, OAuth; …)` on startup, serves `https://relay.example.com/mcp`, and
+publishes `/.well-known/oauth-protected-resource` and
+`/.well-known/oauth-authorization-server`; the consent page a person actually
+sees is served by the portal at `/oauth/authorize`. If your edge proxy has
+already claimed the `/mcp` prefix, point hosts at
+`https://relay.example.com/wanctl-mcp` instead: it is an alias onto the same
+handler, so nothing else changes.
+
+A request without a bearer gets `401` with
+`WWW-Authenticate: Bearer resource_metadata="https://relay.example.com/.well-known/oauth-protected-resource"`,
+which is how an MCP client knows to start authorizing; it sees no session and
+no device. Clients register themselves, which grants nothing on its own —
+access begins when a signed-in person approves the request, and each approval
+appears in their token list labelled with the client's name, revocable there.
+[Connect an AI over MCP](#docs/mcp) is the guide for whoever does that.
+Migration 010 adds the two tables this needs, so back up the database before
+the first start on a version that introduces it, as with any other schema
+change. Keep the seed stable: it seals every access token and every stored
+authorization, so changing it voids them all and each connector has to be
+authorized again.
+
+If `WANCTL_MCP_SEED` is set but the database, `WANCTL_PUBLIC_ORIGIN` or
+`WANCTL_PORTAL` is missing, nobody could authenticate, so the relay does not
+serve sessions: it logs `hosted MCP is off on this relay: it authenticates
+with OAuth only, which needs …` naming what is missing, and `/mcp` answers
+`503` with the same sentence.
 
 A hosted session keeps its device trust in memory only, so the first time it
 reaches a device it stops at a fingerprint it cannot confirm by itself: the
@@ -213,29 +235,23 @@ and the endpoint stays read-only:
 WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1
 ```
 
-### Optional: let web AIs sign in with OAuth
+**Upgrading to v0.19.0.** From v0.19.0 the public MCP endpoint requires the
+portal (OAuth). Before, a client that sent no `Authorization` header could log
+in inside its MCP session with a one-time code from the portal
+(`wanctl_login`) and keep a seven-day `wrb1.` rebind credential. That login is
+gone: its logouts were remembered only in the relay's memory, so a relay
+restart made a logged-out credential work again. What changes for you:
 
-A connector that opens a new MCP session per tool call — ChatGPT's does —
-can never hold a session-keyed login. Such clients authenticate with an OAuth
-2.1 bearer instead, and the relay turns that on by itself once it has all
-three of a database, a public origin and a portal:
-
-```ini
-# selfhost/.env, then: docker compose up -d --no-deps relay
-WANCTL_PUBLIC_ORIGIN=https://relay.example.com
-WANCTL_PORTAL=https://portal.example.com
-```
-
-The relay logs `MCP OAuth enabled` and publishes
-`/.well-known/oauth-protected-resource` and
-`/.well-known/oauth-authorization-server`; the consent page a person actually
-sees is served by the portal at `/oauth/authorize`. Clients register
-themselves, which grants nothing on its own — access begins when a signed-in
-person approves the request, and each approval appears in their token list
-labelled with the client's name, revocable there. Nothing changes for clients
-that send no bearer: they keep the per-session login. Migration 010 adds the
-two tables this needs, so back up the database before the first start on this
-version, as with any other schema change.
+- A third-party hosted AI that does not support OAuth cannot use the public
+  endpoint any more. An AI host that can start a process on the user's machine
+  should use the local stdio server, `wanctl mcp`, which is unchanged.
+- Saved `wrb1.` credentials stop working at upgrade; there is nothing to clean
+  up.
+- The standalone `wanctl mcp --http` mode and the container role
+  `WANCTL_ROLE=mcp` are removed: their only login was the one above. The hosted
+  endpoint lives in the relay.
+- A relay without the portal no longer serves MCP sessions; `/mcp` answers
+  `503` as described above.
 
 ### Optional: serve signed releases to devices
 

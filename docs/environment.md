@@ -8,7 +8,7 @@ Variables marked "conditional" are required only for the feature described.
 
 | Variable | Role | Required | Default | Purpose |
 |---|---|---:|---|---|
-| `WANCTL_ROLE` | container | No | `relay` | Docker image command: `relay`, `portal`, or `mcp`. |
+| `WANCTL_ROLE` | container | No | `relay` | Docker image command: `relay` or `portal`. The hosted MCP endpoint is part of the relay; the `mcp` role was removed in v0.19.0. |
 | `DATABASE_URL` | relay | Conditional | none | PostgreSQL DSN. Required for the portal-backed multi-user deployment; otherwise relay needs `WANCTL_TOKENS` or `WANCTL_UPSTREAM_RELAY`. |
 | `WANCTL_AUTO_MIGRATE` | relay | No | enabled | Set to `0` to skip embedded database migrations. |
 | `WANCTL_ADMIN_SECRET` | relay, portal, admin CLI | Conditional | none | Shared secret for `/admin/*`; relay startup requires at least 32 bytes when set. Required for a functional portal, upstream token resolution, admin CLI, and server-log access. |
@@ -17,7 +17,7 @@ Variables marked "conditional" are required only for the feature described.
 | `WANCTL_PORTAL_NS` | relay | No | none | Namespace allowed to open privileged portal console sessions. Conventionally `portal`. |
 | `WANCTL_DIST_DIR` | relay | No | `/dist` | Directory containing signed release artifacts and installers. |
 | `WANCTL_PUBLIC_ORIGIN` | relay | Conditional | none | Canonical relay origin substituted into `/skills` and into the installers served from `/install.sh` and `/install.ps1`, so a script fetched from this relay installs from this relay. It is also the issuer and the resource identifier the MCP OAuth flow publishes. Never derived from request Host: `/skills` returns 503 when unset, the installers are served with their built-in base untouched, and OAuth stays off. |
-| `WANCTL_MCP_SEED` | relay, MCP | Conditional | none | Hex seed enabling `/mcp` (alias `/wanctl-mcp`) on relay; required and at least 32 decoded bytes for standalone `mcp --http`. It seals rebind credentials and OAuth access tokens, so changing it signs every hosted session out at once. |
+| `WANCTL_MCP_SEED` | relay | Conditional | none | Hex seed, at least 32 decoded bytes, enabling the hosted MCP endpoint `/mcp` (alias `/wanctl-mcp`) on the relay. Since v0.19.0 the endpoint authenticates with OAuth only, so it also needs `DATABASE_URL`, `WANCTL_PUBLIC_ORIGIN` and `WANCTL_PORTAL`; without them `/mcp` answers 503 naming what is missing. It seals OAuth access tokens and stored grants, so changing it voids every authorization at once. |
 | `WANCTL_MCP_LOCAL_ROOT` | MCP stdio | No | process working directory | Only local tree `wanctl_push` and `wanctl_pull` may access. The wanctl config directory is always excluded. |
 | `WANCTL_MCP_ALLOWED_ORIGINS` | MCP HTTP | No | none | Comma-separated browser Origin allowlist. Requests with an Origin are denied unless listed; programmatic clients normally send none. |
 | `WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER` | MCP | No | `0` | Set to `1` only to restore model-callable device TOFU pinning. Default is fail-closed because the model cannot distinguish an independently verified fingerprint from one supplied by a hostile relay. |

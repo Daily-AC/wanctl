@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	mcpapi "github.com/mark3labs/mcp-go/mcp"
 )
@@ -122,21 +123,21 @@ func TestRemoteSessionRefusesLocalFiles(t *testing.T) {
 	}
 }
 
-// A browser page must not be able to drive a `wanctl mcp --http` server
-// (DNS rebinding / localhost CSRF); programs send no Origin and pass.
+// A browser page must not be able to drive the hosted endpoint (DNS
+// rebinding / CSRF), even one that got hold of a bearer; programs send no
+// Origin and pass.
 func TestHandlerRefusesUnknownOrigins(t *testing.T) {
 	t.Setenv("WANCTL_MCP_ALLOWED_ORIGINS", "https://host.example")
 	old := sessions
 	t.Cleanup(func() { sessions = old })
-	h, err := Handler([]byte(strings.Repeat("k", 32)), "/mcp")
-	if err != nil {
-		t.Fatal(err)
-	}
+	h := newOAuthHandler(t, &oauthProbe{live: true})
+	access := bearer(t, "alice", "token", "chat", time.Hour)
 	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
 	do := func(origin string) int {
 		req := httptest.NewRequest("POST", "/mcp", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Authorization", "Bearer "+access)
 		if origin != "" {
 			req.Header.Set("Origin", origin)
 		}

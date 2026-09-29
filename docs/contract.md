@@ -2,9 +2,9 @@
 
 wanctl is the external harness for a web AI. The AI in a chat window is the
 brain; wanctl gives it hands (exec, background jobs, read, edit, push/pull),
-eyes (command output, read, logs, screenshot), memory across turns (session
-rebind, job ledger) and safety rails (pairing, device identity, policy rules).
-Together they form one agent.
+eyes (command output, read, logs, screenshot), memory across turns (workspace
+references, job ledger) and safety rails (pairing, device identity, policy
+rules). Together they form one agent.
 
 A trust layer — relay, pairing, pinned device identity, device-side policy
 rules — decides who may drive which machine, and on top of it sits a
@@ -26,6 +26,9 @@ go run . help --markdown > docs/contract.md
 This is what an MCP host is handed before it calls anything — the
 `instructions` field of the initialize response, and the output of
 `wanctl help --instructions`. It is the harness's system prompt.
+The hosted endpoint (`/mcp` on a relay) hands out the same text without
+`wanctl_login` and the `LOGIN REQUIRED` line: every request there carries
+an OAuth bearer, which is the login.
 
 ```
 wanctl is the external harness for a web AI: your hands and eyes on a machine
@@ -67,7 +70,7 @@ REFUSALS — none of these mean retry as-is:
   PAIRING REQUIRED: give the URL in the message to the user, then retry.
   DEVICE IDENTITY CONFIRMATION REQUIRED: authorize trust, then pin.
   DEVICE IDENTITY MISMATCH: refused, nothing sent; report both fingerprints.
-  LOGIN REQUIRED: call wanctl_login; a saved rebind restores it instantly.
+  LOGIN REQUIRED: call wanctl_login.
 ```
 
 ## Commands
@@ -118,30 +121,25 @@ REFUSALS — none of these mean retry as-is:
 
 *Authenticate to a wanctl namespace through the portal*
 
-Get this session a credential; every other tool needs one before it can reach
-a device. Reach for it when a tool comes back 'LOGIN REQUIRED', and not before
-— a session that already has a credential gains nothing from logging in again.
+Get this machine's wanctl a credential; every other tool needs one before it
+can reach a device. Reach for it when a tool comes back 'LOGIN REQUIRED', and
+not before — a machine that already has a credential gains nothing from
+logging in again.
 
 TWO STEPS. Call with NO argument first: you get back a portal URL and a
 one-time code prompt, and that URL is for the user, verbatim, because only a
 human at a browser can complete it. Call again with the `code` they paste back
-and it becomes a namespace token bound ONLY to this MCP session (in HTTP mode)
-or to this machine's wanctl config (in stdio mode). Several AI users sharing
-one MCP server each log in for themselves; no credential is ever shared
-between sessions.
+and it becomes a namespace token saved in this machine's wanctl config, the
+same one `wanctl login` saves.
 
-SAVE THE REBIND CREDENTIAL that a successful login returns. HTTP-MCP sessions
-live in memory, so a relay restart or a dropped connection makes 'LOGIN
-REQUIRED' surface mid-task even though the user revoked nothing and is still
-authorized. That is not a reason to send them back to the portal: call
-wanctl_login(rebind="…") with the credential you saved and access comes back
-at once, with no round trip through a browser. Go through the OAuth flow again
-only when you have no saved rebind credential.
+Only the local MCP server (`wanctl mcp`, stdio) has this tool. The hosted
+endpoint (/mcp on a relay) authenticates with OAuth before any tool runs: the
+AI host walks the user through authorizing it, and there is nothing to log in
+to afterwards.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
 | `code` | `--code CODE` | string | no | The one-time code the user copied from the portal /enroll page. Omit on the first call. |
-| `rebind` | — | string | no | A rebind credential returned by an earlier successful login in this conversation. Pass it to restore a lost session instantly without re-doing OAuth. Mutually exclusive with code. |
 
 ```
 wanctl login [--code CODE]
@@ -153,7 +151,7 @@ wanctl_login{}  then  wanctl_login{"code":"ABC123"}
 
 | Error | What to do |
 |---|---|
-| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (MCP); an MCP session that had one can restore it instantly with wanctl_login(rebind=…). |
+| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (local MCP). The hosted endpoint never says this: it answers a missing or revoked authorization with HTTP 401, and the AI host authorizes again. |
 
 ## `wanctl status` / `wanctl_status`
 
@@ -197,8 +195,11 @@ or when the session is being handed to someone else — not as housekeeping at
 the end of a task, because the next tool call would then have to walk a human
 back through the portal.
 
-Afterwards every tool that touches a device — peers, exec, read, edit, write,
-push, pull, logs — answers 'LOGIN REQUIRED' until wanctl_login runs again.
+On the local MCP server every tool that touches a device — peers, exec, read,
+edit, write, push, pull, logs — then answers 'LOGIN REQUIRED' until
+wanctl_login runs again. On the hosted endpoint it revokes this connector's
+OAuth grant: later requests get HTTP 401, and the user has to authorize the
+connector again.
 
 **On the command line.**
 
@@ -248,7 +249,7 @@ wanctl_peers{}
 
 | Error | What to do |
 |---|---|
-| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (MCP); an MCP session that had one can restore it instantly with wanctl_login(rebind=…). |
+| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (local MCP). The hosted endpoint never says this: it answers a missing or revoked authorization with HTTP 401, and the AI host authorizes again. |
 
 ## `wanctl pair` / `wanctl_pair`
 
@@ -379,7 +380,7 @@ wanctl_exec{"target":"home-pc","command":"uname -a"}
 | `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
 | `DEVICE IDENTITY MISMATCH` | The device presented a different identity than the pinned one. Refused; nothing was sent. Report both fingerprints and stop — re-pinning is a human decision at a terminal. |
-| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (MCP); an MCP session that had one can restore it instantly with wanctl_login(rebind=…). |
+| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (local MCP). The hosted endpoint never says this: it answers a missing or revoked authorization with HTTP 401, and the AI host authorizes again. |
 | `could not reach adbd on this device` | The adb elevation channel found no adbd it could use, and the fix is on the phone. Usually wireless debugging is off: Android turns it off on every reboot, when Wi-Fi drops and when the phone joins a different access point, so ask the owner to turn Developer options → Wireless debugging back on. If it is on, the agent does not have its current port: apps up to v0.14.0 do not start looking when 提权通道 is switched on while the agent runs, and stop trusting a port half an hour after finding it — ask the owner to tap 停用 and then 启用 on the app's home screen (updating the app fixes both for good). A port whose own failure reads `remote error: tls` or `TLS handshake with adbd` had adbd on it refusing the key: see the next entry. |
 | `TLS handshake with adbd` | adbd is running but does not accept wanctl's key (an app up to v0.14.0 prints `remote error: tls: …` after the port number instead). The pairing lapsed — Android revokes one that has not connected for 7 days unless Developer options → Disable adb authorization timeout is on — or the owner used Revoke USB debugging authorizations. Ask the owner to pair again in the portal (Device settings → ADB pairing); retrying will not help. |
 
@@ -638,7 +639,7 @@ wanctl_exec_async{"target":"lab","command":"npm run dev","cwd":"/srv"}
 |---|---|
 | `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
-| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (MCP); an MCP session that had one can restore it instantly with wanctl_login(rebind=…). |
+| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (local MCP). The hosted endpoint never says this: it answers a missing or revoked authorization with HTTP 401, and the AI host authorizes again. |
 
 ## `wanctl_exec_poll`
 
@@ -716,7 +717,7 @@ wanctl_push{"target":"lab","local":"/tmp/app","remote":"/opt/app"}
 |---|---|
 | `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
-| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (MCP); an MCP session that had one can restore it instantly with wanctl_login(rebind=…). |
+| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (local MCP). The hosted endpoint never says this: it answers a missing or revoked authorization with HTTP 401, and the AI host authorizes again. |
 
 ## `wanctl_push_blob`
 
@@ -787,7 +788,7 @@ wanctl_pull{"target":"lab","remote":"/var/log/app.log","local":"./app"}
 |---|---|
 | `PAIRING REQUIRED` | The device has not approved this controller yet. The message carries a URL valid for 5 minutes; give it to the user verbatim, ask them to open it and approve, then retry. |
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
-| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (MCP); an MCP session that had one can restore it instantly with wanctl_login(rebind=…). |
+| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (local MCP). The hosted endpoint never says this: it answers a missing or revoked authorization with HTTP 401, and the AI host authorizes again. |
 
 ## `wanctl logs` / `wanctl_logs`
 
@@ -1037,7 +1038,7 @@ wanctl start
 
 | Error | What to do |
 |---|---|
-| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (MCP); an MCP session that had one can restore it instantly with wanctl_login(rebind=…). |
+| `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (local MCP). The hosted endpoint never says this: it answers a missing or revoked authorization with HTTP 401, and the AI host authorizes again. |
 
 ## `wanctl stop`
 
@@ -1136,22 +1137,19 @@ wanctl version
 
 *Run wanctl as an MCP server*
 
-Serve the tools in this contract over the Model Context Protocol.
+Serve the tools in this contract over the Model Context Protocol, on stdio:
+one process per AI host, single user, backed by this machine's wanctl config.
 
-With no flags it speaks stdio: one process per AI host, single user, backed by
-this machine's wanctl config. With --http it serves Streamable HTTP for many
-users at once, deriving a separate controller identity per namespace from
-WANCTL_MCP_SEED; wanctl_push and wanctl_pull are withdrawn there, because
-`local` would name a path on the server rather than on the caller's machine.
+The multi-user endpoint is not a separate server: a relay with the portal
+serves it at /mcp and authenticates every request with OAuth.
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
-| — | `--http ADDR` | string | no | Serve Streamable HTTP on this address (e.g. :8081) instead of stdio. Multi-user: each session derives its own controller identity from WANCTL_MCP_SEED, and wanctl_push/wanctl_pull are withdrawn because 'local' would name a path on the server. |
-| — | `--workspace-session` | boolean | no | Dedicate this stdio process to exactly one AI conversation. Enter a workspace once; subsequent exec/read/edit/write/poll calls are automatically bound and share an authenticated connection. Cannot be combined with --http or shared across conversations. Requires relay and agent support for per-operation workspace authorization. |
+| — | `--workspace-session` | boolean | no | Dedicate this stdio process to exactly one AI conversation. Enter a workspace once; subsequent exec/read/edit/write/poll calls are automatically bound and share an authenticated connection. Cannot be shared across conversations. Requires relay and agent support for per-operation workspace authorization. |
 
 ```
 wanctl mcp
-  wanctl mcp --http :8081
+  wanctl mcp --workspace-session
 ```
 
 ## `wanctl docs`

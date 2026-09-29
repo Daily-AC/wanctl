@@ -21,8 +21,8 @@ RUN apk upgrade --no-cache && \
     mkdir -p /data /dist && chown wanctl:wanctl /data /dist
 COPY --from=build --chown=wanctl:wanctl /out/wanctl /usr/local/bin/wanctl
 EXPOSE 8080
-# Role is chosen at runtime: WANCTL_ROLE=relay (default) | portal | mcp.
-# MCP uses Streamable HTTP transport on :8080.
+# Role is chosen at runtime: WANCTL_ROLE=relay (default) | portal. The hosted
+# MCP endpoint is part of the relay (/mcp, OAuth via the portal).
 ENV WANCTL_ROLE=relay
 # Mount the signed release/ directory produced by scripts/build-release.sh.
 # Without a valid signed manifest, /dl/* deliberately returns 503.
@@ -30,4 +30,4 @@ ENV WANCTL_DIST_DIR=/dist
 ENV WANCTL_CONFIG_DIR=/data
 USER wanctl
 WORKDIR /data
-CMD ["sh", "-ec", "case \"$WANCTL_ROLE\" in relay|portal) exec wanctl \"$WANCTL_ROLE\" --addr :8080 ;; mcp) exec wanctl mcp --http :8080 ;; *) echo \"invalid WANCTL_ROLE: $WANCTL_ROLE\" >&2; exit 64 ;; esac"]
+CMD ["sh", "-ec", "case \"$WANCTL_ROLE\" in relay|portal) exec wanctl \"$WANCTL_ROLE\" --addr :8080 ;; *) echo \"invalid WANCTL_ROLE: $WANCTL_ROLE\" >&2; exit 64 ;; esac"]

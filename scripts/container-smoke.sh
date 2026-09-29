@@ -28,7 +28,6 @@ start_role() {
     case "$role" in
       relay) curl -fsS "http://127.0.0.1:$port/healthz" 2>/dev/null | grep -qx ok && return ;;
       portal) curl -fsS -o /dev/null "http://127.0.0.1:$port/" 2>/dev/null && return ;;
-      mcp) curl --max-time 2 -sS -o /dev/null -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$port/mcp" 2>/dev/null && return ;;
     esac
     attempt=$((attempt + 1))
     sleep 1
@@ -40,6 +39,5 @@ start_role() {
 
 start_role relay -e WANCTL_TOKENS=smoke:team
 start_role portal
-start_role mcp -e WANCTL_MCP_SEED=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
 
-echo "container smoke passed for relay, portal, and mcp as UID 10001"
+echo "container smoke passed for relay and portal as UID 10001"
