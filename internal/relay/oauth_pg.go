@@ -127,12 +127,14 @@ func (p *PGStore) RevokeRelayTokenHash(namespace, hash string) error {
 
 // ExtendRelayTokenHash moves the expiry of that same token, matched the same
 // way. Only a live token moves: one that was revoked or has lapsed stays dead,
-// so a refresh cannot bring back a grant the user already ended.
+// so a refresh cannot bring back a grant the user already ended; nor does one
+// of a disabled account, so its connectors cannot refresh their way past it.
 func (p *PGStore) ExtendRelayTokenHash(namespace, hash string, until time.Time) (bool, error) {
 	res, err := p.db.Exec(
 		`UPDATE tokens SET expires_at = $3
 		   WHERE hash = $1 AND namespace = $2 AND kind = 'access' AND revoked_at IS NULL
-		     AND (expires_at IS NULL OR expires_at > now())`, hash, namespace, until)
+		     AND (expires_at IS NULL OR expires_at > now())
+		     AND `+namespaceEnabled("tokens.namespace"), hash, namespace, until)
 	if err != nil {
 		return false, err
 	}

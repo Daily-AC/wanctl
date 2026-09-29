@@ -37,6 +37,7 @@ type agentConn struct {
 	ctrl       io.Writer
 	delegation bool
 	mu         sync.Mutex // serialize control writes
+	kick       func()     // closes the control channel (an account being disabled)
 }
 
 func (a *agentConn) send(v any) error {
@@ -505,7 +506,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	}
 	key := ns + "/" + reg.Device
 	wasLive := r.deviceLive(ns, reg.Device)
-	ac := &agentConn{device: reg.Device, name: reg.Name, ns: ns, inst: reg.Inst, ctrl: nc, delegation: reg.Delegation == "1"}
+	ac := &agentConn{device: reg.Device, name: reg.Name, ns: ns, inst: reg.Inst, ctrl: nc, delegation: reg.Delegation == "1", kick: func() { nc.Close() }}
 	r.mu.Lock()
 	r.agents[key] = ac
 	r.mu.Unlock()

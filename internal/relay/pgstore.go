@@ -45,13 +45,15 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Resolve looks up a non-revoked, non-expired token and returns its namespace.
+// Resolve looks up a non-revoked, non-expired token of an account that is not
+// disabled and returns its namespace.
 func (p *PGStore) Resolve(token string) (string, bool) {
 	var ns string
 	err := p.db.QueryRow(
 		`SELECT namespace FROM tokens
 		   WHERE hash = $1 AND revoked_at IS NULL AND kind <> 'delegated'
-		     AND (expires_at IS NULL OR expires_at > now())`,
+		     AND (expires_at IS NULL OR expires_at > now())
+		     AND `+namespaceEnabled("tokens.namespace"),
 		HashToken(token),
 	).Scan(&ns)
 	if err != nil {
