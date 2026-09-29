@@ -191,13 +191,12 @@ func (r *Relay) adminResolveUser(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var body struct {
-		Identity   string `json:"identity"`
-		Provider   string `json:"provider"`
-		Subject    string `json:"subject"`
-		Login      string `json:"login"`
-		Name       string `json:"name"`
-		Email      string `json:"email"`
-		InviteCode string `json:"invite_code"`
+		Identity string `json:"identity"`
+		Provider string `json:"provider"`
+		Subject  string `json:"subject"`
+		Login    string `json:"login"`
+		Name     string `json:"name"`
+		Email    string `json:"email"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -208,7 +207,7 @@ func (r *Relay) adminResolveUser(w http.ResponseWriter, req *http.Request) {
 		body.Subject = body.Identity
 	}
 	ns, role, err := r.admin.ResolveIdentity(
-		body.Provider, body.Subject, body.Login, body.Name, body.InviteCode, r.portalNS, body.Email,
+		body.Provider, body.Subject, body.Login, body.Name, r.portalNS, body.Email,
 	)
 	if err != nil {
 		if errors.Is(err, ErrPendingInvite) {
@@ -251,13 +250,13 @@ func (r *Relay) adminInvites(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		invite, code, err := r.admin.CreateInvite(body.GitHubLogin)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		invite, err := r.admin.CreateInvite(body.GitHubLogin)
+		if errors.Is(err, ErrInviteLogin) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if code != "" {
-			writeJSON(w, map[string]any{"id": invite.ID, "code": code})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, map[string]any{"id": invite.ID, "github_login": invite.GitHubLogin})
@@ -663,8 +662,8 @@ func (r *Relay) adminAudit(w http.ResponseWriter, req *http.Request) {
 // AdminStore is the DB surface the admin endpoints need.
 type AdminStore interface {
 	ResolveUser(identity string) (string, error)
-	ResolveIdentity(provider, subject, login, name, inviteCode, reservedNS, email string) (ns, role string, err error)
-	CreateInvite(githubLogin string) (Invite, string, error)
+	ResolveIdentity(provider, subject, login, name, reservedNS, email string) (ns, role string, err error)
+	CreateInvite(githubLogin string) (Invite, error)
 	ListInvites() ([]Invite, error)
 	RevokeInvite(id int) (bool, error)
 	UpsertDevice(namespace, name, fingerprint string)
@@ -724,6 +723,10 @@ var ErrNamespaceConflict = errors.New("derived namespace is already owned by ano
 // ErrPendingInvite means a GitHub identity has not been admitted yet.
 var ErrPendingInvite = errors.New("pending-invite")
 
+// ErrInviteLogin is an invite without a usable GitHub login. Invites are bound
+// to the login that will sign in; one-time codes were retired in v0.17.0.
+var ErrInviteLogin = errors.New("invite needs a GitHub login")
+
 // Invite is the public representation of an admission invitation. It never
 // contains the stored code hash or a raw invite code.
 type Invite struct {
@@ -741,13 +744,13 @@ type identityQuerier interface {
 
 // ResolveUser maps an SSO identity to a namespace, creating/linking the row.
 func (p *PGStore) ResolveUser(identity string) (string, error) {
-	ns, _, err := p.ResolveIdentity("header", identity, "", "", "", "", "")
+	ns, _, err := p.ResolveIdentity("header", identity, "", "", "", "")
 	return ns, err
 }
 
 // ResolveIdentity maps an immutable provider identity to a namespace, creating
 // the user when the provider's admission policy permits it.
-func (p *PGStore) ResolveIdentity(provider, subject, login, name, inviteCode, reservedNS, email string) (string, string, error) {
+func (p *PGStore) ResolveIdentity(provider, subject, login, name, reservedNS, email string) (string, string, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	subject = strings.TrimSpace(subject)
 	login = strings.TrimSpace(login)
@@ -786,7 +789,7 @@ func (p *PGStore) ResolveIdentity(provider, subject, login, name, inviteCode, re
 		if err := guardNamespace(preferredNS, reservedNS); err != nil {
 			return "", "", err
 		}
-		return p.resolveGitHubIdentity(subject, preferredNS, name, inviteCode, email)
+		return p.resolveGitHubIdentity(subject, preferredNS, name, email)
 	default:
 		return "", "", fmt.Errorf("unsupported identity provider %q", provider)
 	}
@@ -827,7 +830,7 @@ func insertIdentity(q identityQuerier, provider, subject, namespace, name, role,
 	return insertedNS, insertedRole, err
 }
 
-func (p *PGStore) resolveGitHubIdentity(subject, namespace, name, inviteCode, email string) (ns, role string, err error) {
+func (p *PGStore) resolveGitHubIdentity(subject, namespace, name, email string) (ns, role string, err error) {
 	tx, err := p.db.Begin()
 	if err != nil {
 		return "", "", err
@@ -861,31 +864,19 @@ func (p *PGStore) resolveGitHubIdentity(subject, namespace, name, inviteCode, em
 	inviteID := 0
 	role = "admin"
 	if hasAdmin {
+		// An invite is bound to a GitHub login: the administrator's, or the one
+		// an approved access request wrote. There is no code to present.
 		role = "user"
-		if inviteCode != "" {
-			err = tx.QueryRow(
-				`SELECT id FROM invites WHERE code_hash = $1 AND used_at IS NULL FOR UPDATE`,
-				HashToken(inviteCode),
-			).Scan(&inviteID)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return "", "", err
-			}
-		}
-		if inviteID == 0 {
-			err = tx.QueryRow(
-				`SELECT id FROM invites
-				  WHERE lower(github_login) = lower($1) AND used_at IS NULL
-				  FOR UPDATE`, namespace,
-			).Scan(&inviteID)
-		}
+		err = tx.QueryRow(
+			`SELECT id FROM invites
+			  WHERE lower(github_login) = lower($1) AND used_at IS NULL
+			  FOR UPDATE`, namespace,
+		).Scan(&inviteID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", "", ErrPendingInvite
 		}
 		if err != nil {
 			return "", "", err
-		}
-		if inviteID == 0 {
-			return "", "", ErrPendingInvite
 		}
 	}
 
@@ -960,30 +951,20 @@ func decimalString(value string) bool {
 	return true
 }
 
-func (p *PGStore) CreateInvite(githubLogin string) (Invite, string, error) {
+func (p *PGStore) CreateInvite(githubLogin string) (Invite, error) {
 	githubLogin = strings.ToLower(strings.TrimSpace(githubLogin))
 	var invite Invite
-	var code string
-	if githubLogin != "" {
-		if !validGitHubLogin(githubLogin) {
-			return invite, "", fmt.Errorf("invalid GitHub login %q", githubLogin)
-		}
-		err := p.db.QueryRow(
-			`INSERT INTO invites (github_login) VALUES ($1)
-			 RETURNING id, github_login, created_at`, githubLogin,
-		).Scan(&invite.ID, &invite.GitHubLogin, &invite.CreatedAt)
-		return invite, "", err
+	if githubLogin == "" {
+		return invite, fmt.Errorf("%w: a GitHub login is required", ErrInviteLogin)
 	}
-	code = "winv_" + randHex(12)
+	if !validGitHubLogin(githubLogin) {
+		return invite, fmt.Errorf("%w: invalid GitHub login %q", ErrInviteLogin, githubLogin)
+	}
 	err := p.db.QueryRow(
-		`INSERT INTO invites (code_hash) VALUES ($1)
-		 RETURNING id, created_at`, HashToken(code),
-	).Scan(&invite.ID, &invite.CreatedAt)
-	if err != nil {
-		return Invite{}, "", err
-	}
-	invite.HasCode = true
-	return invite, code, nil
+		`INSERT INTO invites (github_login) VALUES ($1)
+		 RETURNING id, github_login, created_at`, githubLogin,
+	).Scan(&invite.ID, &invite.GitHubLogin, &invite.CreatedAt)
+	return invite, err
 }
 
 func (p *PGStore) ListInvites() ([]Invite, error) {

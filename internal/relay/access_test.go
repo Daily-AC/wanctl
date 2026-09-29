@@ -350,6 +350,26 @@ func TestAccessRequestEmailValidation(t *testing.T) {
 			if _, ok := status["email"]; ok {
 				t.Fatalf("status leaked email: %s", rr.Body.String())
 			}
+			if want := maskEmail(strings.TrimSpace(tc.email)); status["email_hint"] != nil && status["email_hint"] != want ||
+				status["email_hint"] == nil && want != "" {
+				t.Fatalf("status email_hint = %v, want %q", status["email_hint"], want)
+			}
 		})
+	}
+}
+
+func TestMaskEmail(t *testing.T) {
+	for in, want := range map[string]string{
+		"renjinxi@qq.com": "r•••@qq.com",
+		"a@b.co":          "a•••@b.co",
+		"été@example.fr":  "é•••@example.fr",
+		"":                "",
+		"no-at-sign":      "",
+		"@example.com":    "",
+		"trailing@":       "",
+	} {
+		if got := maskEmail(in); got != want {
+			t.Errorf("maskEmail(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

@@ -279,7 +279,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	s.setSessionCookie(w, r, sess, int(sessionTTL.Seconds()))
 	// Resolve once now so a not-yet-invited user lands on the pending page
 	// instead of a wall of failing API calls.
-	if _, _, status, _ := s.resolveNamespace(p, ""); status == resolvePending {
+	if _, _, status, _ := s.resolveNamespace(p); status == resolvePending {
 		http.Redirect(w, r, pendingNext(st.Next), http.StatusSeeOther)
 		return
 	}
@@ -385,9 +385,10 @@ const (
 	resolveError
 )
 
-// resolveNamespace asks the relay to map the principal to a namespace.
-// inviteCode is passed through on redemption attempts.
-func (s *Server) resolveNamespace(p *principal, inviteCode string) (ns, role string, status resolveStatus, detail string) {
+// resolveNamespace asks the relay to map the principal to a namespace. An
+// invite bound to the principal's GitHub login admits it here; there is no
+// code to type.
+func (s *Server) resolveNamespace(p *principal) (ns, role string, status resolveStatus, detail string) {
 	var body any
 	if p.Provider == providerHeader {
 		body = map[string]string{"identity": p.Subject}
@@ -395,9 +396,6 @@ func (s *Server) resolveNamespace(p *principal, inviteCode string) (ns, role str
 		m := map[string]string{"provider": p.Provider, "subject": p.Subject, "login": p.Login, "name": p.Name}
 		if p.Email != "" {
 			m["email"] = p.Email
-		}
-		if inviteCode != "" {
-			m["invite_code"] = inviteCode
 		}
 		body = m
 	}
@@ -448,7 +446,7 @@ func (s *Server) pageAuth(w http.ResponseWriter, r *http.Request, next string) (
 		}
 		return "", false
 	}
-	ns, _, status, detail := s.resolveNamespace(p, "")
+	ns, _, status, detail := s.resolveNamespace(p)
 	switch status {
 	case resolveOK:
 		return ns, true
@@ -484,17 +482,23 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Already admitted? Resume enrollment if this login started on a device.
-	if _, _, status, _ := s.resolveNamespace(p, ""); status == resolveOK {
+	if _, _, status, _ := s.resolveNamespace(p); status == resolveOK {
 		http.Redirect(w, r, next, http.StatusSeeOther)
 		return
 	}
 	// The page renders one of four states, and which one is a server-side
 	// fact: an applicant must not be shown a form whose submit would be
-	// refused. A relay that cannot answer leaves the invite-code form and the
-	// request form both on the page — the relay being down is not a reason to
-	// tell someone their application does not exist.
-	state, retryDays := "none", 0
+	// refused. A relay that cannot answer leaves the request form on the page
+	// — the relay being down is not a reason to tell someone their
+	// application does not exist.
+	state, retryDays, notify := "none", 0, ""
 	if status, err := s.accessStatusFor(p); err == nil {
+		// Mail goes out on approval only, and only to the address filed with
+		// the request; the page says where, masked, so the applicant knows
+		// whether to expect it.
+		if s.mailEnabled() && status.Status == "pending" {
+			notify = status.EmailHint
+		}
 		if status.CanApply {
 			state = "none"
 		} else {
@@ -509,42 +513,19 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, "pending.html", map[string]any{
-		"ShowEmail": s.mailEnabled() && p.Email == "",
-		"Next":      next, "Login": p.Login, "Req": state, "RetryDays": retryDays, "NoteMax": accessNoteMax,
+		"ShowEmail": s.mailEnabled() && p.Email == "", "NotifyEmail": notify,
+		"Avatar": githubAvatarURL(p), "Initial": loginInitial(p.Login),
+		"Next": next, "Login": p.Login, "Req": state, "RetryDays": retryDays, "NoteMax": accessNoteMax,
 	})
 }
 
-func (s *Server) handleAuthRedeem(w http.ResponseWriter, r *http.Request) {
-	if !s.oauthEnabled() {
-		http.NotFound(w, r)
-		return
+// loginInitial is the letter that stands in for the avatar until (or unless)
+// GitHub's image loads.
+func loginInitial(login string) string {
+	for _, r := range login {
+		return string(r)
 	}
-	p := s.principalFrom(r)
-	if p == nil {
-		http.Error(w, "not signed in", http.StatusUnauthorized)
-		return
-	}
-	var in struct {
-		Code string `json:"code"`
-	}
-	json.NewDecoder(r.Body).Decode(&in)
-	in.Code = strings.TrimSpace(in.Code)
-	if in.Code == "" {
-		http.Error(w, "empty invite code", http.StatusBadRequest)
-		return
-	}
-	ns, role, status, detail := s.resolveNamespace(p, in.Code)
-	switch status {
-	case resolveOK:
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"namespace": ns, "role": role})
-	case resolvePending:
-		http.Error(w, "invite code not accepted", http.StatusForbidden)
-	case resolveConflict:
-		http.Error(w, detail, http.StatusConflict)
-	default:
-		http.Error(w, detail, http.StatusBadGateway)
-	}
+	return "?"
 }
 
 // An unavailable email endpoint must not prevent an otherwise valid login.

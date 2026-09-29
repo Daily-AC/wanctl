@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"wanctl/internal/notify"
 )
@@ -222,6 +223,11 @@ func (r *Relay) adminAccessRequestStatus(w http.ResponseWriter, req *http.Reques
 		out["status"] = latest.Status
 		out["id"] = latest.ID
 		out["note"] = latest.Note
+		// The address stays in the queue; the applicant's own page only needs
+		// enough of it to recognise where an approval will be mailed.
+		if hint := maskEmail(latest.Email); hint != "" {
+			out["email_hint"] = hint
+		}
 		out["created_at"] = latest.CreatedAt
 		if latest.DecidedAt != nil {
 			out["decided_at"] = latest.DecidedAt
@@ -476,4 +482,16 @@ func accessEmail(input string) (string, error) {
 		return "", errors.New("email-invalid")
 	}
 	return email, nil
+}
+
+// maskEmail keeps the first character of the mailbox and the whole domain:
+// enough for someone to recognise their own address, not enough to read it
+// off a screen over their shoulder.
+func maskEmail(addr string) string {
+	at := strings.LastIndex(addr, "@")
+	if at < 1 || at == len(addr)-1 {
+		return ""
+	}
+	first, _ := utf8.DecodeRuneInString(addr)
+	return string(first) + "•••" + addr[at:]
 }

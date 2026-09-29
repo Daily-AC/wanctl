@@ -25,9 +25,9 @@ func invitesPortal(t *testing.T, role string, relayCalls *[]string) *Server {
 			*relayCalls = append(*relayCalls, req.Method+" "+req.URL.Path+" "+string(b))
 			switch {
 			case req.URL.Path == "/admin/invites" && req.Method == "POST":
-				json.NewEncoder(rr).Encode(map[string]any{"id": 7, "code": "winv_testcode"})
+				json.NewEncoder(rr).Encode(map[string]any{"id": 7, "github_login": "monalisa"})
 			case req.URL.Path == "/admin/invites":
-				json.NewEncoder(rr).Encode([]map[string]any{{"id": 7, "has_code": true}})
+				json.NewEncoder(rr).Encode([]map[string]any{{"id": 7, "github_login": "monalisa"}})
 			case req.URL.Path == "/admin/invites/revoke":
 				rr.WriteHeader(http.StatusOK)
 			}
@@ -108,8 +108,8 @@ func TestInvitesAdminPassThrough(t *testing.T) {
 	h := s.Handler()
 	cookies := inviteSession(t, s, h)
 
-	rec := inviteReq(h, "POST", "/api/invites", `{"github_login":""}`, cookies)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "winv_testcode") {
+	rec := inviteReq(h, "POST", "/api/invites", `{"github_login":"monalisa"}`, cookies)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"github_login":"monalisa"`) {
 		t.Fatalf("create: status %d body %q", rec.Code, rec.Body.String())
 	}
 	rec = inviteReq(h, "GET", "/api/invites", "", cookies)
@@ -121,7 +121,7 @@ func TestInvitesAdminPassThrough(t *testing.T) {
 		t.Fatalf("revoke: status %d body %q", rec.Code, rec.Body.String())
 	}
 	want := []string{
-		`POST /admin/invites {"github_login":""}`,
+		`POST /admin/invites {"github_login":"monalisa"}`,
 		"GET /admin/invites ",
 		`POST /admin/invites/revoke {"id":7}`,
 	}

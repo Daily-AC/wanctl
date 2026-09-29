@@ -16,7 +16,8 @@ Installing needs **no token at all**.
 
 > Signing in to the portal at all assumes you are already part of this
 > deployment: the first user to log in becomes the administrator, and everyone
-> after that needs an invite code from an administrator, redeemed after login
+> after that is admitted by an administrator: invited by GitHub username, or
+> approved after sending a request from the page that greets them
 > (see "Invites, friends and sharing").
 >
 > You can skip the second line and run `wanctl start` on its own — the first run asks

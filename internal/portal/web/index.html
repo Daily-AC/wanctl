@@ -279,8 +279,8 @@
           <h1 data-en="Invites" data-zh="邀请">Invites</h1>
           <button class="btn" id="iAdd" data-en="New invite" data-zh="新建邀请">New invite</button>
         </div>
-        <p class="lead" data-en="This instance is invite-only. Either hand out a one-time code, or pre-register a GitHub login so that account is admitted on first sign-in."
-                        data-zh="这个实例是邀请制的。可以发一次性邀请码，也可以预录对方的 GitHub 用户名，对方登录即自动获准。">This instance is invite-only.</p>
+        <p class="lead" data-en="This instance is invite-only. Invite someone by their GitHub login; they are admitted when they sign in."
+                        data-zh="这个实例是邀请制的。填对方的 GitHub 用户名发出邀请，对方登录即自动获准。">This instance is invite-only.</p>
         <table style="margin-top:20px">
           <thead><tr>
             <th data-en="Kind" data-zh="方式">Kind</th>
@@ -290,12 +290,6 @@
           </tr></thead>
           <tbody id="invites"></tbody>
         </table>
-        <div class="slip" id="iSlip">
-          <code id="iVal"></code>
-          <div class="once" data-en="Shown once. Your guest pastes it after signing in with GitHub."
-                            data-zh="只显示这一次。对方 GitHub 登录后粘贴。">Shown once.</div>
-          <button class="btn soft" id="iCopy" data-en="Copy" data-zh="复制">Copy</button>
-        </div>
       </section>
 
       <!-- 好友 -->

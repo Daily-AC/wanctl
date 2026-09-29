@@ -656,10 +656,11 @@ pre code{background:none;padding:0;font-size:1em}
    人要拿去跟终端里的那串比对的。 */
 .auth .fp{margin:8px 0 0;font-size:min(11.5px,2.85vw);color:var(--ink);word-break:break-all;user-select:all}
 
-/* 等待邀请页的兑换表单 */
+/* 认证页上的表单。短码和数字（授权页的分钟数）等宽居中；
+   申请页的两栏是句子，走下面的 .fl。 */
 .auth form{display:grid;gap:10px;margin-top:24px}
 .auth form input{font-family:var(--mono);text-align:center;padding:11px 12px}
-.auth form .go{margin-top:0}
+.auth form .go{margin-top:6px}
 .auth .err{margin:10px 0 0;font-size:13px;color:var(--red);min-height:1.3em}
 
 /* Temporary web-client grants reuse the auth page's single-column rhythm. */
@@ -718,17 +719,52 @@ pre code{background:none;padding:0;font-size:1em}
 .auth[data-req="pending"] .req[data-req-state="pending"],
 .auth[data-req="approved"] .req[data-req-state="approved"],
 .auth[data-req="declined"] .req[data-req-state="declined"]{display:block}
-/* 这一栏是一句话，不是一串码：左对齐、正文字体，跟邀请码那格分得开。 */
-.auth #note{font-family:inherit;text-align:left}
-/* 已获准之后：没有东西可兑换了，那个框留着只是噪声；标题也换成另一句。
-   于是这一屏只剩一个蓝按钮 —— 进门。 */
-.auth[data-req="approved"] #redeem,
-.auth[data-req="approved"] #err,
-.auth[data-req="approved"] h1:not(.req){display:none}
-/* 分隔两条路（兑换 / 申请）。发丝线，不是卡片：它分隔的是两件事，
-   而这一页上再没有别的东西需要被框起来。 */
-.auth .req[data-req-state="none"]{margin-top:26px;padding-top:22px;border-top:1px solid var(--hairline)}
-.auth .req[data-req-state="none"] .fine{margin-top:0}
+
+/* 头像是这一页的主体（见 pending.html）。56px：在 25rem 的列里压得住标题，
+   又不至于把一张表单页变成个人主页。首字母那层在 GitHub 图床拉不到时露出来。 */
+.auth .me{
+  position:relative;width:56px;height:56px;margin-bottom:22px;flex:none;
+  border-radius:50%;overflow:hidden;background:var(--canvas-2);
+  display:grid;place-items:center;
+  font-size:22px;font-weight:600;line-height:1;color:var(--ink-2);text-transform:uppercase;
+}
+.auth .me img{
+  position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%;
+  /* 白底的头像（GitHub 的默认图案多半是）会化进白页面。一圈 8% 黑的发丝线
+     只在头像自己是白边时看得出来。描边不是阴影。 */
+  outline:1px solid rgba(0,0,0,.08);outline-offset:-1px;
+}
+/* 标题和导语之间比别处收紧一档：它们读成一句话的两半。 */
+.auth .req h1{letter-spacing:-.6px}
+.auth .req .lead{margin-top:10px}
+
+/* 浮动标签的输入框。标签在框里，打字时缩到上沿 —— 占位文字一打字就没了，
+   人写到一半就不知道这一栏在问什么。只动 transform，不动字号和位置
+   （DESIGN.md §7：不动 layout 属性）。16px 字：iOS 对小于 16px 的输入框
+   聚焦时会整页放大。 */
+.auth .fl{position:relative;display:block}
+.auth .fl input{
+  height:56px;padding:25px 15px 7px;border-radius:8px;
+  font-family:inherit;font-size:16px;text-align:left;
+}
+.auth .fl span{
+  position:absolute;left:16px;top:17px;max-width:calc(100% - 32px);
+  font-size:16px;line-height:22px;color:var(--ink-2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  pointer-events:none;transform-origin:0 0;
+  transition:transform .18s var(--ease);
+}
+.auth .fl input:focus + span,
+.auth .fl input:not(:placeholder-shown) + span{transform:translateY(-9px) scale(.75)}
+@media (prefers-reduced-motion:reduce){.auth .fl span{transition:none}}
+
+/* 申请页上的主按钮跟输入框一样高：它们是一组东西。 */
+.auth .req .go{padding:14px 18px;font-size:16px}
+.auth .req[data-req-state="approved"] .go{margin-top:28px}
+
+/* 页脚出口：退出登录只在这一处，任何状态下都在。 */
+.auth .out{margin-top:36px}
+.auth .out .sep{margin:0 4px;color:var(--hairline)}
 
 /* ── 手机 ──────────────────────────────────────────────────────────────
    一次扫遍全部状态之后加的这一块（tools/portalpreview/sweep.mjs）。
