@@ -205,3 +205,40 @@ func TestBulkWriteSendsNoTailRequests(t *testing.T) {
 		t.Fatalf("%d bytes went out in %d requests %v, want %d", total, len(lengths), lengths, want)
 	}
 }
+
+// Once a chunk is read out in pieces, the conn must not keep pointing at it:
+// an empty tail slice still pins the whole chunk until the next one arrives.
+func TestDrainedChunkIsReleased(t *testing.T) {
+	chunk := bytes.Repeat([]byte("d"), 1000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/h/down" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(chunk)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	connection, err := Dial(t.Context(), server.URL, "session", "agent", "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+
+	c := connection.(*conn)
+	var got []byte
+	buf := make([]byte, 300)
+	for len(got) < len(chunk) {
+		n, err := connection.Read(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, buf[:n]...)
+	}
+	if !bytes.Equal(got, chunk) {
+		t.Fatalf("read %d bytes, want the %d-byte chunk", len(got), len(chunk))
+	}
+	if c.leftover != nil {
+		t.Fatalf("drained leftover still holds the chunk (len %d, cap %d)", len(c.leftover), cap(c.leftover))
+	}
+}
