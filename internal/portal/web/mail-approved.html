@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- 只有浅色：Apple Mail 和部分安卓客户端会把没声明的邮件自动反色，
+     蓝按钮和发丝线在反色之后会变成另一套颜色。 -->
+<meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
+<title>访问申请已通过 · Access approved</title>
+</head>
+<!-- 访问申请通过的通知信。它是认证页那一列的延续（DESIGN.md §9）：
+     白底、没有卡片、一列左对齐、整封信只有一个蓝色按钮。
+     邮件客户端的规矩跟浏览器不一样，所以这里全是表格和内联样式：
+       - 没有 <style> 块、没有外部 CSS：Gmail 等客户端会剥掉或不认。
+       - 没有图片、没有 SVG：多数客户端默认不加载外链图片，Gmail 剥掉 SVG。
+         字标因此只用文字。
+       - 字体拿不到自托管的 Schibsted Grotesk（远程字体既常被拦，又等于告诉服务器
+         信被打开了），退到 Helvetica Neue / Arial，中文走系统的苹方和雅黑。
+     html/template 会删掉注释，所以这些话不会出现在寄出去的信里。 -->
+<body style="margin:0;padding:0;background:#ffffff;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;">
+<tr>
+<td align="center" style="padding:40px 24px 48px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:440px;font-family:'Schibsted Grotesk','Helvetica Neue',Helvetica,Arial,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;color:#1d1d1f;text-align:left;">
+<tr>
+<td style="padding:0 0 44px;font-size:17px;line-height:24px;font-weight:600;letter-spacing:-0.4px;color:#1d1d1f;">wanctl</td>
+</tr>
+<tr>
+<td style="font-size:26px;line-height:32px;font-weight:600;letter-spacing:-0.4px;color:#1d1d1f;">访问申请已通过</td>
+</tr>
+<tr>
+<td lang="en" style="padding:6px 0 0;font-size:15px;line-height:22px;color:#6e6e73;">Your access request was approved</td>
+</tr>
+<tr>
+<td style="padding:26px 0 0;font-size:15px;line-height:24px;color:#1d1d1f;">现在可以登录 <span style="font-family:'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace;">{{.Host}}</span>，接入你的第一台设备。</td>
+</tr>
+<tr>
+<td lang="en" style="padding:4px 0 0;font-size:15px;line-height:24px;color:#6e6e73;">You can now sign in to <span style="font-family:'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace;">{{.Host}}</span> and connect your first device.</td>
+</tr>
+<tr>
+<td style="padding:28px 0 44px;">
+<!-- 防弹按钮：颜色在单元格上，链接撑满它。整行都可点，
+     跟认证页那根通栏的主 CTA 是同一个东西。 -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+<tr>
+<td align="center" bgcolor="#0066cc" style="background:#0066cc;border-radius:999px;">
+<a href="{{.Link}}" target="_blank" style="display:block;padding:12px 18px;font-size:15px;line-height:20px;font-weight:400;letter-spacing:-0.2px;color:#ffffff;text-decoration:none;border-radius:999px;">登录 · Sign in</a>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+<tr>
+<td style="padding:16px 0 0;border-top:1px solid #d2d2d7;font-size:13px;line-height:20px;color:#6e6e73;">你收到这封邮件，是因为 GitHub 账号 <b style="font-weight:600;color:#1d1d1f;font-family:'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace;">{{.Login}}</b> 申请了访问。<br><span lang="en">You received this because the GitHub account <b style="font-weight:600;color:#1d1d1f;font-family:'JetBrains Mono',SFMono-Regular,Menlo,Consolas,monospace;">{{.Login}}</b> asked for access.</span></td>
+</tr>
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>
