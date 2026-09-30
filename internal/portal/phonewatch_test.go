@@ -105,6 +105,7 @@ type phoneFixture struct {
 	clockMu sync.Mutex
 	dropped []string
 	dropMu  sync.Mutex
+	closed  int // link sessions closed, guarded by dropMu
 
 	mu       sync.Mutex
 	phones   map[string]string // ns -> designated device
@@ -141,6 +142,13 @@ func newPhoneFixture(t *testing.T) *phoneFixture {
 				return f.target, nil
 			}
 			return nil, errors.New("no such device " + device)
+		},
+		linkFor: func(ctx context.Context, ns, device string) (phoneSession, func(), error) {
+			sess, err := f.sup.sessionFor(ctx, ns, device)
+			if err != nil {
+				return nil, nil, err
+			}
+			return sess, func() { f.dropMu.Lock(); f.closed++; f.dropMu.Unlock() }, nil
 		},
 		dropConn: func(ns, device string) {
 			f.dropMu.Lock()
@@ -316,8 +324,30 @@ func TestPhoneApprovalRacingExpiryBecomesGrant(t *testing.T) {
 	f.target.found = false
 	f.target.states <- pendingState("p1", "ls")
 	phoneWaitFor(t, "push", func() bool { p, _, _, _ := f.phone.snapshot(); return len(p) == 1 })
+	f.advance(178 * time.Second) // the tap lands as the device's wait runs out
 	f.phone.replyCh <- protocol.Message{Kind: protocol.KindApprovalReply, ApprovalID: f.phone.lastPush(t).ID, Verdict: "y"}
 	phoneWaitFor(t, "grant", func() bool { _, _, g, _ := f.target.snapshot(); return len(g) == 1 })
+}
+
+// With the portal open as well, the same request is on both. Whoever answers
+// first decides it; a phone tap that lands after a portal answer, before the
+// portal has seen the request leave the device, is told "handled" and must not
+// turn into a late grant that lets the command through again.
+func TestPhoneApprovalAfterAnswerElsewhereIsHandled(t *testing.T) {
+	f := newPhoneFixture(t)
+	f.upAndWatching(t)
+	f.target.found = false // the portal's answer got there first
+	f.target.states <- pendingState("p1", "ls")
+	phoneWaitFor(t, "push", func() bool { p, _, _, _ := f.phone.snapshot(); return len(p) == 1 })
+	f.advance(10 * time.Second)
+	f.phone.replyCh <- protocol.Message{Kind: protocol.KindApprovalReply, ApprovalID: f.phone.lastPush(t).ID, Verdict: "y"}
+	phoneWaitFor(t, "handled", func() bool {
+		c := f.phone.lastPush(t)
+		return c.State == protocol.ApprovalDone && c.Result == protocol.ResultHandled
+	})
+	if _, _, g, _ := f.target.snapshot(); len(g) != 0 {
+		t.Fatalf("a phone tap after an answer elsewhere became a grant: %v", g)
+	}
 }
 
 func TestPhoneRequestAnsweredElsewhereIsHandled(t *testing.T) {
@@ -489,5 +519,29 @@ func TestPhoneCardsArePruned(t *testing.T) {
 	f.sup.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("cards past retention = %d", n)
+	}
+}
+
+// The link owns its session. The pooled connection every portal page shares
+// is closed whenever a page's status query times out, which on a real phone
+// tore the watch down every few seconds (S13, 2026-09-30); a card must still
+// reach the phone when the pool cannot.
+func TestPhoneLinkDoesNotUseThePool(t *testing.T) {
+	f := newPhoneFixture(t)
+	f.upAndWatching(t)
+	f.mu.Lock()
+	f.failDial["phone-1"] = true // the pool can no longer reach the phone
+	f.mu.Unlock()
+	f.target.states <- pendingState("p1", "echo s13")
+	phoneWaitFor(t, "push over the link", func() bool { p, _, _, _ := f.phone.snapshot(); return len(p) == 1 })
+	if _, online := f.sup.status("alice"); !online {
+		t.Fatal("phone went offline although its link is up")
+	}
+
+	f.sup.teardown("alice", false)
+	f.dropMu.Lock()
+	defer f.dropMu.Unlock()
+	if f.closed != 1 {
+		t.Fatalf("link sessions closed = %d, want 1", f.closed)
 	}
 }

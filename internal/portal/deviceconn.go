@@ -21,6 +21,11 @@ import (
 // request re-dials a fresh session. A var (not const) so tests can shrink it.
 var rpcTimeout = 12 * time.Second
 
+// maxUnclaimedReplies bounds the approval_replies a connection keeps for a
+// listener that has not subscribed yet. It matches the listener's buffer, so
+// handing them over never blocks.
+const maxUnclaimedReplies = 16
+
 // deviceConn drives one authenticated console session to a device: it
 // demultiplexes the read stream into RPC responses and unsolicited approval
 // notifications, and serializes outgoing RPCs.
@@ -32,8 +37,11 @@ type deviceConn struct {
 	notifMu sync.Mutex
 	notifs  map[chan console.State]struct{}
 	replyCh map[chan protocol.Message]struct{} // approval_reply listeners (approval phone), guarded by notifMu
-	closed  chan struct{}
-	once    sync.Once
+	// unclaimed holds approval_replies that arrived while nobody listened,
+	// for the next replies() call. Guarded by notifMu.
+	unclaimed []protocol.Message
+	closed    chan struct{}
+	once      sync.Once
 }
 
 func newDeviceConn(conn net.Conn) *deviceConn {
@@ -74,6 +82,15 @@ func (d *deviceConn) readLoop() {
 			// the approval phone. It must never land in respCh, where it would
 			// be taken for the answer to whatever RPC is in flight.
 			d.notifMu.Lock()
+			if len(d.replyCh) == 0 {
+				// The phone resends what it has not seen settled as soon as a
+				// session opens, which is before the portal subscribes. Keep
+				// it for the first listener instead of dropping the only copy.
+				if len(d.unclaimed) == maxUnclaimedReplies {
+					d.unclaimed = d.unclaimed[1:]
+				}
+				d.unclaimed = append(d.unclaimed, m)
+			}
 			for ch := range d.replyCh {
 				select {
 				case ch <- m:
@@ -221,7 +238,7 @@ func (d *deviceConn) approvalPush(card protocol.ApprovalCard, timeout time.Durat
 // now on, plus an idempotent cancel. Like subscribe, the channel is closed when
 // the connection dies, so the listener knows to treat the phone as gone.
 func (d *deviceConn) replies() (<-chan protocol.Message, func()) {
-	ch := make(chan protocol.Message, 16)
+	ch := make(chan protocol.Message, maxUnclaimedReplies)
 	d.notifMu.Lock()
 	select {
 	case <-d.closed:
@@ -230,6 +247,10 @@ func (d *deviceConn) replies() (<-chan protocol.Message, func()) {
 		return ch, func() {}
 	default:
 		d.replyCh[ch] = struct{}{}
+		for _, m := range d.unclaimed {
+			ch <- m // cap(ch) >= maxUnclaimedReplies
+		}
+		d.unclaimed = nil
 	}
 	d.notifMu.Unlock()
 	var once sync.Once
