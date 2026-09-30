@@ -121,6 +121,7 @@ type Server struct {
 	larkMu      sync.Mutex
 	larkStarted bool
 	larkRuntime *larkRuntime
+	phone       *phoneSupervisor // approval phone workflow (ADR 0015); nil until Start
 }
 
 // New configures the portal. With an empty relayURL/secret the server still
@@ -209,6 +210,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/pending", s.handleWaiting)
 	mux.HandleFunc("/api/devices/alias", s.handleDeviceAlias)
 	mux.HandleFunc("/api/devices/lark", s.handleDeviceLark)
+	mux.HandleFunc("/api/approval-phone", s.handleApprovalPhone)
 	mux.HandleFunc("/api/devices/notify", s.handleDeviceNotify)
 	mux.HandleFunc("/api/notify", s.handleNotify)
 	mux.HandleFunc("/api/notify/test", s.handleNotifyTest)

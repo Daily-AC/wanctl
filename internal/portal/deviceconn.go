@@ -31,16 +31,18 @@ type deviceConn struct {
 	respCh  chan protocol.Message
 	notifMu sync.Mutex
 	notifs  map[chan console.State]struct{}
+	replyCh map[chan protocol.Message]struct{} // approval_reply listeners (approval phone), guarded by notifMu
 	closed  chan struct{}
 	once    sync.Once
 }
 
 func newDeviceConn(conn net.Conn) *deviceConn {
 	d := &deviceConn{
-		conn:   conn,
-		respCh: make(chan protocol.Message, 1),
-		notifs: make(map[chan console.State]struct{}),
-		closed: make(chan struct{}),
+		conn:    conn,
+		respCh:  make(chan protocol.Message, 1),
+		notifs:  make(map[chan console.State]struct{}),
+		replyCh: make(map[chan protocol.Message]struct{}),
+		closed:  make(chan struct{}),
 	}
 	go d.readLoop()
 	return d
@@ -67,6 +69,20 @@ func (d *deviceConn) readLoop() {
 			}
 			continue
 		}
+		if m.Kind == protocol.KindApprovalReply {
+			// Unsolicited, like the notification above: the owner decided on
+			// the approval phone. It must never land in respCh, where it would
+			// be taken for the answer to whatever RPC is in flight.
+			d.notifMu.Lock()
+			for ch := range d.replyCh {
+				select {
+				case ch <- m:
+				default:
+				}
+			}
+			d.notifMu.Unlock()
+			continue
+		}
 		select {
 		case d.respCh <- m:
 		case <-d.closed:
@@ -84,6 +100,12 @@ func (d *deviceConn) rpcWithin(req protocol.Message, timeout time.Duration) (pro
 	defer d.rpcMu.Unlock()
 	return d.rpcLocked(req, timeout)
 }
+
+// deviceRefusedError is a device's KindError answer: the device is there and
+// said no, as opposed to a connection that failed or went quiet.
+type deviceRefusedError struct{ reason string }
+
+func (e *deviceRefusedError) Error() string { return e.reason }
 
 // errDeviceBusy means another RPC to this device is in flight. Only callers
 // that would rather skip a device than queue behind it see it.
@@ -117,7 +139,7 @@ func (d *deviceConn) rpcLocked(req protocol.Message, timeout time.Duration) (pro
 	select {
 	case m := <-d.respCh:
 		if m.Kind == protocol.KindError {
-			return m, fmt.Errorf("%s", m.Reason)
+			return m, &deviceRefusedError{reason: m.Reason}
 		}
 		return m, nil
 	case <-d.closed:
@@ -154,6 +176,67 @@ func (d *deviceConn) stateIfIdle(timeout time.Duration) (console.State, error) {
 func (d *deviceConn) decide(id, verdict, approver string) error {
 	_, err := d.rpc(protocol.Message{Kind: protocol.KindDecide, ApprovalID: id, Verdict: verdict, Approver: approver})
 	return err
+}
+
+// decideFound is decide for a caller that must know whether the request was
+// still there: the device answers "not-found" once the wait has run out, and a
+// phone approval arriving then becomes a late grant instead (ADR 0015).
+func (d *deviceConn) decideFound(id, verdict, approver string) (bool, error) {
+	m, err := d.rpc(protocol.Message{Kind: protocol.KindDecide, ApprovalID: id, Verdict: verdict, Approver: approver})
+	if err != nil {
+		return false, err
+	}
+	return m.Verdict == "ok", nil
+}
+
+// grantOnce installs a late approval on the device: one request of this kind,
+// from this controller, with this label (command label or path), allowed once
+// within ttl.
+func (d *deviceConn) grantOnce(kind, pattern, fp string, ttl time.Duration, approver string) error {
+	_, err := d.rpc(protocol.Message{Kind: protocol.KindGrantOnce, RuleKind: kind, Pattern: pattern, FP: fp,
+		TimeoutSec: int(ttl / time.Second), Approver: approver})
+	return err
+}
+
+// approvalPush shows or updates a card on the approval phone. The timeout is
+// short on purpose: a phone that cannot acknowledge within it is treated as
+// offline, and the request it was meant for is refused rather than left
+// hanging for the full wait.
+func (d *deviceConn) approvalPush(card protocol.ApprovalCard, timeout time.Duration) error {
+	data, err := json.Marshal(card)
+	if err != nil {
+		return err
+	}
+	_, err = d.rpcWithin(protocol.Message{Kind: protocol.KindApprovalPush, Data: data}, timeout)
+	return err
+}
+
+// replies returns a channel carrying every approval_reply the device sends from
+// now on, plus an idempotent cancel. Like subscribe, the channel is closed when
+// the connection dies, so the listener knows to treat the phone as gone.
+func (d *deviceConn) replies() (<-chan protocol.Message, func()) {
+	ch := make(chan protocol.Message, 16)
+	d.notifMu.Lock()
+	select {
+	case <-d.closed:
+		close(ch)
+		d.notifMu.Unlock()
+		return ch, func() {}
+	default:
+		d.replyCh[ch] = struct{}{}
+	}
+	d.notifMu.Unlock()
+	var once sync.Once
+	return ch, func() {
+		once.Do(func() {
+			d.notifMu.Lock()
+			if _, ok := d.replyCh[ch]; ok {
+				delete(d.replyCh, ch)
+				close(ch)
+			}
+			d.notifMu.Unlock()
+		})
+	}
 }
 
 // errPairingGone means the device no longer holds that pending pairing: it
@@ -289,6 +372,10 @@ func (d *deviceConn) close() {
 		d.notifMu.Lock()
 		for ch := range d.notifs {
 			delete(d.notifs, ch)
+			close(ch)
+		}
+		for ch := range d.replyCh {
+			delete(d.replyCh, ch)
 			close(ch)
 		}
 		d.notifMu.Unlock()
