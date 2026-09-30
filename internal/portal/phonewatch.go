@@ -49,10 +49,13 @@ type phoneSession interface {
 
 type phoneSupervisor struct {
 	sessionFor func(ctx context.Context, ns, device string) (phoneSession, error)
-	dropConn   func(ns, device string)
-	adminReq   adminRequestFunc
-	logf       func(string, ...any)
-	now        func() time.Time
+	// linkFor dials a session nobody else uses, for the phone's link; the
+	// func closes it.
+	linkFor  func(ctx context.Context, ns, device string) (phoneSession, func(), error)
+	dropConn func(ns, device string)
+	adminReq adminRequestFunc
+	logf     func(string, ...any)
+	now      func() time.Time
 
 	reconcileEvery time.Duration
 	retryMin       time.Duration
@@ -75,7 +78,8 @@ type phoneSpace struct {
 	phone     string // route name, the key the portal dials it by
 	phoneName string // display name, for approver=phone:<name>
 	online    bool
-	link      context.CancelFunc // stops the reply listener
+	session   phoneSession // the link's own console session, set while online
+	link      func()       // stops the reply listener and closes session
 	targets   map[string]*phoneTarget
 	names     map[string]string // route name -> display name, for the cards
 }
@@ -103,6 +107,13 @@ func newPhoneSupervisor(s *Server) *phoneSupervisor {
 	return &phoneSupervisor{
 		sessionFor: func(ctx context.Context, ns, device string) (phoneSession, error) {
 			return s.deviceConnFor(ctx, ns, device)
+		},
+		linkFor: func(ctx context.Context, ns, device string) (phoneSession, func(), error) {
+			d, err := s.dialDeviceConn(ctx, ns, device)
+			if err != nil {
+				return nil, nil, err
+			}
+			return d, d.close, nil
 		},
 		dropConn:       s.dropConn,
 		adminReq:       s.adminReq,
@@ -331,9 +342,13 @@ func (p *phoneSupervisor) reconcileSpace(ns, phone string) error {
 // bringUp confirms the phone answers on a console session before anything
 // starts waiting on it — the relay registry says online for up to 40 seconds
 // after a phone lost its network — then starts listening for its decisions.
+//
+// The session is the link's own, not the pooled one every portal page shares:
+// a page whose status query times out closes the pooled connection, and on a
+// real phone that tore the watch down every few seconds (S13, 2026-09-30).
 func (p *phoneSupervisor) bringUp(ns, phone string) error {
 	ctx, cancel := context.WithTimeout(p.ctx, phonePushTimeout)
-	session, err := p.sessionFor(ctx, ns, phone)
+	session, closeSession, err := p.linkFor(ctx, ns, phone)
 	cancel()
 	if err != nil {
 		return err
@@ -343,10 +358,11 @@ func (p *phoneSupervisor) bringUp(ns, phone string) error {
 	select {
 	case err := <-check:
 		if err != nil {
+			closeSession()
 			return err
 		}
 	case <-time.After(phonePushTimeout):
-		p.dropConn(ns, phone)
+		closeSession()
 		return errors.New("no answer")
 	}
 
@@ -358,10 +374,15 @@ func (p *phoneSupervisor) bringUp(ns, phone string) error {
 		p.mu.Unlock()
 		linkCancel()
 		unsubscribe()
+		closeSession()
 		return nil
 	}
 	sp.online = true
-	sp.link = linkCancel
+	sp.session = session
+	sp.link = func() {
+		linkCancel()
+		closeSession()
+	}
 	p.mu.Unlock()
 	p.logf("approval phone %s/%s online", ns, phone)
 
@@ -540,16 +561,32 @@ func (p *phoneSupervisor) settle(cardID string) {
 	}
 }
 
-// push sends a card to the phone, if it is still that namespace's phone.
+// answeredElsewhere tells a request that left its device before its wait ran
+// out from one that expired, by the rule settle uses. It also counts a request
+// a restarting device dropped as answered, so the phone's approval lets
+// nothing through: wrong, but in the safe direction (ADR 0015).
+func (p *phoneSupervisor) answeredElsewhere(pc phoneCard) bool {
+	return p.now().Before(pc.card.Expires.Add(-phoneExpirySlack))
+}
+
+// push sends a card to the phone over its link, if it is still that
+// namespace's phone and the link is up.
 func (p *phoneSupervisor) push(ns, phone string, card protocol.ApprovalCard) error {
-	ctx, cancel := context.WithTimeout(p.ctx, phonePushTimeout)
-	defer cancel()
-	session, err := p.sessionFor(ctx, ns, phone)
-	if err != nil {
-		return err
+	p.mu.Lock()
+	var session phoneSession
+	if sp := p.spaces[ns]; sp != nil && sp.phone == phone && sp.online {
+		session = sp.session
+	}
+	p.mu.Unlock()
+	if session == nil {
+		return errPhoneLinkDown
 	}
 	return session.approvalPush(card, phonePushTimeout)
 }
+
+// errPhoneLinkDown: the phone is not linked right now, so a card has nowhere
+// to go.
+var errPhoneLinkDown = errors.New("approval phone not linked")
 
 // handleReply applies a decision the owner made on the phone. It is accepted
 // only for a card this portal pushed to that very phone, which is still the
@@ -617,6 +654,9 @@ func (p *phoneSupervisor) apply(pc phoneCard, verdict, approver string) string {
 		}
 		switch err := session.pairDecide(pc.pairFP, verdict); {
 		case errors.Is(err, errPairingGone):
+			if p.answeredElsewhere(pc) {
+				return protocol.ResultHandled
+			}
 			return protocol.ResultGone
 		case err != nil:
 			p.logf("approval phone %s: pairing on %s: %v", pc.ns, pc.card.Device, err)
@@ -638,6 +678,12 @@ func (p *phoneSupervisor) apply(pc phoneCard, verdict, approver string) string {
 				return protocol.ResultAllowed
 			}
 			return protocol.ResultDenied
+		}
+		if p.answeredElsewhere(pc) {
+			// Gone before its wait ran out: someone answered it on the
+			// portal or at the device first, and that answer stands. A late
+			// grant here would let the command through a second time.
+			return protocol.ResultHandled
 		}
 		// The wait ran out between the push and the tap: same as expired.
 	}
@@ -687,6 +733,7 @@ func (p *phoneSupervisor) teardown(ns string, forget bool) {
 	sp.online = false
 	link := sp.link
 	sp.link = nil
+	sp.session = nil
 	if forget {
 		delete(p.spaces, ns)
 	}
