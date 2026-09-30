@@ -306,6 +306,7 @@ var mutationPaths = map[string]bool{
 	"/api/devices/mode":            true,
 	"/api/devices/lark":            true,
 	"/api/devices/notify":          true,
+	"/api/approval-phone":          true,
 	"/api/notify":                  true,
 	"/api/notify/test":             true,
 	"/api/docs/articles":           true,
@@ -331,6 +332,7 @@ var readWritePaths = map[string]bool{
 	"/api/acl":            true,
 	"/api/devices/lark":   true,
 	"/api/devices/notify": true,
+	"/api/approval-phone": true,
 	"/api/notify":         true,
 	"/api/invites":        true,
 	// GET is the page behind the link; only the POST confirms.

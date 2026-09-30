@@ -78,7 +78,7 @@ func (f *fakePhoneSession) approvalPush(card protocol.ApprovalCard, _ time.Durat
 	return nil
 }
 func (f *fakePhoneSession) replies() (<-chan protocol.Message, func()) { return f.replyCh, func() {} }
-func (f *fakePhoneSession) state() (console.State, error)             { return console.State{}, nil }
+func (f *fakePhoneSession) state() (console.State, error)              { return console.State{}, nil }
 
 func (f *fakePhoneSession) lastPush(t *testing.T) protocol.ApprovalCard {
 	t.Helper()
