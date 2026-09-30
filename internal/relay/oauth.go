@@ -94,9 +94,9 @@ type OAuthRefresh struct {
 	RevokedAt time.Time
 }
 
-// OAuthStore is the durable half. It is separate from AdminStore because a
-// relay can run the MCP endpoint without one and because these rows have
-// nothing to do with the portal's admin surface.
+// OAuthStore is the durable half. It is separate from AdminStore because these
+// rows have nothing to do with the portal's admin surface. Without one there is
+// no hosted MCP endpoint: it authenticates with OAuth only (v0.19.0).
 type OAuthStore interface {
 	// RegisterOAuthClient stores c unless that would leave more than
 	// maxUnused clients that have never completed an authorization (no
@@ -803,6 +803,14 @@ func (r *Relay) oauthTokenFromRefresh(w http.ResponseWriter, req *http.Request, 
 	if err != nil {
 		// The seed rotated, which is the documented way to log every hosted
 		// session out at once. Say so as an auth failure, not a server error.
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "this authorization is no longer valid; authorize again")
+		return
+	}
+	// A grant that no longer resolves (logged out, or its account disabled)
+	// is refused before rotating. Rotation would spend the refresh token, and
+	// an account that is enabled again should find its connectors where they
+	// were rather than asking for a new authorization.
+	if !r.ResolveOAuthToken(claim.Namespace, claim.Token) {
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "this authorization is no longer valid; authorize again")
 		return
 	}

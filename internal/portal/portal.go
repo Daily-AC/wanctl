@@ -785,6 +785,8 @@ func (s *Server) requireNS(w http.ResponseWriter, r *http.Request) (string, bool
 		http.Error(w, pendingInviteBody, http.StatusForbidden)
 	case resolveConflict:
 		http.Error(w, detail, http.StatusConflict)
+	case resolveDisabled:
+		http.Error(w, accountDisabledBody, http.StatusForbidden)
 	default:
 		http.Error(w, detail, http.StatusBadGateway)
 	}
@@ -869,6 +871,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	case resolveConflict:
 		http.Error(w, detail, http.StatusConflict)
+		return
+	case resolveDisabled:
+		http.Error(w, accountDisabledBody, http.StatusForbidden)
 		return
 	default:
 		http.Error(w, detail, http.StatusBadGateway)
@@ -971,6 +976,10 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (string, b
 	ns, role, status, detail := s.resolveNamespace(p)
 	if status == resolveNeedsEmail {
 		http.Error(w, emailRequiredBody, http.StatusForbidden)
+		return "", false
+	}
+	if status == resolveDisabled {
+		http.Error(w, accountDisabledBody, http.StatusForbidden)
 		return "", false
 	}
 	if status != resolveOK {

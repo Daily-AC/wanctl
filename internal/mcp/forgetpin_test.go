@@ -138,24 +138,6 @@ func TestForgettingOneNameLeavesOtherPinsAlone(t *testing.T) {
 	}
 }
 
-// A session-keyed login (no OAuth bearer) keeps its own store, so the hook has
-// to reach that one too.
-func TestForgettingReachesSessionKeyedLogins(t *testing.T) {
-	own := transport.NewMemStore()
-	sessions = &sessionStore{
-		m:     map[string]*remoteSession{"sid-1": {id: "sid-1", namespace: "alice", known: own}},
-		trust: map[string]*transport.Store{},
-	}
-	fp := seededIdentity(t, "session-keyed").Fingerprint
-	if err := own.Pin("alice/build", fp, false); err != nil {
-		t.Fatal(err)
-	}
-	ForgetPinnedDevice("alice", "build")
-	if _, ok := own.GetByName("alice/build"); ok {
-		t.Error("a session-keyed login kept the stale pin")
-	}
-}
-
 // Calling it before any handler exists (stdio, or a relay with MCP off) must
 // not panic.
 func TestForgettingIsSafeWithoutAHostedServer(t *testing.T) {

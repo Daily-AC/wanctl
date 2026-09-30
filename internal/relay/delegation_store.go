@@ -272,7 +272,7 @@ func (p *PGStore) ResolveAccess(raw string) (delegation.Access, bool) {
 	var expires sql.NullTime
 	err := p.db.QueryRowContext(ctx, `SELECT t.id,t.namespace,t.kind,t.expires_at,COALESCE(r.id,'')
  FROM tokens t LEFT JOIN delegation_requests r ON r.token_id=t.id
- WHERE t.hash=$1 AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>now())`, HashToken(raw)).Scan(&id, &out.Namespace, &kind, &expires, &grantID)
+ WHERE t.hash=$1 AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>now()) AND `+namespaceEnabled("t.namespace"), HashToken(raw)).Scan(&id, &out.Namespace, &kind, &expires, &grantID)
 	if err != nil {
 		return delegation.Access{}, false
 	}

@@ -32,6 +32,7 @@ package httpconn
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -62,6 +63,7 @@ type conn struct {
 	readM       sync.Mutex
 	leftover    []byte
 	eof         bool
+	endErr      error  // what Read returns at the end instead of io.EOF, when the relay said why
 	ackSeq      uint64 // highest down-poll sequence fully received
 	ackable     bool   // the relay has answered this session with the ack protocol
 	downMax     int    // bytes this reader asks one down poll to carry
@@ -129,6 +131,10 @@ const (
 	// gated on having seen this (or a sequence header) on this session.
 	DownAckCapabilityHeader = "X-Wanctl-Down-Ack"
 
+	// SessionEndHeader rides on a 410 for a session the relay ended itself,
+	// naming why. "device-gone" is the one value a reader acts on today.
+	SessionEndHeader = "X-Wanctl-Session-End"
+
 	// DownMaxParam is the most bytes the reader wants in one down-poll
 	// response. A relay that does not know it answers with its own cap.
 	DownMaxParam = "max"
@@ -154,6 +160,12 @@ const (
 // downShrinkPast is how long a chunk may take before the next one is halved;
 // a variable so tests need not wait it out.
 var downShrinkPast = 30 * time.Second
+
+// ErrDeviceGone is what a session's reader gets when the relay ended the
+// session because the device's agent went offline or was restarted. It is not
+// io.EOF: the far side did not finish, and a controller waiting on a command
+// has to say so rather than report a clean end or a timeout.
+var ErrDeviceGone = errors.New("device disconnected: its agent went offline or restarted mid-session, so whatever it was running may or may not have finished")
 
 // Dial constructs a net.Conn for a session/role. base is the relay's HTTP origin
 // (http:// or https://, or ws(s):// which is normalized). No network I/O happens
@@ -292,7 +304,8 @@ type downResult struct {
 	status  int
 	ackable bool
 	window  bool
-	retried bool // a response body was cut short before this complete result
+	retried bool   // a response body was cut short before this complete result
+	end     string // SessionEndHeader on a 410
 	took    time.Duration
 	err     error
 }
@@ -332,6 +345,7 @@ func (c *conn) downPoll(ctx context.Context, ack, want uint64, limit int, retrya
 		result := downResult{want: want, max: limit}
 		if err == nil {
 			result.status = resp.StatusCode
+			result.end = resp.Header.Get(SessionEndHeader)
 			result.ackable = resp.Header.Get(DownAckCapabilityHeader) == "1"
 			result.window = resp.Header.Get(DownWindowCapabilityHeader) == "4"
 			result.seq, _ = strconv.ParseUint(resp.Header.Get(DownSeqHeader), 10, 64)
@@ -447,6 +461,9 @@ func (c *conn) Read(p []byte) (int, error) {
 		return n, nil
 	}
 	if c.eof {
+		if c.endErr != nil {
+			return 0, c.endErr
+		}
 		return 0, io.EOF
 	}
 	for {
@@ -521,6 +538,10 @@ func (c *conn) Read(p []byte) (int, error) {
 				c.stopBatch()
 			}
 			c.eof = true
+			if r.end == "device-gone" {
+				c.endErr = ErrDeviceGone
+				return 0, ErrDeviceGone
+			}
 			return 0, io.EOF
 		default:
 			if windowed {

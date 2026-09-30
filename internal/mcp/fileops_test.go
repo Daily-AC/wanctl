@@ -14,20 +14,14 @@ import (
 // authorized to drive. Registration is shared, so the way this can regress is a
 // handler that reaches for a local path -- which is what the second half checks.
 func TestReadAndEditAreRegisteredForBothTransports(t *testing.T) {
-	s := server.NewMCPServer("wanctl", "1.0.0")
-	registerMCPTools(s)
-	tools := s.ListTools()
-
-	for _, name := range []string{"wanctl_read", "wanctl_edit"} {
-		if _, ok := tools[name]; !ok {
-			t.Fatalf("%s is not registered", name)
-		}
-	}
-	// Both entry points build their server the same way, so what is registered
-	// once is registered for both. Guard the assumption rather than the call.
-	for _, name := range []string{"wanctl_push", "wanctl_pull"} {
-		if _, ok := tools[name]; !ok {
-			t.Fatalf("%s vanished from the shared registration", name)
+	for _, hosted := range []bool{false, true} {
+		s := server.NewMCPServer("wanctl", "1.0.0")
+		registerMCPTools(s, hosted)
+		tools := s.ListTools()
+		for _, name := range []string{"wanctl_read", "wanctl_edit", "wanctl_push", "wanctl_pull"} {
+			if _, ok := tools[name]; !ok {
+				t.Fatalf("hosted=%v: %s is not registered", hosted, name)
+			}
 		}
 	}
 }
@@ -38,7 +32,7 @@ func TestReadAndEditAreRegisteredForBothTransports(t *testing.T) {
 // them.
 func TestFileToolDescriptionsPointAtEachOther(t *testing.T) {
 	s := server.NewMCPServer("wanctl", "1.0.0")
-	registerMCPTools(s)
+	registerMCPTools(s, false)
 	tools := s.ListTools()
 
 	want := map[string][]string{

@@ -165,11 +165,6 @@
         "name": "code",
         "type": "string",
         "required": false
-      },
-      {
-        "name": "rebind",
-        "type": "string",
-        "required": false
       }
     ]
   },

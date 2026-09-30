@@ -27,6 +27,10 @@ type httpAgent struct {
 	retired          map[string]struct{}
 	changed          chan struct{}
 	delegation       bool
+	// polls counts this device's /h/poll requests in flight. A live agent
+	// always has one parked or is about to send the next, so none in flight
+	// and no poll for deviceGoneAfter means the process is gone.
+	polls int
 }
 
 // sideQueue is one direction of a session's byte flow. The relay never inspects
@@ -776,6 +780,17 @@ type httpSession struct {
 	// still reading it collects what is already queued instead of having the
 	// remainder 404 out from under it. Guarded by hmu.
 	closedAt time.Time
+	// agentKey and agentInst name the HTTP agent process that took the
+	// session, so the relay can end it when that process is gone (see
+	// endSessionsOfGoneAgents). Empty until an HTTP agent picks it up, and for
+	// a WebSocket agent, whose socket closing already ends the session.
+	// endReason is why the relay ended it, told to the controller on the 410;
+	// endTold is set once a 410 carrying it has gone out, and until then the
+	// session stays registered, or a controller between polls would find it
+	// gone (404) and read a plain end. All four are guarded by hmu.
+	agentKey, agentInst string
+	endReason           string
+	endTold             bool
 }
 
 func (s *httpSession) close() {
@@ -828,7 +843,7 @@ const (
 func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	ns, ok := r.auth(w, req)
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		r.refuseAgent(w, req)
 		return
 	}
 	device := req.URL.Query().Get("device")
@@ -900,10 +915,17 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	a.name = req.URL.Query().Get("name")
 	a.delegation = req.URL.Query().Get("delegation") == "1"
 	a.lastSeen = time.Now()
+	a.polls++
 	r.hagents[key] = a
 	changed := a.changed
 	r.hmu.Unlock()
 	r.registrationMu.Unlock()
+	defer func() {
+		r.hmu.Lock()
+		a.polls--
+		a.lastSeen = time.Now()
+		r.hmu.Unlock()
+	}()
 	wasLive := wasHTTPLive || r.wsDeviceLive(key)
 	if !wasLive {
 		r.emitDeviceEvent(ns, device, onlineEvent(device))
@@ -919,6 +941,11 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "another agent instance registered this device name", http.StatusConflict)
 			return
 		}
+		r.hmu.Lock()
+		if s := r.hsess[open.Session]; s != nil {
+			s.agentKey, s.agentInst = key, inst
+		}
+		r.hmu.Unlock()
 		w.Header().Set(httpconn.UpSeqCapabilityHeader, "1")
 		w.Header().Set(httpconn.DownWindowCapabilityHeader, strconv.Itoa(httpconn.DownWindowSize))
 		writeJSON(w, open)
@@ -1097,7 +1124,7 @@ func (r *Relay) handleHUp(w http.ResponseWriter, req *http.Request) {
 	// queue would say anyway; saying it before the push keeps the answer the
 	// same for an empty body, which never reaches the queue at all.
 	if r.gracefullyClosed(s) {
-		http.Error(w, "session closed", http.StatusGone)
+		r.writeSessionClosed(w, s)
 		return
 	}
 	dst := s.toAgent // role=client writes toward the agent
@@ -1280,7 +1307,7 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if closed && len(data) == 0 {
-		http.Error(w, "session closed", http.StatusGone)
+		r.writeSessionClosed(w, s)
 		return
 	}
 	if len(data) == 0 {
@@ -1396,7 +1423,7 @@ func (r *Relay) releaseDrainedSession(sid string, s *httpSession) {
 		return
 	}
 	r.hmu.Lock()
-	retire := !s.closedAt.IsZero() && r.hsess[sid] == s
+	retire := !s.closedAt.IsZero() && r.hsess[sid] == s && (s.endReason == "" || s.endTold)
 	if retire {
 		delete(r.hsess, sid)
 	}
@@ -1473,7 +1500,78 @@ func (r *Relay) startHTTPReaper() {
 				r.reapHTTP(time.Now())
 			}
 		}()
+		go func() {
+			t := time.NewTicker(deviceGoneScan)
+			defer t.Stop()
+			for range t.C {
+				r.endSessionsOfGoneAgents(time.Now())
+			}
+		}()
 	})
+}
+
+const (
+	// deviceGoneAfter is how long an HTTP agent may go with no /h/poll in
+	// flight before the relay takes its process for gone. A live agent sends
+	// the next poll as soon as one is answered, and retries a failed one
+	// every two seconds, so this is several missed retries, not a slow link.
+	deviceGoneAfter = 15 * time.Second
+	deviceGoneScan  = 5 * time.Second
+	// sessionEndDeviceGone is the X-Wanctl-Session-End value for a session
+	// the relay ended because the device's agent went away.
+	sessionEndDeviceGone = "device-gone"
+)
+
+// endSessionsOfGoneAgents ends the sessions whose HTTP agent process is gone:
+// replaced by another instance (a self-update, or a supervisor restarting a
+// crashed agent), deregistered, dropped from the registry, or silent for
+// deviceGoneAfter (killed, or the machine went off the network).
+//
+// Without it a controller waiting on a command kept polling its side of the
+// session, which is exactly what keeps a session alive, and hung until someone
+// killed it (2026-09-29, a 5090 self-update). The mirror case, a controller
+// that vanished, is reapHTTP's clientSeen check. A session whose device polls
+// on, however long its command or approval takes, is never touched: the check
+// is on the agent's registration poll, not on the session.
+func (r *Relay) endSessionsOfGoneAgents(now time.Time) {
+	var gone []*httpSession
+	r.hmu.Lock()
+	for _, s := range r.hsess {
+		if s.agentKey == "" || s.endReason != "" {
+			continue
+		}
+		a := r.hagents[s.agentKey]
+		if a != nil && (s.agentInst == "" || a.inst == s.agentInst) && (a.polls > 0 || now.Sub(a.lastSeen) <= deviceGoneAfter) {
+			continue
+		}
+		s.endReason = sessionEndDeviceGone
+		if s.closedAt.IsZero() {
+			s.closedAt = now
+		}
+		gone = append(gone, s)
+	}
+	r.hmu.Unlock()
+	for _, s := range gone {
+		// Nobody will read the device's direction again. The controller's is
+		// closed, not dropped: it collects what the device sent before it
+		// went, then reads the 410 that says why, and that poll retires the
+		// session.
+		s.toAgent.free()
+		s.toClient.close()
+	}
+}
+
+// writeSessionClosed answers a poll or an upload on a session that has ended,
+// saying why when the relay itself ended it.
+func (r *Relay) writeSessionClosed(w http.ResponseWriter, s *httpSession) {
+	r.hmu.Lock()
+	reason := s.endReason
+	s.endTold = true
+	r.hmu.Unlock()
+	if reason != "" {
+		w.Header().Set(httpconn.SessionEndHeader, reason)
+	}
+	http.Error(w, "session closed", http.StatusGone)
 }
 
 // reapHTTP drops HTTP-registry entries whose agent stopped polling and

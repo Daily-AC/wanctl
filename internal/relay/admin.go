@@ -44,6 +44,7 @@ func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/invites/revoke", r.adminInviteRevoke)
 	mux.HandleFunc("/admin/users", r.adminUsers)
 	mux.HandleFunc("/admin/users/lookup", r.adminUserLookup)
+	mux.HandleFunc("/admin/users/disable", r.adminAccountDisable)
 	mux.HandleFunc("/admin/friends", r.adminFriends)
 	mux.HandleFunc("/admin/friends/request", r.adminFriendRequest)
 	mux.HandleFunc("/admin/friends/accept", r.adminFriendAccept)
@@ -212,6 +213,11 @@ func (r *Relay) adminResolveUser(w http.ResponseWriter, req *http.Request) {
 		if errors.Is(err, ErrPendingInvite) {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = io.WriteString(w, "pending-invite")
+			return
+		}
+		if errors.Is(err, ErrAccountDisabled) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, accountDisabledBody)
 			return
 		}
 		if errors.Is(err, ErrNamespaceConflict) {
@@ -773,6 +779,13 @@ func (p *PGStore) ResolveIdentity(provider, subject, login, name, reservedNS str
 	}
 
 	if ns, role, err := lookupIdentity(p.db, provider, subject); err == nil {
+		// Asked on every portal request as well as at login, so a disabled
+		// account's session stops here too, not only its next sign-in.
+		if at, _, err := p.AccountDisabled(ns); err != nil {
+			return "", "", err
+		} else if at != nil {
+			return "", "", ErrAccountDisabled
+		}
 		return ns, role, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return "", "", err

@@ -688,6 +688,37 @@ func TestRefreshRotatesAndRetiresTheOldToken(t *testing.T) {
 	}
 }
 
+// A refresh refused because the grant stopped resolving (its account was
+// disabled) must not spend the refresh token: once the account is enabled
+// again, the connector refreshes as if nothing happened.
+func TestRefreshRefusedWhileTheGrantIsDeadIsNotSpent(t *testing.T) {
+	r, b, seed := newOAuthRelay(t)
+	id, secret := registerClient(t, r)
+	verifier, challenge := pkce()
+	code := authorize(t, r, id, challenge, "st", "alice")
+	out := decode(t, formPost(t, r, "/oauth/token", url.Values{
+		"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {testRedirect},
+		"code_verifier": {verifier}, "client_id": {id}, "client_secret": {secret},
+	}))
+	claim, _ := mcpauth.OpenAccess(seed, out["access_token"].(string), time.Now())
+	refresh := url.Values{
+		"grant_type": {"refresh_token"}, "refresh_token": {out["refresh_token"].(string)},
+		"client_id": {id}, "client_secret": {secret},
+	}
+	b.mu.Lock()
+	b.revoked[HashToken(claim.Token)] = true
+	b.mu.Unlock()
+	if rr := formPost(t, r, "/oauth/token", refresh); rr.Code != http.StatusBadRequest || decode(t, rr)["error"] != "invalid_grant" {
+		t.Fatalf("refresh of a dead grant: %d %s", rr.Code, rr.Body.String())
+	}
+	b.mu.Lock()
+	delete(b.revoked, HashToken(claim.Token))
+	b.mu.Unlock()
+	if rr := formPost(t, r, "/oauth/token", refresh); rr.Code != http.StatusOK {
+		t.Fatalf("the refused refresh spent the token: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestRefreshRefusesAnotherClientsToken(t *testing.T) {
 	r, _, _ := newOAuthRelay(t)
 	id, secret := registerClient(t, r)

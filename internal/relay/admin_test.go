@@ -255,6 +255,10 @@ func (s resolveUserStmt) Query(args []driver.Value) (driver.Rows, error) {
 		}
 		return &adminRows{columns: []string{"namespace", "role"}}, nil
 	}
+	if strings.Contains(s.query, "SELECT disabled_at FROM users") {
+		// Nobody in these tests is disabled; disable_pg_test.go covers it.
+		return &adminRows{columns: []string{"disabled_at"}, values: [][]driver.Value{{nil}}}, nil
+	}
 	if strings.Contains(s.query, "INSERT INTO users") {
 		s.state.inserts++
 		provider, subject := args[0].(string), args[1].(string)

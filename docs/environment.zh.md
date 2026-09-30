@@ -7,7 +7,7 @@
 
 | 变量 | 角色 | 必需 | 默认值 | 用途 |
 |---|---|---:|---|---|
-| `WANCTL_ROLE` | 容器 | 否 | `relay` | Docker 镜像的启动角色：`relay`、`portal` 或 `mcp`。 |
+| `WANCTL_ROLE` | 容器 | 否 | `relay` | Docker 镜像的启动角色：`relay` 或 `portal`。托管 MCP 端点是 relay 的一部分；`mcp` 角色在 v0.19.0 删掉了。 |
 | `DATABASE_URL` | relay | 视情况 | 无 | PostgreSQL DSN。带门户的多用户部署必需；否则 relay 需要 `WANCTL_TOKENS` 或 `WANCTL_UPSTREAM_RELAY`。 |
 | `WANCTL_AUTO_MIGRATE` | relay | 否 | 开启 | 设成 `0` 可跳过内嵌的数据库 migration。 |
 | `WANCTL_ADMIN_SECRET` | relay、portal、管理 CLI | 视情况 | 无 | `/admin/*` 的共享 secret；设了的话 relay 启动时要求至少 32 字节。门户可用、上游令牌解析、管理 CLI 和服务端日志访问都需要它。 |
@@ -16,7 +16,7 @@
 | `WANCTL_PORTAL_NS` | relay | 否 | 无 | 允许开启特权门户控制台会话的命名空间。惯例是 `portal`。 |
 | `WANCTL_DIST_DIR` | relay | 否 | `/dist` | 存放签名过的发布产物和安装器的目录。 |
 | `WANCTL_PUBLIC_ORIGIN` | relay | 视情况 | 无 | relay 的规范 origin，会被替换进 `/skills`，以及从 `/install.sh` 和 `/install.ps1` 提供的安装器里，这样从这台 relay 取到的脚本就从这台 relay 安装。它同时也是 MCP OAuth 对外公布的 issuer 和资源标识。绝不从请求的 Host 推导：没设时 `/skills` 返回 503，安装器原样带着它内置的 base 提供，OAuth 则保持关闭。 |
-| `WANCTL_MCP_SEED` | relay、MCP | 视情况 | 无 | 十六进制种子，在 relay 上启用 `/mcp`（别名 `/wanctl-mcp`）；独立跑 `mcp --http` 时必需，且解码后至少 32 字节。它同时密封 rebind 凭证和 OAuth 访问令牌，所以换掉它等于让所有托管会话立刻登出。 |
+| `WANCTL_MCP_SEED` | relay | 视情况 | 无 | 十六进制种子，解码后至少 32 字节，在 relay 上启用托管 MCP 端点 `/mcp`（别名 `/wanctl-mcp`）。v0.19.0 起这个端点只认 OAuth，所以还需要 `DATABASE_URL`、`WANCTL_PUBLIC_ORIGIN` 和 `WANCTL_PORTAL`；缺了的话 `/mcp` 回 503 并说明缺什么。它密封 OAuth 访问令牌和存下来的授权，所以换掉它等于让所有授权立刻作废。 |
 | `WANCTL_MCP_LOCAL_ROOT` | MCP stdio | 否 | 进程工作目录 | `wanctl_push` 和 `wanctl_pull` 唯一可以访问的本地目录树。wanctl 配置目录永远被排除在外。 |
 | `WANCTL_MCP_ALLOWED_ORIGINS` | MCP HTTP | 否 | 无 | 逗号分隔的浏览器 Origin 白名单。带 Origin 的请求不在名单里就拒绝；程序化的客户端通常一个都不带。 |
 | `WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER` | MCP | 否 | `0` | 只有想恢复「模型可调用的设备 TOFU 钉扎」时才设成 `1`。默认是失败即关闭，因为模型分不清一个独立验证过的指纹和一个由敌意 relay 递过来的指纹。 |

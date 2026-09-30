@@ -33,6 +33,12 @@ const (
 	// pendingInviteBody is the exact 403 body the relay's resolve endpoint
 	// returns when admission requires an invite. Contract with internal/relay.
 	pendingInviteBody = "pending-invite"
+	// accountDisabledBody is the relay's 403 body for a disabled account, and
+	// what the portal's API answers such a session with. Contract with
+	// internal/relay.
+	accountDisabledBody = "account-disabled"
+	// accountDisabledPage is what a page load shows that session.
+	accountDisabledPage = "This account has been disabled. Contact the operator of this wanctl instance.\n此账号已停用，请联系这台 wanctl 的运营方。"
 )
 
 // principal is an authenticated identity before namespace resolution.
@@ -387,6 +393,9 @@ const (
 	resolveNeedsEmail
 	resolvePending
 	resolveConflict
+	// resolveDisabled is an account the operator disabled: its session and
+	// every fresh login are refused until the flag is cleared.
+	resolveDisabled
 	resolveError
 )
 
@@ -421,8 +430,11 @@ func (s *Server) resolveNamespace(p *principal) (ns, role string, status resolve
 		return out.Namespace, out.Role, resolveOK, ""
 	case http.StatusForbidden:
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		if strings.TrimSpace(string(b)) == pendingInviteBody {
+		switch strings.TrimSpace(string(b)) {
+		case pendingInviteBody:
 			return "", "", resolvePending, ""
+		case accountDisabledBody:
+			return "", "", resolveDisabled, accountDisabledBody
 		}
 		return "", "", resolveError, "relay admin error"
 	case http.StatusConflict:
@@ -463,6 +475,8 @@ func (s *Server) pageAuth(w http.ResponseWriter, r *http.Request, next string) (
 		http.Redirect(w, r, pendingNext(next), http.StatusSeeOther)
 	case resolveConflict:
 		http.Error(w, detail, http.StatusConflict)
+	case resolveDisabled:
+		http.Error(w, accountDisabledPage, http.StatusForbidden)
 	default:
 		http.Error(w, detail, http.StatusBadGateway)
 	}
@@ -494,6 +508,9 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 	switch _, _, status, _ := s.resolveNamespace(p); status {
 	case resolveOK, resolveNeedsEmail:
 		http.Redirect(w, r, next, http.StatusSeeOther)
+		return
+	case resolveDisabled:
+		http.Error(w, accountDisabledPage, http.StatusForbidden)
 		return
 	}
 	// An applicant passes the same door as everyone else: an approval nobody

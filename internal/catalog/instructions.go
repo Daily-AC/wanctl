@@ -6,7 +6,7 @@ import (
 )
 
 // Instructions is the harness's own system prompt: what wanctl is, the whole
-// list of primitives, how they fit into a loop, and the four refusals a caller
+// list of primitives, how they fit into a loop, and the refusals a caller
 // has to recognise — each of which has to be answered before the same call is
 // worth making again.
 //
@@ -25,11 +25,22 @@ import (
 // The budget is forty lines. It is read before any work, every session, by
 // something that pays for every token; the command reference is one
 // `wanctl help <command>` away and does not belong here.
-func Instructions() string {
+func Instructions() string { return instructions(false) }
+
+// HostedInstructions is what the hosted endpoint (/mcp on a relay) hands out:
+// the same text without the local login and its refusal. A hosted session is
+// authenticated by its OAuth bearer before any tool runs, so telling the model
+// to log in would send it after a tool that is not there.
+func HostedInstructions() string { return instructions(true) }
+
+func instructions(hosted bool) string {
 	var b strings.Builder
 	b.WriteString(instructionsHeader)
 
 	for _, c := range MCPCommands() {
+		if hosted && c.StdioOnly {
+			continue
+		}
 		b.WriteString(fmt.Sprintf("  %-20s %s\n", c.MCPName, instructionLine(c)))
 	}
 
@@ -40,6 +51,9 @@ func Instructions() string {
 
 	b.WriteString("\nREFUSALS — none of these mean retry as-is:\n")
 	for _, r := range criticalErrors {
+		if hosted && r.Text == loginRequired {
+			continue
+		}
 		b.WriteString("  " + r.Text + ": " + r.Do + "\n")
 	}
 	return b.String()
@@ -66,7 +80,7 @@ var devLoop = []string{
 	"Before working in a project directory, read its AGENTS.md or CLAUDE.md with wanctl_read if one exists and follow it: it outranks how you would proceed.",
 }
 
-// criticalErrors are the four refusals that mean the next move is not the same
+// criticalErrors are the refusals that mean the next move is not the same
 // call again: each names the thing that has to change first — an approval, a
 // pin, a human decision, a credential — with the shortest form of what to do.
 //
@@ -79,8 +93,10 @@ var criticalErrors = []struct{ Text, Do string }{
 	{"PAIRING REQUIRED", "give the URL in the message to the user, then retry."},
 	{"DEVICE IDENTITY CONFIRMATION REQUIRED", "authorize trust, then pin."},
 	{"DEVICE IDENTITY MISMATCH", "refused, nothing sent; report both fingerprints."},
-	{"LOGIN REQUIRED", "call wanctl_login; a saved rebind restores it instantly."},
+	{loginRequired, "call wanctl_login."},
 }
+
+const loginRequired = "LOGIN REQUIRED"
 
 // CriticalErrors are the error texts the instructions promise a caller will
 // recognise. Exported for the test that checks each is a failure some command

@@ -53,3 +53,23 @@ func TestEveryQuotedRefusalIsRealOne(t *testing.T) {
 		}
 	}
 }
+
+// The hosted endpoint's text is the same contract less the local login: its
+// requests are authenticated by an OAuth bearer before any tool runs, so a
+// model told to log in there would go looking for a tool that is not offered.
+func TestHostedInstructionsHaveNoLogin(t *testing.T) {
+	got := HostedInstructions()
+	for _, stale := range []string{"wanctl_login", "LOGIN REQUIRED", "rebind", "one-time code"} {
+		if strings.Contains(got, stale) {
+			t.Errorf("hosted instructions mention %q:\n%s", stale, got)
+		}
+	}
+	for _, c := range MCPCommands() {
+		if !c.StdioOnly && !strings.Contains(got, c.MCPName) {
+			t.Errorf("hosted instructions never mention %s", c.MCPName)
+		}
+	}
+	if !strings.Contains(Instructions(), "wanctl_login") {
+		t.Error("the local instructions lost wanctl_login")
+	}
+}

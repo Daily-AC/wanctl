@@ -44,12 +44,13 @@ services:
       WANCTL_PORTAL_NS: portal
       WANCTL_PUBLIC_ORIGIN: ${RELAY_PUBLIC_ORIGIN:?set RELAY_PUBLIC_ORIGIN in selfhost/.env}
       # Hosted MCP endpoint at /mcp, plus a /wanctl-mcp alias for edges
-      # that have claimed the /mcp prefix; empty keeps it off. Every MCP
-      # session authenticates through the portal and then talks to this relay
-      # as an ordinary controller, so the relay needs the portal origin and a
-      # way to reach itself. A hosted session pins device identities in
-      # memory only and stays fail-closed on first contact with a device
-      # until the operator sets the opt-in below to 1.
+      # that have claimed the /mcp prefix; empty keeps it off. It is OAuth
+      # only: every request carries a bearer the portal's consent page led to,
+      # so it needs the database, WANCTL_PUBLIC_ORIGIN and WANCTL_PORTAL set
+      # here. An MCP session then talks to this relay as an ordinary
+      # controller, so the relay needs a way to reach itself. A hosted session
+      # pins device identities in memory only and stays fail-closed on first
+      # contact with a device until the operator sets the opt-in below to 1.
       WANCTL_MCP_SEED: ${WANCTL_MCP_SEED:-}
       WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER: ${WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER:-}
       WANCTL_PORTAL: ${PORTAL_PUBLIC_ORIGIN:?set PORTAL_PUBLIC_ORIGIN in selfhost/.env}

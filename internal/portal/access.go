@@ -75,8 +75,12 @@ func (s *Server) handleAccessRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	// Someone who already has a namespace has nothing to apply for, and an
 	// application from them would sit in the queue forever.
-	if _, _, status, _ := s.resolveNamespace(p); status == resolveOK || status == resolveNeedsEmail {
+	switch _, _, status, _ := s.resolveNamespace(p); status {
+	case resolveOK, resolveNeedsEmail:
 		http.Error(w, "already admitted", http.StatusConflict)
+		return
+	case resolveDisabled:
+		http.Error(w, accountDisabledBody, http.StatusForbidden)
 		return
 	}
 	// Checked here, not only by the page's redirect: the form is one POST
