@@ -1,7 +1,7 @@
 # 0015 — Approvals on the owner's phone
 
 Date: 2026-09-30
-Status: accepted; implementation in progress (S13)
+Status: accepted; implemented in v0.20.0
 
 ## Problem
 
