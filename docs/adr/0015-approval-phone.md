@@ -48,6 +48,13 @@ expecting a request, picks the phone up 19 to 50 minutes later.
   answer only what was shown to it, once. These records live in the portal's
   memory: a portal restart forgets them, and a decision naming one is then
   answered as gone, which fails safe.
+- **The portal page and the phone together (v0.20.1).** A pending request is
+  on both; the first answer to reach the device decides it. The other side is
+  told: the phone's card turns "已处理", and a click on the page answers
+  `request_gone` instead of claiming it was allowed. The phone's link, its
+  pushes and its decisions use a console session of their own, not the pooled
+  one portal pages share: a page whose status query times out on a slow phone
+  closes the pooled session, and that used to take the whole watch down.
 - **Unlock is required.** The lock screen shows only "有 1 个待审批请求"
   (the notification's public version). The command appears after unlock: the
   detail screen is not allowed over the keyguard, and the notification's own
@@ -78,6 +85,13 @@ including the same command from another controller, asks again. Controllers
 already retry refused commands, so the retry goes through. The grant lives in
 the agent's memory only: an agent restart drops it, which fails safe. Refusing
 an expired request only clears the notification.
+
+A tap is late only if the card had reached its expiry (less 5 seconds of
+slack) when the device reported the request gone. Before that, someone
+answered it on the portal or at the device first, and the tap is "已处理", not
+a grant (v0.20.1): otherwise the command could run twice. A request that a
+restarting device dropped early is counted the same way, so the phone's
+approval lets nothing through; that is wrong, but in the safe direction.
 
 Pairing requests do not get a late path. A device keeps an unanswered pairing
 for five minutes (`pairTTL`); after that the phone says the request is gone and
