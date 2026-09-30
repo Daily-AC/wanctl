@@ -1441,6 +1441,29 @@ func (s *Server) deviceConnFor(ctx context.Context, ns, device string) (*deviceC
 		delete(s.conns, key)
 	}
 	s.mu.Unlock()
+	d, err := s.dialDeviceConn(ctx, ns, device)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	if existing := s.conns[key]; existing != nil && existing.alive() {
+		s.mu.Unlock()
+		d.close() // lost the race: close our dial, use the winner
+		return existing, nil
+	}
+	s.conns[key] = d
+	s.mu.Unlock()
+	return d, nil
+}
+
+// dialDeviceConn opens a new console connection to ns/device outside the
+// pool. deviceConnFor pools what it returns; a caller that must not share a
+// connection with the rest of the portal owns and closes this one.
+func (s *Server) dialDeviceConn(ctx context.Context, ns, device string) (*deviceConn, error) {
+	if s.dialer == nil {
+		return nil, fmt.Errorf("portal console not wired (set WANCTL_RELAY, WANCTL_PORTAL_TOKEN)")
+	}
+	key := ns + "/" + device
 	fingerprint, err := s.registeredFingerprint(ctx, ns, device)
 	if err != nil {
 		return nil, err
@@ -1452,16 +1475,7 @@ func (s *Server) deviceConnFor(ctx context.Context, ns, device string) (*deviceC
 	if err != nil {
 		return nil, err
 	}
-	d := newDeviceConn(conn)
-	s.mu.Lock()
-	if existing := s.conns[key]; existing != nil && existing.alive() {
-		s.mu.Unlock()
-		d.close() // lost the race: close our dial, use the winner
-		return existing, nil
-	}
-	s.conns[key] = d
-	s.mu.Unlock()
-	return d, nil
+	return newDeviceConn(conn), nil
 }
 
 // registeredFingerprint obtains the device identity over the authenticated
