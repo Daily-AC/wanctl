@@ -61,6 +61,8 @@ final class ApprovalNotifier {
     static final class Card {
         final String json, id, state, kind, device, peer, peerFp, cmd, path, cwd, result;
         final long created;
+        /** When this process got the card; a final card lingers from here, however often it is redrawn. */
+        final long seen = System.currentTimeMillis();
 
         private Card(String json, JSONObject o) {
             this.json = json;
@@ -333,6 +335,8 @@ final class ApprovalNotifier {
         String line = done ? "1 个审批请求已处理" : "有 1 个待审批请求";
         Notification cover = new Notification.Builder(c, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_agent)
+                .setWhen(k.created)
+                .setShowWhen(true)
                 .setContentTitle(line)
                 .build();
         Uri card = Uri.fromParts(SCHEME, k.id, null);
@@ -362,7 +366,15 @@ final class ApprovalNotifier {
             }
         }
         if (done) {
-            b.setTimeoutAfter(DONE_LINGER_MS);
+            // Every lock and unlock redraws the card; restarting the timer
+            // each time would keep a final card up for as long as the phone
+            // keeps being picked up.
+            long left = DONE_LINGER_MS - (System.currentTimeMillis() - k.seen);
+            if (left <= 0) {
+                nm(c).cancel(k.id, ID);
+                return;
+            }
+            b.setTimeoutAfter(left);
         }
         nm(c).notify(k.id, ID, b.build());
     }
