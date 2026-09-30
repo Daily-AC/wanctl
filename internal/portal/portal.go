@@ -1655,8 +1655,16 @@ func (s *Server) handleDeviceDecide(w http.ResponseWriter, r *http.Request) {
 		s.connError(w, body.Device, err)
 		return
 	}
-	if err := d.decide(body.ID, body.Verdict, "portal:"+s.identity(r)); err != nil {
+	found, err := d.decideFound(body.ID, body.Verdict, "portal:"+s.identity(r))
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if !found {
+		// Answered first somewhere else (the approval phone, the device's
+		// own console) or its wait ran out: this answer changed nothing, and
+		// the page must not say it did.
+		http.Error(w, "request_gone", http.StatusNotFound)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
