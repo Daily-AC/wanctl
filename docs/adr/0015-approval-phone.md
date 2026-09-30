@@ -45,7 +45,9 @@ expecting a request, picks the phone up 19 to 50 minutes later.
   portal's own console session to the namespace's **current** approval phone;
   it names a push id the portal issued for that namespace; that id has not been
   answered before; and it is less than 24 hours old. The phone can therefore
-  answer only what was shown to it, once.
+  answer only what was shown to it, once. These records live in the portal's
+  memory: a portal restart forgets them, and a decision naming one is then
+  answered as gone, which fails safe.
 - **Unlock is required.** The lock screen shows only "有 1 个待审批请求"
   (the notification's public version). The command appears after unlock: the
   detail screen is not allowed over the keyguard, and the notification's own
