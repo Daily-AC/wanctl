@@ -36,6 +36,8 @@ import java.util.concurrent.Executors;
 
 /** Native, dependency-free setup: permissions, instance, sign-in, one run control. */
 public final class MainActivity extends Activity {
+    /** Opens a page directly; the approval test notification uses it for its setup step. */
+    static final String EXTRA_PAGE = "dev.wanctl.agent.page";
     private static final String HOSTED_PORTAL = "https://wanctl.z10.dev";
     private static final String HOSTED_RELAY = "https://wanctl-relay.z10.dev";
     private static final int INK = Color.rgb(29, 29, 31), MUTED = Color.rgb(105, 105, 110);
@@ -76,7 +78,7 @@ public final class MainActivity extends Activity {
             draftRelay = state.getString("draft_relay");
             draftPortal = state.getString("draft_portal");
             permissionsFromSettings = state.getBoolean("permissions_from_settings");
-        }
+        } else receivePage(getIntent());
         route();
         receiveLogin(getIntent());
     }
@@ -97,7 +99,16 @@ public final class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        receivePage(intent);
         receiveLogin(intent);
+    }
+
+    private void receivePage(Intent intent) {
+        if (!"permissions".equals(intent.getStringExtra(EXTRA_PAGE))) return;
+        intent.removeExtra(EXTRA_PAGE);
+        permissionsFromSettings = true;
+        if (ready) showPermissions();
+        else pendingPage = "permissions";
     }
 
     @Override
@@ -478,6 +489,11 @@ public final class MainActivity extends Activity {
         LinearLayout background = group("系统设置");
         row(background, "后台活动与自启动", "设置指引", this::showOEMBackgroundHelp);
         note("部分手机还需在系统中允许后台活动与自启动，具体选项以本机为准。");
+        if (prefs.approvalPhone()) {
+            LinearLayout approval = group("审批提醒");
+            row(approval, "打开锁屏显示和横幅", "", this::openApprovalChannel);
+            note("部分手机默认不在锁屏和横幅显示 wanctl 的通知，待审批请求会因此被错过。锁屏上只会显示「有 1 个待审批请求」，解锁后才能看到具体命令。");
+        }
         if (!fromSettings)
             footerAction(
                     notificationsGranted() && batteryGranted() ? "继续" : "暂时跳过",
@@ -487,6 +503,18 @@ public final class MainActivity extends Activity {
                         page = "";
                         route();
                     });
+    }
+
+    private void openApprovalChannel() {
+        if (!notificationsGranted()) {
+            requestNotifications();
+            return;
+        }
+        ApprovalNotifier.channel(this);
+        openSettings(
+                new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName())
+                        .putExtra(Settings.EXTRA_CHANNEL_ID, ApprovalNotifier.CHANNEL));
     }
 
     private void requestNotifications() {

@@ -5,26 +5,38 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
 import android.util.Log;
 
+import org.json.JSONObject;
+
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
+import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Runs and supervises the wanctl agent as a child process.
@@ -51,6 +63,9 @@ public final class AgentService extends Service {
     public static final String ACTION_STOP = "dev.wanctl.agent.STOP";
     public static final String ACTION_RESTART = "dev.wanctl.agent.RESTART";
 
+    /** What the agent prints before an approval card under --approvals-stdio (ADR 0015). */
+    static final String APPROVAL_LINE = "wanctl-approval ";
+
     private Thread supervisor;
     private volatile Process child;
     private volatile boolean stopping;
@@ -69,6 +84,78 @@ public final class AgentService extends Service {
     static boolean isRunning() {
         return running;
     }
+
+    /*
+     * The child's stdin carries the owner's approval decisions. Static because
+     * they come from the notification buttons and the detail screen, which share
+     * this process but not this instance; written on one thread of their own so
+     * a child that stops reading can never block the main thread.
+     */
+    private static final Object stdinLock = new Object();
+    private static final ExecutorService stdinWriter = Executors.newSingleThreadExecutor();
+    private static Writer stdin;
+    /** Card ids whose decision the current child has already been given. */
+    private static final Set<String> written = new HashSet<>();
+
+    /**
+     * Hands the owner's answer to an approval card to the agent, which forwards
+     * it to the portal and resends it after reconnects.
+     *
+     * <p>Every decision that no final card has answered yet is written again to
+     * each new child, so one made while the agent was restarting, or just before
+     * it died, still arrives. The portal accepts one decision per card and
+     * ignores a repeat.
+     */
+    static void decide(Context c, String id, String verdict) {
+        if (id.isEmpty() || !("y".equals(verdict) || "n".equals(verdict))) {
+            return;
+        }
+        ApprovalNotifier.decided(c, id, verdict);
+        stdinWriter.execute(AgentService::writeDecisions);
+        if (!running && new Prefs(c).enabled()) {
+            try {
+                start(c);
+            } catch (IllegalStateException e) {
+                // A background start refused; KeeperJob brings the agent back
+                // and the decision is written to it then.
+                Log.i(TAG, "decision queued until the agent runs again");
+            }
+        }
+    }
+
+    private static void writeDecisions() {
+        synchronized (stdinLock) {
+            if (stdin == null) {
+                return;
+            }
+            try {
+                for (Map.Entry<String, String> d : ApprovalNotifier.undecided().entrySet()) {
+                    if (written.add(d.getKey())) {
+                        stdin.write("{\"id\":" + JSONObject.quote(d.getKey())
+                                + ",\"verdict\":" + JSONObject.quote(d.getValue()) + "}\n");
+                    }
+                }
+                stdin.flush();
+            } catch (IOException e) {
+                // The child is gone; the next one is given every decision again.
+                stdin = null;
+            }
+        }
+    }
+
+    /**
+     * Keeps approval notifications in step with the keyguard: the command text
+     * is only shown while the phone is unlocked. See ApprovalNotifier.
+     */
+    private final BroadcastReceiver lockWatch = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent i) {
+            String a = String.valueOf(i.getAction());
+            boolean locked = Intent.ACTION_SCREEN_OFF.equals(a)
+                    || !Intent.ACTION_USER_PRESENT.equals(a) && ApprovalNotifier.locked(c);
+            ApprovalNotifier.refresh(c, locked);
+        }
+    };
 
     static void start(Context c) {
         Intent i = new Intent(c, AgentService.class);
@@ -106,6 +193,16 @@ public final class AgentService extends Service {
         ch.setDescription(getString(R.string.channel_desc));
         ch.setShowBadge(false);
         nm.createNotificationChannel(ch);
+        IntentFilter screen = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+        screen.addAction(Intent.ACTION_SCREEN_ON);
+        screen.addAction(Intent.ACTION_USER_PRESENT);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(lockWatch, screen, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(lockWatch, screen);
+        }
+        // A process restart can leave a card showing its command from before.
+        ApprovalNotifier.refresh(this, ApprovalNotifier.locked(this));
     }
 
     @Override
@@ -167,6 +264,9 @@ public final class AgentService extends Service {
             deviceState = null;
         }
         releaseWakeLock();
+        unregisterReceiver(lockWatch);
+        // Nothing follows the lock state from here on, so hide what cards show.
+        ApprovalNotifier.refresh(this, true);
         AgentState.get().setPhase(AgentState.Phase.STOPPED, "");
         super.onDestroy();
     }
@@ -271,6 +371,9 @@ public final class AgentService extends Service {
         // bypass back off would silently keep the device wide open.
         args.add("--mode");
         args.add(prefs.bypass() ? "bypass" : "normal");
+        // Approval cards on stdout, decisions on stdin: this is how the portal
+        // tells the app's agent from any other device (ADR 0015).
+        args.add("--approvals-stdio");
         ProcessBuilder pb = Wanctl.command(this, args.toArray(new String[0]));
         pb.redirectErrorStream(true);
         // Without this the agent inherits the service's working directory, "/",
@@ -281,12 +384,25 @@ public final class AgentService extends Service {
         append("$ wanctl " + String.join(" ", args));
         Process p = pb.start();
         child = p;
-        p.getOutputStream().close();
+        synchronized (stdinLock) {
+            stdin = new BufferedWriter(new OutputStreamWriter(p.getOutputStream(), StandardCharsets.UTF_8));
+            written.clear();
+        }
+        stdinWriter.execute(AgentService::writeDecisions);
         try (BufferedReader r = new BufferedReader(
                 new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = r.readLine()) != null) {
                 consume(line);
+            }
+        } finally {
+            synchronized (stdinLock) {
+                stdin = null;
+            }
+            try {
+                p.getOutputStream().close();
+            } catch (IOException ignored) {
+                // Already broken by the child exiting.
             }
         }
         int code = p.waitFor();
@@ -307,6 +423,15 @@ public final class AgentService extends Service {
      * retry loop.
      */
     private void consume(String line) {
+        if (line.startsWith(APPROVAL_LINE)) {
+            // The card carries the text of someone else's command. It becomes a
+            // notification and nothing else: not the log ring, not agent.log,
+            // not logcat, all of which the log screen shows and copies.
+            if (!ApprovalNotifier.onLine(this, line.substring(APPROVAL_LINE.length()))) {
+                append("! 收到一条无法识别的审批请求，已丢弃");
+            }
+            return;
+        }
         append(line);
         String t = line.trim();
         if (t.contains("online via ")) {
