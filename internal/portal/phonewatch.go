@@ -561,6 +561,14 @@ func (p *phoneSupervisor) settle(cardID string) {
 	}
 }
 
+// answeredElsewhere tells a request that left its device before its wait ran
+// out from one that expired, by the rule settle uses. It also counts a request
+// a restarting device dropped as answered, so the phone's approval lets
+// nothing through: wrong, but in the safe direction (ADR 0015).
+func (p *phoneSupervisor) answeredElsewhere(pc phoneCard) bool {
+	return p.now().Before(pc.card.Expires.Add(-phoneExpirySlack))
+}
+
 // push sends a card to the phone over its link, if it is still that
 // namespace's phone and the link is up.
 func (p *phoneSupervisor) push(ns, phone string, card protocol.ApprovalCard) error {
@@ -646,6 +654,9 @@ func (p *phoneSupervisor) apply(pc phoneCard, verdict, approver string) string {
 		}
 		switch err := session.pairDecide(pc.pairFP, verdict); {
 		case errors.Is(err, errPairingGone):
+			if p.answeredElsewhere(pc) {
+				return protocol.ResultHandled
+			}
 			return protocol.ResultGone
 		case err != nil:
 			p.logf("approval phone %s: pairing on %s: %v", pc.ns, pc.card.Device, err)
@@ -667,6 +678,12 @@ func (p *phoneSupervisor) apply(pc phoneCard, verdict, approver string) string {
 				return protocol.ResultAllowed
 			}
 			return protocol.ResultDenied
+		}
+		if p.answeredElsewhere(pc) {
+			// Gone before its wait ran out: someone answered it on the
+			// portal or at the device first, and that answer stands. A late
+			// grant here would let the command through a second time.
+			return protocol.ResultHandled
 		}
 		// The wait ran out between the push and the tap: same as expired.
 	}
