@@ -76,6 +76,9 @@ const (
 	KindTrustRevoke   = "trust_revoke"   // portal -> device, drop a trusted controller by fingerprint
 	KindADBPair       = "adb_pair"       // console administrator pairs this Android installation with local adbd
 	KindTimeoutSet    = "timeout_set"    // portal -> device, set how long an approval waits (TimeoutSec; 0 = default)
+	KindApprovalPush  = "approval_push"  // portal -> approval phone, show or update an approval card (Data: ApprovalCard)
+	KindApprovalReply = "approval_reply" // approval phone -> portal, UNSOLICITED: the owner's decision (ApprovalID, Verdict)
+	KindGrantOnce     = "grant_once"     // portal -> device, allow one matching request within TimeoutSec (late approval)
 )
 
 // Message is the JSON body of a FrameJSON frame. Fields are reused across kinds;
