@@ -118,6 +118,7 @@
       'mail-failed': "We couldn't send it. Check the address, or try again later.",
       eBadCode: 'That code is not valid.',
       ePairGone: 'That pairing request expired or was already answered. Ask the AI to try again.',
+      eRequestGone: 'That request was already answered elsewhere, or it expired. Nothing changed.',
       failedGeneric: 'That did not work.',
       failedCode: 'Failed:',
       aliasTaken: 'Another device already answers to that alias.',
@@ -253,6 +254,7 @@
       'mail-failed': '信没发出去。检查一下地址，或者稍后再试。',
       eBadCode: '这个码不对。',
       ePairGone: '这条配对请求已经过期或被人答过了。让 AI 再试一次。',
+      eRequestGone: '这条请求已被处理或已过期，这次操作没有生效。',
       failedGeneric: '没成功。',
       failedCode: '失败：',
       aliasTaken: '这个别名已经指向另一台设备了。',
@@ -419,6 +421,7 @@
     not_found: 'eNotFound',
     bad_verification_code: 'eBadCode',
     pairing_gone: 'ePairGone',
+    request_gone: 'eRequestGone',
     approval_phone_unreachable: 'ePhoneUnreachable',
     approval_phone_incapable: 'ePhoneIncapable',
     'no-such-user': 'eNoUser',
@@ -614,7 +617,11 @@
       if (el) el.classList.add('gone');
       toast(v === 'n' ? t().refused : t().allowed, v === 'n');
       setTimeout(refreshAsks, 340);
-    }).catch(oops);
+    }).catch(function (e) {
+      // 404 request_gone：审批手机或别处先答了，这张卡已经作废，重读一遍。
+      oops(e);
+      setTimeout(refreshAsks, 340);
+    });
   }
   function pairDecide(dev, fp, v, el) {
     if (adminGuard(dev)) return;

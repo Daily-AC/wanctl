@@ -155,3 +155,46 @@ func TestDeviceConsoleCarriesPendingAndTrustedFingerprints(t *testing.T) {
 		t.Fatalf("trusted = %+v; want the one trusted fingerprint", got.Trusted)
 	}
 }
+
+// decideDevice plays the agent side of one decide RPC with the verdict the
+// agent really sends: "ok", or "not-found" once the request left the device.
+func decideDevice(t *testing.T, nc net.Conn, verdict string) {
+	t.Helper()
+	go func() {
+		if _, err := protocol.ReadMessage(nc); err != nil {
+			return
+		}
+		protocol.WriteMessage(nc, protocol.Message{Kind: protocol.KindDecide, Verdict: verdict})
+	}()
+}
+
+// With an approval phone the same request is on the phone and on the page.
+// When the phone answered first, a click on the page changed nothing and must
+// not be reported as allowed (S13): 404 request_gone, which the SPA says in
+// one sentence before it reloads the list.
+func TestDeviceDecideReportsGoneRequestAs404(t *testing.T) {
+	for _, tc := range []struct {
+		verdict string
+		code    int
+		body    string
+	}{
+		{"not-found", 404, "request_gone"},
+		{"ok", 200, ""},
+	} {
+		s := newTestPortal(relayFor("alice", "legion", transport.Fingerprint([]byte("legion"))))
+		withDialer(t, s)
+		cli, srv := net.Pipe()
+		d := newDeviceConn(cli)
+		s.conns["alice/legion"] = d
+		decideDevice(t, srv, tc.verdict)
+
+		rec := httptest.NewRecorder()
+		s.handleDeviceDecide(rec, userReq("POST", "/api/devices/decide",
+			map[string]any{"device": "legion", "id": "req1", "verdict": "y"}))
+		d.close()
+		srv.Close()
+		if rec.Code != tc.code || strings.TrimSpace(rec.Body.String()) != tc.body {
+			t.Fatalf("device says %s: status %d %q; want %d %q", tc.verdict, rec.Code, rec.Body.String(), tc.code, tc.body)
+		}
+	}
+}
