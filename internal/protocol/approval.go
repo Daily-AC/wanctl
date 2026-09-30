@@ -18,8 +18,8 @@ type ApprovalCard struct {
 	Path   string `json:"path,omitempty"`
 	Cwd    string `json:"cwd,omitempty"`
 
-	Created time.Time `json:"created,omitempty"`
-	Expires time.Time `json:"expires,omitempty"` // when the synchronous wait ends
+	Created time.Time `json:"created,omitzero"`
+	Expires time.Time `json:"expires,omitzero"` // when the synchronous wait ends
 
 	Result string `json:"result,omitempty"` // for ApprovalDone: one of the Result* values
 }
