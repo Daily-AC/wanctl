@@ -77,6 +77,7 @@ type phoneSpace struct {
 	online    bool
 	link      context.CancelFunc // stops the reply listener
 	targets   map[string]*phoneTarget
+	names     map[string]string // route name -> display name, for the cards
 }
 
 type phoneTarget struct {
@@ -88,8 +89,9 @@ type phoneTarget struct {
 // it went to, and how it ended. The card id is the only thing the phone can
 // name in a decision, so this record is what makes a decision valid.
 type phoneCard struct {
-	card      protocol.ApprovalCard
+	card      protocol.ApprovalCard // card.Device is the display name
 	ns        string
+	device    string // route name of the target device
 	phone     string // the phone it was pushed to; a decision must come from it
 	pendingID string // approval on the target device, or
 	pairFP    string // pairing on the target device
@@ -280,11 +282,14 @@ func (p *phoneSupervisor) reconcileSpace(ns, phone string) error {
 		sp = &phoneSpace{ns: ns, phone: phone, targets: map[string]*phoneTarget{}}
 		p.spaces[ns] = sp
 	}
-	if phoneRow != nil {
-		sp.phoneName = phoneRow.DisplayName
-		if sp.phoneName == "" {
-			sp.phoneName = phoneRow.Name
+	sp.names = map[string]string{}
+	for _, d := range devices {
+		if d.DisplayName != "" {
+			sp.names[d.Name] = d.DisplayName
 		}
+	}
+	if phoneRow != nil {
+		sp.phoneName = sp.displayName(phone)
 	}
 	wasOnline := sp.online
 	p.mu.Unlock()
@@ -380,6 +385,13 @@ func (p *phoneSupervisor) bringUp(ns, phone string) error {
 	return nil
 }
 
+func (sp *phoneSpace) displayName(device string) string {
+	if n := sp.names[device]; n != "" {
+		return n
+	}
+	return device
+}
+
 func (p *phoneSupervisor) startTargetLocked(sp *phoneSpace, device string) {
 	ctx, cancel := context.WithCancel(p.ctx)
 	t := &phoneTarget{cancel: cancel, done: make(chan struct{})}
@@ -422,7 +434,7 @@ func (p *phoneSupervisor) onTargetState(ns, device string, session deviceSession
 			continue
 		}
 		pc := p.newCard(ns, device, protocol.ApprovalCard{
-			Kind: pend.Kind, Device: device, Peer: names[pend.Peer], PeerFP: pend.Peer,
+			Kind: pend.Kind, Peer: names[pend.Peer], PeerFP: pend.Peer,
 			Cmd: pend.Cmd, Path: pend.Path, Cwd: pend.Cwd, Created: pend.Created,
 		}, wait)
 		if pc == nil {
@@ -457,7 +469,7 @@ func (p *phoneSupervisor) onTargetState(ns, device string, session deviceSession
 			peer = pair.Name + "（" + pair.Label + "）"
 		}
 		pc := p.newCard(ns, device, protocol.ApprovalCard{
-			Kind: "pair", Device: device, Peer: peer, PeerFP: pair.FP, Created: pair.Created,
+			Kind: "pair", Peer: peer, PeerFP: pair.FP, Created: pair.Created,
 		}, phonePairingWindow)
 		if pc == nil {
 			continue
@@ -496,7 +508,8 @@ func (p *phoneSupervisor) newCard(ns, device string, card protocol.ApprovalCard,
 	if sp == nil {
 		return nil
 	}
-	pc := &phoneCard{card: card, ns: ns, phone: sp.phone, seenAt: now}
+	card.Device = sp.displayName(device)
+	pc := &phoneCard{card: card, ns: ns, device: device, phone: sp.phone, seenAt: now}
 	p.cards[card.ID] = pc
 	return pc
 }
@@ -593,9 +606,9 @@ func verdictWord(v string) string {
 func (p *phoneSupervisor) apply(pc phoneCard, verdict, approver string) string {
 	ctx, cancel := context.WithTimeout(p.ctx, phonePushTimeout)
 	defer cancel()
-	session, err := p.sessionFor(ctx, pc.ns, pc.card.Device)
+	session, err := p.sessionFor(ctx, pc.ns, pc.device)
 	if err != nil {
-		p.logf("approval phone %s: reach %s: %v", pc.ns, pc.card.Device, err)
+		p.logf("approval phone %s: reach %s: %v", pc.ns, pc.device, err)
 		return protocol.ResultGone
 	}
 	if pc.pairFP != "" {

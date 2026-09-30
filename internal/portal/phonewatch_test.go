@@ -250,7 +250,7 @@ func TestPhoneApprovalReachesTheDevice(t *testing.T) {
 	f.target.states <- pendingState("p1", "Get-Service wanctl")
 	phoneWaitFor(t, "push", func() bool { p, _, _, _ := f.phone.snapshot(); return len(p) == 1 })
 	card := f.phone.lastPush(t)
-	if card.State != protocol.ApprovalPending || card.Device != "mac-1" || card.Cmd != "Get-Service wanctl" ||
+	if card.State != protocol.ApprovalPending || card.Device != "mac" || card.Cmd != "Get-Service wanctl" ||
 		card.Peer != "zyl-mac" || card.PeerFP != controllerFP() || card.Kind != "exec" || len(card.ID) != 32 {
 		t.Fatalf("card = %+v", card)
 	}
