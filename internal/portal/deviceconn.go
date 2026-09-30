@@ -139,7 +139,13 @@ func (d *deviceConn) rpcLocked(req protocol.Message, timeout time.Duration) (pro
 	select {
 	case m := <-d.respCh:
 		if m.Kind == protocol.KindError {
-			return m, &deviceRefusedError{reason: m.Reason}
+			reason := m.Reason
+			if reason == "" {
+				// The console RPC handler puts its reason in Data as a JSON
+				// string ("unknown RPC kind" from an older agent).
+				_ = json.Unmarshal(m.Data, &reason)
+			}
+			return m, &deviceRefusedError{reason: reason}
 		}
 		return m, nil
 	case <-d.closed:
