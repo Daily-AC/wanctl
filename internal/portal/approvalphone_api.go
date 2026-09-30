@@ -64,11 +64,12 @@ func (s *Server) handleApprovalPhoneWrite(w http.ResponseWriter, r *http.Request
 		// notification and the proof that this device can take approvals:
 		// only an agent hosted by the Android app accepts one.
 		if err := phone.testPush(r.Context(), ns, body.Device, body.Device); err != nil {
+			// Tokens, not sentences: the page words them in its own language.
 			if errors.Is(err, errPhoneIncapable) {
-				http.Error(w, "这台设备收不了审批提醒：审批手机要装 wanctl 安卓 app，并更新到最新版。", http.StatusUnprocessableEntity)
+				http.Error(w, "approval_phone_incapable", http.StatusUnprocessableEntity)
 				return
 			}
-			http.Error(w, "设备没有响应：先在手机上打开 wanctl，等它显示已连接再设。", http.StatusConflict)
+			http.Error(w, "approval_phone_unreachable", http.StatusConflict)
 			return
 		}
 	}
