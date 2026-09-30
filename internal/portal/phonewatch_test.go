@@ -105,6 +105,7 @@ type phoneFixture struct {
 	clockMu sync.Mutex
 	dropped []string
 	dropMu  sync.Mutex
+	closed  int // link sessions closed, guarded by dropMu
 
 	mu       sync.Mutex
 	phones   map[string]string // ns -> designated device
@@ -141,6 +142,13 @@ func newPhoneFixture(t *testing.T) *phoneFixture {
 				return f.target, nil
 			}
 			return nil, errors.New("no such device " + device)
+		},
+		linkFor: func(ctx context.Context, ns, device string) (phoneSession, func(), error) {
+			sess, err := f.sup.sessionFor(ctx, ns, device)
+			if err != nil {
+				return nil, nil, err
+			}
+			return sess, func() { f.dropMu.Lock(); f.closed++; f.dropMu.Unlock() }, nil
 		},
 		dropConn: func(ns, device string) {
 			f.dropMu.Lock()
@@ -489,5 +497,29 @@ func TestPhoneCardsArePruned(t *testing.T) {
 	f.sup.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("cards past retention = %d", n)
+	}
+}
+
+// The link owns its session. The pooled connection every portal page shares
+// is closed whenever a page's status query times out, which on a real phone
+// tore the watch down every few seconds (S13, 2026-09-30); a card must still
+// reach the phone when the pool cannot.
+func TestPhoneLinkDoesNotUseThePool(t *testing.T) {
+	f := newPhoneFixture(t)
+	f.upAndWatching(t)
+	f.mu.Lock()
+	f.failDial["phone-1"] = true // the pool can no longer reach the phone
+	f.mu.Unlock()
+	f.target.states <- pendingState("p1", "echo s13")
+	phoneWaitFor(t, "push over the link", func() bool { p, _, _, _ := f.phone.snapshot(); return len(p) == 1 })
+	if _, online := f.sup.status("alice"); !online {
+		t.Fatal("phone went offline although its link is up")
+	}
+
+	f.sup.teardown("alice", false)
+	f.dropMu.Lock()
+	defer f.dropMu.Unlock()
+	if f.closed != 1 {
+		t.Fatalf("link sessions closed = %d, want 1", f.closed)
 	}
 }
