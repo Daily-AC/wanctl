@@ -182,9 +182,10 @@ func newLarkSupervisor(s *Server, sender cardSender, grants *lark.Grants) *larkS
 	}
 }
 
-// Start enables the Feishu workflow when both wanctl-scoped credentials are
-// present. Missing credentials and an untagged binary are deployment choices,
-// not reasons for the portal's existing HTTP surface to fail.
+// Start runs the resident approval workflows: the approval phone whenever the
+// console dialer is configured, and Feishu when both wanctl-scoped credentials
+// are present. Missing credentials and an untagged binary are deployment
+// choices, not reasons for the portal's existing HTTP surface to fail.
 func (s *Server) Start(parent context.Context) {
 	s.larkMu.Lock()
 	if s.larkStarted {
@@ -192,6 +193,12 @@ func (s *Server) Start(parent context.Context) {
 		return
 	}
 	s.larkStarted = true
+	// The approval phone needs no credentials of its own, only the console
+	// dialer every device page already uses.
+	if s.dialer != nil && s.phone == nil {
+		s.phone = newPhoneSupervisor(s)
+		s.phone.start(parent)
+	}
 	appID := os.Getenv("WANCTL_LARK_APP_ID")
 	appSecret := os.Getenv("WANCTL_LARK_APP_SECRET")
 	if appID == "" || appSecret == "" {
@@ -230,7 +237,12 @@ func (s *Server) Close() {
 	s.larkMu.Lock()
 	runtime := s.larkRuntime
 	s.larkRuntime = nil
+	phone := s.phone
+	s.phone = nil
 	s.larkMu.Unlock()
+	if phone != nil {
+		phone.stop()
+	}
 	if runtime != nil {
 		runtime.cancel()
 		runtime.supervisor.stop()
@@ -596,21 +608,21 @@ func (w *larkWatcher) getConfig() deviceLarkApproval {
 func (w *larkWatcher) run(ctx context.Context) error {
 	seenPending := make(map[string]seenPending)
 	seenPairings := make(map[string]seenPairing)
-	backoff := w.sup.retryMin
 	dialFailures := 0
-	var lastSession deviceSession
-	defer func() {
-		if lastSession != nil {
-			if _, err := lastSession.setApprovalTimeout(0); err != nil {
-				w.sup.logf("lark approval restore timeout for %s: %v", larkDeviceKey(w.ns, w.device), err)
-			}
-		}
-	}()
-
-	for {
-		session, err := w.sup.sessionFor(ctx, w.ns, w.device)
-		if err != nil {
+	return residentWatch{
+		ns: w.ns, device: w.device, wait: larkApprovalWait,
+		sessionFor: w.sup.sessionFor,
+		retryMin:   w.sup.retryMin,
+		retryMax:   w.sup.retryMax,
+		waitRetry:  w.sup.waitRetry,
+		logf:       w.sup.logf,
+		logPrefix:  "lark approval",
+		onDial: func(err error) error {
 			w.sup.recordHealth(w.ns, w.device, "dial", err)
+			if err == nil {
+				dialFailures = 0
+				return nil
+			}
 			// Say something. An agent started without the portal's admin
 			// fingerprint refuses the console dial, and this loop would then
 			// retry forever in complete silence: the switch reads "on", no card
@@ -627,55 +639,14 @@ func (w *larkWatcher) run(ctx context.Context) error {
 			if isPermanentLarkDialError(err) {
 				return &larkWatcherStop{cause: err, config: w.getConfig()}
 			}
-			if !w.sup.waitRetry(ctx, backoff) {
-				return nil
-			}
-			backoff = nextBackoff(backoff, w.sup.retryMax)
-			continue
-		}
-		dialFailures = 0
-		w.sup.recordHealth(w.ns, w.device, "dial", nil)
-		lastSession = session
-		// A device older than the timeout_set verb answers "unknown RPC kind".
-		// That must not stop us watching it: carrying on with whatever wait the
-		// device already uses degrades the feature to a shorter window, whereas
-		// treating it as a dial failure would make Feishu approvals silently
-		// never work on every agent that has not been upgraded yet.
-		wait := larkApprovalWait
-		if applied, err := session.setApprovalTimeout(int(larkApprovalWait / time.Second)); err != nil {
-			wait = console.DefaultTimeout
-			w.sup.logf("lark approval timeout for %s not set, using the device default %s: %v",
-				larkDeviceKey(w.ns, w.device), wait, err)
-		} else if applied > 0 {
-			// The device clamps, so the card must state what it actually applied
-			// rather than what we asked for.
-			wait = time.Duration(applied) * time.Second
-		}
-
-		states, unsubscribe := session.subscribe()
-		backoff = w.sup.retryMin
-		closed := false
-		for !closed {
-			select {
-			case <-ctx.Done():
-				unsubscribe()
-				return nil
-			case state, ok := <-states:
-				if !ok {
-					closed = true
-					continue
-				}
-				w.reconcileState(ctx, state, seenPending, seenPairings, wait)
-			}
-		}
-		unsubscribe()
-		// A closed channel means visibility was lost, not that pending work
-		// disappeared. Preserve both seen maps across the bounded re-dial loop.
-		if !w.sup.waitRetry(ctx, backoff) {
 			return nil
-		}
-		backoff = nextBackoff(backoff, w.sup.retryMax)
-	}
+		},
+		onState: func(ctx context.Context, _ deviceSession, state console.State, wait time.Duration) {
+			// Both seen maps live across re-dials: a dropped session means
+			// visibility was lost, not that the pending work disappeared.
+			w.reconcileState(ctx, state, seenPending, seenPairings, wait)
+		},
+	}.run(ctx)
 }
 
 func isPermanentLarkDialError(err error) bool {

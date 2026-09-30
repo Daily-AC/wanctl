@@ -57,6 +57,7 @@ func (r *Relay) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/devices", r.adminDevices)
 	mux.HandleFunc("/admin/devices/alias", r.adminDeviceAlias)
 	mux.HandleFunc("/admin/devices/lark", r.adminDevicesLark)
+	mux.HandleFunc("/admin/approval-phone", r.adminApprovalPhone)
 	mux.HandleFunc("/admin/devices/notify", r.adminDeviceNotify)
 	mux.HandleFunc("/admin/notify", r.adminNotify)
 	mux.HandleFunc("/admin/notify/test", r.adminNotifyTest)
@@ -1193,6 +1194,9 @@ func (p *PGStore) RemoveDevice(namespace, device string) error {
 		return err
 	}
 	_, _ = p.db.Exec(`DELETE FROM acl WHERE owner_namespace=$1 AND device=$2`, namespace, device)
+	// A designation must not outlive its device: a later enrollment under the
+	// same name would otherwise inherit the power to approve (ADR 0015).
+	_, _ = p.db.Exec(`DELETE FROM approval_phone WHERE namespace=$1 AND device=$2`, namespace, device)
 	return nil
 }
 

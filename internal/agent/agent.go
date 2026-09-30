@@ -57,6 +57,11 @@ type Options struct {
 	PortalFP  string      // deprecated single portal admin fingerprint
 	PortalFPs []string    // pre-trusted portal admin fingerprints, enrolled locally
 	Version   string      // immutable release version reported to controllers
+
+	// ApprovalsStdio makes this agent an approval phone (ADR 0015): approval
+	// cards go out on stdout and the owner's decisions come in on stdin. Only
+	// the Android app, which runs the agent as its child, sets it.
+	ApprovalsStdio bool
 }
 
 // Agent is a running controlled node.
@@ -86,8 +91,13 @@ type Agent struct {
 	// answering on.
 	consoles atomic.Int64
 	jobs     *jobStore
-	stdin    *bufio.Reader
 	elevator *elevate.Manager
+
+	// phone is the stdio link to the Android app, nil unless the agent runs
+	// with Options.ApprovalsStdio; grants are late approvals, which any device
+	// can hold (approvals.go).
+	phone  *approvalPhone
+	grants lateGrants
 
 	// Owned goroutines. Every goroutine the agent starts is registered in wg
 	// and takes its context from stopCtx, so Close can cancel them all and then
@@ -262,12 +272,15 @@ func New(opts Options) (*Agent, error) {
 	a := &Agent{
 		deviceID: deviceID, id: id, known: known, portalAdmins: portalAdmins, opts: opts, engine: engine, log: logger,
 		inst:     inst,
-		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(), stdin: bufio.NewReader(os.Stdin),
+		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(),
 		elevator: elevate.ConfigureDefault(configDirOrEmpty(), os.Getenv),
 	}
 	// Shutdown context for everything the agent starts; Close cancels it and
 	// then joins those goroutines.
 	a.stopCtx, a.stop = context.WithCancel(context.Background())
+	if opts.ApprovalsStdio {
+		a.phone = newApprovalPhone(os.Stdout, os.Stdin, a.stopCtx.Done())
+	}
 	a.console = console.New(engine, logger, console.Info{
 		Device: opts.Name, Fingerprint: id.Fingerprint, Relay: opts.RelayURL,
 		Platform: runtime.GOOS, ADBPair: runtime.GOOS == "android",
@@ -333,9 +346,10 @@ func (a *Agent) gateDataCapability(cap dataCapability, peerFP string, checks ...
 	}
 }
 
-// gate authorizes a request: bypass/pre-approved pass; otherwise ask the
-// approver and optionally remember a rule. Returns whether the op may proceed
-// and a short decision string for the audit log.
+// gate authorizes a request: bypass/pre-approved pass, then a late approval
+// the owner already gave; otherwise ask the approver and optionally remember a
+// rule. Returns whether the op may proceed and a short decision string for the
+// audit log.
 func (a *Agent) gate(req policy.Request, checks ...func() bool) (bool, string) {
 	// Bypasses, not Mode()==bypass: an elevated command rides the blanket allow
 	// only on a device whose elevation channel is also switched on. Two opt-ins,
@@ -346,6 +360,10 @@ func (a *Agent) gate(req policy.Request, checks ...func() bool) (bool, string) {
 	if a.engine.Allowed(req) {
 		return true, "pre-approved"
 	}
+	if ok, decision, handled := a.useLateGrant(req, checks); handled {
+		return ok, decision
+	}
+	a.grants.asked(req)
 	a.apprMu.Lock()
 	appr := a.appr
 	a.apprMu.Unlock()
@@ -381,6 +399,14 @@ func (a *Agent) gateFile(req policy.Request, checks ...func() bool) (bool, strin
 	if root, ok := a.engine.AllowedFileRoot(req); ok {
 		return true, "pre-approved", root
 	}
+	// A late approval is a one-shot approval that arrived late, so it gets
+	// the same root.
+	if ok, decision, handled := a.useLateGrant(req, checks); handled {
+		if !ok {
+			return false, decision, ""
+		}
+		return true, decision, filepath.Dir(req.Path)
+	}
 	a.apprMu.Lock()
 	appr := a.appr
 	a.apprMu.Unlock()
@@ -412,6 +438,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer cancel()
 
 	a.spawn(func() { a.runNotifyPolicy(ctx) })
+	if a.phone != nil {
+		a.spawn(func() { a.phone.serveDecisions(ctx) })
+	}
 	if a.opts.Transport == "http" {
 		return a.runHTTP(ctx)
 	}
@@ -432,7 +461,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	fmt.Printf("wanctl agent %q online via %s\n  fingerprint: %s\n", a.opts.Name, a.opts.RelayURL, a.id.Fingerprint)
-	if term.IsTerminal(int(os.Stdin.Fd())) {
+	// On an approval phone stdin carries the app's decisions, and a prompt
+	// reading it would swallow them.
+	if a.phone == nil && term.IsTerminal(int(os.Stdin.Fd())) {
 		a.spawn(func() { a.runConsolePrompt(ctx) })
 	}
 
@@ -1437,6 +1468,12 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 		data, _ := json.Marshal(events)
 		return protocol.Message{Kind: protocol.KindLogs, Data: json.RawMessage(data)}
 
+	case protocol.KindApprovalPush:
+		return a.approvalPush(msg.Data)
+
+	case protocol.KindGrantOnce:
+		return a.grantOnce(msg)
+
 	default:
 		return protocol.Message{Kind: protocol.KindError, Data: json.RawMessage(`"unknown RPC kind"`)}
 	}
@@ -1487,6 +1524,13 @@ func (a *Agent) serveConsole(ctx context.Context, conn net.Conn) {
 	ch, unsub := a.console.Subscribe()
 	defer unsub()
 	a.spawn(func() { pumpApprovalNotifs(ctx, ch, a.console, send) })
+
+	// On an approval phone this session also carries the owner's decisions
+	// back to the portal, starting with any it has not settled yet.
+	if a.phone != nil {
+		detach := a.phone.attach(send)
+		defer detach()
+	}
 
 	// Speak the same framed protocol the controller/portal uses (the hello/OK
 	// handshake in handleSession was framed too) — NOT raw json.Encoder.

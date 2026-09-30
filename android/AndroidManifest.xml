@@ -71,6 +71,18 @@
         android:label="@string/log_title"
         android:parentActivityName=".MainActivity" />
 
+    <!-- An approval card in full (ADR 0015). Never showWhenLocked or
+         turnScreenOn: the command it shows must wait for the unlock. -->
+    <activity
+        android:name=".ApprovalActivity"
+        android:exported="false"
+        android:launchMode="singleTop" />
+
+    <!-- The allow / refuse buttons on an approval notification. -->
+    <receiver
+        android:name=".ApprovalReceiver"
+        android:exported="false" />
+
     <!--
       specialUse rather than dataSync on purpose. From API 35 a dataSync
       foreground service is capped at six cumulative hours a day, after which

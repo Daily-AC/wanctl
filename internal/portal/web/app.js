@@ -129,6 +129,14 @@
       lastFail: function (w, e) { return 'Last delivery failed (' + w + '): ' + e; },
       larkOn: function (m) { return 'Feishu approvals — on, cards go to ' + m; },
       larkOff: 'Feishu approvals — off',
+      phoneOn: 'Approval phone — this one', phoneOff: 'Approval phone — off',
+      phoneHint: 'When no portal page is open, requests no rule covers are pushed to this phone and wait up to 3 minutes. Approve one after that and the same command is let through once within 30 minutes.',
+      phoneElsewhere: function (d) { return 'Your approval phone is ' + d + '. Switching it on here moves it to this one.'; },
+      phoneOnline: 'Online: requests are pushed here and wait up to 3 minutes. The lock screen only says "有 1 个待审批请求"; the command shows after unlock.',
+      phoneOffline: 'Not reachable right now: requests are refused at once, as before, until the phone is back.',
+      phoneSent: 'A test notification is on its way. If the lock screen does not show it, open wanctl on the phone and turn on lock screen and banners for approvals.',
+      ePhoneUnreachable: 'The phone did not answer. Open wanctl on it and wait until it says connected.',
+      ePhoneIncapable: 'This device cannot receive approvals. It needs the wanctl Android app, updated to the latest version.',
       notifyDevOn: 'Webhook notifications — on', notifyDevOff: 'Webhook notifications — off',
       removeDevT: 'Remove this device?',
       removeDevM: function (d) { return d + ' leaves your namespace. Running wanctl on that machine again brings it back.'; },
@@ -256,6 +264,14 @@
       lastFail: function (w, e) { return '最近一次投递失败（' + w + '）：' + e; },
       larkOn: function (m) { return '飞书审批 —— 已开启，卡片推给 ' + m; },
       larkOff: '飞书审批 —— 已关闭',
+      phoneOn: '审批手机 —— 就是这台', phoneOff: '审批手机 —— 未设置',
+      phoneHint: '没开门户页面时，未命中规则的操作会推到这台手机上批，最多等 3 分钟。过了 3 分钟再点允许，同一条命令 30 分钟内放行一次。',
+      phoneElsewhere: function (d) { return '现在的审批手机是 ' + d + '，在这里打开会改成这台。'; },
+      phoneOnline: '在线：请求会推到这台手机，最多等 3 分钟。锁屏上只显示「有 1 个待审批请求」，解锁后才看得到命令。',
+      phoneOffline: '现在连不上：手机回来之前，请求照旧立即拒绝。',
+      phoneSent: '已向手机发了一条测试提醒。锁屏上看不到的话，在手机上打开 wanctl，按提示打开待审批通知的锁屏和横幅。',
+      ePhoneUnreachable: '手机没有响应。先在手机上打开 wanctl，等它显示已连接。',
+      ePhoneIncapable: '这台设备收不了审批提醒：要装 wanctl 安卓 app，并更新到最新版。',
       notifyDevOn: 'Webhook 通知 —— 已开启', notifyDevOff: 'Webhook 通知 —— 已关闭',
       removeDevT: '解除这台设备？',
       removeDevM: function (d) { return d + ' 会离开你的命名空间。在那台机器上重新运行 wanctl 可再次纳管。'; },
@@ -403,6 +419,8 @@
     not_found: 'eNotFound',
     bad_verification_code: 'eBadCode',
     pairing_gone: 'ePairGone',
+    approval_phone_unreachable: 'ePhoneUnreachable',
+    approval_phone_incapable: 'ePhoneIncapable',
     'no-such-user': 'eNoUser',
     'no-such-friend': 'eNoFriend',
     'not-friends': 'eNotFriends',
@@ -896,6 +914,8 @@
     if (!st || !st.mode) return;
     lastState = st;
     $('#dsAdb').hidden = !(st.info && st.info.adb_pair) || !!(devMeta[cur] || {}).shared;   // 属主专属，与 manage 无关
+    // 审批手机只能是自己的安卓设备：只有 app 托管的 agent 收得了推送（ADR 0015）
+    $('#dsPhone').hidden = !(st.info && st.info.platform === 'android') || !!(devMeta[cur] || {}).shared;
     curMode = st.mode;
     setModeUI(st.mode);
 
@@ -1151,7 +1171,41 @@
       if (cur !== name) return;
       devNotify = c; $('#dsNotify').hidden = false; paintDevNotify();
     }).catch(function () { $('#dsNotify').hidden = true; });
+    loadPhone(name);
   }
+
+  /* 审批手机：每个命名空间一台，开关在那台安卓设备的设置里 */
+  var phone = {}, phoneBusy = false;
+  function loadPhone(name) {
+    jget('/api/approval-phone').then(function (c) {
+      if (cur !== name) return;
+      phone = c; paintPhone();
+    }).catch(function () { $('#dsPhone').hidden = true; });
+  }
+  function paintPhone(extra) {
+    var mine = !!phone.device && phone.device === cur;
+    $('#dsPhoneSw').className = 'sw' + (mine ? ' on' : '');
+    $('#dsPhoneTxt').textContent = mine ? t().phoneOn : t().phoneOff;
+    var note = $('#dsPhoneNote');
+    note.className = 'note' + (mine && !phone.online && !extra ? ' warn' : '');
+    note.textContent = extra || (mine ? (phone.online ? t().phoneOnline : t().phoneOffline)
+      : (phone.device ? t().phoneElsewhere(devName(phone.device).label) : t().phoneHint));
+  }
+  $('#dsPhoneSw').onclick = function () {
+    if (!cur || roGuard(cur) || phoneBusy) return;
+    var name = cur, on = phone.device !== cur;
+    phoneBusy = true;
+    jpost('/api/approval-phone', { device: on ? name : '' }).then(function () {
+      if (cur !== name) return;
+      phone = { device: on ? name : '', online: on };
+      paintPhone(on ? t().phoneSent : '');
+    }).catch(function (e) {
+      if (cur !== name) return;
+      var k = errSay[errCode(e)];
+      paintPhone(k ? t()[k] : t().failedGeneric);
+      $('#dsPhoneNote').className = 'note warn';
+    }).finally(function () { phoneBusy = false; });
+  };
   var adbPairBusy = false;
   $('#dsAdbForm').onsubmit = function (event) {
     event.preventDefault();

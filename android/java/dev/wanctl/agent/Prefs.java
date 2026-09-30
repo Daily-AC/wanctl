@@ -135,6 +135,19 @@ final class Prefs {
         sp.edit().putBoolean(ELEVATION, v).apply();
     }
 
+    /**
+     * Set when the portal's test push arrives, which only happens to the phone the owner designated
+     * to approve for them (ADR 0015). It decides nothing but whether setup shows the lock-screen
+     * step for approval notifications.
+     */
+    boolean approvalPhone() {
+        return sp.getBoolean("approval_phone", false);
+    }
+
+    void setApprovalPhone() {
+        sp.edit().putBoolean("approval_phone", true).apply();
+    }
+
     /** Empty means "let wanctl ask the property service", which yields e.g. "pa2353". */
     String deviceName() {
         return sp.getString(NAME, "").trim();

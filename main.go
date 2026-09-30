@@ -516,6 +516,7 @@ func cmdAgent(ctx context.Context, args []string) error {
 	managed := fs.Bool("managed", false, "agent is owned by an external supervisor")
 	portalFPS := fs.String("portal-fps", config.PortalFingerprintsEnv(), "comma-separated portal admin fingerprints to seed locally")
 	portalPK := fs.String("portal-pk", "", "deprecated alias for one --portal-fps entry")
+	approvalsStdio := fs.Bool("approvals-stdio", false, "for the wanctl Android app, which runs the agent as its child: stdout carries approval cards (wanctl-approval lines) and stdin carries the owner's decisions")
 	fs.Parse(args)
 	portalRaw := *portalFPS
 	if *portalPK != "" {
@@ -539,7 +540,7 @@ func cmdAgent(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFPs: parsedPortalFPs, Version: buildVersion})
+	ag, err := agent.New(agent.Options{RelayURL: *relayURL, Token: *token, Name: *name, Shell: *shell, AutoYes: *yes, Transport: *tr, Mode: policy.Mode(*mode), PortalFPs: parsedPortalFPs, Version: buildVersion, ApprovalsStdio: *approvalsStdio})
 	if err != nil {
 		return err
 	}
