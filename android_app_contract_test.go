@@ -169,7 +169,8 @@ func javaMethodBody(t *testing.T, src, signature string) string {
 // carries the text of a command someone else wants to run, so
 // AgentService.consume must take such a line before append(), which writes the
 // log ring, agent.log and logcat: the log screen shows all three and copies
-// them with one tap.
+// them with one tap. stderr is read apart from stdout, so no log line can land
+// inside a card.
 func TestApprovalCardsStayOutOfTheAppLog(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join("android", "java", "dev", "wanctl", "agent", "AgentService.java"))
 	if err != nil {
@@ -181,7 +182,13 @@ func TestApprovalCardsStayOutOfTheAppLog(t *testing.T) {
 	if !strings.Contains(string(src), `"--approvals-stdio"`) {
 		t.Error("AgentService.java no longer starts the agent with --approvals-stdio, so the portal cannot designate this phone")
 	}
+	if strings.Contains(string(src), "redirectErrorStream(true)") {
+		t.Error("AgentService.java merges the agent's stderr into stdout: a log line written into a card longer than the pipe's atomic write would split it and put the command text in the log")
+	}
 	body := javaMethodBody(t, string(src), "private void consume(")
+	if !strings.Contains(body, "stdout && line.startsWith(APPROVAL_LINE)") {
+		t.Error("consume() takes approval cards from stderr too; only the agent's stdout carries them")
+	}
 	card := strings.Index(body, "startsWith(APPROVAL_LINE)")
 	logged := strings.Index(body, "append(line)")
 	if card < 0 || logged < 0 {

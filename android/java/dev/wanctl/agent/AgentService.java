@@ -22,6 +22,7 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
@@ -59,6 +60,8 @@ public final class AgentService extends Service {
     private static final long STABLE_RUN_MS = 60_000;
     private static final long BACKOFF_MIN_MS = 2_000;
     private static final long BACKOFF_MAX_MS = 60_000;
+    /** How long an exited child's stderr may take to drain: its last line may be the fatal one. */
+    private static final long STDERR_DRAIN_MS = 2_000;
 
     public static final String ACTION_STOP = "dev.wanctl.agent.STOP";
     public static final String ACTION_RESTART = "dev.wanctl.agent.RESTART";
@@ -375,7 +378,6 @@ public final class AgentService extends Service {
         // tells the app's agent from any other device (ADR 0015).
         args.add("--approvals-stdio");
         ProcessBuilder pb = Wanctl.command(this, args.toArray(new String[0]));
-        pb.redirectErrorStream(true);
         // Without this the agent inherits the service's working directory, "/",
         // which is read-only — so a relative path in an exec session or a
         // `wanctl push` with a bare filename fails for a reason nobody would
@@ -389,11 +391,17 @@ public final class AgentService extends Service {
             written.clear();
         }
         stdinWriter.execute(AgentService::writeDecisions);
+        // stderr is read on its own, never merged into stdout: a card can be
+        // longer than the pipe's atomic write, and a log line written into the
+        // middle of it would split the card and leave its command text on a
+        // line that goes to the log.
+        Thread errors = new Thread(() -> drain(p.getErrorStream()), "wanctl-stderr");
+        errors.start();
         try (BufferedReader r = new BufferedReader(
                 new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = r.readLine()) != null) {
-                consume(line);
+                consume(line, true);
             }
         } finally {
             synchronized (stdinLock) {
@@ -405,9 +413,21 @@ public final class AgentService extends Service {
                 // Already broken by the child exiting.
             }
         }
+        errors.join(STDERR_DRAIN_MS);
         int code = p.waitFor();
         child = null;
         return code;
+    }
+
+    private void drain(InputStream err) {
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(err, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                consume(line, false);
+            }
+        } catch (IOException ignored) {
+            // The child is gone; the stdout reader reports how.
+        }
     }
 
     /**
@@ -421,9 +441,12 @@ public final class AgentService extends Service {
      * in the wanctl package asserts these substrings still appear — so a rewrite
      * fails CI rather than quietly turning a fatal error back into an infinite
      * retry loop.
+     *
+     * <p>Called for stdout and stderr alike, from their two reader threads; the
+     * markers may appear on either. Only stdout carries approval cards.
      */
-    private void consume(String line) {
-        if (line.startsWith(APPROVAL_LINE)) {
+    private void consume(String line, boolean stdout) {
+        if (stdout && line.startsWith(APPROVAL_LINE)) {
             // The card carries the text of someone else's command. It becomes a
             // notification and nothing else: not the log ring, not agent.log,
             // not logcat, all of which the log screen shows and copies.
@@ -454,7 +477,8 @@ public final class AgentService extends Service {
         }
     }
 
-    private void append(String line) {
+    /** Synchronized: stdout and stderr are read on two threads and share one log file. */
+    private synchronized void append(String line) {
         String stamped = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(new Date()) + "  " + line;
         AgentState.get().append(stamped);
         Log.i(TAG, line);
