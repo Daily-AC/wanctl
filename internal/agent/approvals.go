@@ -155,9 +155,14 @@ func (p *approvalPhone) show(card protocol.ApprovalCard) error {
 	}
 	line := make([]byte, 0, len(approvalLinePrefix)+len(b)+1)
 	line = append(append(append(line, approvalLinePrefix...), b...), '\n')
+	return p.writeLine(line)
+}
+
+// writeLine writes one whole line to the app, never interleaved with another.
+func (p *approvalPhone) writeLine(line []byte) error {
 	p.outMu.Lock()
 	defer p.outMu.Unlock()
-	_, err = p.out.Write(line)
+	_, err := p.out.Write(line)
 	return err
 }
 

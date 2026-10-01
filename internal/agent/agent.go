@@ -98,6 +98,7 @@ type Agent struct {
 	// can hold (approvals.go).
 	phone  *approvalPhone
 	grants lateGrants
+	adb    adbLinkState
 
 	// Owned goroutines. Every goroutine the agent starts is registered in wg
 	// and takes its context from stopCtx, so Close can cancel them all and then
@@ -274,6 +275,7 @@ func New(opts Options) (*Agent, error) {
 		inst:     inst,
 		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(),
 		elevator: elevate.ConfigureDefault(configDirOrEmpty(), os.Getenv),
+		adb:      adbLinkState{kick: make(chan struct{}, 1)},
 	}
 	// Shutdown context for everything the agent starts; Close cancels it and
 	// then joins those goroutines.
@@ -438,6 +440,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer cancel()
 
 	a.spawn(func() { a.runNotifyPolicy(ctx) })
+	a.spawn(func() { a.watchADBLink(ctx) })
 	if a.phone != nil {
 		a.spawn(func() { a.phone.serveDecisions(ctx) })
 	}
@@ -1369,6 +1372,7 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 
 	case protocol.KindConsoleState:
 		snap := a.console.State()
+		snap.ADB = a.adbLink()
 		data, _ := json.Marshal(snap)
 		return protocol.Message{Kind: protocol.KindConsoleState, Data: json.RawMessage(data)}
 

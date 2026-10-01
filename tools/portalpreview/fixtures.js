@@ -47,6 +47,11 @@
   // 的 pairTTL 和 DecidePair 决定，工装只是把那个结果摆出来。
   var pairGone = new URLSearchParams(location.search).get('pairgone') === '1';
 
+  // ?adb=connected|no_port|unpaired|off|error 给安卓设备 bench-02 的控制台快照
+  // 带上 adb 链路状态（v0.20.2，agent 自己探出来的那个值）。不给就是旧 agent：
+  // 快照里没有 adb 字段，卡片只摆配对表单。
+  var adbState = new URLSearchParams(location.search).get('adb') || '';
+
   // ?now=<毫秒> 把「现在」钉住。页面上每一个时间都是从它算出来的，不钉住的话
   // 两次截图之间光是钟走了几分钟就够让每一张都不一样，前后对比无从做起。
   var now = Number(new URLSearchParams(location.search).get('now')) || Date.now();
@@ -248,7 +253,7 @@
       if (p === '/api/acl') return { acl: [] };
     }
     if (p === '/api/access-requests/decide') return {};
-    if (p === '/api/devices/console') { var st = consoles[new URLSearchParams(url.split('?')[1]).get('device')]; if (st) { var android = new URLSearchParams(url.split('?')[1]).get('device') === 'bench-02'; st.info = {platform:android?'android':'linux', adb_pair:android}; } }
+    if (p === '/api/devices/console') { var st = consoles[new URLSearchParams(url.split('?')[1]).get('device')]; if (st) { var android = new URLSearchParams(url.split('?')[1]).get('device') === 'bench-02'; st.info = {platform:android?'android':'linux', adb_pair:android}; if (android && adbState) st.adb = adbState === 'error' ? {state:'error', reason:'adbd on port 41031 is waiting for someone to allow wanctl\'s key on the device screen'} : {state:adbState}; } }
     if (p === '/api/devices/console') return consoles[new URLSearchParams(url.split('?')[1]).get('device')] || { mode: 'normal', pending: [], pending_pairings: [], rules: [], trusted: [] };
     if (p === '/api/devices/logs') return { logs: logs.slice().reverse() };
     if (p === '/api/devices/lark') return { approval_enabled: true, pairing_from_card: false, notify_email: 'you@example.com', delivery_health: { result: 'success', attempted_at: ago(300) } };
