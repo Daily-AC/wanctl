@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // doorRelay is the relay's side of the email door, in memory: one identity's
@@ -492,4 +493,69 @@ func TestNoDoorWithoutMail(t *testing.T) {
 			t.Fatalf("contact lookup with the door down: %s", call)
 		}
 	}
+}
+
+// With PORTAL_PUBLIC_ORIGIN set, both mails link to it whatever Host the
+// request came in on: a forged Host must never reach an inbox.
+func TestMailLinksUseConfiguredOrigin(t *testing.T) {
+	const origin, forged = "https://wanctl.example", "evil.example"
+	check := func(t *testing.T, m sentMail, link string) {
+		t.Helper()
+		for _, part := range []string{m.text, m.html} {
+			if !strings.Contains(part, link) || strings.Contains(part, forged) {
+				t.Fatalf("mail part should link %s and never %s:\n%s", link, forged, part)
+			}
+		}
+	}
+
+	t.Run("confirmation", func(t *testing.T) {
+		s, mail := doorPortal(t, &doorRelay{resolve: "ok"})
+		cookie := signedIn(t, s)
+		s.publicOrigin = origin
+		req := httptest.NewRequest("POST", "http://"+forged+"/auth/email/send", strings.NewReader(`{"address":"person@example.com"}`))
+		req.Header.Set("Origin", origin)
+		csrf := newCSRFToken()
+		req.Header.Set(csrfHeaderName, csrf)
+		req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: csrf})
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		if rr.Code != 200 {
+			t.Fatalf("send = %d %s", rr.Code, rr.Body.String())
+		}
+		check(t, <-mail.messages, origin+"/auth/email/confirm?t=tok%2B%2F%3D")
+	})
+
+	t.Run("approval", func(t *testing.T) {
+		var calls []string
+		s := accessPortal(t, resolveOKAs("admin", "admin"), &calls)
+		mail := newFakeMailSender()
+		s.mail = mail
+		inner := s.hc.Transport
+		s.hc.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path != "/admin/access-requests/decide" {
+				return inner.RoundTrip(r)
+			}
+			rr := httptest.NewRecorder()
+			json.NewEncoder(rr).Encode(map[string]any{"id": 7, "login": "octocat", "email": "applicant@example.com", "status": "approved"})
+			return rr.Result(), nil
+		})
+		cookies := inviteSession(t, s, s.Handler())
+		s.publicOrigin = origin
+		req := httptest.NewRequest("POST", "http://"+forged+"/api/access-requests/decide", strings.NewReader(`{"id":7,"decision":"approved"}`))
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		rr := httptest.NewRecorder()
+		s.handleAccessDecide(rr, req)
+		if rr.Code != 200 {
+			t.Fatalf("decide = %d %s", rr.Code, rr.Body.String())
+		}
+		select {
+		case m := <-mail.messages:
+			check(t, m, origin+"/")
+		case <-time.After(time.Second):
+			t.Fatal("no approval email")
+		}
+	})
 }
