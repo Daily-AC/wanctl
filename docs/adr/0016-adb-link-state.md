@@ -22,11 +22,12 @@ and reports one state to both surfaces:
 | `connected` | adbd ran `id` as shell                                          |
 | `no_port`   | nothing answered: wireless debugging is off, or not found yet   |
 | `unpaired`  | adbd answered and refused wanctl's key (never paired, or lapsed)|
-| `error`     | anything else, with the reason (e.g. an "Allow USB debugging?" dialog) |
+| `confirm`   | adbd shows "Allow USB debugging?" for wanctl's key; tap Allow   |
+| `error`     | anything else, with the reason (shown folded, for diagnosis)    |
 
 - It probes when the app reports a new wireless-debugging port, right after a
-  pairing, and otherwise once a minute (every five minutes in `error`, whose
-  usual cause is a dialog every probe raises again). A probe never queues
+  pairing, and otherwise once a minute (every five minutes in `confirm`,
+  whose dialog every probe raises again, and in `error`). A probe never queues
   behind a running elevated command.
 - **Portal:** console state gains an optional `adb` object
   (`{"state": …, "reason": …}`). An agent before v0.20.2 omits it and the

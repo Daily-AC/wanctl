@@ -1098,6 +1098,9 @@ public final class MainActivity extends Activity {
             case "unpaired":
                 say = "已允许，但配对已失效：在门户「设备设置 → ADB 无线调试」重新配对后生效";
                 break;
+            case "confirm":
+                say = "已允许，请在手机弹出的「允许 USB 调试吗」框里点允许";
+                break;
             default:
                 say = "已允许，但还没连上无线调试，按指引配对后生效";
         }

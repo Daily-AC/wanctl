@@ -47,7 +47,7 @@ final class AgentState {
     private String detail = "";
     /**
      * The adb elevation link as the agent last probed it: "", "off", "connected", "no_port",
-     * "unpaired" or "error". The portal's ADB card shows the same value (v0.20.2).
+     * "unpaired", "confirm" or "error". The portal's ADB card shows the same value (v0.20.2).
      */
     private String adbLink = "";
 

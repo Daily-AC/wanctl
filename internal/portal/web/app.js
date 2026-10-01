@@ -137,7 +137,11 @@
       adbUnpairedSay: 'Wireless debugging is on but does not accept wanctl\'s key: it was never paired here, or Android revoked the pairing (it does after 7 days unused).',
       adbOff: 'Elevation is off in the app',
       adbOffSay: 'Turn on 提权通道 under Settings → Advanced in the wanctl app on the phone; the connection shows here after that.',
-      adbErr: 'Cannot reach adb', adbRepair: 'Pair again', adbPair: 'Pair',
+      adbConfirm: 'Waiting for you to allow on the phone',
+      adbConfirmSay: 'The phone should be showing "Allow USB debugging?" for wanctl. Tap Allow there; if you do not see it, pair again.',
+      adbErr: 'Cannot reach adb',
+      adbErrSay: 'adb on the phone did not answer properly. Pair again; if it still fails, send us the details below.',
+      adbRepair: 'Pair again', adbPair: 'Pair',
       adbChecking: 'Paired. Checking the connection…',
       phoneOn: 'Approval phone — this one', phoneOff: 'Approval phone — off',
       phoneHint: 'When no portal page is open, requests no rule covers are pushed to this phone and wait up to 3 minutes. Approve one after that and the same command is let through once within 30 minutes.',
@@ -282,7 +286,11 @@
       adbUnpairedSay: '无线调试开着，但不认 wanctl 的密钥：这台手机还没配对过，或者配对已被系统撤销（7 天没用会自动撤销）。',
       adbOff: '手机 App 里的提权通道没打开',
       adbOffSay: '在手机 wanctl 的「设置 → 高级设置」打开「提权通道」，这里才会显示连接状态。',
-      adbErr: '连不上 adb', adbRepair: '重新配对', adbPair: '配对',
+      adbConfirm: '等你在手机上点允许',
+      adbConfirmSay: '手机上应该弹出了「允许 USB 调试吗」的授权框，在手机上点允许。没看到就点「重新配对」。',
+      adbErr: '连不上 adb',
+      adbErrSay: '手机上的 adb 没有正常应答。点「重新配对」再试一次；还不行，把下面的详情发给我们。',
+      adbRepair: '重新配对', adbPair: '配对',
       adbChecking: '配对成功，正在确认连接…',
       phoneOn: '审批手机 —— 就是这台', phoneOff: '审批手机 —— 未设置',
       phoneHint: '没开门户页面时，未命中规则的操作会推到这台手机上批，最多等 3 分钟。过了 3 分钟再点允许，同一条命令 30 分钟内放行一次。',
@@ -1236,17 +1244,23 @@
      随控制台快照带过来；手机 App 的提权通道那一行用的是同一个值。旧 agent
      不带 adb 字段，只摆配对表单，和以前一样。 */
   var adbFormFor = null;   // 点了「配对 / 重新配对」的那台设备；换设备就收起
-  var adbKey = { connected: 'On', no_port: 'NoPort', unpaired: 'Unpaired', off: 'Off' };
+  var adbKey = { connected: 'On', no_port: 'NoPort', unpaired: 'Unpaired', confirm: 'Confirm', off: 'Off' };
   function paintAdb(link) {
     var row = $('#dsAdbState'), box = $('#dsAdbPairBox'), rp = $('#dsAdbRepair');
     if (!link) { row.hidden = true; box.hidden = false; return; }
-    var k = adbKey[link.state] || 'Err', fix = k === 'Unpaired' || k === 'Err';
+    var k = adbKey[link.state] || 'Err', fix = k === 'Unpaired' || k === 'Confirm' || k === 'Err';
     if (k === 'On' && adbFormFor === cur) { adbFormFor = null; $('#dsAdbResult').textContent = ''; }
     var open = adbFormFor === cur;
     row.hidden = false;
-    $('#dsAdbDot').className = 'dot' + (k === 'On' ? '' : ' off');
+    row.className = 'row adb-state' + (k === 'On' ? ' on' : '');
+    $('#dsAdbDot').hidden = k === 'On';
+    $('#dsAdbDot').className = 'dot off';
+    $('#dsAdbOk').toggleAttribute('hidden', k !== 'On');   // SVG 没有 .hidden 属性，只认这个 attribute
     $('#dsAdbHead').textContent = t()['adb' + k];
-    $('#dsAdbSay').textContent = k === 'Err' ? (link.reason || '') : t()['adb' + k + 'Say'];
+    $('#dsAdbSay').textContent = t()['adb' + k + 'Say'];
+    // 原始报错是英文、给排查用的，折叠起来，不当成给主人看的那句话。
+    $('#dsAdbWhy').hidden = k !== 'Err' || !link.reason;
+    $('#dsAdbReason').textContent = link.reason || '';
     rp.hidden = k === 'On' || open;
     rp.textContent = fix ? t().adbRepair : t().adbPair;
     rp.className = fix ? 'btn' : 'btn soft';
