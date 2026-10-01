@@ -35,7 +35,7 @@
 | `WANCTL_SMTP_PASSWORD` | portal | 条件必需 | 无 | SMTP 密码。 |
 | `WANCTL_MAIL_FROM` | portal | 条件必需 | 无 | RFC 5322 发件地址，例如 `wanctl <wanctl@portal.example.com>`。启用邮件且使用 GitHub 登录时，每个登录的账号要先确认一个联系邮箱，才能进门户或提交访问申请：门户发一封确认信（链接 24 小时有效、只能用一次；每个账号每天最多 5 封，同一地址 10 分钟一封），按下链接页上的确认后生效。不向 GitHub 申请邮箱权限。申请通过后异步给确认过的地址发中英双语通知；拒绝不发信，发送失败不撤销审批。 |
 | `PORTAL_USER_HEADER` | portal | 视情况 | `X-Auth-Request-Email` | header 认证模式下，来自可信反向代理的身份头。代理必须剥掉客户端自带的同名头。与 GitHub OAuth 互斥。 |
-| `PORTAL_PUBLIC_ORIGIN` | portal | 否 | 由请求推导 | 门户对外的 origin，用于 OAuth 重定向和安全 cookie。TLS 在代理上终结时要设。 |
+| `PORTAL_PUBLIC_ORIGIN` | portal | 否 | 由请求推导 | 门户对外的 origin，用于 OAuth 重定向、安全 cookie 和邮件里的链接。TLS 在代理上终结或启用了邮件时要设，否则这些链接取自请求的 Host。 |
 | `PORTAL_DEBUG_WHOAMI` | portal | 否 | `0` | 设成 `1` 打开诊断用的 `/whoami` 端点。不要常开。 |
 | `WANCTL_RELAY` | portal | 视情况 | 持久化配置，其次构建时默认值 | 门户控制台和 `/skills` 跳转所用的公网 relay URL。客户端和 agent 也用它，可以用 `wanctl config set relay=…` 持久化。 |
 | `WANCTL_PORTAL_TOKEN` | portal | 视情况 | 无 | `WANCTL_PORTAL_NS` 里的令牌；只有实时设备控制台才需要。 |
