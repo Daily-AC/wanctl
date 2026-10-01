@@ -38,6 +38,8 @@ import java.util.concurrent.Executors;
 public final class MainActivity extends Activity {
     /** Opens a page directly; the approval test notification uses it for its setup step. */
     static final String EXTRA_PAGE = "dev.wanctl.agent.page";
+    /** The test reminder's tap: the setup page, asking at once whether the reminder rang. */
+    static final String PAGE_ALERT_CHECK = "alert_check";
     private static final String HOSTED_PORTAL = "https://wanctl.z10.dev";
     private static final String HOSTED_RELAY = "https://wanctl-relay.z10.dev";
     private static final int INK = Color.rgb(29, 29, 31), MUTED = Color.rgb(105, 105, 110);
@@ -45,6 +47,10 @@ public final class MainActivity extends Activity {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Runnable onStateChange = this::renderState;
+    private final Runnable onCards = this::renderApprovals;
+    /** Moves the rows' countdowns; the rows themselves are rebuilt only when a card changes. */
+    private final java.util.List<Runnable> countdowns = new java.util.ArrayList<>();
+    private final Runnable tick = this::tickApprovals;
     private Prefs prefs;
     private Installer installer;
     private LinearLayout body, footer;
@@ -52,6 +58,9 @@ public final class MainActivity extends Activity {
     private boolean settingsFlow;
     private String pendingPage = "";
     private TextView homeCaption;
+    private LinearLayout approvals;
+    private TextView elevationState;
+    private boolean askAlert;
     private ConnectionMark connectionMark;
     private TextView status;
     private Button power;
@@ -104,8 +113,10 @@ public final class MainActivity extends Activity {
     }
 
     private void receivePage(Intent intent) {
-        if (!"permissions".equals(intent.getStringExtra(EXTRA_PAGE))) return;
+        String want = intent.getStringExtra(EXTRA_PAGE);
+        if (!"permissions".equals(want) && !PAGE_ALERT_CHECK.equals(want)) return;
         intent.removeExtra(EXTRA_PAGE);
+        askAlert = PAGE_ALERT_CHECK.equals(want);
         permissionsFromSettings = true;
         if (ready) showPermissions();
         else pendingPage = "permissions";
@@ -115,7 +126,9 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         AgentState.get().addListener(onStateChange);
+        ApprovalNotifier.listen(onCards);
         if (page.equals("permissions")) showPermissions();
+        renderApprovals();
         if (connectionMark != null) connectionMark.resume();
         probe();
     }
@@ -123,6 +136,8 @@ public final class MainActivity extends Activity {
     @Override
     protected void onPause() {
         AgentState.get().removeListener(onStateChange);
+        ApprovalNotifier.unlisten(onCards);
+        main.removeCallbacks(tick);
         stopAnimation();
         if (connectionMark != null) connectionMark.pause();
         super.onPause();
@@ -205,6 +220,9 @@ public final class MainActivity extends Activity {
         navigateBack = back;
         status = null;
         homeCaption = null;
+        approvals = null;
+        elevationState = null;
+        main.removeCallbacks(tick);
         connectionMark = null;
         power = null;
         LinearLayout outer = new LinearLayout(this);
@@ -469,6 +487,7 @@ public final class MainActivity extends Activity {
             body.addView(guide, new LinearLayout.LayoutParams(-1, dp(140)));
             gap(16);
         }
+        if (prefs.approvalPhone()) approvalGuide();
         LinearLayout permissions = group(fromSettings ? "运行权限" : "");
         row(
                 permissions,
@@ -489,11 +508,6 @@ public final class MainActivity extends Activity {
         LinearLayout background = group("系统设置");
         row(background, "后台活动与自启动", "设置指引", this::showOEMBackgroundHelp);
         note("部分手机还需在系统中允许后台活动与自启动，具体选项以本机为准。");
-        if (prefs.approvalPhone()) {
-            LinearLayout approval = group("审批提醒");
-            row(approval, "打开锁屏显示和横幅", "", this::openApprovalChannel);
-            note("部分手机默认不在锁屏和横幅显示 wanctl 的通知，待审批请求会因此被错过。锁屏上只会显示「有 1 个待审批请求」，解锁后才能看到具体命令。");
-        }
         if (!fromSettings)
             footerAction(
                     notificationsGranted() && batteryGranted() ? "继续" : "暂时跳过",
@@ -503,18 +517,75 @@ public final class MainActivity extends Activity {
                         page = "";
                         route();
                     });
+        if (askAlert) {
+            askAlert = false;
+            main.postDelayed(this::confirmAlert, 400);
+        }
     }
 
-    private void openApprovalChannel() {
+    /**
+     * The approval phone's three steps, first on the page because each one, missed, loses
+     * requests: ColorOS kills wanctl when it is swiped out of recents, and switches banners,
+     * sound and vibration off per app for sideloaded apps (S13). Nothing the app can read says
+     * whether the last two are on, so the step is done when the owner says a test rang.
+     */
+    private void approvalGuide() {
+        LinearLayout keep = group("审批手机：保持在线");
+        row(keep, "在最近任务中锁定 wanctl", "怎么锁定", this::showLockHelp);
+        note("从最近任务里上划清理，会直接停掉 wanctl：手机随即掉线，收不到审批，要重新打开 wanctl 才恢复。");
+        LinearLayout alerts = group("审批手机：提醒要响");
+        row(alerts, "横幅、锁屏、铃声、振动", "去打开", this::openAppNotifications);
+        row(alerts, "测试提醒", prefs.approvalAlertOk() ? "已确认" : "未确认", this::testAlert);
+        note("这四项部分系统对侧载应用默认关闭，要在 wanctl 的通知设置里逐个打开。打开后发一条测试提醒，听到响声、看到横幅才算设好。锁屏上只显示「有 1 个待审批请求」，解锁后才能看到具体命令。");
+    }
+
+    private void showLockHelp() {
+        new AlertDialog.Builder(this)
+                .setTitle("在最近任务中锁定 wanctl")
+                .setMessage("1. 打开最近任务（从屏幕底部上滑并停住）。\n"
+                        + "2. 在 wanctl 的卡片上点右上角的「⋮」，选「锁定」。有的系统版本是下拉卡片，或长按卡片。\n"
+                        + "3. 卡片上出现锁的标志就好了。以后清理最近任务不会再停掉它。")
+                .setPositiveButton("知道了", null)
+                .show();
+    }
+
+    private void testAlert() {
         if (!notificationsGranted()) {
             requestNotifications();
             return;
         }
+        ApprovalNotifier.test(this);
+        main.postDelayed(this::confirmAlert, 3000);
+    }
+
+    /** 「响了吗」: yes finishes the step; no goes straight to wanctl's notification settings. */
+    private void confirmAlert() {
+        if (isFinishing() || isDestroyed() || !page.equals("permissions")) return;
+        new AlertDialog.Builder(this)
+                .setTitle("测试提醒响了吗？")
+                .setMessage("要同时听到提示音、看到屏幕顶部弹出的横幅。")
+                .setPositiveButton("响了，也看到了", (d, w) -> {
+                    prefs.setApprovalAlertOk(true);
+                    showPermissions();
+                })
+                .setNegativeButton("没有", (d, w) -> {
+                    prefs.setApprovalAlertOk(false);
+                    showPermissions();
+                    new AlertDialog.Builder(this)
+                            .setTitle("打开 wanctl 的提醒")
+                            .setMessage("下一页是 wanctl 的通知设置。把「允许通知」和横幅、锁屏、铃声、振动都打开；有「待审批」这一类的话，点进去同样打开。回来后再发一次测试提醒。")
+                            .setPositiveButton("去打开", (d2, w2) -> openAppNotifications())
+                            .show();
+                })
+                .setNeutralButton("再发一次", (d, w) -> testAlert())
+                .show();
+    }
+
+    private void openAppNotifications() {
         ApprovalNotifier.channel(this);
         openSettings(
-                new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
-                        .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName())
-                        .putExtra(Settings.EXTRA_CHANNEL_ID, ApprovalNotifier.CHANNEL));
+                new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
     }
 
     private void requestNotifications() {
@@ -775,6 +846,9 @@ public final class MainActivity extends Activity {
         settingsFlow = false;
         permissionsFromSettings = false;
         screen("home", "wanctl", null);
+        approvals = new LinearLayout(this);
+        approvals.setOrientation(LinearLayout.VERTICAL);
+        body.addView(approvals, new LinearLayout.LayoutParams(-1, -2));
         spring();
         connectionMark = new ConnectionMark(this);
         LinearLayout.LayoutParams logoSize = new LinearLayout.LayoutParams(dp(128), dp(128));
@@ -811,9 +885,81 @@ public final class MainActivity extends Activity {
                             renderState();
                         });
         renderState();
+        renderApprovals();
+    }
+
+    /**
+     * 「待审批」 on the home screen (v0.20.2): the shade used to be the only way to a request, so
+     * one the owner did not see slide down was one they could not find. Each row opens the same
+     * detail screen the notification does. Nothing at all when nothing waits — no empty state.
+     */
+    private void renderApprovals() {
+        main.removeCallbacks(tick);
+        countdowns.clear();
+        if (approvals == null) return;
+        approvals.removeAllViews();
+        java.util.List<ApprovalNotifier.Card> open = ApprovalNotifier.open(this);
+        boolean nag = prefs.approvalPhone() && !prefs.approvalAlertOk();
+        if (open.isEmpty() && !nag) return;
+        LinearLayout saved = body;
+        body = approvals;
+        if (!open.isEmpty()) {
+            LinearLayout list = group("待审批");
+            for (ApprovalNotifier.Card k : open) approvalRow(list, k);
+        }
+        if (nag) {
+            LinearLayout alert = group(open.isEmpty() ? "" : "审批提醒");
+            row(alert, "审批提醒还没确认响了", "去设置", () -> {
+                permissionsFromSettings = true;
+                showPermissions();
+            });
+        }
+        gap(8);
+        body = saved;
+        if (!countdowns.isEmpty()) main.postDelayed(tick, 1000);
+    }
+
+    private void tickApprovals() {
+        for (Runnable r : countdowns) r.run();
+        if (!countdowns.isEmpty()) main.postDelayed(tick, 1000);
+    }
+
+    private void approvalRow(LinearLayout group, ApprovalNotifier.Card k) {
+        separator(group);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(16), dp(12), dp(16), dp(12));
+        row.addView(text(ApprovalNotifier.title(k), 16, INK));
+        String subject = !k.cmd.isEmpty() ? k.cmd : k.path;
+        if (!subject.isEmpty()) {
+            TextView cmd = text(subject, 14, INK);
+            cmd.setTypeface(Typeface.MONOSPACE);
+            cmd.setMaxLines(2);
+            cmd.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            cmd.setPadding(0, dp(4), 0, 0);
+            row.addView(cmd);
+        }
+        String status = ApprovalNotifier.status(k);
+        TextView m = text("", 13, status != null && ApprovalNotifier.DONE.equals(k.state) ? INK : MUTED);
+        m.setPadding(0, dp(4), 0, 0);
+        row.addView(m);
+        Runnable meta = () -> {
+            String st = ApprovalNotifier.status(k), left = ApprovalActivity.remaining(k);
+            m.setText("来自 " + ApprovalNotifier.peerName(k)
+                    + (st != null ? " · " + st : left.isEmpty() ? "" : " · " + left));
+        };
+        meta.run();
+        if (!ApprovalActivity.remaining(k).isEmpty()) countdowns.add(meta);
+        row.setBackground(
+                new RippleDrawable(ColorStateList.valueOf(0x11000000), null, shape(Color.WHITE, 12)));
+        row.setOnClickListener(
+                v -> startActivity(new Intent(this, ApprovalActivity.class)
+                        .setData(ApprovalNotifier.uri(k.id))));
+        group.addView(row, new LinearLayout.LayoutParams(-1, -2));
     }
 
     private void renderState() {
+        if (elevationState != null) paintElevation();
         if (!page.equals("home") || status == null) return;
         AgentState s = AgentState.get();
         connectionMark.setState(s.phase(), prefs.enabled());
@@ -927,9 +1073,36 @@ public final class MainActivity extends Activity {
                         restartIfRunning();
                     } else showElevationHelp();
                 });
+        if (prefs.elevation()) {
+            elevationState = text("", 14, MUTED);
+            elevationState.setPadding(dp(16), 0, dp(16), dp(12));
+            elevation.addView(elevationState);
+            paintElevation();
+        }
         row(elevation, "配置系统权限", "设置指引", this::showElevationHelp);
 
         note("截图、模拟点击等系统操作需要额外配置无线调试或 root。仅在使用这些功能时配置。");
+    }
+
+    /**
+     * The switch is the owner's consent; this line is whether it works. The agent probes adb and
+     * reports it (AgentState.adbLink), the same state the portal's ADB card shows.
+     */
+    private void paintElevation() {
+        String link = AgentState.get().adbLink();
+        String say;
+        switch (link) {
+            case "connected":
+                say = "已连通";
+                break;
+            case "unpaired":
+                say = "已允许，但配对已失效：在门户「设备设置 → ADB 无线调试」重新配对后生效";
+                break;
+            default:
+                say = "已允许，但还没连上无线调试，按指引配对后生效";
+        }
+        elevationState.setText(say);
+        elevationState.setTextColor(link.equals("connected") ? INK : MUTED);
     }
 
     private void showDetails() {
@@ -998,7 +1171,7 @@ public final class MainActivity extends Activity {
                 .setTitle("配置提权通道")
                 .setMessage(
                         "仅在需要控制系统、截图或模拟点击时开启。\n\n"
-                                + "无线调试：手机连接 Wi-Fi，打开开发者选项中的「无线调试」，点「使用配对码配对设备」并保持弹窗打开。在另一台设备的浏览器打开门户，选择这台手机，进入「设备设置 → ADB 配对」，填写弹窗里的端口和六位码。\n\n"
+                                + "无线调试：手机连接 Wi-Fi，打开开发者选项中的「无线调试」，点「使用配对码配对设备」并保持弹窗打开。在另一台设备的浏览器打开门户，选择这台手机，进入「设备设置 → ADB 无线调试」，填写弹窗里的端口和六位码。\n\n"
                                 + "重启、断开 Wi-Fi 或换到另一个接入点后，系统会关闭无线调试，需要重新打开；配对超过 7 天未使用会被系统撤销，需要重新配对（开发者选项中的「停用 adb 授权超时功能」可关闭这个期限）。\n\n"
                                 + xiaomi
                                 + "已 root 的手机可使用 root 通道。开启后仍需按系统提示授权。")
@@ -1011,7 +1184,7 @@ public final class MainActivity extends Activity {
                             showAdvanced();
                         })
                 .setPositiveButton(
-                        "启用通道",
+                        "允许（配对后生效）",
                         (d, w) -> {
                             prefs.setElevation(true);
                             restartIfRunning();

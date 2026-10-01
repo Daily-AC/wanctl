@@ -68,6 +68,8 @@ public final class AgentService extends Service {
 
     /** What the agent prints before an approval card under --approvals-stdio (ADR 0015). */
     static final String APPROVAL_LINE = "wanctl-approval ";
+    /** What the agent prints when the adb elevation link changes state (v0.20.2). */
+    static final String ADB_LINE = "wanctl-adb ";
 
     private Thread supervisor;
     private volatile Process child;
@@ -123,6 +125,25 @@ public final class AgentService extends Service {
                 // and the decision is written to it then.
                 Log.i(TAG, "decision queued until the agent runs again");
             }
+        }
+    }
+
+    /**
+     * Sends one decision again, for the owner who saw 「提交中」 last too long. The agent's
+     * outbox already resends on every reconnect; this covers a child that died with the decision
+     * unread, and an agent that is not running at all.
+     */
+    static void retry(Context c, String id) {
+        if (ApprovalNotifier.verdict(id) == null) {
+            return;
+        }
+        ApprovalNotifier.resent(id);
+        synchronized (stdinLock) {
+            written.remove(id);
+        }
+        stdinWriter.execute(AgentService::writeDecisions);
+        if (!running) {
+            start(c);
         }
     }
 
@@ -452,6 +473,15 @@ public final class AgentService extends Service {
             // not logcat, all of which the log screen shows and copies.
             if (!ApprovalNotifier.onLine(this, line.substring(APPROVAL_LINE.length()))) {
                 append("! 收到一条无法识别的审批请求，已丢弃");
+            }
+            return;
+        }
+        if (stdout && line.startsWith(ADB_LINE)) {
+            try {
+                AgentState.get().setAdbLink(
+                        new JSONObject(line.substring(ADB_LINE.length())).optString("state"));
+            } catch (org.json.JSONException e) {
+                append("! 无法识别的 adb 状态行，已丢弃");
             }
             return;
         }

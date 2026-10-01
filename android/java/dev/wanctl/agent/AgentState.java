@@ -45,6 +45,11 @@ final class AgentState {
     private String relay = "";
     private String fingerprint = "";
     private String detail = "";
+    /**
+     * The adb elevation link as the agent last probed it: "", "off", "connected", "no_port",
+     * "unpaired" or "error". The portal's ADB card shows the same value (v0.20.2).
+     */
+    private String adbLink = "";
 
     private AgentState() {
     }
@@ -66,11 +71,24 @@ final class AgentState {
         return detail;
     }
 
+    synchronized String adbLink() {
+        return adbLink;
+    }
+
+    synchronized void setAdbLink(String state) {
+        String next = state == null ? "" : state;
+        if (!next.equals(adbLink)) {
+            adbLink = next;
+            notifyListeners();
+        }
+    }
+
     synchronized void setPhase(Phase p, String detail) {
         this.phase = p;
         this.detail = detail == null ? "" : detail;
         if (p == Phase.STOPPED || p == Phase.ERROR) {
             relay = "";
+            adbLink = "";
         }
         notifyListeners();
     }
