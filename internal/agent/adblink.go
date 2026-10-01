@@ -28,9 +28,9 @@ const adbLinkLinePrefix = "wanctl-adb "
 const (
 	adbLinkPoll  = 5 * time.Second  // how often the discovered port is checked
 	adbLinkEvery = 60 * time.Second // the longest a state goes unconfirmed
-	// adbLinkErrorEvery spaces probes out while the link is in error. The
-	// usual error is adbd showing "Allow USB debugging?" for wanctl's key (a
-	// plain `adb tcpip` port), and every probe raises that dialog again.
+	// adbLinkErrorEvery spaces probes out while adbd is asking the owner to
+	// allow wanctl's key (every probe raises that dialog again) or failing in
+	// some other way a minute will not change.
 	adbLinkErrorEvery = 5 * time.Minute
 )
 
@@ -78,7 +78,7 @@ func (a *Agent) watchADBLink(ctx context.Context) {
 			a.setADBLink(link)
 			lastPort, lastOn, kicked, lastProbe = port, on, false, time.Now()
 			every = adbLinkEvery
-			if link.State == elevate.LinkError {
+			if link.State == elevate.LinkConfirm || link.State == elevate.LinkError {
 				every = adbLinkErrorEvery
 			}
 		}

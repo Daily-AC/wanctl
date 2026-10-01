@@ -52,8 +52,11 @@ const (
 	// LinkUnpaired: adbd answered and refused wanctl's key — never paired, or
 	// the pairing lapsed. Pairing again is the fix.
 	LinkUnpaired = "unpaired"
-	// LinkError: anything else (a pending "Allow USB debugging?" dialog, an
-	// adbd that runs as an app uid); Reason says what.
+	// LinkConfirm: adbd is showing "Allow USB debugging?" for wanctl's key (a
+	// plain `adb tcpip` port); someone has to tap Allow on the phone.
+	LinkConfirm = "confirm"
+	// LinkError: anything else (an adbd that runs as an app uid, a connection
+	// that drops); Reason says what.
 	LinkError = "error"
 )
 
@@ -279,7 +282,7 @@ func (a *ADB) connect(ctx context.Context) (conn shellConn, port int, reused boo
 		if errors.Is(err, adb.ErrPublicKeyPending) {
 			// Distinct from "nothing is listening": someone has to tap Allow on
 			// the device, and trying other ports would bury that.
-			return nil, 0, false, &linkError{LinkError, fmt.Sprintf("adbd on port %d is waiting for someone to allow wanctl's key on the device screen", p)}
+			return nil, 0, false, &linkError{LinkConfirm, fmt.Sprintf("adbd on port %d is waiting for someone to allow wanctl's key on the device screen", p)}
 		}
 		if errors.Is(err, adb.ErrKeyRejected) {
 			// adbd answered on this port and refused the key. Its error

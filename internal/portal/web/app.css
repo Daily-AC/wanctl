@@ -901,6 +901,13 @@ pre code{background:none;padding:0;font-size:1em}
 /* Device-owned wireless debugging setup. Keep both fields readable on phones. */
 .adb-state{margin-top:14px;flex-wrap:wrap}
 .adb-state .dot{align-self:flex-start;margin-top:8px}
+/* 已连通用页面唯一的强调色和一个对勾，其余几态保持中性的空心圈（甲方 09-30：要一眼看出连上了）。 */
+.adb-ok{flex:none;align-self:flex-start;margin-top:1px}
+.adb-ok circle{fill:var(--blue)}
+.adb-state.on b{color:var(--blue)}
+.adb-why{margin-top:6px;font-size:12px;color:var(--ink-2)}
+.adb-why summary{cursor:pointer}
+.adb-why code{display:block;margin-top:4px;word-break:break-word}
 /* 窄屏上按钮掉到文字下面，别把说明挤成一指宽。 */
 .adb-state .txt{flex:1 1 220px}
 .adb-state .btn{margin-left:19px}

@@ -365,7 +365,7 @@ func TestADBProbeLinkStates(t *testing.T) {
 		{"shell", &stubConn{uid: "uid=2000(shell)"}, nil, LinkConnected},
 		{"nothing listening", nil, errors.New("connect: connection refused"), LinkNoPort},
 		{"key refused", nil, rejected, LinkUnpaired},
-		{"allow dialog up", nil, adb.ErrPublicKeyPending, LinkError},
+		{"allow dialog up", nil, adb.ErrPublicKeyPending, LinkConfirm},
 		{"app uid", &stubConn{uid: "uid=10601(u0_a601)"}, nil, LinkError},
 	} {
 		if got := newTestADB(t, 41031, c.conn, c.err).Probe(context.Background()).Link; got != c.want {

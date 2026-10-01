@@ -69,7 +69,8 @@ type State struct {
 }
 
 // ADBLink is the adb elevation channel's state as the device last probed it:
-// "off" (提权通道 switched off in the app), or one of elevate's Link states.
+// "off" (提权通道 switched off in the app), or one of elevate's Link states
+// (connected, no_port, unpaired, confirm, error).
 type ADBLink struct {
 	State  string `json:"state"`
 	Reason string `json:"reason,omitempty"`
