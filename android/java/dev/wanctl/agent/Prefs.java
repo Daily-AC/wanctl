@@ -148,6 +148,19 @@ final class Prefs {
         sp.edit().putBoolean("approval_phone", true).apply();
     }
 
+    /**
+     * The owner confirmed a test reminder rang and showed a banner. ColorOS and others switch
+     * banners, sound and vibration off per app for sideloaded apps, and nothing the app can read
+     * says so; only the owner can, which is what setup asks for.
+     */
+    boolean approvalAlertOk() {
+        return sp.getBoolean("approval_alert_ok", false);
+    }
+
+    void setApprovalAlertOk(boolean v) {
+        sp.edit().putBoolean("approval_alert_ok", v).apply();
+    }
+
     /** Empty means "let wanctl ask the property service", which yields e.g. "pa2353". */
     String deviceName() {
         return sp.getString(NAME, "").trim();
