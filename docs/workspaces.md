@@ -60,14 +60,14 @@ wanctl mcp --workspace-session
 ```
 
 Use this only when the host dedicates that MCP process to ONE conversation.
-Do not put multiple conversations through the same process. It cannot be used
-with `--http` and does not redirect the host's unrelated native tools.
+Do not put multiple conversations through the same process. It does not
+redirect the host's unrelated native tools.
 
 If this process inherits `WANCTL_WORKSPACE`, it starts bound to that reference.
 This also supports hosts that restart the MCP subprocess: the host retains the
 reference in its own conversation environment. The first device operation still
 checks access and workspace availability; startup never creates a replacement.
-Default stdio and HTTP do not read this environment variable as a binding.
+Plain `wanctl mcp` does not read this environment variable as a binding.
 
 Enter once with target and root. Then use the ordinary tools without target
 or workspace arguments, for example `wanctl_read({"path":"README.md"})` and
