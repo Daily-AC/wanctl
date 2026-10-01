@@ -1607,9 +1607,14 @@ func peerText(s string) string {
 }
 
 // Busy reports whether this agent is in the middle of work that restarting it
-// would destroy: an open shell session (its cwd, its environment, its history),
-// a background job whose output nobody has collected yet, or a live console
-// session. It is the gate the auto-updater consults before swapping the binary
+// would destroy: a command running in a shell session, a background job whose
+// output nobody has collected yet, or a live console session.
+//
+// An idle shell is not work. Sessions are never reaped, so counting every open
+// one made a single plain exec block self-update for the rest of the agent's
+// life, silently (5090 stayed on v0.17.0 through four releases, found 10-02).
+// A restart costs an idle session its cwd; the controller's next exec opens a
+// fresh one. It is the gate the auto-updater consults before swapping the binary
 // under itself.
 //
 // A relay it cannot currently reach is deliberately not busy. That state can
@@ -1622,7 +1627,7 @@ func (a *Agent) Busy() bool {
 	}
 	a.sessMu.Lock()
 	for _, sess := range a.sessions {
-		if !sess.Closed() {
+		if !sess.Closed() && sess.Running() {
 			a.sessMu.Unlock()
 			return true
 		}

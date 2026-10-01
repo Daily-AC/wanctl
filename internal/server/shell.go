@@ -126,6 +126,11 @@ type ShellSession struct {
 	// the lock that guards every session on the device. Reading it must never
 	// wait for the command running in this one.
 	closed atomic.Bool
+	// inUse counts commands running or queued on this session. The agent's
+	// update gate asks it: an idle shell loses only its cwd to a restart, and
+	// counting every open shell as work kept an agent that had run one exec
+	// from ever updating again.
+	inUse atomic.Int32
 
 	// container holds the shell and everything it starts, so cancelling a
 	// command is one kernel operation on a named unit rather than a guess at
@@ -316,6 +321,8 @@ func (s *ShellSession) writeCommand(command string) error {
 // Exec runs command in the session's current directory, streaming output to
 // out, and returns the exit code.
 func (s *ShellSession) Exec(command string, out io.Writer) (int, error) {
+	s.inUse.Add(1)
+	defer s.inUse.Add(-1)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.execLocked(command, out)
@@ -344,6 +351,8 @@ func (s *ShellSession) ExecInDir(command, cwd string, out io.Writer) (int, error
 // failed". A kill that failed is reported as such and never swallowed, because
 // the caller would otherwise be told the command stopped when it did not.
 func (s *ShellSession) ExecInDirContext(ctx context.Context, command, cwd string, out io.Writer) (int, error) {
+	s.inUse.Add(1)
+	defer s.inUse.Add(-1)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// A request that was already cancelled — the controller left while it sat
@@ -492,6 +501,10 @@ func currentDirCommand(goos, dataPath string) string {
 // agent asks this while holding the lock that guards every session on the
 // device, so waiting here for one session's command would stall all of them.
 func (s *ShellSession) Closed() bool { return s.closed.Load() }
+
+// Running reports whether a command is running or waiting on this session.
+// Like Closed it takes no lock.
+func (s *ShellSession) Running() bool { return s.inUse.Load() > 0 }
 
 // Close terminates the session: the shell and everything still running inside
 // its container. Killing only the shell would leave its children orphaned and
