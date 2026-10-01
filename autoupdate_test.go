@@ -294,6 +294,11 @@ func TestAutoUpdaterWaitsForIdle(t *testing.T) {
 	if tu.restarts != 0 {
 		t.Fatal("restart hook called while busy")
 	}
+	// A postponement is said once, with the count, not every five minutes.
+	tu.tick(t.Context())
+	if len(tu.logs) != 1 || !strings.Contains(tu.logs[0], "v2.0.0") || !strings.Contains(tu.logs[0], "第 1 次") {
+		t.Fatalf("logs after two busy checks = %q, want one line naming the version and the count", tu.logs)
+	}
 
 	busy.Store(false)
 	if _, done := tu.tick(t.Context()); !done {

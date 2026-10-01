@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"io"
 	"runtime"
 	"testing"
+	"time"
 
 	"wanctl/internal/server"
 )
@@ -21,15 +23,28 @@ func TestBusyCoversEveryKindOfWork(t *testing.T) {
 		t.Fatal("a fresh agent with nothing running reads as busy")
 	}
 
-	t.Run("an open shell session", func(t *testing.T) {
+	t.Run("a shell session runs a command", func(t *testing.T) {
 		sess, err := server.NewShellSession("/bin/sh")
 		if err != nil {
 			t.Fatal(err)
 		}
 		a.sessions["SHA256:controller"] = sess
-		if !a.Busy() {
-			t.Fatal("an open shell session does not count as busy")
+		if a.Busy() {
+			t.Fatal("an idle shell session counts as busy")
 		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			sess.Exec("sleep 1", io.Discard)
+		}()
+		deadline := time.Now().Add(time.Second)
+		for !a.Busy() && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !a.Busy() {
+			t.Fatal("a command running in a shell session does not count as busy")
+		}
+		<-done
 		sess.Close()
 		// A closed session is history: its cwd and environment are already
 		// gone, so nothing is lost by restarting around it.
@@ -66,4 +81,27 @@ func TestBusyCoversEveryKindOfWork(t *testing.T) {
 			t.Fatal("an empty agent reads as busy")
 		}
 	})
+}
+
+// One plain exec leaves its shell session open for the next one, and nothing
+// reaps it. Counting that idle shell as busy postponed every self-update for
+// the rest of the agent's life (S17, 10-02: 5090 stuck on v0.17.0 since 09-30).
+// After the command finishes, the update gate must be open again.
+func TestSelfUpdateIsNotBlockedByAnIdleShellAfterExec(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/sh")
+	}
+	a := &Agent{sessions: map[string]*server.ShellSession{}, jobs: newJobStore()}
+	sess, err := server.NewShellSession("/bin/sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sess.Close)
+	a.sessions["SHA256:controller"] = sess
+	if code, err := sess.ExecInDir("echo hi", "", io.Discard); err != nil || code != 0 {
+		t.Fatalf("exec = %d, %v", code, err)
+	}
+	if a.Busy() {
+		t.Fatal("the agent stays busy after its one exec finished, so self-update is postponed forever")
+	}
 }
