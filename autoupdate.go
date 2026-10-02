@@ -176,6 +176,9 @@ func startAutoUpdate(ctx context.Context, version string, busy func() bool, rest
 	if real, err := filepath.EvalSymlinks(self); err == nil {
 		self = real
 	}
+	// The binary this agent replaced last time is no longer running by now,
+	// unless a supervisor still is (see replaceBinary on Windows).
+	removeReplacedBinaries(self)
 	u := newAutoUpdater(self, version, busy, restart)
 	go u.run(ctx)
 	return u
