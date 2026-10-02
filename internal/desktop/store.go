@@ -59,7 +59,9 @@ func (s *Store) Put(peer string, snap protocol.DesktopSnapshot, now time.Time) (
 		return snap, errors.New("desktop snapshot capacity reached")
 	}
 	snap.ID = NewID()
-	snap.CapturedAt = now.UnixMilli()
+	if snap.CapturedAt == 0 {
+		snap.CapturedAt = now.UnixMilli()
+	}
 	entries := append(s.peers[peer], stored{snapshot: snap})
 	if len(entries) > snapshotsPerController {
 		entries = entries[len(entries)-snapshotsPerController:]

@@ -129,6 +129,7 @@ type fakeBackend struct {
 	beginHuman               bool
 	onPress                  func()
 	onCheck                  func()
+	failRelease              bool
 	failPress                bool
 }
 
@@ -167,6 +168,9 @@ func (f *fakeBackend) input(down bool) error {
 			return errors.New("partial OS delivery")
 		}
 	} else {
+		if f.failRelease {
+			return errors.New("cannot send key up")
+		}
 		f.released++
 		f.held--
 	}
@@ -197,7 +201,13 @@ func TestHumanStopBeforeDuringTypeWaitAndHeldKeys(t *testing.T) {
 				f.onPress = func() { sig.HumanInput(false) }
 			case "wait":
 				actions[0] = protocol.DesktopAction{Type: "wait", Millis: 5000}
-				f.onCheck = func() { sig.HumanInput(false) }
+				checks := 0
+				f.onCheck = func() {
+					checks++
+					if checks == 5 {
+						sig.HumanInput(false)
+					}
+				}
 			}
 			start := time.Now()
 			res := (Engine{Backend: f, Signal: sig}).Run(context.Background(), "controller", example(), actions)
@@ -257,5 +267,41 @@ func TestFocusChangePreventsTypingAndCoveredClick(t *testing.T) {
 		if strings.Contains(string(raw), "SECRET") {
 			t.Fatal("result leaked input")
 		}
+	}
+}
+
+func TestHumanStopRemainsExplicitWhenReleaseFails(t *testing.T) {
+	f := fake()
+	sig := NewSignal()
+	f.failRelease = true
+	f.onPress = func() { sig.HumanInput(false) }
+	res := (Engine{Backend: f, Signal: sig}).Run(context.Background(), "controller", example(), []protocol.DesktopAction{{Type: "key", Key: "ctrl+l"}})
+	if res.Status != "unknown" || res.Error != protocol.DesktopHumanInput || !strings.Contains(res.Warning, "release held input") {
+		t.Fatalf("%+v", res)
+	}
+}
+
+func TestFocusStolenMidTypeStopsRemainingCharacters(t *testing.T) {
+	f := fake()
+	f.onPress = func() { f.foreground.ID = "unexpected-window" }
+	res := (Engine{Backend: f}).Run(context.Background(), "controller", example(), []protocol.DesktopAction{{Type: "type", Text: "first then stop"}, {Type: "click", X: 10, Y: 10}})
+	if res.Status != "partial" || res.Completed != 0 || f.pressed != 1 || f.released != 1 || f.moves != 0 || !strings.Contains(res.Error, "foreground window changed") {
+		t.Fatalf("%+v presses=%d releases=%d", res, f.pressed, f.released)
+	}
+}
+
+func TestExplicitFocusChangesGuardAndLaunchReportsStages(t *testing.T) {
+	f := fake()
+	snap := example()
+	other := protocol.DesktopWindow{ID: "other", PID: 8, Title: "Intended editor", ElevationKnown: true}
+	snap.Windows = append(snap.Windows, other)
+	res := (Engine{Backend: f}).Run(context.Background(), "controller", snap, []protocol.DesktopAction{{Type: "focus", PID: 8}, {Type: "type", Text: "OK"}})
+	if res.Status != "completed" || res.Completed != 2 || f.pressed != 2 || f.foreground.ID != "other" {
+		t.Fatalf("%+v", res)
+	}
+	f = fake()
+	res = (Engine{Backend: f}).Run(context.Background(), "controller", example(), []protocol.DesktopAction{{Type: "launch", Program: "fake-program"}})
+	if res.Status != "completed" || len(res.Actions) != 1 || res.Actions[0].PID != 7 || !res.Actions[0].WindowAppeared || !res.Actions[0].Foreground {
+		t.Fatalf("%+v", res)
 	}
 }

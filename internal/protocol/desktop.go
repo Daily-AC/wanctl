@@ -86,6 +86,7 @@ type DesktopResult struct {
 	RequestID   string                `json:"request_id,omitempty"`
 	Status      string                `json:"status"` // completed, rejected, partial, interrupted, unknown
 	Error       string                `json:"error,omitempty"`
+	Warning     string                `json:"warning,omitempty"` // cleanup uncertainty; never suppresses the human-input stop result
 	Completed   int                   `json:"completed"`
 	FailedIndex int                   `json:"failed_index"` // -1 when no action failed
 	Actions     []DesktopActionResult `json:"actions,omitempty"`
