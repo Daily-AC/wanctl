@@ -170,3 +170,42 @@ func TestDesktopMismatchRefusesCoordinateContract(t *testing.T) {
 		t.Fatal("accepted resized/mismatched image")
 	}
 }
+
+func TestDesktopCancellationClosesStreamAndDoesNotReplay(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered, closed := make(chan struct{}), make(chan struct{})
+	var dials atomic.Int32
+	dial := func(context.Context) (net.Conn, error) {
+		dials.Add(1)
+		c, d := net.Pipe()
+		go func() {
+			defer d.Close()
+			defer close(closed)
+			_, _ = protocol.ReadMessage(d)
+			close(entered)
+			_, _ = protocol.ReadMessage(d)
+		}()
+		return c, nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := desktopCallWithDial(ctx, "device", "act", "", protocol.DesktopRequest{ScreenshotID: "id", Actions: []protocol.DesktopAction{{Type: "wait", Millis: 10000}}}, dial)
+		done <- err
+	}()
+	<-entered
+	cancel()
+	select {
+	case err := <-done:
+		var lost *DesktopStateUnknownError
+		if !errors.As(err, &lost) {
+			t.Fatalf("cancelled act must remain unknown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled client kept waiting")
+	}
+	<-closed
+	if dials.Load() != 1 {
+		t.Fatal("cancelled call reconnected")
+	}
+}
