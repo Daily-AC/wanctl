@@ -40,6 +40,9 @@ func sendNative(in *winInput) error {
 	return nil
 }
 func (b *nativeBackend) Move(p protocol.Point) error {
+	if _, err := b.uncoveredRoot(p); err != nil {
+		return err
+	}
 	r := b.bounds
 	if r.Width <= 0 || r.Height <= 0 {
 		return errors.New("invalid virtual desktop geometry")

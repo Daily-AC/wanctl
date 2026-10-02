@@ -48,6 +48,7 @@ type nativeBackend struct {
 	layout          string
 	bounds          protocol.Rect
 	keyScans        map[uint16]uintptr
+	monitors        []protocol.DesktopMonitor
 }
 
 func utf16ptr(s string) *uint16 { p, _ := windows.UTF16PtrFromString(s); return p }
@@ -147,6 +148,7 @@ func (b *nativeBackend) Check(layout string) error {
 		}
 		b.layout = s.Layout
 		b.bounds = s.Source
+		b.monitors = s.Monitors
 		b.lastLayoutCheck = time.Now()
 	}
 	if b.layout != layout {
@@ -208,11 +210,44 @@ func (b *nativeBackend) Windows() ([]protocol.DesktopWindow, error) {
 	}
 	return state.result, nil
 }
-func (b *nativeBackend) Hit(p protocol.Point) (protocol.DesktopWindow, error) {
+func (b *nativeBackend) uncoveredRoot(p protocol.Point) (uintptr, error) {
 	hwnd := windowFromPoint(int32(p.X), int32(p.Y))
 	hwnd, _, _ = user32.NewProc("GetAncestor").Call(hwnd, 2) // GA_ROOT
+	var pid uint32
+	user32.NewProc("GetWindowThreadProcessId").Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	if pid == windows.GetCurrentProcessId() {
+		// The excluded banner must not make the screen below it permanently
+		// unclickable. Move it to the opposite edge BEFORE hit testing again;
+		// it stays visible, excluded from capture, and never becomes active.
+		var rect winRect
+		if callOK(user32.NewProc("GetWindowRect"), hwnd, uintptr(unsafe.Pointer(&rect))) != nil {
+			return 0, errors.New("cannot move indicator away from target")
+		}
+		for _, m := range b.monitors {
+			if Contains(m.Rect, p) {
+				y := m.Rect.Y + 12
+				if int(rect.Top) < m.Rect.Y+m.Rect.Height/2 {
+					y = m.Rect.Y + m.Rect.Height - int(rect.Bottom-rect.Top) - 12
+				}
+				if err := callOK(user32.NewProc("SetWindowPos"), hwnd, ^uintptr(0), uintptr(rect.Left), uintptr(y), 0, 0, 0x0011); err != nil {
+					return 0, errors.New("cannot move indicator away from target")
+				}
+				break
+			}
+		}
+		hwnd = windowFromPoint(int32(p.X), int32(p.Y))
+		hwnd, _, _ = user32.NewProc("GetAncestor").Call(hwnd, 2)
+	}
+	return hwnd, nil
+}
+func (b *nativeBackend) Hit(p protocol.Point) (protocol.DesktopWindow, error) {
+	hwnd, err := b.uncoveredRoot(p)
+	if err != nil {
+		return protocol.DesktopWindow{}, err
+	}
 	return windowInfo(hwnd)
 }
+
 func windowHandle(w protocol.DesktopWindow) (uintptr, error) {
 	n, err := strconv.ParseUint(w.ID, 16, 64)
 	if err != nil {
