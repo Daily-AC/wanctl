@@ -59,3 +59,41 @@ func TestCancelledHTTPPollPreservesDataAndPrefetch(t *testing.T) {
 		})
 	}
 }
+
+// Out-of-order handler completion and an already-running timer callback must
+// not close a newer poll or shorten its grace period. Exercise the callbacks
+// directly so this ordering does not depend on scheduler timing.
+func TestControllerPollGraceIgnoresStaleCancellation(t *testing.T) {
+	r, s, sid := tunnelSession(t)
+	timerPending := func() bool { r.hmu.Lock(); defer r.hmu.Unlock(); return s.clientDisconnectTimer != nil }
+	first := r.controllerPollStarted(sid, s)
+	second := r.controllerPollStarted(sid, s)
+	r.controllerPollCancelled(sid, s, first)
+	if timerPending() {
+		t.Fatal("old handler armed a disconnect after a new poll arrived")
+	}
+	r.controllerPollCancelled(sid, s, second)
+	if !timerPending() {
+		t.Fatal("current cancelled poll did not arm grace period")
+	}
+	third := r.controllerPollStarted(sid, s)
+	if timerPending() {
+		t.Fatal("new poll did not clear the pending disconnect")
+	}
+	r.controllerPollCancelled(sid, s, third)
+	r.expireControllerDisconnect(sid, s, second)
+	if r.session(sid) != s || !timerPending() {
+		t.Fatal("old timer closed the session or erased the newer grace period")
+	}
+	r.expireControllerDisconnect(sid, s, third)
+	if r.session(sid) != nil {
+		t.Fatal("unrecovered controller session survived grace expiry")
+	}
+	for _, q := range []*sideQueue{s.toAgent, s.toClient} {
+		select {
+		case <-q.done:
+		default:
+			t.Fatal("expiry did not close both carrier directions")
+		}
+	}
+}
