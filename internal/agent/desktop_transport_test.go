@@ -65,6 +65,10 @@ func TestDesktopDisconnectOverRelayCarriers(t *testing.T) {
 					if controllerCarrier == "http" {
 						waitDesktopCondition(t, func() bool { return rig.clientPolls.Load() > 0 }, "controller has no pending /h/down")
 					}
+					cancelWithin := 2 * time.Second
+					if controllerCarrier == "http" && how != "close" {
+						cancelWithin = 3 * time.Second
+					}
 					started := time.Now()
 					switch how {
 					case "close":
@@ -85,13 +89,13 @@ func TestDesktopDisconnectOverRelayCarriers(t *testing.T) {
 					}
 					select {
 					case cancelled := <-rig.cancelled:
-						if elapsed := cancelled.Sub(started); elapsed > 2*time.Second {
+						if elapsed := cancelled.Sub(started); elapsed > cancelWithin {
 							t.Fatalf("runner cancellation took %v", elapsed)
 						} else {
 							t.Logf("runner cancelled after %v", elapsed)
 						}
-					case <-time.After(2 * time.Second):
-						t.Fatalf("runner context not cancelled within 2s after controller %s (calls=%d)", how, rig.calls.Load())
+					case <-time.After(cancelWithin):
+						t.Fatalf("runner context not cancelled within %s after controller %s (calls=%d)", cancelWithin, how, rig.calls.Load())
 					}
 					// Check without relying on the controller receiving a result after it
 					// left. Then redeliver the same request through a NEW real session.

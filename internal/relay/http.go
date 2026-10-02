@@ -775,6 +775,11 @@ type httpSession struct {
 	// socket closing ends the session.
 	clientSeen    time.Time
 	clientBridged bool
+	// A cancelled idle poll may be a transient carrier reset. Each new
+	// controller poll supersedes older cancellations and their grace timer.
+	// Both fields are guarded by hmu.
+	clientPollGeneration  uint64
+	clientDisconnectTimer *time.Timer
 	// closedAt is set when a peer closed the session gracefully. The session
 	// then stops accepting new bytes but stays in the registry, so the peer
 	// still reading it collects what is already queued instead of having the
@@ -1261,6 +1266,10 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 	if req.URL.Query().Get("role") == "agent" {
 		src = s.toAgent
 	}
+	var clientPoll uint64
+	if req.URL.Query().Get("role") != "agent" {
+		clientPoll = r.controllerPollStarted(req.URL.Query().Get("session"), s)
+	}
 	// Whatever this poll does, it may be the one that empties the last
 	// direction or releases the last hold on it, so it checks on the way out.
 	// Reaching EOF is not the only way a session becomes finished, and a check
@@ -1298,19 +1307,15 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 		// a mixed-version fleet keeps working.
 		data, closed, served = src.pollDrain(req.Context(), downPollWait)
 	}
-	// An abandoned idle controller poll is the carrier's disconnect signal.
-	// Close() cancels this poll before posting /h/close; an interrupted CLI
-	// can exit in that gap, and a killed controller never posts a close at
-	// all. Keeping the queues open leaves the device's read (and command)
-	// alive until the idle reaper. End it now, just as a WS leg closing does.
-	// Data-bearing responses remain replayable after carrier failures, and
-	// numbered prefetch polls can be cancelled normally by stopBatch. Neither
-	// cancellation says that the controller abandoned the session.
-	if req.Context().Err() != nil && len(data) == 0 &&
-		req.URL.Query().Get("role") != "agent" && !req.URL.Query().Has(httpconn.DownWantParam) {
-		r.closeHTTPSession(req.URL.Query().Get("session"), s)
+	// Allow downPoll's carrier-failure retry to reconnect before treating an
+	// abandoned idle poll as a disconnected controller. Data-bearing retries
+	// and deliberate numbered-prefetch cancellation keep their existing paths.
+	if req.Context().Err() != nil && len(data) == 0 && clientPoll != 0 &&
+		!req.URL.Query().Has(httpconn.DownWantParam) {
+		r.controllerPollCancelled(req.URL.Query().Get("session"), s, clientPoll)
 		return
 	}
+
 	if !served {
 		return // the reader gave up before this poll got its turn
 	}
