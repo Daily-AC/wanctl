@@ -22,7 +22,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -86,12 +85,8 @@ type Agent struct {
 	workspaceMu      sync.Mutex
 	workspaces       map[string]*workspace
 	workspacesClosed bool
-	// consoles counts live console sessions. An update that swapped the binary
-	// under an owner who is mid-approval would drop the connection they are
-	// answering on.
-	consoles atomic.Int64
-	jobs     *jobStore
-	elevator *elevate.Manager
+	jobs             *jobStore
+	elevator         *elevate.Manager
 
 	// phone is the stdio link to the Android app, nil unless the agent runs
 	// with Options.ApprovalsStdio; grants are late approvals, which any device
@@ -1514,9 +1509,6 @@ func (a *Agent) serveConsole(ctx context.Context, conn net.Conn) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	a.consoles.Add(1)
-	defer a.consoles.Add(-1)
-
 	var wmu sync.Mutex
 	send := func(m protocol.Message) error {
 		wmu.Lock()
@@ -1612,7 +1604,7 @@ func peerText(s string) string {
 
 // Busy reports whether this agent is in the middle of work that restarting it
 // would destroy: a command running in a shell session, a background job whose
-// output nobody has collected yet, or a live console session.
+// output nobody has collected yet, or a request waiting on the owner's answer.
 //
 // An idle shell is not work. Sessions are never reaped, so counting every open
 // one made a single plain exec block self-update for the rest of the agent's
@@ -1641,7 +1633,23 @@ func (a *Agent) Busy() bool {
 	if a.jobs != nil && a.jobs.runningCount() > 0 {
 		return true
 	}
-	return a.consoles.Load() > 0
+	return a.awaitingOwner()
+}
+
+// awaitingOwner reports whether an approval or a pairing request is waiting on
+// the owner. Restarting then would drop the request and the connection they
+// are answering it on.
+//
+// An open console is not by itself such a wait. The portal's approval watch
+// keeps one open on every device it watches, around the clock (ADR 0015), and
+// counting the connection kept those devices from ever updating (S19,
+// 2026-10-02). The watch dials again after the restart.
+func (a *Agent) awaitingOwner() bool {
+	if a.console == nil {
+		return false
+	}
+	st := a.console.State()
+	return len(st.Pending) > 0 || len(st.PendingPairings) > 0
 }
 
 // isPowerShell reports whether the resolved session shell is a PowerShell.

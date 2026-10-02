@@ -284,7 +284,7 @@ func (u *autoUpdater) tick(ctx context.Context) (time.Duration, bool) {
 		// exactly like an update that was never offered (S17, 10-02).
 		u.deferred++
 		if u.deferred == 1 || u.deferred%12 == 0 {
-			u.logf("wanctl: 新版本 %s 可用，agent 正忙（有命令、后台任务或控制台在用），推迟自动更新（第 %d 次）",
+			u.logf("wanctl: 新版本 %s 可用，agent 正忙（有命令或后台任务在跑，或有请求在等审批），推迟自动更新（第 %d 次）",
 				res.version, u.deferred)
 		}
 		return u.busyRetry, false

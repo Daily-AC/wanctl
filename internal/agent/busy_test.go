@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"wanctl/internal/console"
+	"wanctl/internal/policy"
 	"wanctl/internal/server"
 )
 
@@ -62,18 +64,6 @@ func TestBusyCoversEveryKindOfWork(t *testing.T) {
 		}
 	})
 
-	t.Run("a live console session", func(t *testing.T) {
-		b := &Agent{sessions: map[string]*server.ShellSession{}, jobs: newJobStore()}
-		b.consoles.Add(1)
-		if !b.Busy() {
-			t.Fatal("a live console session does not count as busy")
-		}
-		b.consoles.Add(-1)
-		if b.Busy() {
-			t.Fatal("busy after the console session ended")
-		}
-	})
-
 	// An agent assembled by a unit test without New has no job store; asking it
 	// whether it is busy must answer, not panic.
 	t.Run("an agent with no job store", func(t *testing.T) {
@@ -103,5 +93,77 @@ func TestSelfUpdateIsNotBlockedByAnIdleShellAfterExec(t *testing.T) {
 	}
 	if a.Busy() {
 		t.Fatal("the agent stays busy after its one exec finished, so self-update is postponed forever")
+	}
+}
+
+// The portal's approval watch keeps a console open on every device it watches,
+// around the clock (ADR 0015). Counting the connection as work kept each of
+// those devices busy, and so off every release, for as long as the watch ran
+// (S19, 10-02). What a console is for is an owner answering a request, and only
+// that wait is busy: once it is approved, denied or expired, the gate opens.
+// main.go hands exactly this method to the auto-updater, and
+// TestAutoUpdaterWaitsForIdle shows its next check installs once the gate is
+// open.
+func TestBusyFollowsWhatWaitsOnTheOwnerNotTheConsole(t *testing.T) {
+	a := newOptsAgent(t, Options{})
+	portal, msgs := openConsole(t, a)
+	nextIsState(t, portal, msgs) // the console is being served
+	if a.Busy() {
+		t.Fatal("an open console with nothing waiting on the owner counts as busy")
+	}
+
+	ask := func() (id string, answered <-chan policy.Decision) {
+		t.Helper()
+		ch := make(chan policy.Decision, 1)
+		go func() {
+			ch <- a.console.Ask(policy.Request{Kind: policy.KindExec, Cmd: "make deploy", Peer: "SHA256:ctl"})
+		}()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if p := a.console.State().Pending; len(p) == 1 {
+				return p[0].ID, ch
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatal("the approval request never became pending")
+		return "", nil
+	}
+	settled := func(answered <-chan policy.Decision, how string) {
+		t.Helper()
+		select {
+		case <-answered:
+		case <-time.After(15 * time.Second):
+			t.Fatalf("the request was never %s", how)
+		}
+		if a.Busy() {
+			t.Fatalf("still busy after the request was %s", how)
+		}
+	}
+
+	for _, verdict := range []string{"y", "n"} {
+		id, answered := ask()
+		if !a.Busy() {
+			t.Fatalf("a request waiting for approval (to be answered %q) does not count as busy", verdict)
+		}
+		a.console.Decide(id, verdict)
+		settled(answered, "answered "+verdict)
+	}
+
+	a.console.SetTimeout(console.MinTimeout)
+	_, answered := ask()
+	if !a.Busy() {
+		t.Fatal("a request waiting for approval does not count as busy")
+	}
+	settled(answered, "left to expire")
+
+	if _, err := a.console.AskPairNonBlocking("SHA256:newcontroller", "laptop", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !a.Busy() {
+		t.Fatal("a controller waiting to be paired does not count as busy")
+	}
+	a.console.DecidePair("SHA256:newcontroller", false)
+	if a.Busy() {
+		t.Fatal("still busy after the pairing was decided")
 	}
 }
