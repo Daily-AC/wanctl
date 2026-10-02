@@ -9,6 +9,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -27,7 +29,12 @@ public final class ApprovalActivity extends Activity {
     private static final int INK = Color.rgb(29, 29, 31), MUTED = Color.rgb(105, 105, 110);
     private static final int BLUE = Color.rgb(0, 102, 204), CANVAS = Color.rgb(250, 250, 252);
     private final Runnable onChange = this::render;
+    private final Handler main = new Handler(Looper.getMainLooper());
     private String id = "";
+    private TextView subtitle;
+    private boolean shownSlow;
+    /** Moves the countdown, and redraws once when a submission turns slow; nothing else. */
+    private final Runnable tick = this::tick;
     private LinearLayout body, footer;
 
     @Override
@@ -54,11 +61,13 @@ public final class ApprovalActivity extends Activity {
 
     @Override
     protected void onPause() {
-        ApprovalNotifier.listen(null);
+        ApprovalNotifier.unlisten(onChange);
+        main.removeCallbacksAndMessages(null);
         super.onPause();
     }
 
     private void render() {
+        main.removeCallbacksAndMessages(null);
         body.removeAllViews();
         footer.removeAllViews();
         footer.setVisibility(View.GONE);
@@ -67,8 +76,9 @@ public final class ApprovalActivity extends Activity {
             heading("找不到这条请求", "它可能已处理或已失效。");
             return;
         }
-        String status = ApprovalNotifier.status(k);
-        heading(ApprovalNotifier.title(k), ago(k.created) + (status == null ? "" : " · " + status));
+        String left = remaining(k);
+        subtitle = heading(ApprovalNotifier.title(k), ago(k.created) + (left.isEmpty() ? "" : " · " + left));
+        shownSlow = ApprovalNotifier.slow(id);
         if (k.pairing()) {
             body.addView(text("这个控制端第一次连接。信任之后它就能控制这台设备。", 15, MUTED));
             gap(8);
@@ -81,10 +91,90 @@ public final class ApprovalActivity extends Activity {
         row(from, "控制端", ApprovalNotifier.peerName(k));
         if (!k.peerFp.isEmpty()) row(from, "指纹", ApprovalNotifier.shortFingerprint(k.peerFp));
         String[] choices = ApprovalNotifier.choices(k);
+        String status = ApprovalNotifier.status(k);
         if (choices != null) {
+            if (status != null) outcome(status, false);
             footerButton(choices[0], true, () -> decide(k, "y"));
             footerButton(choices[1], false, () -> decide(k, "n"));
+        } else if (ApprovalNotifier.verdict(id) != null) {
+            submitting();
+        } else if (status != null) {
+            outcome(status, true);
+            footerButton("完成", false, this::finish);
         }
+        // The countdown and the 「提交中」 deadline both move with the clock.
+        if (!left.isEmpty() || ApprovalNotifier.verdict(id) != null && !shownSlow)
+            main.postDelayed(tick, 1000);
+    }
+
+    private void tick() {
+        ApprovalNotifier.Card k = ApprovalNotifier.card(this, id);
+        if (k == null) return;
+        if (ApprovalNotifier.verdict(id) != null && ApprovalNotifier.slow(id) && !shownSlow) {
+            render();
+            return;
+        }
+        String left = remaining(k);
+        subtitle.setText(ago(k.created) + (left.isEmpty() ? "" : " · " + left));
+        if (!left.isEmpty() || ApprovalNotifier.verdict(id) != null && !shownSlow)
+            main.postDelayed(tick, 1000);
+    }
+
+    /**
+     * The answer is on its way. Until the final card comes back the button stays where the owner
+     * tapped, saying so; past SUBMIT_SLOW_MS the screen says it has not arrived and offers to
+     * send it again, instead of a spinner that never ends.
+     */
+    private void submitting() {
+        if (!ApprovalNotifier.slow(id)) {
+            Button b = footerButton("提交中…", true, () -> {});
+            b.setEnabled(false);
+            b.setAlpha(.6f);
+            return;
+        }
+        Prefs prefs = new Prefs(this);
+        if (!prefs.enabled()) {
+            outcome("还没送达：wanctl 已停用", false);
+            footer.addView(note("启用后会把这个决定送出去。"));
+            footerButton("启用并重新提交", true, () -> {
+                prefs.setEnabled(true);
+                KeeperJob.schedule(this);
+                AgentService.retry(this, id);
+                render();
+            });
+            return;
+        }
+        outcome("还没送达", false);
+        footer.addView(note("手机可能没联网，或 wanctl 没连上服务。联网后会自动重发，也可以现在再发一次。"));
+        footerButton("重新提交", true, () -> {
+            AgentService.retry(this, id);
+            render();
+        });
+    }
+
+    /** The result in words the owner cannot miss, above the buttons. */
+    private void outcome(String text, boolean done) {
+        footer.setVisibility(View.VISIBLE);
+        TextView t = text(text, done ? 20 : 17, INK);
+        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(0, dp(4), 0, dp(12));
+        footer.addView(t);
+    }
+
+    private TextView note(String text) {
+        TextView t = text(text, 14, MUTED);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(0, 0, 0, dp(8));
+        return t;
+    }
+
+    /** 「还剩 2:35」 for a card still waiting, empty otherwise. */
+    static String remaining(ApprovalNotifier.Card k) {
+        if (!ApprovalNotifier.PENDING.equals(k.state) || k.expires == 0) return "";
+        long s = (k.expires - System.currentTimeMillis()) / 1000;
+        if (s <= 0) return "";
+        return String.format(java.util.Locale.ROOT, "还剩 %d:%02d", s / 60, s % 60);
     }
 
     /** Answers only what is on screen: the card may have moved on while it was open. */
@@ -97,6 +187,7 @@ public final class ApprovalActivity extends Activity {
         boolean ignore = ApprovalNotifier.EXPIRED.equals(now.state) && "n".equals(verdict);
         AgentService.decide(this, id, verdict);
         if (ignore) finish();
+        else render();
     }
 
     private static String ago(long at) {
@@ -178,13 +269,15 @@ public final class ApprovalActivity extends Activity {
         body.addView(new View(this), new LinearLayout.LayoutParams(1, dp(size)));
     }
 
-    private void heading(String title, String detail) {
+    private TextView heading(String title, String detail) {
         TextView h = text(title, 24, INK);
         h.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         body.addView(h);
         gap(8);
-        body.addView(text(detail, 15, MUTED));
+        TextView d = text(detail, 15, MUTED);
+        body.addView(d);
         gap(16);
+        return d;
     }
 
     private LinearLayout group(String label) {
@@ -249,10 +342,12 @@ public final class ApprovalActivity extends Activity {
         return b;
     }
 
-    private void footerButton(String label, boolean primary, Runnable action) {
+    private Button footerButton(String label, boolean primary, Runnable action) {
         footer.setVisibility(View.VISIBLE);
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
         p.topMargin = dp(4);
-        footer.addView(button(label, primary, action), p);
+        Button b = button(label, primary, action);
+        footer.addView(b, p);
+        return b;
     }
 }
