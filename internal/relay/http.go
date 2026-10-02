@@ -1298,6 +1298,19 @@ func (r *Relay) handleHDown(w http.ResponseWriter, req *http.Request) {
 		// a mixed-version fleet keeps working.
 		data, closed, served = src.pollDrain(req.Context(), downPollWait)
 	}
+	// An abandoned idle controller poll is the carrier's disconnect signal.
+	// Close() cancels this poll before posting /h/close; an interrupted CLI
+	// can exit in that gap, and a killed controller never posts a close at
+	// all. Keeping the queues open leaves the device's read (and command)
+	// alive until the idle reaper. End it now, just as a WS leg closing does.
+	// Data-bearing responses remain replayable after carrier failures, and
+	// numbered prefetch polls can be cancelled normally by stopBatch. Neither
+	// cancellation says that the controller abandoned the session.
+	if req.Context().Err() != nil && len(data) == 0 &&
+		req.URL.Query().Get("role") != "agent" && !req.URL.Query().Has(httpconn.DownWantParam) {
+		r.closeHTTPSession(req.URL.Query().Get("session"), s)
+		return
+	}
 	if !served {
 		return // the reader gave up before this poll got its turn
 	}
