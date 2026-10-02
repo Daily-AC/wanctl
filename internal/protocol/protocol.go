@@ -84,6 +84,8 @@ const (
 // Message is the JSON body of a FrameJSON frame. Fields are reused across kinds;
 // only those relevant to a given Kind are populated.
 type Message struct {
+	Desktop        *DesktopRequest  `json:"desktop,omitempty"`
+	DesktopResult  *DesktopResult   `json:"desktop_result,omitempty"`
 	Kind           string           `json:"kind"`
 	Action         string           `json:"action,omitempty"`
 	WorkspaceID    string           `json:"workspace_id,omitempty"`
