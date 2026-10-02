@@ -1,5 +1,25 @@
 [
   {
+    "name": "wanctl_act",
+    "params": [
+      {
+        "name": "actions",
+        "type": "array",
+        "required": true
+      },
+      {
+        "name": "screenshot_id",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "target",
+        "type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
     "name": "wanctl_edit",
     "params": [
       {
@@ -318,6 +338,16 @@
   {
     "name": "wanctl_screenshot",
     "params": [
+      {
+        "name": "region",
+        "type": "array",
+        "required": false
+      },
+      {
+        "name": "screenshot_id",
+        "type": "string",
+        "required": false
+      },
       {
         "name": "target",
         "type": "string",
