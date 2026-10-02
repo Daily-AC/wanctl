@@ -96,6 +96,8 @@ func (e *UnsupportedError) Error() string {
 // kind they never chose.
 func unsupportedWhat(kind string) string {
 	switch kind {
+	case protocol.KindDesktop:
+		return "desktop act"
 	case protocol.KindWorkspace:
 		return "workspaces"
 	case protocol.KindFileWrite:

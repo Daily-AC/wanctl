@@ -24,11 +24,11 @@ const Headline = "the external harness for a web AI"
 // heads the Markdown contract, because a reader meeting the command list for
 // the first time needs to know what the list is a list of.
 const Product = `wanctl is ` + Headline + `. ` +
-	`The AI in a chat window is the brain; wanctl gives it hands (exec, background jobs, read, edit, push/pull), ` +
+	`The AI in a chat window is the brain; wanctl gives it hands (exec, desktop act, background jobs, read, edit, push/pull), ` +
 	`eyes (command output, read, logs, screenshot), memory across turns (workspace references, job ledger) ` +
 	`and safety rails (pairing, device identity, policy rules). Together they form one agent.` + "\n\n" +
 	`A trust layer — relay, pairing, pinned device identity, device-side policy rules — decides who may drive which machine, ` +
-	`and on top of it sits a deliberately small set of primitives: run a command, run a background job, read a file, patch a file, move bytes, read the log. ` +
+	`and on top of it sits a deliberately small set of primitives: run a command, operate a desktop, run a background job, read a file, patch a file, move bytes, read the log. ` +
 	`There is no IDE, no browser driver and no second way to do any of these; anything richer is built out of them by the agent.`
 
 // Type names for Param.Type. They are the JSON Schema types the MCP tools
