@@ -161,6 +161,8 @@ func New(cfg Config) *Server {
 	}
 	if cfg.Identity != nil && cfg.RelayDialURL != "" && cfg.PortalToken != "" {
 		s.dialer = client.NewWith(cfg.Identity, cfg.Known, cfg.RelayDialURL, cfg.PortalToken, cfg.Transport)
+		// Devices log this name in their activity; the container's hostname is a hash.
+		s.dialer.SetName("wanctl 门户")
 	}
 	return s
 }

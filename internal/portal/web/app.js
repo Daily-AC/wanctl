@@ -66,6 +66,7 @@
       noTrusted: 'No controller is trusted yet.',
       noRules: 'No rules — every request asks you.',
       noLog: 'No activity yet.',
+      connected: 'Connected',
       noTokens: 'No tokens yet.',
       noInvites: 'No invites yet.',
       noFriends: 'No friends yet.',
@@ -216,6 +217,7 @@
       noTrusted: '还没有信任任何控制端。',
       noRules: '还没有规则，每条请求都会问你。',
       noLog: '还没有活动记录。',
+      connected: '建立连接',
       noTokens: '还没有令牌。',
       noInvites: '还没有邀请。',
       noFriends: '还没有好友。',
@@ -1158,7 +1160,7 @@
         // 退出码由设备控制，必须转义（审计 2026-08-28, SEC-C-01）
         var exit = (e.exit === 0 || e.exit) ? esc('' + e.exit) : '—';
         return '<tr><td>' + esc(fmt(e.ts)) + '</td>' +
-          '<td class="mono">' + esc(e.detail || '—') +
+          '<td class="mono">' + esc(e.detail || (e.type === 'connect' && dec === 'accepted' ? t().connected : '—')) +
             (e.cwd ? '<span class="sub">' + esc(e.cwd) + '</span>' : '') + '</td>' +
           '<td>' + esc(cut(e.peer_name || e.peer_fp || '—', 20)) + '</td>' +
           '<td' + (/den/i.test(dec) ? ' class="no"' : '') + '>' + esc(dec || '—') + '</td>' +

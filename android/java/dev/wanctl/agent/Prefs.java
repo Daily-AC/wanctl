@@ -161,6 +161,18 @@ final class Prefs {
         sp.edit().putBoolean("approval_alert_ok", v).apply();
     }
 
+    /**
+     * The approval-phone guide opens by itself once, when the phone first becomes the approval
+     * phone; after that an unconfirmed reminder is a dot on 设置, not a page in the way.
+     */
+    boolean approvalGuideShown() {
+        return sp.getBoolean("approval_guide_shown", false);
+    }
+
+    void setApprovalGuideShown() {
+        sp.edit().putBoolean("approval_guide_shown", true).apply();
+    }
+
     /** Empty means "let wanctl ask the property service", which yields e.g. "pa2353". */
     String deviceName() {
         return sp.getString(NAME, "").trim();
