@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"wanctl/internal/client"
@@ -20,6 +22,8 @@ import (
 func cmdScreenshot(ctx context.Context, args []string) error { return cmdDesktop(ctx, args, false) }
 func cmdAct(ctx context.Context, args []string) error        { return cmdDesktop(ctx, args, true) }
 func cmdDesktop(ctx context.Context, args []string, act bool) error {
+	ctx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 	name := "screenshot"
 	if act {
 		name = "act"
