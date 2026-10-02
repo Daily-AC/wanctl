@@ -37,7 +37,7 @@ First launch follows four steps:
 1. Follow the animated guide to allow running notifications and background activity. You may skip these, but screen-off connections and reboot recovery can be restricted until permissions are completed in Settings.
 2. Choose the **official service** (the same addresses as the CLI, currently invite-only) or enter your self-hosted relay and portal addresses.
 3. Tap **使用 GitHub 登录**, authorize in the browser, then tap **Return to wanctl**. GitHub Mobile handles the link only if it supports the authorization URL. Self-hosted SSO portals have an alternative sign-in entry; older portals can still use a one-time enrollment code.
-4. Tap **启用**. Home shows connection state and one enable/disable button. Configuration persists across launches.
+4. Tap 「需要处理：wanctl 未启用」 to enable it. From then on home shows one thing at a time: with requests waiting, the oldest one fills the screen with 允许一次 and 拒绝 on the card and 「还有 N 条」 below when there are more; otherwise the connection state, and under it at most the most urgent 「需要处理」, one tap from its fix. Configuration persists across launches.
 
 Settings contains the device name, boot behavior, notification/background permissions, instance, sign-in, logs and updates. Switching instances stops the connection and clears the old login. Elevation stays off until explicitly enabled, at which point the app explains the required system settings.
 

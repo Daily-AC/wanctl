@@ -190,10 +190,12 @@ final class ApprovalNotifier {
     }
 
     /**
-     * What the home screen lists: requests still open, those the owner just answered (until the
-     * final card has lingered as long as its notification does), and expired ones whose
-     * notification is still up. Newest first. A pending card the owner swiped out of the shade
-     * stays here: the shade is not the only way in any more.
+     * What the home screen lists: requests still open, those the owner answered whose final card
+     * has not come back yet, and expired ones whose notification is still up. Oldest first, the
+     * order they are worked through. A pending card the owner swiped out of the shade stays here:
+     * the shade is not the only way in any more. A final card leaves the list the moment it
+     * arrives; its result stays in the notification and on the detail screen (v0.20.3 kept it here
+     * for a minute and nothing redrew the screen when that minute was up).
      */
     static List<Card> open(Context c) {
         Map<String, Card> all = new LinkedHashMap<>();
@@ -213,22 +215,20 @@ final class ApprovalNotifier {
         for (Card k : all.values()) {
             boolean showing = active(c, k.id) != null;
             boolean keep;
-            if (TEST.equals(k.state)) {
+            if (DONE.equals(k.state) || TEST.equals(k.state)) {
                 keep = false;
             } else if (verdict(k.id) != null) {
                 keep = true;
             } else if (PENDING.equals(k.state)) {
                 keep = k.expires == 0 || k.expires > now || showing;
-            } else if (EXPIRED.equals(k.state)) {
-                keep = showing && !k.pairing();
             } else {
-                keep = now - k.seen < DONE_LINGER_MS;
+                keep = showing && !k.pairing();
             }
             if (keep) {
                 out.add(k);
             }
         }
-        out.sort((a, b) -> Long.compare(b.created, a.created));
+        out.sort((a, b) -> Long.compare(a.created, b.created));
         return out;
     }
 

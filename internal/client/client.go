@@ -74,6 +74,7 @@ type Client struct {
 	token         string
 	transport     string       // "ws" (default) or "http"
 	label         string       // self-description sent at pairing (WANCTL_LABEL)
+	name          string       // sent as the controller's name; the hostname when empty
 	httpc         *http.Client // relay HTTP client
 	workspaceLink *WorkspaceLink
 }
@@ -81,6 +82,11 @@ type Client struct {
 // SetLabel overrides the controller's self-description (who/why), shown to the
 // device owner at pairing time and in audit.
 func (c *Client) SetLabel(l string) { c.label = l }
+
+// SetName replaces the hostname a device records as this controller's name, for
+// a controller whose hostname means nothing to the owner (the portal's is a
+// container ID).
+func (c *Client) SetName(n string) { c.name = n }
 
 // New loads identity + config from env (WANCTL_RELAY, WANCTL_TOKEN), falling
 // back to the persisted relay setting.
@@ -551,7 +557,10 @@ func (c *Client) sendHello(ctx context.Context, nc net.Conn, target, helloKind s
 		dr.Conn.Close()
 		return nil, &TrustRequiredError{Target: target, Fingerprint: dr.PeerFP}
 	}
-	host, _ := os.Hostname()
+	host := c.name
+	if host == "" {
+		host, _ = os.Hostname()
+	}
 	if err := protocol.WriteMessage(dr.Conn, protocol.Message{Kind: helloKind, Role: "client", Name: host, Label: c.label, Version: "1"}); err != nil {
 		dr.Conn.Close()
 		return nil, err
