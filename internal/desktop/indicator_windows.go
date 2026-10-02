@@ -195,6 +195,7 @@ func (b *nativeBackend) Begin(controller string, sig *Signal) (func(), error) {
 		b.banner.Store(banners[0])
 		b.monitorRequired.Store(true)
 		ready <- nil
+		lastRaise := time.Now()
 		ticker := time.NewTicker(5 * time.Millisecond)
 		defer ticker.Stop()
 		for {
@@ -210,6 +211,21 @@ func (b *nativeBackend) Begin(controller string, sig *Signal) (func(), error) {
 				} // WM_QUIT must fail closed.
 				user32.NewProc("TranslateMessage").Call(uintptr(unsafe.Pointer(&msg)))
 				user32.NewProc("DispatchMessageW").Call(uintptr(unsafe.Pointer(&msg)))
+			}
+			if time.Since(lastRaise) >= 50*time.Millisecond {
+				for _, hwnd := range banners {
+					// A newly launched fullscreen/topmost application can otherwise cover
+					// an earlier topmost window. Reassert order without changing focus or
+					// position (Hit may have moved the banner away from a click target).
+					if callOK(user32.NewProc("SetWindowPos"), hwnd, ^uintptr(0), 0, 0, 0, 0, 0x0013) != nil {
+						return
+					}
+					visible, _, _ := user32.NewProc("IsWindowVisible").Call(hwnd)
+					if visible == 0 {
+						return
+					}
+				}
+				lastRaise = time.Now()
 			}
 			b.monitorAlive.Store(time.Now().UnixMilli())
 			select {
