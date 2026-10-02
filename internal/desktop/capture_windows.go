@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/jpeg"
 	"math"
+	"time"
 	"unsafe"
 
 	"wanctl/internal/protocol"
@@ -73,6 +74,7 @@ func (b *nativeBackend) Capture(crop *protocol.Rect) (protocol.DesktopSnapshot, 
 	if err = jpeg.Encode(&out, img, &jpeg.Options{Quality: 82}); err != nil {
 		return snap, nil, errors.New("could not encode desktop JPEG")
 	}
+	snap.CapturedAt = time.Now().UnixMilli()
 	return snap, out.Bytes(), nil
 }
 func captureGDI(source protocol.Rect, width, height int) (*image.RGBA, error) {

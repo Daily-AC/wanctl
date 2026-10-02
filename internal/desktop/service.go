@@ -27,6 +27,10 @@ type Service struct {
 
 func (s *Service) Do(ctx context.Context, peer, label, action, requestID string, req *protocol.DesktopRequest, run Runner) (protocol.DesktopResult, []byte) {
 	res := protocol.DesktopResult{RequestID: requestID, Status: "rejected", FailedIndex: -1}
+	if err := ctx.Err(); err != nil {
+		res.Error = "desktop request cancelled before execution"
+		return res, nil
+	}
 	if err := Validate(action, req); err != nil {
 		res.Error = err.Error()
 		return res, nil
@@ -37,6 +41,10 @@ func (s *Service) Do(ctx context.Context, peer, label, action, requestID string,
 	}
 	if !s.busy.TryLock() {
 		res.Error = "desktop busy; another call is in progress"
+		if action == "act" {
+			res.Status = "unknown"
+			res.Error = "state unknown: desktop busy; an earlier call may be partially completed; this request was not queued or replayed"
+		}
 		return res, nil
 	}
 	defer s.busy.Unlock()
@@ -110,3 +118,12 @@ func isFullSnapshot(s protocol.DesktopSnapshot) bool {
 }
 
 var ErrWindowsOnly = errors.New(protocol.DesktopWindowsOnly)
+
+// Busy lets the agent defer its ordinary self-update until input has stopped.
+func (s *Service) Busy() bool {
+	if !s.busy.TryLock() {
+		return true
+	}
+	s.busy.Unlock()
+	return false
+}

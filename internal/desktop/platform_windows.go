@@ -38,7 +38,7 @@ func executeJob(ctx context.Context, job Job) (res protocol.DesktopResult, data 
 	}
 	backend := &nativeBackend{}
 	var source *protocol.Rect
-	if job.Reference != nil {
+	if job.Reference != nil && job.Action == "screenshot" {
 		if err := backend.Check(job.Reference.Layout); err != nil {
 			res.Error = err.Error()
 			return

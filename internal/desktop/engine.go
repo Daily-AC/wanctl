@@ -121,6 +121,11 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 	clean, err := b.Begin(controller, sig)
 	if err != nil {
 		res.Error = "desktop safety monitor unavailable: " + err.Error()
+		if sig.human.Load() {
+			res.Status = "interrupted"
+			res.Warning = res.Error
+			res.Error = protocol.DesktopHumanInput
+		}
 		return
 	}
 	defer clean()
@@ -144,7 +149,14 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 		<-watchDone
 		if err := input.release(); err != nil {
 			res.Status = "unknown"
+			res.Warning = err.Error()
 			res.Error = err.Error()
+		}
+		if sig.human.Load() {
+			if res.Status != "unknown" {
+				res.Status = "interrupted"
+			}
+			res.Error = protocol.DesktopHumanInput
 		}
 	}()
 	expected := snapshot.Foreground
