@@ -131,3 +131,28 @@ func TestOtherCaptureFailuresAreNotBlamedOnPermissions(t *testing.T) {
 		}
 	}
 }
+
+// powershell.exe is not DPI aware, so on a scaled display VirtualScreen comes
+// back in logical pixels and the capture is the top-left corner of the screen.
+// The script has to make the process aware first, and before it reads the size,
+// or the size it reads is still the scaled one.
+func TestWindowsCaptureDeclaresDPIAwarenessBeforeMeasuring(t *testing.T) {
+	script := windowsCapture(`C:\Temp\shot.png`)
+	measure := strings.Index(script, "VirtualScreen")
+	if measure < 0 {
+		t.Fatalf("script no longer reads VirtualScreen:\n%s", script)
+	}
+	for _, call := range []string{
+		"SetProcessDpiAwarenessContext([IntPtr](-4))", // per-monitor aware v2
+		"SetProcessDPIAware()",                        // fallback before Windows 10 1703
+	} {
+		at := strings.Index(script, "]::"+call)
+		if at < 0 {
+			t.Errorf("script does not call %s:\n%s", call, script)
+			continue
+		}
+		if at > measure {
+			t.Errorf("script calls %s after it reads VirtualScreen", call)
+		}
+	}
+}
