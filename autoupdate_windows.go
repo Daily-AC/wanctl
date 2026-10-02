@@ -27,7 +27,7 @@ func restartAgentForUpdate(self string, osArgs []string, lock *config.AgentLock)
 	// Detached (`wanctl` / `wanctl start`): nothing will restart us, so start
 	// the replacement the same way cmdStart does — same detach flags, same log
 	// file, and the flags this agent was given — and let it register itself.
-	// replaceBinary has already renamed the running .exe to .old, so this
+	// replaceBinary has already renamed the running .exe aside, so this
 	// process is unaffected and self now names the new file.
 	logPath, err := config.LogPath()
 	if err != nil {
