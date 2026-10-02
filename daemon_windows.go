@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"syscall"
 
@@ -37,6 +38,7 @@ func canTerminatePID(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
+	enableDebugPrivilege()
 	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(pid))
 	if err != nil {
 		return false
@@ -62,12 +64,42 @@ func detachSysProcAttr() *syscall.SysProcAttr {
 }
 
 // terminatePID kills the background agent.
+//
+// It opens the process for PROCESS_TERMINATE itself, the same open
+// canTerminatePID tries, instead of using os.FindProcess and Kill. Those open
+// the process without terminate access and then ask for it by duplicating the
+// handle, and that second access check ignores SeDebugPrivilege. A SYSTEM
+// agent's process grants administrators no terminate access, only the
+// privilege lets them in, so an elevated `wanctl update` passed the check and
+// its restart helper then failed with "DuplicateHandle: Access is denied",
+// leaving the old build serving (S17, S18; diagnosed on zyl 2026-10-02).
 func terminatePID(pid int) error {
-	p, err := os.FindProcess(pid)
+	enableDebugPrivilege()
+	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(pid))
 	if err != nil {
-		return err
+		return fmt.Errorf("open process %d: %w", pid, err)
 	}
-	return p.Kill()
+	defer windows.CloseHandle(h)
+	return windows.TerminateProcess(h, 1)
+}
+
+// enableDebugPrivilege switches on SeDebugPrivilege when this process's token
+// holds it. An elevated administrator's token does, but disabled, except in an
+// OpenSSH session; it is what opens a SYSTEM agent for termination. A token
+// without it is left as it is, and the open that follows fails.
+func enableDebugPrivilege() {
+	var token windows.Token
+	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_ADJUST_PRIVILEGES|windows.TOKEN_QUERY, &token); err != nil {
+		return
+	}
+	defer token.Close()
+	var luid windows.LUID
+	if err := windows.LookupPrivilegeValue(nil, windows.StringToUTF16Ptr("SeDebugPrivilege"), &luid); err != nil {
+		return
+	}
+	privs := windows.Tokenprivileges{PrivilegeCount: 1}
+	privs.Privileges[0] = windows.LUIDAndAttributes{Luid: luid, Attributes: windows.SE_PRIVILEGE_ENABLED}
+	_ = windows.AdjustTokenPrivileges(token, false, &privs, 0, nil, nil)
 }
 
 // exitWithParent cancels the supervisor when the process that started it exits.
