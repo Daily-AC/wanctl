@@ -251,3 +251,21 @@ func TestApprovalDetailWaitsForTheUnlock(t *testing.T) {
 		}
 	}
 }
+
+func TestAndroidVerificationRequestsTheDeviceAnswer(t *testing.T) {
+	raw, err := os.ReadFile("android/java/dev/wanctl/agent/MainActivity.java")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, required := range []string{"不会显示校验码", "把这 9 位数字告诉控制端", "同一次提示中的指纹和校验号"} {
+		if !strings.Contains(text, required) {
+			t.Errorf("verification instructions omit %q", required)
+		}
+	}
+	for _, stale := range []string{"以及它算出的 9 位校验码", "与控制端显示的那一串逐位核对"} {
+		if strings.Contains(text, stale) {
+			t.Errorf("verification instructions still expect a controller-displayed answer: %q", stale)
+		}
+	}
+}

@@ -36,14 +36,49 @@ var ErrNoToken = errors.New("no token: run wanctl_login (MCP) or `wanctl login` 
 
 // TrustRequiredError requires the caller to confirm an unknown device identity
 // out of band before any application data is sent.
+//
+// Number binds the device's locally derived code to the certificate observed
+// before the number was issued. Only the device owner supplies the code.
 type TrustRequiredError struct {
 	Target      string
 	Fingerprint string
+	Number      string // per-dial verification number, ungrouped digits
 }
 
 func (e *TrustRequiredError) Error() string {
-	return fmt.Sprintf("DEVICE IDENTITY CONFIRMATION REQUIRED for %q\n  fingerprint: %s\nVerify it with the device owner, then run:\n  wanctl trust server --target %q --fingerprint %q",
-		e.Target, e.Fingerprint, e.Target, e.Fingerprint)
+	return fmt.Sprintf("DEVICE IDENTITY CONFIRMATION REQUIRED for %q\n"+
+		"  fingerprint:          %s\n"+
+		"  verification number:  %s\n"+
+		"On the device, run `wanctl verify %s` (Android app: 连接详情 → 连接校验) and read the code it prints.\n"+
+		"Copy target, fingerprint and number from this same refusal. Then run:\n"+
+		"  wanctl trust server --target %q --fingerprint %q --number %s --code <the code the device shows>\n"+
+		"A device whose wanctl predates `wanctl verify` can only be checked by fingerprint:\n"+
+		"  wanctl trust server --target %q --fingerprint %q",
+		e.Target, e.Fingerprint, transport.GroupDigits(e.Number),
+		e.Number, e.Target, e.Fingerprint, e.Number, e.Target, e.Fingerprint)
+}
+
+// VerifyCodeMismatchError is the refusal that replaces a silent trust decision:
+// the code read off the device is not the one this controller derives from the
+// certificate that dial presented, so nothing was pinned. It is a matchable
+// refusal — the next move is a human repeating the comparison on the right
+// device, never a retry of the same call.
+type VerifyCodeMismatchError struct {
+	Target   string
+	Number   string
+	Reported string // read off the device by the human
+}
+
+func (e *VerifyCodeMismatchError) Error() string {
+	return fmt.Sprintf("VERIFICATION CODE MISMATCH for %q\n"+
+		"  verification number:     %s\n"+
+		"  read off the device:     %s\n"+
+		"Nothing was pinned, and the identity was NOT recorded. Either the device is not the\n"+
+		"machine this number was issued for, or that code belongs to a different number — a\n"+
+		"number from an earlier command is not this one. Run `wanctl verify %s` on the device\n"+
+		"and read the code printed for THAT number; do not retry this call as is.",
+		e.Target, transport.GroupDigits(e.Number),
+		transport.GroupDigits(e.Reported), e.Number)
 }
 
 // RejectError is returned when a device rejects a controller's connection,
@@ -384,6 +419,93 @@ func (c *Client) Pinned(name string) (transport.Peer, bool) {
 	return c.known.GetByName(name)
 }
 
+// firstContact binds a fresh number to the certificate this dial presented.
+// Never expose the derived answer: the device owner must supply it.
+func firstContact(target, fingerprint string) error {
+	return &TrustRequiredError{Target: target, Fingerprint: fingerprint, Number: transport.NewVerifyNumber()}
+}
+
+// TrustChallenge carries target, fingerprint and number from one refusal.
+type TrustChallenge struct {
+	Target      string
+	Fingerprint string
+	Number      string
+}
+
+// ConfirmTrust checks the device's answer and pins only the original identity.
+// Requiring the original fingerprint prevents a certificate chosen after the
+// number became known from satisfying the shortened-code comparison.
+func (c *Client) ConfirmTrust(ctx context.Context, ch *TrustChallenge, reported string, replace bool) (canonical, fingerprint string, err error) {
+	if ch == nil || strings.TrimSpace(ch.Target) == "" {
+		return "", "", fmt.Errorf("target is required")
+	}
+	if !transport.ValidFingerprint(ch.Fingerprint) {
+		return "", "", fmt.Errorf("a valid fingerprint from the same first-contact refusal is required with number")
+	}
+	// The certificate is what the human compared, so the certificate is what
+	// has to still be there. A target whose resolution moved (a legacy name
+	// promoted to a device ID, say) is not an identity change on its own:
+	// PinServer resolves it again below.
+	_, presented, err := c.present(ctx, ch.Target)
+	if err != nil {
+		return "", "", err
+	}
+	if presented != ch.Fingerprint {
+		return "", "", &VerifiedIdentityChangedError{Target: ch.Target, Verified: ch.Fingerprint, Presented: presented}
+	}
+	want, err := transport.VerifyCode(presented, ch.Number)
+	if err != nil {
+		return "", "", err
+	}
+	got, err := transport.NormalizeVerifyCode(reported)
+	if err != nil {
+		return "", "", err
+	}
+	if got != want {
+		return "", "", &VerifyCodeMismatchError{Target: ch.Target, Number: ch.Number, Reported: got}
+	}
+	if canonical, err = c.PinServer(ctx, ch.Target, presented, replace); err != nil {
+		return "", "", err
+	}
+	return canonical, presented, nil
+}
+
+// present dials target, reads the certificate it presents and closes without
+// sending a hello. It is the whole of what first-contact verification observes.
+func (c *Client) present(ctx context.Context, target string) (canonical, fingerprint string, err error) {
+	nc, name, err := c.dialTarget(ctx, target)
+	if err != nil {
+		return "", "", err
+	}
+	defer nc.Close()
+	hctx, cancel := context.WithTimeout(ctx, deviceHandshakeTimeout)
+	defer cancel()
+	dr, err := transport.ClientHandshake(hctx, nc, pinName(name), c.id, c.known)
+	if err != nil {
+		return "", "", err
+	}
+	dr.Conn.Close()
+	return name, dr.PeerFP, nil
+}
+
+// VerifiedIdentityChangedError is the refusal for a device that answered with a
+// different certificate at confirmation than the one the verification number
+// was issued for. Nothing was pinned.
+type VerifiedIdentityChangedError struct {
+	Target    string
+	Verified  string
+	Presented string
+}
+
+func (e *VerifiedIdentityChangedError) Error() string {
+	return fmt.Sprintf("DEVICE IDENTITY MISMATCH for %q\n"+
+		"  verified with the verification number: %s\n"+
+		"  presented now:                        %s\n"+
+		"Nothing was pinned. The identity that was checked is not the one answering now — a\n"+
+		"human has to decide about these two values; do not retry this call as is.",
+		e.Target, e.Verified, e.Presented)
+}
+
 // PinServer records an explicitly verified fingerprint for a canonical target.
 func (c *Client) PinServer(ctx context.Context, target, fingerprint string, replace bool) (string, error) {
 	if strings.TrimSpace(target) == "" {
@@ -555,7 +677,7 @@ func (c *Client) sendHello(ctx context.Context, nc net.Conn, target, helloKind s
 	}
 	if dr.FirstSeen {
 		dr.Conn.Close()
-		return nil, &TrustRequiredError{Target: target, Fingerprint: dr.PeerFP}
+		return nil, firstContact(target, dr.PeerFP)
 	}
 	host := c.name
 	if host == "" {

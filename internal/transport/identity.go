@@ -113,6 +113,24 @@ func LoadOrCreateIdentity() (*Identity, error) {
 	return createIdentity(certPath, keyPath)
 }
 
+// LoadIdentity loads the node identity the config dir already holds, and fails
+// if there is none. Commands that only report on this installation use it so
+// that asking a question cannot answer it by minting an identity: `wanctl
+// verify` on a machine that has never run wanctl must say so rather than print
+// a fingerprint of a key pair it just created.
+func LoadIdentity() (*Identity, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	if _, err := os.Stat(certPath); err != nil {
+		return nil, fmt.Errorf("no wanctl identity in %s: run `wanctl start` (or `wanctl login`) on this machine first", dir)
+	}
+	return loadIdentity(certPath, keyPath)
+}
+
 func loadIdentity(certPath, keyPath string) (*Identity, error) {
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {

@@ -147,6 +147,10 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 		"wanctl_trust_server": {
 			"DEVICE IDENTITY CONFIRMATION REQUIRED",
 			"DEVICE IDENTITY MISMATCH",
+			// The short form of a first-contact check, and the refusal that
+			// stops a bogus one: the code has to come off the device.
+			"VERIFICATION CODE MISMATCH",
+			"wanctl verify",
 			"WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER",
 		},
 		"wanctl_read": {
@@ -191,6 +195,10 @@ func TestDescriptionsKeepTheRules(t *testing.T) {
 	}
 	// Rules that live in a parameter description rather than the tool's own.
 	mustKeepParam := map[string]map[string][]string{
+		"wanctl_trust_server": {
+			"code":   {"never a value to invent or reuse"},
+			"number": {"wanctl verify"},
+		},
 		"wanctl_edit": {
 			"edits": {"ORIGINAL", "exactly once", "may not overlap", "Mutually exclusive"},
 		},

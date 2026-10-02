@@ -23,6 +23,47 @@ also accepted. Ambiguous names fail instead of selecting a device by registratio
 order. PostgreSQL-backed resolution includes offline devices in this check.
 The portal uses full IDs for actions and shows a short ID beside duplicate labels.
 
+## First contact
+
+A controller that has never dialled an installation stops with `DEVICE IDENTITY
+CONFIRMATION REQUIRED`, and sends no application data until a human confirms
+which installation answered. The refusal carries the target, certificate
+fingerprint (`SHA256:<base64>`), and a fresh six-digit **verification number**.
+It never prints the expected verification code.
+
+1. Keep the target, fingerprint and number from that same refusal. On the device,
+   run `wanctl verify <number>`, or use the Android app's 连接详情 → 连接校验.
+   The device prints a nine-digit **verification code** from its own certificate
+   and that number, locally: no relay, no agent, no network.
+2. Report the device's code to the controller with the original target,
+   fingerprint and number. All four values are required for the code form:
+
+```sh
+wanctl trust server --target ns/device --fingerprint SHA256:... \
+  --number 482913 --code 771204638
+```
+
+The fingerprint must be the one observed before the number was disclosed. The
+controller re-dials and requires that exact fingerprint, then checks the
+reported code. A changed identity or a wrong code pins nothing. Neither the
+initial refusal nor a code-mismatch error reveals the expected code. Do not
+calculate an answer on the controller or reuse one from an earlier check: read
+it on the intended device. There is no interactive trust prompt.
+
+The number reaches the device through the human, never over the relay. Binding
+the confirmation to the original fingerprint prevents an attacker from choosing
+a different certificate after learning the number. The code is a comparison aid
+based on public inputs, not a secret or a proof of possession.
+
+For a device whose wanctl predates `wanctl verify`, independently compare the
+full fingerprint shown on that device with the refusal, then use:
+
+```sh
+wanctl trust server --target ns/device --fingerprint SHA256:...
+```
+
+On success, the controller records the pin in its own `known_servers.json`.
+
 ## Upgrade
 
 Upgrade the relay and portal together, then agents and controllers. Migration 007

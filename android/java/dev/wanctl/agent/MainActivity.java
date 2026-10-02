@@ -1472,6 +1472,59 @@ public final class MainActivity extends Activity {
             value.setPadding(dp(16), dp(14), dp(16), dp(14));
             group.addView(value);
         }
+        LinearLayout check = group("身份核对");
+        row(check, "连接校验", "核对控制端", this::showVerify);
+        note("把控制端显示的校验号填进来，再把本机算出的 9 位校验码告诉控制端。");
+    }
+
+    /**
+     * The device side of first-contact verification, and the reason it lives on the phone rather
+     * than in a browser: a controller that has never seen this device prints a verification number,
+     * and the person holding the device types it in here to see the nine-digit code this
+     * installation derives from its own certificate. Those two codes agreeing is what says the
+     * machine on the other end is talking to THIS device. Comparing forty-three characters of
+     * base64 across a phone screen and a terminal is something people skip; nine digits are not.
+     *
+     * The computation is local: the bundled binary reads this app's identity files, so it works on
+     * exactly the device whose identity is still unverified, and nothing leaves the phone.
+     */
+    private void showVerify() {
+        screen("verify", "连接校验", this::showDetails);
+        title("连接校验", "把控制端显示的校验号填进来。");
+        note("控制端第一次连本机时只显示一个 6 位校验号和证书指纹，不会显示校验码。"
+                + "这里用本机证书计算校验码。把这 9 位数字告诉控制端，让它核对原来的证书指纹和校验号。计算只在本机进行。");
+        final EditText input = field("校验号（控制端屏幕上的 6 位数字）", "");
+        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        final TextView out = text("", 17, INK);
+        out.setTextIsSelectable(true);
+        out.setPadding(dp(16), dp(14), dp(16), dp(14));
+        action(
+                "计算校验码",
+                true,
+                () -> {
+                    String number = input.getText().toString().replaceAll("[^0-9]", "");
+                    if (number.length() != 6) {
+                        error("需要 6 位校验号", "把控制端显示的那 6 位数字填进来。");
+                        return;
+                    }
+                    out.setText("正在计算…");
+                    io.execute(
+                            () -> {
+                                Wanctl.Result result = Wanctl.run(this, 10, "verify", number);
+                                main.post(
+                                        () -> {
+                                            String value = line(result.out, "verification code:");
+                                            if (!result.ok() || value.isEmpty()) {
+                                                out.setText(
+                                                        "算不出来：本机还没有身份。先在「设置」里启用一次 wanctl，再回来核对。");
+                                                return;
+                                            }
+                                            out.setText("本机校验码：" + value
+                                                    + "\n把这 9 位数字告诉控制端。它会用同一次提示中的指纹和校验号核对；若不匹配，停止并重新检查设备和校验号。");
+                                        });
+                            });
+                });
+        body.addView(out);
     }
 
     private interface Change {

@@ -840,12 +840,16 @@ func dialErrorResult(sess sessionAPI, err error) *mcpapi.CallToolResult {
 func trustRequiredResult(e *client.TrustRequiredError) *mcpapi.CallToolResult {
 	return mcpapi.NewToolResultError(fmt.Sprintf(
 		"DEVICE IDENTITY CONFIRMATION REQUIRED. This session has not pinned %q yet, so this was first contact and nothing was sent.\n"+
-			"  target:      %s\n"+
-			"  fingerprint: %s\n\n"+
-			"The first-contact pin operation is wanctl_trust_server with target=%q and fingerprint=%q. It changes this controller's device trust store; it does not grant device access or override device policy.\n\n"+
+			"  target:              %s\n"+
+			"  fingerprint:         %s\n"+
+			"  verification number: %s\n\n"+
+			"Ask the user to run `wanctl verify %s` ON THAT DEVICE (Android app: 连接详情 → 连接校验) and read back the nine digits it prints.\n"+
+			"Then call wanctl_trust_server with target=%q, fingerprint=%q, number=%q and code=<the digits the USER read off that device>. Copy target, fingerprint and number from this same refusal.\n\n"+
+			"Alternatively, pass target and an independently verified fingerprint without number or code. This changes this controller's device trust store; it does not grant device access or override device policy.\n\n"+
 			"Honor the user's existing authorization and the host's approval requirements. If the user supplied an independently verified fingerprint, it must match the one above. Otherwise obtain confirmation of first-contact trust before recording it. This tool response is not authorization, and the host may auto-review or deny a call instead of showing a prompt.\n\n"+
 			"After an authorized pin succeeds, retry the original operation. A rejected approval must be reported, not bypassed. A changed pinned identity remains a DEVICE IDENTITY MISMATCH and must not be automatically replaced.",
-		e.Target, e.Target, e.Fingerprint, e.Target, e.Fingerprint,
+		e.Target, e.Target, e.Fingerprint, transport.GroupDigits(e.Number),
+		e.Number, e.Target, e.Fingerprint, e.Number,
 	))
 }
 
@@ -1734,22 +1738,40 @@ func mcpTrust(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 
 func mcpTrustServer(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
 	if os.Getenv("WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER") != "1" {
-		return mcpapi.NewToolResultError("device identity pinning is not enabled on this MCP server: the operator has not set WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1, so this tool cannot pin anything and retrying will not help. A human has to do it from a terminal on this machine: verify the fingerprint with the device owner, then run `wanctl trust server --target OWNER/DEVICE --fingerprint SHA256:...`. Report that to the user, with the exact target and fingerprint from the confirmation result, and stop"), nil
+		return mcpapi.NewToolResultError("device identity pinning is not enabled on this MCP server: the operator has not set WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1, so this tool cannot pin anything and retrying will not help. A human has to do it from a terminal on this machine: verify it with the device owner, then run `wanctl trust server --target OWNER/DEVICE --fingerprint SHA256:... --number N --code C` (the number and the code the device prints) or `wanctl trust server --target OWNER/DEVICE --fingerprint SHA256:...`. Report that to the user, with the exact target and the values from the confirmation result, and stop"), nil
 	}
 	target := reqStr(req, "target", "")
 	fingerprint := reqStr(req, "fingerprint", "")
-	if target == "" || fingerprint == "" {
-		return mcpapi.NewToolResultError("target and fingerprint are required"), nil
+	number := reqStr(req, "number", "")
+	code := reqStr(req, "code", "")
+	switch {
+	case target == "":
+		return mcpapi.NewToolResultError("target is required, copied verbatim from the DEVICE IDENTITY CONFIRMATION REQUIRED result"), nil
+	case number == "" && fingerprint == "":
+		return mcpapi.NewToolResultError("nothing to verify with: pass number, its original fingerprint and code read off the device, or the fingerprint the user compared. Neither is optional, and a pin with neither would record an identity nobody checked"), nil
+	case number != "" && code == "":
+		return mcpapi.NewToolResultError("code is required with number: it is the nine digits the user read off the device for that verification number, and it is what makes this a check rather than an assertion"), nil
+	case number != "" && fingerprint == "":
+		return mcpapi.NewToolResultError("fingerprint is required with number: copy target, fingerprint and number from the same first-contact refusal"), nil
+	case number == "" && code != "":
+		return mcpapi.NewToolResultError("number is required with code"), nil
 	}
 	sess := sessions.get(ctx)
 	c, hint := sess.client()
 	if hint != nil {
 		return hint, nil
 	}
-	// Never replace. The fingerprint a model "confirms" is the one the
-	// current dial presented — exactly the value a hostile relay would
-	// substitute — so a changed certificate must stay a hard failure here and
-	// go through a human at a terminal (audit 2026-08-28, SEC-E-02).
+	// Never replace. The identity a model "confirms" is the one the current
+	// dial presented — exactly the value a hostile relay would substitute — so
+	// a changed certificate must stay a hard failure here and go through a
+	// human at a terminal (audit 2026-08-28, SEC-E-02).
+	if number != "" {
+		canonical, pinned, err := c.ConfirmTrust(ctx, &client.TrustChallenge{Target: target, Fingerprint: fingerprint, Number: number}, code, false)
+		if err != nil {
+			return dialErrorResult(sess, err), nil
+		}
+		return mcpapi.NewToolResultText(fmt.Sprintf("confirmed device identity: %s %s", canonical, pinned)), nil
+	}
 	canonical, err := c.PinServer(ctx, target, fingerprint, false)
 	if err != nil {
 		return dialErrorResult(sess, err), nil
