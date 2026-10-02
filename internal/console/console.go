@@ -63,6 +63,17 @@ type State struct {
 	Pending         []Pending           `json:"pending"`
 	PendingPairings []PendingPairing    `json:"pending_pairings"`
 	Trusted         []TrustedController `json:"trusted"`
+	// ADB is the Android agent's adb elevation link, for the portal's ADB
+	// card; absent on other platforms and from agents before v0.20.2.
+	ADB *ADBLink `json:"adb,omitempty"`
+}
+
+// ADBLink is the adb elevation channel's state as the device last probed it:
+// "off" (提权通道 switched off in the app), or one of elevate's Link states
+// (connected, no_port, unpaired, confirm, error).
+type ADBLink struct {
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type pending struct {

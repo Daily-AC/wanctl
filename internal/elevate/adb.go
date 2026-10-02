@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"wanctl/internal/adb"
@@ -38,6 +39,42 @@ const tcpipPort = 5555
 // reasonably insist it is on: they remember turning it on.
 const offWhen = "Android switches it off on every reboot, when Wi-Fi disconnects and when the phone joins a different access point"
 
+// The adb channel's link states. The app's 提权通道 row and the portal's ADB
+// card turn each into one sentence for the owner, so they name what the owner
+// would do next rather than what failed.
+const (
+	// LinkConnected: adbd ran `id` as shell.
+	LinkConnected = "connected"
+	// LinkNoPort: nothing answered on any candidate port. Wireless debugging
+	// is off, or on but its port not discovered yet; turning it back on
+	// recovers without pairing again.
+	LinkNoPort = "no_port"
+	// LinkUnpaired: adbd answered and refused wanctl's key — never paired, or
+	// the pairing lapsed. Pairing again is the fix.
+	LinkUnpaired = "unpaired"
+	// LinkConfirm: adbd is showing "Allow USB debugging?" for wanctl's key (a
+	// plain `adb tcpip` port); someone has to tap Allow on the phone.
+	LinkConfirm = "confirm"
+	// LinkError: anything else (an adbd that runs as an app uid, a connection
+	// that drops); Reason says what.
+	LinkError = "error"
+)
+
+// linkError is a connect failure that knows its Link state.
+type linkError struct {
+	link, msg string
+}
+
+func (e *linkError) Error() string { return e.msg }
+
+func linkOf(err error) string {
+	var le *linkError
+	if errors.As(err, &le) {
+		return le.link
+	}
+	return LinkError
+}
+
 // adbProbeTimeout bounds a connection attempt. Loopback either answers
 // immediately or is not listening.
 const adbProbeTimeout = 5 * time.Second
@@ -65,7 +102,14 @@ type ADB struct {
 	mu   sync.Mutex
 	conn shellConn
 	port int
+
+	// running counts commands in Run, so a background probe can stay off a
+	// connection that is busy (adb.Conn runs one command at a time).
+	running atomic.Int32
 }
+
+// Busy reports whether a command is running on this channel right now.
+func (a *ADB) Busy() bool { return a.running.Load() > 0 }
 
 // shellConn is the part of *adb.Conn this channel uses.
 type shellConn interface {
@@ -121,9 +165,19 @@ func (a *ADB) Probe(ctx context.Context) Status {
 	ctx, cancel := context.WithTimeout(ctx, adbProbeTimeout)
 	defer cancel()
 
+	st := a.probe(ctx)
+	if st.Available {
+		st.Link = LinkConnected
+	} else if st.Link == "" {
+		st.Link = LinkError
+	}
+	return st
+}
+
+func (a *ADB) probe(ctx context.Context) Status {
 	conn, port, reused, err := a.connect(ctx)
 	if err != nil {
-		return Status{Available: false, Reason: err.Error()}
+		return Status{Available: false, Reason: err.Error(), Link: linkOf(err)}
 	}
 	var sb strings.Builder
 	code, err := conn.Shell(ctx, "id", &sb)
@@ -137,7 +191,7 @@ func (a *ADB) Probe(ctx context.Context) Status {
 		// the banner describeConn adds, is the diagnosis.
 		a.reset()
 		if conn, port, _, err = a.connect(ctx); err != nil {
-			return Status{Available: false, Reason: err.Error()}
+			return Status{Available: false, Reason: err.Error(), Link: linkOf(err)}
 		}
 		sb.Reset()
 		code, err = conn.Shell(ctx, "id", &sb)
@@ -166,6 +220,8 @@ func (a *ADB) Probe(ctx context.Context) Status {
 }
 
 func (a *ADB) Run(ctx context.Context, command, cwd string, out io.Writer) (int, error) {
+	a.running.Add(1)
+	defer a.running.Add(-1)
 	conn, _, _, err := a.connect(ctx)
 	if err != nil {
 		return -1, err
@@ -226,7 +282,7 @@ func (a *ADB) connect(ctx context.Context) (conn shellConn, port int, reused boo
 		if errors.Is(err, adb.ErrPublicKeyPending) {
 			// Distinct from "nothing is listening": someone has to tap Allow on
 			// the device, and trying other ports would bury that.
-			return nil, 0, false, fmt.Errorf("adbd on port %d is waiting for someone to allow wanctl's key on the device screen", p)
+			return nil, 0, false, &linkError{LinkConfirm, fmt.Sprintf("adbd on port %d is waiting for someone to allow wanctl's key on the device screen", p)}
 		}
 		if errors.Is(err, adb.ErrKeyRejected) {
 			// adbd answered on this port and refused the key. Its error
@@ -245,10 +301,10 @@ func (a *ADB) connect(ctx context.Context) (conn shellConn, port int, reused boo
 		return nil, 0, false, errors.New("no adbd port to try")
 	}
 	reason := fmt.Sprintf("could not reach adbd on this device (%s)", strings.Join(failures, "; "))
-	if !rejected {
-		reason += "; " + hint
+	if rejected {
+		return nil, 0, false, &linkError{LinkUnpaired, reason}
 	}
-	return nil, 0, false, errors.New(reason)
+	return nil, 0, false, &linkError{LinkNoPort, reason + "; " + hint}
 }
 
 func (a *ADB) reset() {

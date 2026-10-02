@@ -19,7 +19,9 @@ import org.json.JSONObject;
 
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -53,6 +55,11 @@ final class ApprovalNotifier {
     private static final Map<String, Card> cards = recent();
     /** Decisions the owner made that no final card has answered yet; AgentService resends them. */
     private static final Map<String, String> verdicts = recent();
+    /** When each of those decisions was made, so a screen can say it has not arrived yet. */
+    private static final Map<String, Long> decidedAt = recent();
+    /** How long 「提交中」 may last before the screen offers to send it again. */
+    static final long SUBMIT_SLOW_MS = 10_000;
+    private static final String LOCAL_TEST = "local-test";
     private static Runnable listener;
 
     private ApprovalNotifier() {
@@ -60,7 +67,7 @@ final class ApprovalNotifier {
 
     static final class Card {
         final String json, id, state, kind, device, peer, peerFp, cmd, path, cwd, result;
-        final long created;
+        final long created, expires;
         /** When this process got the card; a final card lingers from here, however often it is redrawn. */
         final long seen = System.currentTimeMillis();
 
@@ -78,6 +85,7 @@ final class ApprovalNotifier {
             result = text(o, "result");
             long t = time(text(o, "created"));
             created = t > 0 ? t : System.currentTimeMillis();
+            expires = time(text(o, "expires"));
         }
 
         /** Null for anything that is not a card this app knows how to show. */
@@ -129,7 +137,7 @@ final class ApprovalNotifier {
                 verdicts.remove(k.id);
             }
         }
-        if (TEST.equals(k.state)) {
+        if (TEST.equals(k.state) && !k.id.startsWith(LOCAL_TEST)) {
             new Prefs(c).setApprovalPhone();
         }
         // A final state only updates a notification that is still there: one the
@@ -167,11 +175,75 @@ final class ApprovalNotifier {
         return new LinkedHashMap<>(verdicts);
     }
 
+    /** True once a decision has waited longer than SUBMIT_SLOW_MS for its final card. */
+    static synchronized boolean slow(String id) {
+        Long at = decidedAt.get(id);
+        return verdicts.containsKey(id) && at != null
+                && System.currentTimeMillis() - at > SUBMIT_SLOW_MS;
+    }
+
+    /** Restarts the 「提交中」 clock for a decision the owner chose to send again. */
+    static synchronized void resent(String id) {
+        if (verdicts.containsKey(id)) {
+            decidedAt.put(id, System.currentTimeMillis());
+        }
+    }
+
+    /**
+     * What the home screen lists: requests still open, those the owner just answered (until the
+     * final card has lingered as long as its notification does), and expired ones whose
+     * notification is still up. Newest first. A pending card the owner swiped out of the shade
+     * stays here: the shade is not the only way in any more.
+     */
+    static List<Card> open(Context c) {
+        Map<String, Card> all = new LinkedHashMap<>();
+        for (StatusBarNotification s : nm(c).getActiveNotifications()) {
+            if (s.getId() == ID && s.getTag() != null) {
+                Card k = card(c, s.getTag());
+                if (k != null) {
+                    all.put(k.id, k);
+                }
+            }
+        }
+        synchronized (ApprovalNotifier.class) {
+            all.putAll(cards);
+        }
+        long now = System.currentTimeMillis();
+        List<Card> out = new ArrayList<>();
+        for (Card k : all.values()) {
+            boolean showing = active(c, k.id) != null;
+            boolean keep;
+            if (TEST.equals(k.state)) {
+                keep = false;
+            } else if (verdict(k.id) != null) {
+                keep = true;
+            } else if (PENDING.equals(k.state)) {
+                keep = k.expires == 0 || k.expires > now || showing;
+            } else if (EXPIRED.equals(k.state)) {
+                keep = showing && !k.pairing();
+            } else {
+                keep = now - k.seen < DONE_LINGER_MS;
+            }
+            if (keep) {
+                out.add(k);
+            }
+        }
+        out.sort((a, b) -> Long.compare(b.created, a.created));
+        return out;
+    }
+
+    /** Posts a test card from the app itself, for the setup step that asks whether it rang. */
+    static void test(Context c) {
+        Card k = Card.parse("{\"id\":\"" + LOCAL_TEST + "\",\"state\":\"test\"}");
+        post(c, k, false);
+    }
+
     /** Records the owner's answer and shows 「正在提交…」 until the final card arrives. */
     static void decided(Context c, String id, String verdict) {
         Card k = card(c, id);
         synchronized (ApprovalNotifier.class) {
             verdicts.put(id, verdict);
+            decidedAt.put(id, System.currentTimeMillis());
         }
         if (k != null && EXPIRED.equals(k.state) && "n".equals(verdict)) {
             // 忽略: refusing a lapsed request only clears it (ADR 0015, decision 2).
@@ -182,9 +254,18 @@ final class ApprovalNotifier {
         changed();
     }
 
-    /** One listener, the detail screen; called on the main thread after any change. */
+    /**
+     * One listener, the screen in front (home or detail); called on the main thread after any
+     * change. Only one of them is resumed at a time.
+     */
     static synchronized void listen(Runnable r) {
         listener = r;
+    }
+
+    static synchronized void unlisten(Runnable r) {
+        if (listener == r) {
+            listener = null;
+        }
     }
 
     private static void changed() {
@@ -239,19 +320,23 @@ final class ApprovalNotifier {
         if (DONE.equals(k.state)) {
             switch (k.result) {
                 case "allowed":
-                    return k.pairing() ? "已信任" : "已允许";
+                    if (k.pairing()) {
+                        return "已信任";
+                    }
+                    return k.kind.startsWith("exec") ? "已允许，命令正在执行" : "已允许";
                 case "denied":
                     return "已拒绝";
                 case "granted":
                     return "已放行：30 分钟内同一条命令可执行一次";
                 case "handled":
-                    return "已在别处处理";
+                    return "这条已在别处处理";
                 default:
-                    return "已失效";
+                    // gone: the wait ran out (or the device restarted) before the answer landed.
+                    return "已过期";
             }
         }
         if (verdict(k.id) != null) {
-            return "正在提交…";
+            return "提交中…";
         }
         if (EXPIRED.equals(k.state)) {
             return k.pairing() ? "已过期，请让控制端重新连接" : "已过期，仍可批准：30 分钟内放行一次";
@@ -313,7 +398,7 @@ final class ApprovalNotifier {
                 .setVisibility(Notification.VISIBILITY_PRIVATE);
         if (TEST.equals(k.state)) {
             String title = "审批提醒测试";
-            String text = "锁屏上能看到这条，待审批请求就能及时送到。看不到的话，打开 wanctl 按提示开启锁屏通知和横幅。";
+            String text = "听到提示音、看到横幅了吗？点这里确认。没响的话，点进来按步骤打开。";
             Notification cover = new Notification.Builder(c, CHANNEL)
                     .setSmallIcon(R.drawable.ic_stat_agent)
                     .setContentTitle(title)
@@ -321,7 +406,7 @@ final class ApprovalNotifier {
                     .setStyle(new Notification.BigTextStyle().bigText(text))
                     .build();
             PendingIntent guide = PendingIntent.getActivity(c, ID,
-                    new Intent(c, MainActivity.class).putExtra(MainActivity.EXTRA_PAGE, "permissions"),
+                    new Intent(c, MainActivity.class).putExtra(MainActivity.EXTRA_PAGE, MainActivity.PAGE_ALERT_CHECK),
                     PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
             b.setContentTitle(title)
                     .setContentText(text)
@@ -388,6 +473,11 @@ final class ApprovalNotifier {
             a.setAuthenticationRequired(true);
         }
         return a.build();
+    }
+
+    /** The detail screen's address for a card, as the notification and the home list open it. */
+    static Uri uri(String id) {
+        return Uri.fromParts(SCHEME, id, null);
     }
 
     /** The card id a notification action or the detail screen was opened for. */

@@ -80,6 +80,10 @@ type Status struct {
 	// do about it. It is shown to the controller verbatim.
 	Reason    string    `json:"reason,omitempty"`
 	CheckedAt time.Time `json:"checked_at,omitempty"`
+	// Link classifies the adb channel's answer for the app and the portal,
+	// which show the owner one fixed sentence per state (Link* constants).
+	// Empty for other channels.
+	Link string `json:"link,omitempty"`
 }
 
 // Channel is one way to run a command with elevated privilege.
@@ -169,6 +173,37 @@ func (m *Manager) probe(ctx context.Context, c Channel) Status {
 	m.cache[c.Kind()] = st
 	m.mu.Unlock()
 	return st
+}
+
+// Fresh probes one channel now, ignoring and then replacing its cached
+// status, so Select sees the same answer. A channel busy with a command is not
+// interrupted: its last status is returned instead, since a probe would queue
+// behind the command on the same connection. ok is false for a channel this
+// build does not have, or while elevation is switched off.
+func (m *Manager) Fresh(ctx context.Context, kind Kind) (st Status, ok bool) {
+	m.mu.Lock()
+	enabled := m.enabled
+	cached, seen := m.cache[kind]
+	m.mu.Unlock()
+	if !enabled {
+		return Status{}, false
+	}
+	for _, c := range m.channels {
+		if c.Kind() != kind {
+			continue
+		}
+		if b, isBusy := c.(interface{ Busy() bool }); isBusy && b.Busy() && seen {
+			return cached, true
+		}
+		st = c.Probe(ctx)
+		st.Kind = kind
+		st.CheckedAt = m.now()
+		m.mu.Lock()
+		m.cache[kind] = st
+		m.mu.Unlock()
+		return st, true
+	}
+	return Status{}, false
 }
 
 // Select picks a channel. An empty via probes ProbeOrder and takes the first

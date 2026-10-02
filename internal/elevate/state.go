@@ -41,6 +41,11 @@ type adbState struct {
 // maintains any more, and a day is plenty for that.
 const maxADBPortAge = 24 * time.Hour
 
+// DiscoveredPort is the wireless-debugging port the Android app last found, or
+// 0. The agent watches it to re-probe the adb channel the moment the owner
+// turns wireless debugging on or off.
+func DiscoveredPort() int { return portFromState(os.Getenv(StateEnv)) }
+
 // portFromState reads the app-discovered wireless-debugging port, or 0.
 func portFromState(path string) int {
 	if path == "" {

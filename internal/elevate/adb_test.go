@@ -350,3 +350,49 @@ func TestPortFromState(t *testing.T) {
 		t.Fatalf("port = %d for an unset path, want 0", got)
 	}
 }
+
+// The app and the portal show the owner one sentence per link state, so each
+// way the channel can fail has to land in the state whose sentence names the
+// fix: turn wireless debugging on, or pair again.
+func TestADBProbeLinkStates(t *testing.T) {
+	rejected := fmt.Errorf("adb: TLS handshake: remote error (%w)", adb.ErrKeyRejected)
+	for _, c := range []struct {
+		name string
+		conn *stubConn
+		err  error
+		want string
+	}{
+		{"shell", &stubConn{uid: "uid=2000(shell)"}, nil, LinkConnected},
+		{"nothing listening", nil, errors.New("connect: connection refused"), LinkNoPort},
+		{"key refused", nil, rejected, LinkUnpaired},
+		{"allow dialog up", nil, adb.ErrPublicKeyPending, LinkConfirm},
+		{"app uid", &stubConn{uid: "uid=10601(u0_a601)"}, nil, LinkError},
+	} {
+		if got := newTestADB(t, 41031, c.conn, c.err).Probe(context.Background()).Link; got != c.want {
+			t.Errorf("%s: link = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// A background probe must not queue behind a running command on the one adb
+// connection: Fresh keeps the last answer while the channel is busy.
+func TestFreshLeavesABusyChannelAlone(t *testing.T) {
+	conn := &stubConn{uid: "uid=2000(shell)"}
+	a := newTestADB(t, 41031, conn, nil)
+	m := NewManager(true, "", a)
+	if st, ok := m.Fresh(context.Background(), KindADB); !ok || st.Link != LinkConnected {
+		t.Fatalf("first probe = %+v, %v", st, ok)
+	}
+	a.running.Add(1)
+	before := len(conn.ran)
+	if st, ok := m.Fresh(context.Background(), KindADB); !ok || st.Link != LinkConnected {
+		t.Fatalf("busy probe = %+v, %v", st, ok)
+	}
+	if len(conn.ran) != before {
+		t.Fatalf("probed a busy channel: ran %v", conn.ran[before:])
+	}
+	a.running.Add(-1)
+	if _, ok := NewManager(false, "off", a).Fresh(context.Background(), KindADB); ok {
+		t.Fatal("Fresh probed with elevation switched off")
+	}
+}

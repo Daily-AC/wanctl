@@ -98,6 +98,7 @@ type Agent struct {
 	// can hold (approvals.go).
 	phone  *approvalPhone
 	grants lateGrants
+	adb    adbLinkState
 
 	// Owned goroutines. Every goroutine the agent starts is registered in wg
 	// and takes its context from stopCtx, so Close can cancel them all and then
@@ -274,6 +275,7 @@ func New(opts Options) (*Agent, error) {
 		inst:     inst,
 		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(),
 		elevator: elevate.ConfigureDefault(configDirOrEmpty(), os.Getenv),
+		adb:      adbLinkState{kick: make(chan struct{}, 1)},
 	}
 	// Shutdown context for everything the agent starts; Close cancels it and
 	// then joins those goroutines.
@@ -438,6 +440,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer cancel()
 
 	a.spawn(func() { a.runNotifyPolicy(ctx) })
+	a.spawn(func() { a.watchADBLink(ctx) })
 	if a.phone != nil {
 		a.spawn(func() { a.phone.serveDecisions(ctx) })
 	}
@@ -1369,6 +1372,7 @@ func (a *Agent) handleConsoleRPC(msg protocol.Message) protocol.Message {
 
 	case protocol.KindConsoleState:
 		snap := a.console.State()
+		snap.ADB = a.adbLink()
 		data, _ := json.Marshal(snap)
 		return protocol.Message{Kind: protocol.KindConsoleState, Data: json.RawMessage(data)}
 
@@ -1607,9 +1611,14 @@ func peerText(s string) string {
 }
 
 // Busy reports whether this agent is in the middle of work that restarting it
-// would destroy: an open shell session (its cwd, its environment, its history),
-// a background job whose output nobody has collected yet, or a live console
-// session. It is the gate the auto-updater consults before swapping the binary
+// would destroy: a command running in a shell session, a background job whose
+// output nobody has collected yet, or a live console session.
+//
+// An idle shell is not work. Sessions are never reaped, so counting every open
+// one made a single plain exec block self-update for the rest of the agent's
+// life, silently (5090 stayed on v0.17.0 through four releases, found 10-02).
+// A restart costs an idle session its cwd; the controller's next exec opens a
+// fresh one. It is the gate the auto-updater consults before swapping the binary
 // under itself.
 //
 // A relay it cannot currently reach is deliberately not busy. That state can
@@ -1622,7 +1631,7 @@ func (a *Agent) Busy() bool {
 	}
 	a.sessMu.Lock()
 	for _, sess := range a.sessions {
-		if !sess.Closed() {
+		if !sess.Closed() && sess.Running() {
 			a.sessMu.Unlock()
 			return true
 		}

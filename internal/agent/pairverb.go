@@ -71,6 +71,7 @@ func (a *Agent) runADBPair(command string, out io.Writer) (handled bool, code in
 	}
 	fmt.Fprintf(out, "paired with adbd on port %d; wanctl's key is now in this device's adb_keys.\n", port)
 	fmt.Fprintf(out, "The adb elevation channel becomes available once wireless debugging is on.\n")
+	a.kickADBLink()
 	return true, 0, nil
 }
 

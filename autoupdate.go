@@ -126,6 +126,8 @@ type autoUpdater struct {
 	lastErr    string
 	warnedFor  string
 	handedOver atomic.Bool
+	// deferred counts consecutive busy postponements, for the log line.
+	deferred int
 }
 
 // newAutoUpdater wires the loop to a live agent. self must already be resolved
@@ -254,6 +256,9 @@ func (u *autoUpdater) tick(ctx context.Context) (time.Duration, bool) {
 	if res.action != autoUpdateFailed {
 		u.lastErr = ""
 	}
+	if res.action != autoUpdateBusy {
+		u.deferred = 0
+	}
 	switch res.action {
 	case autoUpdateFailed:
 		// Consecutive identical failures are one fact, not many: a device off
@@ -272,6 +277,13 @@ func (u *autoUpdater) tick(ctx context.Context) (time.Duration, bool) {
 				res.version, filepath.Dir(u.probe.self))
 		}
 	case autoUpdateBusy:
+		// Said out loud, sparingly: a postponement that never ends looked
+		// exactly like an update that was never offered (S17, 10-02).
+		u.deferred++
+		if u.deferred == 1 || u.deferred%12 == 0 {
+			u.logf("wanctl: 新版本 %s 可用，agent 正忙（有命令、后台任务或控制台在用），推迟自动更新（第 %d 次）",
+				res.version, u.deferred)
+		}
 		return u.busyRetry, false
 	case autoUpdateReady:
 		installed, err := u.install(ctx)

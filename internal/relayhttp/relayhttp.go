@@ -47,6 +47,23 @@ const (
 	responseHeaderTimeout = 45 * time.Second
 )
 
+// An HTTP/2 connection whose path died (a phone that changed networks under a
+// NAT, a Wi-Fi that stopped forwarding) gives no error of its own: requests
+// sent on it simply get no answer. Without a health check net/http keeps
+// handing every new request to that connection — a timed-out request only
+// resets its stream — so an agent's polls failed one after another until the
+// kernel gave up on the socket, minutes later. With these, a connection that
+// has read nothing for pingAfter is pinged, and closed if the ping is not
+// answered within pingTimeout; the next request dials a fresh one.
+//
+// pingAfter is longer than the relay's 25-second poll park, so a healthy idle
+// poll answers before any ping is due and costs nothing extra on a phone's
+// radio. Variables, not constants, so a test can shrink them.
+var (
+	pingAfter   = 30 * time.Second
+	pingTimeout = 15 * time.Second
+)
+
 // Transport is an http.RoundTripper that sends each request over HTTP/3 when
 // the relay is known to be reachable that way and over HTTP/2 otherwise.
 type Transport struct {
@@ -82,6 +99,7 @@ func Shared() *Transport { return shared() }
 func New(tlsConf *tls.Config) *Transport {
 	h2 := http.DefaultTransport.(*http.Transport).Clone()
 	h2.ResponseHeaderTimeout = responseHeaderTimeout
+	h2.HTTP2 = &http.HTTP2Config{SendPingTimeout: pingAfter, PingTimeout: pingTimeout}
 	if tlsConf != nil {
 		h2.TLSClientConfig = tlsConf.Clone()
 	}
