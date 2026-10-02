@@ -10,3 +10,6 @@ import "os"
 func replaceBinary(src, dst string) error {
 	return os.Rename(src, dst)
 }
+
+// removeReplacedBinaries has nothing to do on Unix: the swap leaves no backup.
+func removeReplacedBinaries(string) {}
