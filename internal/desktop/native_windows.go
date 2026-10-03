@@ -3,10 +3,7 @@
 package desktop
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"path/filepath"
 	"runtime"
@@ -99,7 +96,7 @@ func displayState() (protocol.DesktopSnapshot, error) {
 		return snap, err
 	}
 	snap.Session = session
-	state := monitorEnumeration{snap: &snap}
+	state := monitorEnumeration{snap: &snap, rotations: make(map[string]uint32)}
 
 	ok, _, _ := user32.NewProc("EnumDisplayMonitors").Call(0, 0, monitorCallback, uintptr(unsafe.Pointer(&state)))
 	runtime.KeepAlive(&state)
@@ -110,7 +107,6 @@ func displayState() (protocol.DesktopSnapshot, error) {
 		return snap, errors.New("desktop unavailable: no monitors")
 	}
 	sort.Slice(snap.Monitors, func(i, j int) bool { return snap.Monitors[i].ID < snap.Monitors[j].ID })
-	sort.Strings(state.modes)
 	bounds := snap.Monitors[0].Rect
 	right, bottom := bounds.X+bounds.Width, bounds.Y+bounds.Height
 	for _, m := range snap.Monitors {
@@ -123,13 +119,7 @@ func displayState() (protocol.DesktopSnapshot, error) {
 	bounds.Height = bottom - bounds.Y
 	snap.Source = bounds
 	snap.Origin = protocol.Point{X: bounds.X, Y: bounds.Y}
-	raw, _ := json.Marshal(struct {
-		Session  uint32
-		Monitors []protocol.DesktopMonitor
-		Modes    []string
-	}{session, snap.Monitors, state.modes})
-	hash := sha256.Sum256(raw)
-	snap.Layout = hex.EncodeToString(hash[:])
+	snap.Layout = layoutFingerprint(session, snap.Monitors, state.rotations)
 	return snap, nil
 }
 func (b *nativeBackend) Check(layout string) error {
@@ -273,9 +263,9 @@ func (b *nativeBackend) Focus(w protocol.DesktopWindow) error {
 }
 
 type monitorEnumeration struct {
-	snap  *protocol.DesktopSnapshot
-	err   error
-	modes []string
+	snap      *protocol.DesktopSnapshot
+	err       error
+	rotations map[string]uint32
 }
 
 var monitorCallback = windows.NewCallback(func(hmon, dc uintptr, rect *winRect, state *monitorEnumeration) uintptr {
@@ -300,15 +290,15 @@ var monitorCallback = windows.NewCallback(func(hmon, dc uintptr, rect *winRect, 
 		state.err = errors.New("cannot measure monitor DPI")
 		return 0
 	}
-	// DEVMODEW's fixed 220-byte layout also catches rotation and mode changes
-	// that preserve the bounding rectangle (e.g. a 180-degree rotation).
+	// Read only valid rotation from DEVMODEW, so 180-degree rotation is caught
+	// without treating refresh-rate/driver changes as new pointer coordinates.
 	var mode [220]byte
 	binary.LittleEndian.PutUint16(mode[68:], uint16(len(mode)))
 	if callOK(user32.NewProc("EnumDisplaySettingsW"), uintptr(unsafe.Pointer(&info.Device[0])), uintptr(0xffffffff), uintptr(unsafe.Pointer(&mode[0]))) != nil {
 		state.err = errors.New("cannot read display mode")
 		return 0
 	}
-	state.modes = append(state.modes, name+":"+hex.EncodeToString(mode[:]))
+	state.rotations[name] = displayRotation(mode)
 	state.snap.Monitors = append(state.snap.Monitors, protocol.DesktopMonitor{ID: name, Rect: r, Primary: info.Flags&1 != 0, DPI: int(dpi)})
 	return 1
 })
