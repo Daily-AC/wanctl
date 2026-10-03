@@ -29,6 +29,7 @@ import (
 	"wanctl/internal/androidverb"
 	"wanctl/internal/config"
 	"wanctl/internal/console"
+	"wanctl/internal/desktop"
 	"wanctl/internal/elevate"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/httpconn"
@@ -65,6 +66,7 @@ type Options struct {
 
 // Agent is a running controlled node.
 type Agent struct {
+	desktop      desktop.Service
 	deviceID     string
 	id           *transport.Identity
 	known        *transport.Store
@@ -810,6 +812,8 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 			continue
 		}
 		switch m.Kind {
+		case protocol.KindDesktop:
+			pending = a.doDesktop(conn, fp, peerName, m, audit, check)
 		case protocol.KindExec:
 			pending = a.doExecAuthorized(conn, fp, peerName, m, audit, check)
 		case protocol.KindCancel:
@@ -918,7 +922,7 @@ func (a *Agent) status() protocol.Message {
 
 func requiredCapability(kind string) sessionauth.Capabilities {
 	switch kind {
-	case protocol.KindExec, protocol.KindExecAsync, protocol.KindExecPoll:
+	case protocol.KindExec, protocol.KindExecAsync, protocol.KindExecPoll, protocol.KindDesktop:
 		return sessionauth.Exec
 	case protocol.KindFileGet, protocol.KindFileRead:
 		return sessionauth.Read
@@ -998,6 +1002,11 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 	// and no file.
 	spill := server.NewSpill(server.FrameWriter(conn, protocol.FrameStdout), m.SpillAfter)
 	out := io.Writer(spill)
+	var permissionOutput *androidPermissionWriter
+	if runtime.GOOS == "android" && !m.Elevate {
+		permissionOutput = &androidPermissionWriter{out: out, command: m.Command}
+		out = permissionOutput
+	}
 	var code int
 	var err error
 	var ranVia elevate.Kind
@@ -1054,6 +1063,9 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 				return pending
 			}
 		}
+	}
+	if permissionOutput != nil && permissionOutput.denied && (code != 0 || err != nil) && ctx.Err() == nil {
+		err = errors.New(androidPermissionHint)
 	}
 	if err != nil {
 		if ctx.Err() != nil && !errors.Is(err, server.ErrSessionCancelled) {
@@ -1618,6 +1630,9 @@ func peerText(s string) string {
 // the devices most in need of an unattended update are the ones that never get
 // one.
 func (a *Agent) Busy() bool {
+	if a.desktop.Busy() {
+		return true
+	}
 	if a.workspacesBusy() {
 		return true
 	}

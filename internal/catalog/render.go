@@ -120,7 +120,13 @@ func Entry(c Command) string {
 	if params := c.CLIParams(); len(params) > 0 {
 		b.WriteString("\nPARAMETERS\n")
 		for _, p := range params {
-			b.WriteString(fmt.Sprintf("  %-28s %s\n", p.CLISpelling(), kind(p)))
+			line := fmt.Sprintf("  %-28s %s", p.CLISpelling(), kind(p))
+			if len([]rune(line)) > Width {
+				b.WriteString("  " + p.CLISpelling() + "\n")
+				b.WriteString(wrap(kind(p), Width-6, "      ") + "\n")
+			} else {
+				b.WriteString(line + "\n")
+			}
 			b.WriteString(wrap(p.CLIMeaning(), Width-6, "      ") + "\n")
 		}
 	}

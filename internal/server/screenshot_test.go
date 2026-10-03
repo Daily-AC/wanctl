@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"image/png"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -28,6 +29,9 @@ func TestRunScreenshotOnlyHandlesItsOwnVerb(t *testing.T) {
 // the whole assertion: everything above it is shape, and this is the part that
 // only a machine with a screen can answer.
 func TestCaptureScreenProducesADecodablePNG(t *testing.T) {
+	if os.Getenv("WANCTL_TEST_SCREEN_CAPTURE") != "1" {
+		t.Skip("requires supervised WANCTL_TEST_SCREEN_CAPTURE=1")
+	}
 	if testing.Short() {
 		t.Skip("drives the OS capture tool")
 	}

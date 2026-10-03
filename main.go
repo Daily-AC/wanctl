@@ -6,7 +6,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -31,6 +30,7 @@ import (
 	_ "wanctl/internal/androiddns"
 	"wanctl/internal/client"
 	"wanctl/internal/config"
+	"wanctl/internal/desktop"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/limits"
 	mcppkg "wanctl/internal/mcp"
@@ -128,6 +128,9 @@ func configuredDisplay(value, empty string) string {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "__desktop" {
+		os.Exit(desktop.HelperMain(os.Stdin, os.Stdout))
+	}
 	if len(os.Args) < 2 {
 		// Bare `wanctl` explains itself and does nothing else. It used to
 		// enroll and start an agent, so someone on a controller-only machine
@@ -176,6 +179,8 @@ func main() {
 		err = cmdWorkspace(ctx, os.Args[2:])
 	case "screenshot":
 		err = cmdScreenshot(ctx, os.Args[2:])
+	case "act":
+		err = cmdAct(ctx, os.Args[2:])
 	case "push":
 		err = cmdPush(ctx, os.Args[2:])
 	case "pull":
@@ -256,7 +261,7 @@ func main() {
 // `relay`/`portal`. `agent` runs the same gate itself, after parsing --relay.
 var relayCommands = map[string]bool{
 	"start": true, "login": true,
-	"exec": true, "screenshot": true, "push": true, "pull": true,
+	"exec": true, "screenshot": true, "act": true, "push": true, "pull": true,
 	"read": true, "edit": true, "write": true, "workspace": true,
 	"peers": true, "pair": true, "friends": true, "share": true,
 	"docs": true, "admin": true,
@@ -759,90 +764,6 @@ func cmdExec(ctx context.Context, args []string) error {
 		return err
 	}
 	os.Exit(code)
-	return nil
-}
-
-// cmdScreenshot captures the device's screen to a local PNG.
-//
-// This is `exec --elevate -- screenshot` with the one piece a shell pipeline
-// gets wrong: `screencap -p` writes a PNG to stdout, and stdout here is a
-// terminal. Writing to a file by default — and only writing to the terminal
-// when explicitly asked with `-o -` — is the difference between a usable
-// command and a screenful of binary.
-func cmdScreenshot(ctx context.Context, args []string) error {
-	fs := withHelp(flag.NewFlagSet("screenshot", flag.ExitOnError))
-	target := fs.String("target", "", "device ID or unique name (NS/DEV or DEV)")
-	out := fs.String("o", "", "local file to write (default screenshot-<device>-<time>.png; \"-\" writes to stdout)")
-	via := fs.String("via", "", "pin the elevation channel: su | adb")
-	fs.Parse(args)
-	rest := fs.Args()
-	// Go's flag package stops at the first non-flag argument, so
-	// `screenshot emu -o out.png` would otherwise leave -o unparsed and reject
-	// it as a stray argument. Take the device name and resume parsing.
-	if *target == "" && len(rest) > 0 {
-		*target = rest[0]
-		fs.Parse(rest[1:])
-		rest = fs.Args()
-	}
-	if len(rest) > 0 {
-		return fmt.Errorf("unexpected argument %q (usage: wanctl screenshot [DEVICE] [-o file.png])", rest[0])
-	}
-
-	c, err := client.New()
-	if err != nil {
-		return err
-	}
-
-	// Buffer rather than stream: a failed capture must not leave a truncated
-	// PNG on disk that looks like a real one. The device's stderr and any
-	// policy rejection travel on separate frames, so they still reach the user.
-	var png bytes.Buffer
-	deviceStderr, flushStderr := deviceOutput(os.Stderr)
-	defer flushStderr()
-	code, err := c.ExecTo(ctx, client.ExecRequest{
-		Target: *target, Command: "screenshot", OneShot: true,
-		// Asked for elevated because Android cannot capture without it and this
-		// side cannot know what kind of device answers; a desktop gates it as
-		// an ordinary command. ElevateOptional is what lets a laptop answer
-		// without naming a channel it does not have.
-		Elevate: true, ElevateOptional: true, Via: *via,
-	}, &png, deviceStderr)
-	if err != nil {
-		return err
-	}
-	if code != 0 {
-		return fmt.Errorf("the capture failed on the device (exit %d)", code)
-	}
-	if png.Len() == 0 {
-		return fmt.Errorf("device returned an empty screenshot")
-	}
-	// A capture emits a PNG; anything else means the verb did not run and the
-	// bytes are some tool's error text. On a device that is not Android, an
-	// agent from before desktop capture is the usual reason.
-	if !bytes.HasPrefix(png.Bytes(), []byte("\x89PNG\r\n\x1a\n")) {
-		return fmt.Errorf("device did not return a PNG (%d bytes, starting %q); if it is not Android, run `wanctl update` on it",
-			png.Len(), firstBytes(png.Bytes(), 40))
-	}
-
-	if *out == "-" {
-		w, flush := deviceOutput(os.Stdout)
-		defer flush()
-		_, err := w.Write(png.Bytes())
-		return err
-	}
-	path := *out
-	if path == "" {
-		name := *target
-		if name == "" {
-			name = "device"
-		}
-		name = strings.NewReplacer("/", "-", string(os.PathSeparator), "-").Replace(name)
-		path = fmt.Sprintf("screenshot-%s-%s.png", name, time.Now().Format("20060102-150405"))
-	}
-	if err := os.WriteFile(path, png.Bytes(), 0o644); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "%s (%d bytes)\n", path, png.Len())
 	return nil
 }
 
