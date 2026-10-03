@@ -69,6 +69,7 @@ type held struct {
 	button  string
 	key     uint16
 	unicode bool
+	target  protocol.DesktopWindow
 }
 type inputState struct {
 	mu         sync.Mutex
@@ -82,6 +83,11 @@ func (s *inputState) send(h held, down bool) error {
 		return s.backend.Button(h.button, down)
 	}
 	if h.unicode {
+		if b, ok := s.backend.(interface {
+			UnicodeChecked(protocol.DesktopWindow, uint16, bool) error
+		}); ok {
+			return b.UnicodeChecked(h.target, h.key, down)
+		}
 		return s.backend.Unicode(h.key, down)
 	}
 	return s.backend.Key(h.key, down)
@@ -286,7 +292,7 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 						break
 					}
 					for _, unit := range utf16.Encode([]rune{r}) {
-						if err = input.press(ctx, sig, held{key: unit, unicode: true}); err != nil {
+						if err = input.press(ctx, sig, held{key: unit, unicode: true, target: expected}); err != nil {
 							break
 						}
 						if err = input.release(); err != nil {

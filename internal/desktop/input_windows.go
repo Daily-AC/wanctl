@@ -5,6 +5,7 @@ package desktop
 import (
 	"errors"
 	"os/exec"
+	"strconv"
 	"syscall"
 	"unsafe"
 
@@ -82,6 +83,40 @@ func (b *nativeBackend) Unicode(unit uint16, down bool) error {
 		flags |= 2
 	}
 	return keyboard(unit, flags)
+}
+
+// Keep Unicode SendInput, but put the final live foreground check AFTER the
+// engine's monitoring, metadata, lock and held-state work and all packet/API
+// preparation. This shortens the race; global input delivery is not atomic.
+func (b *nativeBackend) UnicodeChecked(expected protocol.DesktopWindow, unit uint16, down bool) error {
+	if !down {
+		return b.Unicode(unit, false) // release even after focus changes
+	}
+	want, err := strconv.ParseUint(expected.ID, 16, 64)
+	if err != nil || want == 0 {
+		return errors.New("invalid text target window")
+	}
+	in := winInput{Type: 1}
+	*(*keyboardInput)(unsafe.Pointer(&in.Mouse)) = keyboardInput{Scan: unit, Flags: 0x0004, Extra: ownInputMarker}
+	send := user32.NewProc("SendInput")
+	if err = send.Find(); err != nil {
+		return err
+	}
+	entry := send.Addr()
+	var pid uint32
+	user32.NewProc("GetWindowThreadProcessId").Call(uintptr(want), uintptr(unsafe.Pointer(&pid)))
+	if pid != expected.PID {
+		return errors.New("foreground window changed; stopped before sending input")
+	}
+	current, _, _ := user32.NewProc("GetForegroundWindow").Call()
+	if current != uintptr(want) {
+		return errors.New("foreground window changed; stopped before sending input")
+	}
+	n, _, _ := syscall.SyscallN(entry, 1, uintptr(unsafe.Pointer(&in)), unsafe.Sizeof(in))
+	if n != 1 {
+		return errors.New("input was not delivered; target may be elevated or desktop unavailable")
+	}
+	return nil
 }
 func (b *nativeBackend) Key(vk uint16, down bool) error {
 	if b.keyScans == nil {
