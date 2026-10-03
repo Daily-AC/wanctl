@@ -154,10 +154,7 @@ func (f *fakeBackend) Move(protocol.Point) error                          { f.mo
 func (f *fakeBackend) Button(_ string, down bool) error                   { return f.input(down) }
 func (f *fakeBackend) Wheel(int) error                                    { return nil }
 func (f *fakeBackend) Unicode(_ uint16, down bool) error                  { return f.input(down) }
-func (f *fakeBackend) UnicodeTo(_ protocol.DesktopWindow, unit uint16, down bool) error {
-	return f.Unicode(unit, down)
-}
-func (f *fakeBackend) Key(_ uint16, down bool) error { return f.input(down) }
+func (f *fakeBackend) Key(_ uint16, down bool) error                      { return f.input(down) }
 func (f *fakeBackend) input(down bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

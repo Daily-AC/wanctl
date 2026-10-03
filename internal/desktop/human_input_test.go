@@ -49,9 +49,6 @@ func (b *physicalInputBackend) Unicode(_ uint16, down bool) error {
 	}
 	return nil
 }
-func (b *physicalInputBackend) UnicodeTo(_ protocol.DesktopWindow, unit uint16, down bool) error {
-	return b.Unicode(unit, down)
-}
 func (b *physicalInputBackend) Check(string) error {
 	if b.pressed >= 932 {
 		return errors.New("display configuration or session changed; take a fresh screenshot")

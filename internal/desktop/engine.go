@@ -57,9 +57,7 @@ type Backend interface {
 	Move(protocol.Point) error
 	Button(string, bool) error
 	Wheel(int) error
-	// UnicodeTo must retain an explicit receiver belonging to the expected
-	// window; another foreground check plus global input is not sufficient.
-	UnicodeTo(protocol.DesktopWindow, uint16, bool) error
+	Unicode(uint16, bool) error
 	Key(uint16, bool) error
 	Focus(protocol.DesktopWindow) error
 	Launch(protocol.DesktopAction) (uint32, error)
@@ -71,7 +69,6 @@ type held struct {
 	button  string
 	key     uint16
 	unicode bool
-	target  protocol.DesktopWindow
 }
 type inputState struct {
 	mu         sync.Mutex
@@ -85,7 +82,7 @@ func (s *inputState) send(h held, down bool) error {
 		return s.backend.Button(h.button, down)
 	}
 	if h.unicode {
-		return s.backend.UnicodeTo(h.target, h.key, down)
+		return s.backend.Unicode(h.key, down)
 	}
 	return s.backend.Key(h.key, down)
 }
@@ -289,7 +286,7 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 						break
 					}
 					for _, unit := range utf16.Encode([]rune{r}) {
-						if err = input.press(ctx, sig, held{key: unit, unicode: true, target: expected}); err != nil {
+						if err = input.press(ctx, sig, held{key: unit, unicode: true}); err != nil {
 							break
 						}
 						if err = input.release(); err != nil {

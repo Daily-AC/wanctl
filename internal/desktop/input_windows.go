@@ -76,6 +76,13 @@ func keyboard(scan uint16, flags uint32) error {
 	*(*keyboardInput)(unsafe.Pointer(&in.Mouse)) = keyboardInput{Scan: scan, Flags: flags, Extra: ownInputMarker}
 	return sendNative(&in)
 }
+func (b *nativeBackend) Unicode(unit uint16, down bool) error {
+	flags := uint32(0x0004)
+	if !down {
+		flags |= 2
+	}
+	return keyboard(unit, flags)
+}
 func (b *nativeBackend) Key(vk uint16, down bool) error {
 	if b.keyScans == nil {
 		b.keyScans = map[uint16]uintptr{}
