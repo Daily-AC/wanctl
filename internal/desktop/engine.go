@@ -14,13 +14,15 @@ import (
 )
 
 var ErrHumanInput = errors.New(protocol.DesktopHumanInput)
+var errInputMonitor = errors.New("desktop physical input monitor unavailable; input stopped")
 
 // Signal remembers only whether human input occurred. Neither the hook nor
 // this state machine retains keys, pointer positions or input content.
 type Signal struct {
-	human atomic.Bool
-	once  sync.Once
-	done  chan struct{}
+	human         atomic.Bool
+	monitorFailed atomic.Bool
+	once          sync.Once
+	done          chan struct{}
 }
 
 func NewSignal() *Signal { return &Signal{done: make(chan struct{})} }
@@ -30,9 +32,17 @@ func (s *Signal) HumanInput(synthetic bool) {
 		s.once.Do(func() { close(s.done) })
 	}
 }
+func (s *Signal) failMonitor() {
+	s.monitorFailed.Store(true)
+	s.once.Do(func() { close(s.done) })
+}
+
 func (s *Signal) Check(ctx context.Context) error {
 	if s.human.Load() {
 		return ErrHumanInput
+	}
+	if s.monitorFailed.Load() {
+		return errInputMonitor
 	}
 	return ctx.Err()
 }
@@ -103,6 +113,13 @@ func (s *inputState) release() error {
 	return s.releaseErr
 }
 
+// Physical input monitoring is independent of the banner/hook message loop.
+// The monitor retains only an occurrence latch, never keys or input content.
+// Portable backends need no native monitor; tests can supply a device feed.
+type physicalInputMonitor interface {
+	WatchInput(*Signal) (stop func(), err error)
+}
+
 type Engine struct {
 	Backend Backend
 	Signal  *Signal
@@ -118,6 +135,33 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 		sig = NewSignal()
 	}
 	b := e.Backend
+	var stopInput func()
+	// Join/drain the device monitor before choosing the final reason, including
+	// input that arrived while a display/focus query or cleanup was finishing.
+	defer func() {
+		if stopInput != nil {
+			stopInput()
+		}
+		if sig.human.Load() {
+			if res.Status != "unknown" {
+				res.Status = "interrupted"
+			}
+			res.Error = protocol.DesktopHumanInput
+			for i := range res.Actions {
+				if res.Actions[i].Index == res.FailedIndex {
+					res.Actions[i].Error = protocol.DesktopHumanInput
+				}
+			}
+		}
+	}()
+	if monitor, ok := b.(physicalInputMonitor); ok {
+		var err error
+		stopInput, err = monitor.WatchInput(sig)
+		if err != nil {
+			res.Error = "desktop physical input monitor unavailable: " + err.Error()
+			return
+		}
+	}
 	clean, err := b.Begin(controller, sig)
 	if err != nil {
 		res.Error = "desktop safety monitor unavailable: " + err.Error()
@@ -152,19 +196,17 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 			res.Warning = err.Error()
 			res.Error = err.Error()
 		}
-		if sig.human.Load() {
-			if res.Status != "unknown" {
-				res.Status = "interrupted"
-			}
-			res.Error = protocol.DesktopHumanInput
-		}
 	}()
 	expected := snapshot.Foreground
 	checkpoint := func() error {
 		if err := sig.Check(ctx); err != nil {
 			return err
 		}
-		return b.Check(snapshot.Layout)
+		err := b.Check(snapshot.Layout)
+		if stopped := sig.Check(ctx); stopped != nil {
+			return stopped
+		}
+		return err
 	}
 	wait := func(d time.Duration) error {
 		deadline := time.Now().Add(d)
@@ -191,6 +233,9 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 			return err
 		}
 		w, err := b.Foreground()
+		if stopped := sig.Check(ctx); stopped != nil {
+			return stopped
+		}
 		if err != nil {
 			return err
 		}

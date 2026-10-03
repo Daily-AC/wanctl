@@ -30,8 +30,6 @@ type winInput struct {
 	Mouse mouseInput
 }
 
-const ownInputMarker = 0x57414e43
-
 func sendNative(in *winInput) error {
 	n, _, _ := user32.NewProc("SendInput").Call(1, uintptr(unsafe.Pointer(in)), unsafe.Sizeof(*in))
 	if n != 1 {

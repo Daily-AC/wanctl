@@ -38,6 +38,8 @@ type monitorInfo struct {
 	Device        [32]uint16
 }
 type nativeBackend struct {
+	inputSignal     *Signal
+	inputAlive      atomic.Int64
 	banner          atomic.Uintptr
 	monitorAlive    atomic.Int64
 	monitorRequired atomic.Bool
@@ -123,6 +125,9 @@ func displayState() (protocol.DesktopSnapshot, error) {
 	return snap, nil
 }
 func (b *nativeBackend) Check(layout string) error {
+	if err := b.physicalInputError(); err != nil {
+		return err
+	}
 	if b.monitorRequired.Load() && (b.banner.Load() == 0 || time.Since(time.UnixMilli(b.monitorAlive.Load())) > 100*time.Millisecond) {
 		return errors.New("desktop safety monitor stopped responding")
 	}
