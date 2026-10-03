@@ -123,6 +123,12 @@ type physicalInputMonitor interface {
 	WatchInput(*Signal) (stop func(), err error)
 }
 
+// Native text delivery can use a control's accessibility contract and verify
+// its receipt. The callback retains the engine's cancellation/focus checks.
+type textActionBackend interface {
+	TypeText(protocol.DesktopWindow, string, func() error) error
+}
+
 type Engine struct {
 	Backend Backend
 	Signal  *Signal
@@ -284,6 +290,10 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 				err = wait(time.Duration(a.Millis) * time.Millisecond)
 				ar.Status = "completed"
 			case "type":
+				if typer, ok := b.(textActionBackend); ok {
+					err = typer.TypeText(expected, a.Text, foreground)
+					break
+				}
 				for _, r := range a.Text {
 					if err = foreground(); err != nil {
 						break
