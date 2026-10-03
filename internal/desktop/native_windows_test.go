@@ -27,3 +27,16 @@ func TestWin32InputAndCaptureLayouts(t *testing.T) {
 		t.Fatal("hook flags offsets do not match Win32 ABI")
 	}
 }
+
+func TestWin32RawInputMetadataLayouts(t *testing.T) {
+	headerSize, deviceSize := uintptr(24), uintptr(16)
+	if unsafe.Sizeof(uintptr(0)) == 4 {
+		headerSize, deviceSize = 16, 12
+	}
+	if unsafe.Sizeof(rawInputHeader{}) != headerSize || unsafe.Sizeof(rawInputDevice{}) != deviceSize || unsafe.Sizeof(inputMessageSource{}) != 8 {
+		t.Fatal("Raw Input metadata ABI mismatch")
+	}
+	if unsafe.Offsetof(rawInputHeader{}.Device) != 8 || unsafe.Offsetof(rawInputDevice{}.Target) != 8 {
+		t.Fatal("Raw Input pointer alignment mismatch")
+	}
+}
