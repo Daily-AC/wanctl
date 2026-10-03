@@ -40,3 +40,13 @@ func TestWin32RawInputMetadataLayouts(t *testing.T) {
 		t.Fatal("Raw Input pointer alignment mismatch")
 	}
 }
+
+func TestGUIThreadInfoLayout(t *testing.T) {
+	size := uintptr(72)
+	if unsafe.Sizeof(uintptr(0)) == 4 {
+		size = 48
+	}
+	if unsafe.Sizeof(guiThreadInfo{}) != size || unsafe.Offsetof(guiThreadInfo{}.Active) != 8 || unsafe.Offsetof(guiThreadInfo{}.CaretRect) != 8+6*unsafe.Sizeof(uintptr(0)) {
+		t.Fatal("GUITHREADINFO ABI mismatch")
+	}
+}
