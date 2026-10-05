@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"wanctl/internal/desktop"
+	"wanctl/internal/protocol"
 )
 
 // This file gives the `screenshot` verb a body on the three desktop platforms.
@@ -63,6 +68,38 @@ func RunScreenshot(ctx context.Context, command string, out io.Writer) (handled 
 
 // captureScreen returns the PNG bytes of the whole desktop.
 func captureScreen(ctx context.Context) ([]byte, error) {
+	return captureScreenUsing(ctx, desktop.SessionZero, desktop.RunHelper, captureScreenLocal)
+}
+
+func captureScreenUsing(ctx context.Context, sessionZero func() (bool, error), run desktop.Runner, local func(context.Context) ([]byte, error)) ([]byte, error) {
+	zero, err := sessionZero()
+	if err != nil {
+		return nil, err
+	}
+	if !zero {
+		return local(ctx)
+	}
+	res, data, err := run(ctx, desktop.Job{Action: "screenshot", Request: protocol.DesktopRequest{}})
+	if err != nil {
+		return nil, fmt.Errorf("desktop screenshot helper failed")
+	}
+	if res.Status != "completed" {
+		return nil, fmt.Errorf("desktop screenshot: %s", res.Error)
+	}
+	img, err := jpeg.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("desktop screenshot helper returned an invalid image")
+	}
+	// Old exec clients expect raw PNG. Only this boundary transcodes; desktop
+	// clients retain the helper's original JPEG and coordinate metadata.
+	var out bytes.Buffer
+	if err := png.Encode(&out, img); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func captureScreenLocal(ctx context.Context) ([]byte, error) {
 	f, err := os.CreateTemp("", "wanctl-screenshot-*.png")
 	if err != nil {
 		return nil, err

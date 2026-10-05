@@ -52,6 +52,8 @@ func (a *Agent) doDesktopUsing(conn io.ReadWriter, fp, peerName string, m protoc
 		}
 	}
 	label = fp[:min(len(fp), 20)] + " · " + label
+	var session *uint32
+	ctx = desktop.WithSessionObserver(ctx, func(id uint32) { session = &id })
 	res, data := a.desktop.Do(ctx, fp, label, m.Action, m.RequestID, m.Desktop, run)
 	code := 0
 	if res.Status != "completed" {
@@ -59,7 +61,7 @@ func (a *Agent) doDesktopUsing(conn io.ReadWriter, fp, peerName string, m protoc
 	}
 	// No OS window titles, typed text, launch arguments, or helper output enter
 	// these surfaces. Status alone is sufficient to audit interrupted batches.
-	a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: detail + " [" + res.Status + "]", Decision: decision, Exit: &code})
+	a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: detail + " [" + res.Status + "]", Decision: decision, Exit: &code, DesktopSession: session})
 	a.notifyExecFinished(detail, "", peerName, code)
 	_ = desktop.WriteResult(conn, res, data)
 	return pending

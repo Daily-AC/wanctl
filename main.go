@@ -128,6 +128,9 @@ func configuredDisplay(value, empty string) string {
 }
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "__desktop-pipe" {
+		os.Exit(desktop.PipeHelperMain(os.Args[2]))
+	}
 	if len(os.Args) == 2 && os.Args[1] == "__desktop" {
 		os.Exit(desktop.HelperMain(os.Stdin, os.Stdout))
 	}

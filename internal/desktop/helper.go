@@ -12,24 +12,36 @@ import (
 	"wanctl/internal/protocol"
 )
 
-// RunHelper carries private action data over an anonymous pipe, never argv,
+// RunHelper carries private action data over pipes, never argv,
 // environment, a temporary file, the event log or process error text.
 func RunHelper(ctx context.Context, job Job) (protocol.DesktopResult, []byte, error) {
-	var res protocol.DesktopResult
+	return runPlatformHelper(ctx, job)
+}
+
+type helperProcess struct {
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+	wait   func() error
+	kill   func() error
+}
+
+type helperStart func(context.Context) (*helperProcess, error)
+
+func startInheritedHelper(context.Context) (*helperProcess, error) {
 	path, err := os.Executable()
 	if err != nil {
-		return res, nil, err
+		return nil, err
 	}
 	cmd := exec.Command(path, "__desktop")
 	helperProcessAttrs(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return res, nil, err
+		return nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		stdin.Close()
-		return res, nil, err
+		return nil, err
 	}
 	// Child errors are structured and sanitized. Never reflect stderr (which
 	// might contain OS diagnostics that echo launch arguments) to a controller.
@@ -37,10 +49,24 @@ func RunHelper(ctx context.Context, job Job) (protocol.DesktopResult, []byte, er
 	if err = cmd.Start(); err != nil {
 		stdin.Close()
 		stdout.Close()
-		return res, nil, err
+		return nil, err
 	}
+	return &helperProcess{stdin: stdin, stdout: stdout, wait: cmd.Wait, kill: cmd.Process.Kill}, nil
+}
+
+func exchangeHelper(ctx context.Context, job Job, start helperStart) (protocol.DesktopResult, []byte, error) {
+	var res protocol.DesktopResult
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return res, nil, err
+	}
+	child, err := start(ctx)
+	if err != nil {
+		return res, nil, err
+	}
+	stdin, stdout := child.stdin, child.stdout
+	defer stdout.Close()
 	done := make(chan struct{})
 	watchDone := make(chan struct{})
 	go func() {
@@ -54,7 +80,7 @@ func RunHelper(ctx context.Context, job Job) (protocol.DesktopResult, []byte, er
 			select {
 			case <-done:
 			case <-timer.C:
-				_ = cmd.Process.Kill()
+				_ = child.kill()
 			}
 		case <-done:
 		}
@@ -69,9 +95,9 @@ func RunHelper(ctx context.Context, job Job) (protocol.DesktopResult, []byte, er
 	}
 	if err != nil {
 		stdin.Close()
-		_ = cmd.Process.Kill()
+		_ = child.kill()
 	}
-	waitErr := cmd.Wait()
+	waitErr := child.wait()
 	close(done)
 	<-watchDone
 	stdin.Close()
@@ -126,7 +152,7 @@ func ReadResultBody(r io.Reader, m protocol.Message) (protocol.DesktopResult, []
 }
 
 // HelperMain is reachable before any relay/config initialization. It runs only
-// once, in the desktop of its parent. Input EOF means the owner agent left.
+// once, in the selected user's desktop. Input EOF means the owner agent left.
 func HelperMain(in io.Reader, out io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
