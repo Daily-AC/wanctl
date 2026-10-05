@@ -1,13 +1,25 @@
 package desktop
 
-const ownInputMarker = 0x57414e43
+import (
+	"crypto/rand"
+	"encoding/binary"
+)
 
-// Raw Input can also carry injected events. Classify source metadata, not the
-// key/button payload: ignore our marker and explicitly injected/system input.
-// A null device alone is NOT proof of injection: precision touchpads use it.
-func rawDeviceInput(kind uint32, device uintptr, origin uint32, extra uintptr) bool {
-	if kind > 1 || extra == ownInputMarker || origin == 2 || origin == 4 {
-		return false
+// Each helper invocation is a fresh process. Keep the nonzero random marker
+// within signed 32 bits as well as ULONG_PTR; never reuse a shared constant.
+var ownInputMarker = func() uintptr {
+	var b [4]byte
+	for {
+		rand.Read(b[:]) // Go's crypto/rand.Read terminates on entropy failure.
+		if marker := uintptr(binary.LittleEndian.Uint32(b[:]) & 0x7fffffff); marker != 0 {
+			return marker
+		}
 	}
-	return device != 0 || origin == 1 || kind == 0
+}()
+
+func isOwnInput(extra uintptr) bool { return extra == ownInputMarker }
+
+// Only our marker exempts keyboard/mouse input, irrespective of source/device.
+func rawDeviceInput(kind uint32, _ uintptr, _ uint32, extra uintptr) bool {
+	return kind <= 1 && !isOwnInput(extra)
 }

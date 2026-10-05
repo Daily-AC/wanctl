@@ -23,9 +23,11 @@ func TestInputSourceClassificationDoesNotConfuseInjectionAndTouchpad(t *testing.
 		{"own injection without source annotation", 0, 0, 0, ownInputMarker, false},
 		{"own injection with hardware annotation", 0, 17, 1, ownInputMarker, false},
 		{"own injected Unicode", 1, 0, 2, ownInputMarker, false},
-		{"unattributed software keyboard packet", 1, 0, 0, 0, false},
-		{"other injected keyboard", 1, 0, 2, 0, false},
-		{"system cursor reposition", 0, 0, 4, 0, false},
+		{"unattributed software keyboard packet", 1, 0, 0, 0, true},
+		{"other injected keyboard", 1, 0, 2, 0, true},
+		{"system cursor reposition", 0, 0, 4, 0, true},
+		{"remote mouse without our marker", 0, 0, 2, 0, true},
+		{"remote keyboard without our marker", 1, 0, 0, 0, true},
 		{"unrelated HID", 2, 17, 1, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
