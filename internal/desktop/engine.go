@@ -166,12 +166,18 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 		stopInput, err = monitor.WatchInput(sig)
 		if err != nil {
 			res.Error = "desktop physical input monitor unavailable: " + err.Error()
+			if errors.Is(err, ErrLocked) {
+				res.Error = ErrLocked.Error()
+			}
 			return
 		}
 	}
 	clean, err := b.Begin(controller, sig)
 	if err != nil {
 		res.Error = "desktop safety monitor unavailable: " + err.Error()
+		if errors.Is(err, ErrLocked) {
+			res.Error = ErrLocked.Error()
+		}
 		if sig.human.Load() {
 			res.Status = "interrupted"
 			res.Warning = res.Error

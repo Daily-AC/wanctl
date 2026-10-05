@@ -36,7 +36,10 @@ func executeJob(ctx context.Context, job Job) (res protocol.DesktopResult, data 
 		res.Error = err.Error()
 		return
 	}
-	return executeJobWithBackend(ctx, job, &nativeBackend{})
+	return executeJobWithBackend(ctx, job, &nativeBackend{}, func() error {
+		_, err := desktopSession()
+		return err
+	})
 }
 
 func setDPI() error {
