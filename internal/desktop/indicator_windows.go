@@ -51,19 +51,19 @@ func (b *nativeBackend) Begin(controller string, sig *Signal) (func(), error) {
 			ready <- err
 			return
 		}
-		// Only flags are inspected. No key codes, scan codes, pointer coordinates,
+		// Only extra-info markers are inspected. No key codes, scan codes, pointer coordinates,
 		// or input content are copied into application state, logs or IPC.
 		keyboardCB := windows.NewCallback(func(code int32, wparam uintptr, event *keyboardHook) uintptr {
 			if code >= 0 {
-				sig.HumanInput(event.Flags&0x10 != 0)
-			} // LLKHF_INJECTED
+				sig.HumanInput(isOwnInput(event.Extra))
+			}
 			r, _, _ := user32.NewProc("CallNextHookEx").Call(0, uintptr(code), wparam, uintptr(unsafe.Pointer(event)))
 			return r
 		})
 		mouseCB := windows.NewCallback(func(code int32, wparam uintptr, event *mouseHook) uintptr {
 			if code >= 0 {
-				sig.HumanInput(event.Flags&1 != 0)
-			} // LLMHF_INJECTED
+				sig.HumanInput(isOwnInput(event.Extra))
+			}
 			r, _, _ := user32.NewProc("CallNextHookEx").Call(0, uintptr(code), wparam, uintptr(unsafe.Pointer(event)))
 			return r
 		})
