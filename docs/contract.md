@@ -1304,12 +1304,12 @@ The helper has a two-minute overall deadline. Actions (1 to 64): click
 (wheel notches, positive up, -100 to 100); type {text} (Unicode, max 16384
 characters per batch); key {key} (scan-code combination); wait {ms} (0 to
 10000); focus {title} or {pid} (must identify one visible window in the
-referenced screenshot); launch {program,args,cwd,timeout_ms,title} (direct
-program launch, optional expected window title fragment for launchers that
-reuse a process, default 10000 ms, max 30000). Launch reports PID, window
-appearance and foreground acquisition separately; the launched program
-survives this call. focus handles foreground lock and verifies the resulting
-window.
+referenced screenshot); launch {program,args,cwd,timeout_ms,title} (executable
+path, or a .lnk shortcut started the way Explorer opens it; optional expected
+window title fragment for launchers that reuse a process, default 10000 ms,
+max 30000). Launch reports PID, window appearance and foreground acquisition
+separately; the launched program survives this call. focus handles foreground
+lock and verifies the resulting window.
 
 Key names: ctrl, alt, shift, win, a-z, 0-9, f1-f12, enter, tab, esc/escape,
 space, backspace, delete, insert, home, end, pageup, pagedown, left, right,
