@@ -1,5 +1,5 @@
 // Package desktop implements one visible, cancellable batch in the logged-in
-// Windows user's desktop. It does not install a service or cross sessions.
+// Windows user's desktop. Helpers are short-lived, including from session 0.
 package desktop
 
 import (
