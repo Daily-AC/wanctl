@@ -29,3 +29,9 @@ func (s *Signal) InputEvent(kind uint32, injected bool, extra uintptr) {
 		s.HumanInput(false)
 	}
 }
+
+func (s *Signal) RawInputEvent(kind, origin uint32, extra uintptr) {
+	// IMO_SYSTEM, like IMO_INJECTED, explicitly denotes synthetic input.
+	// Hardware (including UIAccess-attributed input) and unknown origins stop.
+	s.InputEvent(kind, origin == 2 || origin == 4, extra)
+}

@@ -83,7 +83,7 @@ func (b *nativeBackend) WatchInput(sig *Signal) (func(), error) {
 					// RID_HEADER does NOT fetch RAWKEYBOARD/RAWMOUSE: no key code, typed
 					// content, button or pointer coordinates are read or retained. Do not
 					// reject a zero hDevice: precision touchpads legitimately use it.
-					sig.InputEvent(header.Type, source.Origin == 2, extra)
+					sig.RawInputEvent(header.Type, source.Origin, extra)
 				}
 				defWindow.Call(hwnd, uintptr(message), wparam, lparam)
 				return 0
