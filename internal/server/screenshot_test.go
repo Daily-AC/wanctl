@@ -3,12 +3,17 @@ package server
 import (
 	"bytes"
 	"context"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"image/png"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
+	"wanctl/internal/desktop"
+	"wanctl/internal/protocol"
 )
 
 // The verb is only this device's verb. Anything else is an ordinary command and
@@ -157,6 +162,59 @@ func TestWindowsCaptureDeclaresDPIAwarenessBeforeMeasuring(t *testing.T) {
 		}
 		if at > measure {
 			t.Errorf("script calls %s after it reads VirtualScreen", call)
+		}
+	}
+}
+
+func TestSessionZeroLegacyScreenshotUsesHelper(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 16, 9))
+	img.Set(4, 3, color.RGBA{200, 40, 30, 255})
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, img, nil); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	helper := func(ctx context.Context, job desktop.Job) (protocol.DesktopResult, []byte, error) {
+		calls++
+		if job.Action != "screenshot" || job.Reference != nil || len(job.Request.Actions) != 0 {
+			t.Fatalf("unexpected job: %+v", job)
+		}
+		desktop.RecordSession(ctx, 9)
+		return protocol.DesktopResult{Status: "completed", Snapshot: &protocol.DesktopSnapshot{Session: 9}}, encoded.Bytes(), nil
+	}
+	var recorded uint32
+	ctx := desktop.WithSessionObserver(context.Background(), func(id uint32) { recorded = id })
+	data, err := captureScreenUsing(ctx, func() (bool, error) { return true, nil }, helper, func(context.Context) ([]byte, error) {
+		t.Fatal("session 0 used the blank PowerShell capture")
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil || cfg.Width != 16 || cfg.Height != 9 || calls != 1 || recorded != 9 {
+		t.Fatalf("cfg=%+v err=%v calls=%d session=%d", cfg, err, calls, recorded)
+	}
+}
+
+func TestLegacyDesktopSessionCaptureUnchanged(t *testing.T) {
+	original := []byte("original PNG bytes")
+	data, err := captureScreenUsing(context.Background(), func() (bool, error) { return false, nil }, func(context.Context, desktop.Job) (protocol.DesktopResult, []byte, error) {
+		t.Fatal("desktop-session legacy capture was rerouted")
+		return protocol.DesktopResult{}, nil, nil
+	}, func(context.Context) ([]byte, error) { return original, nil })
+	if err != nil || !bytes.Equal(data, original) {
+		t.Fatalf("%q %v", data, err)
+	}
+}
+
+func TestSessionZeroLegacyScreenshotPreservesRefusal(t *testing.T) {
+	for _, cause := range []string{"desktop unavailable: no signed-in user at the active console", "desktop unavailable: screen locked or secure desktop active"} {
+		data, err := captureScreenUsing(context.Background(), func() (bool, error) { return true, nil }, func(context.Context, desktop.Job) (protocol.DesktopResult, []byte, error) {
+			return protocol.DesktopResult{Status: "rejected", Error: cause}, nil, nil
+		}, func(context.Context) ([]byte, error) { t.Fatal("fell back to blank screen"); return nil, nil })
+		if len(data) != 0 || err == nil || !strings.Contains(err.Error(), cause) {
+			t.Fatalf("%q %v", data, err)
 		}
 	}
 }

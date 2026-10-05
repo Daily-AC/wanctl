@@ -1010,6 +1010,8 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 	var code int
 	var err error
 	var ranVia elevate.Kind
+	var desktopSession *uint32
+	ctx = desktop.WithSessionObserver(ctx, func(id uint32) { desktopSession = &id })
 	switch {
 	case m.Elevate:
 		// A desktop capture is the same verb through the same gate, with no
@@ -1075,7 +1077,7 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 			// failed, so it is passed through untouched.
 			err = fmt.Errorf("command cancelled by the controller")
 		}
-		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(ranVia)})
+		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Via: string(ranVia), DesktopSession: desktopSession})
 		if code == 0 {
 			code = -1
 		}
@@ -1090,7 +1092,7 @@ func (a *Agent) doExecAuthorized(conn *tls.Conn, fp, peerName string, m protocol
 		})
 		return pending
 	}
-	a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code, Via: string(ranVia)})
+	a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peerName, Detail: m.Command, Cwd: m.Cwd, Decision: decision, Exit: &code, Via: string(ranVia), DesktopSession: desktopSession})
 	a.notifyExecFinished(m.Command, m.Cwd, peerName, code)
 	spillPath, spilled, kept := spill.Close()
 	protocol.WriteMessage(conn, protocol.Message{
