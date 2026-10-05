@@ -189,3 +189,27 @@ func TestAndroidPermissionHintCrossesChunks(t *testing.T) {
 		t.Fatal("unrelated permission refusal matched")
 	}
 }
+
+func TestDesktopAuditRecordsSessionWithoutTypedText(t *testing.T) {
+	for _, status := range []string{"completed", "rejected", "unknown"} {
+		t.Run(status, func(t *testing.T) {
+			a := newOptsAgent(t, Options{Mode: policy.ModeBypass})
+			snap, _ := a.desktop.Store.Put("owner", protocol.DesktopSnapshot{}, time.Now())
+			secret := "PRIVATE_S25_TEXT"
+			req := protocol.Message{Kind: protocol.KindDesktop, Action: "act", RequestID: desktop.NewID(), Desktop: &protocol.DesktopRequest{ScreenshotID: snap.ID, Actions: []protocol.DesktopAction{{Type: "type", Text: secret}}}}
+			desktopExchange(t, a, req, true, func(ctx context.Context, job desktop.Job) (protocol.DesktopResult, []byte, error) {
+				desktop.RecordSession(ctx, 17)
+				// No snapshot on locked/crashed helpers; audit cannot rely on one.
+				return protocol.DesktopResult{Status: status}, nil, nil
+			})
+			events, err := a.log.Read(eventlog.Filter{Type: "exec"})
+			if err != nil || len(events) != 1 || events[0].DesktopSession == nil || *events[0].DesktopSession != 17 {
+				t.Fatalf("%+v %v", events, err)
+			}
+			encoded, _ := json.Marshal(events)
+			if strings.Contains(string(encoded), secret) {
+				t.Fatalf("typed text leaked: %s", encoded)
+			}
+		})
+	}
+}
