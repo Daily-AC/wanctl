@@ -35,3 +35,13 @@ func (s *Signal) RawInputEvent(kind, origin uint32, extra uintptr) {
 	// Hardware (including UIAccess-attributed input) and unknown origins stop.
 	s.InputEvent(kind, origin == 2 || origin == 4, extra)
 }
+
+func (s *Signal) RawInputDeviceEvent(kind uint32, device uintptr, origin uint32, extra uintptr) {
+	// Use keyboard device presence when message-origin metadata loses injection.
+	// Never apply this inference to mice: precision touchpads can have hDevice=0.
+	if kind == 1 && device == 0 {
+		s.InputEvent(kind, true, extra)
+		return
+	}
+	s.RawInputEvent(kind, origin, extra)
+}
