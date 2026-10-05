@@ -36,53 +36,7 @@ func executeJob(ctx context.Context, job Job) (res protocol.DesktopResult, data 
 		res.Error = err.Error()
 		return
 	}
-	backend := &nativeBackend{}
-	var source *protocol.Rect
-	if job.Reference != nil && job.Action == "screenshot" {
-		if err := backend.Check(job.Reference.Layout); err != nil {
-			res.Error = err.Error()
-			return
-		}
-		if job.Request.Region != nil {
-			r, err := CropSource(*job.Reference, *job.Request.Region)
-			if err != nil {
-				res.Error = err.Error()
-				return
-			}
-			source = &r
-		}
-	}
-	if job.Action == "act" {
-		if job.Reference == nil {
-			res.Error = "act needs a screenshot reference"
-			return
-		}
-		res = (Engine{Backend: backend}).Run(ctx, job.Controller, *job.Reference, job.Request.Actions)
-	} else {
-		res.Status = "completed"
-	}
-	if ctx.Err() != nil {
-		if res.Error == "" {
-			res.Status = "partial"
-			res.Error = "controller disconnected; input may be partially completed; do not replay"
-		}
-		return
-	}
-	snap, jpeg, err := backend.Capture(source)
-	if err != nil {
-		if res.Error == "" {
-			res.Error = err.Error()
-			if res.Completed > 0 {
-				res.Status = "partial"
-			} else {
-				res.Status = "rejected"
-			}
-		}
-		return
-	}
-	res.Snapshot = &snap
-	data = jpeg
-	return
+	return executeJobWithBackend(ctx, job, &nativeBackend{})
 }
 
 func setDPI() error {
