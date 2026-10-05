@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"wanctl/internal/admission"
+	"wanctl/internal/desktop"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/protocol"
 	"wanctl/internal/sessionauth"
@@ -60,6 +61,8 @@ func firstAudit(scopes []sessionAudit) sessionAudit {
 func rejectedRequestEvent(fp, name string, m protocol.Message, reason string) eventlog.Event {
 	e := eventlog.Event{Type: "request", PeerFP: fp, PeerName: name, Detail: m.Kind, Decision: "denied: " + reason}
 	switch m.Kind {
+	case protocol.KindDesktop:
+		e.Type, e.Detail = "exec", desktop.Summary(m.Action, m.Desktop, true)
 	case protocol.KindExec, protocol.KindExecAsync, protocol.KindExecPoll:
 		e.Type, e.Detail, e.Cwd = "exec", m.Command, m.Cwd
 	case protocol.KindFilePut:

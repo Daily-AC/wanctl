@@ -85,6 +85,9 @@ func TestExecLeavesNoFileForShortOutput(t *testing.T) {
 // screencap, answered here by this machine's own capture tool, and a PNG that
 // decodes at the other end.
 func TestScreenshotOverTheRelayReturnsAPNG(t *testing.T) {
+	if os.Getenv("WANCTL_TEST_SCREEN_CAPTURE") != "1" {
+		t.Skip("requires supervised WANCTL_TEST_SCREEN_CAPTURE=1")
+	}
 	if testing.Short() {
 		t.Skip("drives the OS capture tool")
 	}

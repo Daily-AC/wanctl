@@ -44,12 +44,12 @@ func instructions(hosted bool) string {
 		b.WriteString(fmt.Sprintf("  %-20s %s\n", c.MCPName, instructionLine(c)))
 	}
 
-	b.WriteString("\nDEV LOOP\n")
+	b.WriteString("DEV LOOP\n")
 	for _, rule := range devLoop {
 		b.WriteString(wrapPlainPrefixed(rule, Width-2, "  ") + "\n")
 	}
 
-	b.WriteString("\nREFUSALS — none of these mean retry as-is:\n")
+	b.WriteString("REFUSALS — none of these mean retry as-is:\n")
 	for _, r := range criticalErrors {
 		if hosted && r.Text == loginRequired {
 			continue
@@ -90,6 +90,7 @@ var devLoop = []string{
 // are deliberately shorter than the catalog's own: this list is read before any
 // work, and the full explanation is one `wanctl help <command>` away.
 var criticalErrors = []struct{ Text, Do string }{
+	{"有人在用这台电脑", "stop, ask your user; NEVER retry automatically."},
 	{"PAIRING REQUIRED", "give the URL in the message to the user, then retry."},
 	{"DEVICE IDENTITY CONFIRMATION REQUIRED", "authorize trust, then pin."},
 	{"DEVICE IDENTITY MISMATCH", "refused, nothing sent; report both fingerprints."},
