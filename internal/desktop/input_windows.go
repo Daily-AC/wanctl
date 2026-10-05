@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -162,5 +163,53 @@ func (b *nativeBackend) Launch(a protocol.DesktopAction) (uint32, error) {
 	}
 	pid := uint32(cmd.Process.Pid)
 	_ = cmd.Process.Release()
+	return pid, nil
+}
+
+type shellExecuteInfo struct {
+	Size, Mask                        uint32
+	Window                            uintptr
+	Verb, File, Parameters, Directory *uint16
+	Show                              int32
+	Instance, IDList                  uintptr
+	Class                             *uint16
+	ClassKey                          uintptr
+	HotKey                            uint32
+	Icon                              uintptr
+	Process                           windows.Handle
+}
+
+func (b *nativeBackend) LaunchShortcut(a protocol.DesktopAction) (uint32, error) {
+	// The helper runs on a locked OS thread. Let the Shell resolve the link's
+	// target, arguments and working directory; do not parse or rewrite it.
+	if err := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED|windows.COINIT_DISABLE_OLE1DDE); err != nil && err != syscall.Errno(1) {
+		return 0, errors.New("cannot initialize shortcut launch")
+	}
+	defer windows.CoUninitialize()
+	args := make([]string, len(a.Args))
+	for i, arg := range a.Args {
+		args[i] = windows.EscapeArg(arg)
+	}
+	parameters := strings.Join(args, " ")
+	if strings.ContainsRune(a.Program+parameters+a.Cwd, 0) {
+		return 0, errors.New("invalid shortcut launch argument")
+	}
+	info := shellExecuteInfo{Mask: 0x40 | 0x100 | 0x400, Verb: utf16ptr("open"), File: utf16ptr(a.Program), Show: 1}
+	info.Size = uint32(unsafe.Sizeof(info)) // NOCLOSEPROCESS | NOASYNC | FLAG_NO_UI
+	if parameters != "" {
+		info.Parameters = utf16ptr(parameters)
+	}
+	if a.Cwd != "" {
+		info.Directory = utf16ptr(a.Cwd)
+	}
+	ok, _, _ := windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteExW").Call(uintptr(unsafe.Pointer(&info)))
+	if ok == 0 {
+		return 0, errors.New("shortcut could not be started")
+	}
+	if info.Process == 0 {
+		return 0, nil // an existing process may handle it; title matching still works
+	}
+	defer windows.CloseHandle(info.Process)
+	pid, _ := windows.GetProcessId(info.Process)
 	return pid, nil
 }

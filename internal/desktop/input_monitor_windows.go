@@ -79,11 +79,11 @@ func (b *nativeBackend) WatchInput(sig *Signal) (func(), error) {
 				copied, _, _ := getRaw.Call(lparam, ridHeader, uintptr(unsafe.Pointer(&header)), uintptr(unsafe.Pointer(&size)), unsafe.Sizeof(header))
 				if copied != unsafe.Sizeof(header) || sourceOK == 0 {
 					sig.failMonitor()
-				} else if rawDeviceInput(header.Type, header.Device, source.Origin, extra) {
+				} else {
 					// RID_HEADER does NOT fetch RAWKEYBOARD/RAWMOUSE: no key code, typed
 					// content, button or pointer coordinates are read or retained. Do not
 					// reject a zero hDevice: precision touchpads legitimately use it.
-					sig.HumanInput(false)
+					sig.InputEvent(header.Type, source.Origin == 2, extra)
 				}
 				defWindow.Call(hwnd, uintptr(message), wparam, lparam)
 				return 0

@@ -23,3 +23,9 @@ func isOwnInput(extra uintptr) bool { return extra == ownInputMarker }
 func rawDeviceInput(kind uint32, _ uintptr, _ uint32, extra uintptr) bool {
 	return kind <= 1 && !isOwnInput(extra)
 }
+
+func (s *Signal) InputEvent(kind uint32, injected bool, extra uintptr) {
+	if rawDeviceInput(kind, 0, 0, extra) && !(kind == 1 && injected && s.launchWaiting.Load()) {
+		s.HumanInput(false)
+	}
+}

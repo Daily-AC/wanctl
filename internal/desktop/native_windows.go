@@ -264,7 +264,28 @@ func (b *nativeBackend) Focus(w protocol.DesktopWindow) error {
 		user32.NewProc("ShowWindowAsync").Call(hwnd, 9)
 	} // SW_RESTORE
 	user32.NewProc("SetForegroundWindow").Call(hwnd)
-	return nil // Engine verifies, handles foreground lock, then verifies again.
+	foreground, _, _ := user32.NewProc("GetForegroundWindow").Call()
+	if foreground == hwnd {
+		return nil
+	}
+	// executeJob locks this OS thread. Create its message queue before sharing
+	// input state, activate only the selected normal window, and always detach.
+	var msg winMessage
+	user32.NewProc("PeekMessageW").Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0, 0)
+	caller := uintptr(windows.GetCurrentThreadId())
+	frontThread, _, _ := user32.NewProc("GetWindowThreadProcessId").Call(foreground, 0)
+	targetThread, _, _ := user32.NewProc("GetWindowThreadProcessId").Call(hwnd, 0)
+	attach := user32.NewProc("AttachThreadInput")
+	for i, thread := range []uintptr{frontThread, targetThread} {
+		if thread != 0 && thread != caller && (i == 0 || thread != frontThread) {
+			if callOK(attach, caller, thread, 1) == nil {
+				defer attach.Call(caller, thread, 0)
+			}
+		}
+	}
+	user32.NewProc("BringWindowToTop").Call(hwnd)
+	user32.NewProc("SetForegroundWindow").Call(hwnd)
+	return nil // Engine verifies the resulting foreground; no input was sent.
 }
 
 type monitorEnumeration struct {

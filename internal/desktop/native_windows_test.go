@@ -28,6 +28,16 @@ func TestWin32InputAndCaptureLayouts(t *testing.T) {
 	}
 }
 
+func TestShellExecuteInfoLayout(t *testing.T) {
+	size, processOffset := uintptr(112), uintptr(104)
+	if unsafe.Sizeof(uintptr(0)) == 4 {
+		size, processOffset = 60, 56
+	}
+	if unsafe.Sizeof(shellExecuteInfo{}) != size || unsafe.Offsetof(shellExecuteInfo{}.Process) != processOffset {
+		t.Fatal("SHELLEXECUTEINFOW ABI mismatch")
+	}
+}
+
 func TestWin32RawInputMetadataLayouts(t *testing.T) {
 	headerSize, deviceSize := uintptr(24), uintptr(16)
 	if unsafe.Sizeof(uintptr(0)) == 4 {
