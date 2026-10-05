@@ -68,7 +68,23 @@ func RunScreenshot(ctx context.Context, command string, out io.Writer) (handled 
 
 // captureScreen returns the PNG bytes of the whole desktop.
 func captureScreen(ctx context.Context) ([]byte, error) {
-	return captureScreenUsing(ctx, desktop.SessionZero, desktop.RunHelper, captureScreenLocal)
+	return captureScreenUsing(ctx, desktop.SessionZero, desktop.RunHelper, func(ctx context.Context) ([]byte, error) {
+		return captureScreenChecked(ctx, desktop.CheckCaptureSession, captureScreenLocal)
+	})
+}
+
+func captureScreenChecked(ctx context.Context, check func() error, capture func(context.Context) ([]byte, error)) ([]byte, error) {
+	if err := check(); err != nil {
+		return nil, err
+	}
+	data, err := capture(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := check(); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func captureScreenUsing(ctx context.Context, sessionZero func() (bool, error), run desktop.Runner, local func(context.Context) ([]byte, error)) ([]byte, error) {
@@ -84,6 +100,9 @@ func captureScreenUsing(ctx context.Context, sessionZero func() (bool, error), r
 		return nil, fmt.Errorf("desktop screenshot helper failed")
 	}
 	if res.Status != "completed" {
+		if res.Error == desktop.ErrLocked.Error() {
+			return nil, desktop.ErrLocked
+		}
 		return nil, fmt.Errorf("desktop screenshot: %s", res.Error)
 	}
 	img, err := jpeg.Decode(bytes.NewReader(data))
