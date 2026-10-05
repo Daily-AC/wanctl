@@ -41,6 +41,8 @@ type Event struct {
 	// adb). Present only on elevated execs, which is what makes
 	// "what has run as root on this phone" a greppable question.
 	Via string `json:"via,omitempty"`
+
+	DesktopSession *uint32 `json:"desktop_session,omitempty"` // Windows session where a helper actually started
 }
 
 // Filter narrows a Read.
