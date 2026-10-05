@@ -434,7 +434,6 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 						break
 					}
 					if len(matches) == 1 {
-						sig.launchWaiting.Store(false)
 						ar.WindowAppeared = true
 						expected, err = focusWindow(b, matches[0], wait, checkpoint)
 						ar.Foreground = err == nil
@@ -449,6 +448,8 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 					}
 					err = wait(20 * time.Millisecond)
 				}
+				// The launch action ends here, after any foreground acquisition.
+				// Resume strict input handling before result checks/the next action.
 				sig.launchWaiting.Store(false)
 			default:
 				err = errors.New("unknown action type")
