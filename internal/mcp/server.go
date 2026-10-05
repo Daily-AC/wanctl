@@ -669,6 +669,7 @@ func registerMCPTools(s *server.MCPServer, hosted bool, bindings ...*workspaceCo
 		"mcpEdit":        mcpEdit,
 		"mcpWrite":       mcpWrite,
 		"mcpScreenshot":  mcpScreenshot,
+		"mcpAct":         mcpAct,
 		"mcpExecAsync":   mcpExecAsync,
 		"mcpExecPoll":    mcpExecPoll,
 		"mcpPush":        mcpPush,
@@ -1372,34 +1373,6 @@ func mcpWrite(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 // mcpScreenshot returns what is on the device's screen as image content, which
 // is the only form of it a model can actually look at. The CLI writes a file
 // instead; both ask the device the same thing.
-func mcpScreenshot(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
-	sess := sessions.get(ctx)
-	c, hint := sess.client()
-	if hint != nil {
-		return hint, nil
-	}
-	var png, stderr bytes.Buffer
-	res, err := c.ExecOut(ctx, client.ExecRequest{
-		Target: reqStr(req, "target", ""), Command: "screenshot", OneShot: true,
-		// Asked for elevated because Android cannot capture any other way and
-		// only the device knows which kind it is; a desktop gates it as the
-		// ordinary command it is. Optional because a desktop agent honours the
-		// request with no channel to report back.
-		Elevate: true, ElevateOptional: true, Via: reqStr(req, "via", ""),
-	}, &png, &stderr)
-	if err != nil {
-		return dialErrorResult(sess, err), nil
-	}
-	if res.Code != 0 || png.Len() == 0 {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = fmt.Sprintf("the capture exited %d with no output", res.Code)
-		}
-		return mcpapi.NewToolResultError("screenshot failed on the device: " + msg), nil
-	}
-	return screenshotResult(png.Bytes()), nil
-}
-
 // screenshotResult turns the captured bytes into what the caller sees: image
 // content it can actually look at, and one line of text saying what it is
 // looking at. Separate from the call so the shaping is testable without a

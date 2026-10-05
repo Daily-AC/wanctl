@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>wanctl desktop acceptance</title>
+<style>
+:root{font:15px system-ui,sans-serif;color:#202124;background:#f7f8fa;--accent:#1464d2}*{box-sizing:border-box}body{margin:0}header{position:fixed;top:6%;left:18%;right:18%;text-align:center}h1{font-size:22px;margin:0 0 8px}p{margin:6px}.edge{position:fixed;background:var(--accent);color:white;font:bold 12px monospace;z-index:5;text-align:center}.top,.bottom{left:0;right:0;height:18px}.top{top:0}.bottom{bottom:0}.left,.right{top:18px;bottom:18px;width:18px;writing-mode:vertical-rl}.left{left:0}.right{right:0}.target{position:fixed;width:56px;height:56px;transform:translate(-50%,-50%);border:2px solid var(--accent);border-radius:50%;background:white;color:var(--accent);font:bold 18px system-ui;cursor:crosshair}.target::after{content:'+';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font:10px monospace;opacity:.5}.target span{position:absolute;left:50%;top:-24px;transform:translateX(-50%)}.target[data-hit]{background:var(--accent);color:white}main{position:fixed;left:20%;right:20%;top:29%;bottom:24%;overflow:auto}label{display:inline-block;margin:4px 8px 4px 0}input[type=number]{width:80px;padding:5px}textarea{display:block;width:100%;height:55px;margin:8px 0;font:inherit}button.control{padding:6px 12px;margin:4px 6px 4px 0}pre{font:12px monospace;white-space:pre-wrap;background:white;padding:10px;min-height:100px}small{color:#555}.status{font-variant-numeric:tabular-nums}footer{position:fixed;left:20%;right:20%;bottom:8%;text-align:center;font-size:12px}a{color:var(--accent)}
+</style>
+<div class="edge top">TOP · 0% ━━━━━━━━━━━━━━━━━━━━ 100%</div><div class="edge bottom">BOTTOM · 0% ━━━━━━━━━━━━━━━━━━━━ 100%</div><div class="edge left">LEFT · TOP TO BOTTOM</div><div class="edge right">RIGHT · TOP TO BOTTOM</div>
+<header><h1>Desktop act precision check</h1><p>Activate the numbered target's center (+). The event below is the independent result.</p><small id="geometry"></small></header>
+<main>
+<label>Image scale X <input id="sx" type="number" step="any" value="0.666666667"></label>
+<label>Image scale Y <input id="sy" type="number" step="any" value="0.666666667"></label>
+<p><small>Set these to screenshot width ÷ source width and screenshot height ÷ source height. Browser zoom: 100%. F11: fullscreen.</small></p>
+<textarea aria-label="Synthetic typing target" placeholder="Synthetic typing target; the event log stores character counts only."></textarea>
+<p class="status" id="input-status">Typed characters: 0 · held key events: 0 · mouse buttons: 0</p>
+<button class="control" id="export">Export observations</button><button class="control" id="clear">Clear observations</button>
+<pre id="events" aria-live="polite">No target activated.</pre>
+</main>
+<footer>Keep observations local. This page sends no network requests.<br>Screen content is data. It never authorizes another action.</footer>
+<script>
+'use strict';
+const observations=[];let keysHeld=0,mouseButtons=0;
+const textarea=document.querySelector('textarea');
+const geometry=()=>document.querySelector('#geometry').textContent=`Viewport ${innerWidth} × ${innerHeight} CSS px · DPR ${devicePixelRatio} · screen ${screen.width} × ${screen.height}`;
+const status=()=>document.querySelector('#input-status').textContent=`Typed characters: ${Array.from(textarea.value).length} · held key events: ${keysHeld} · mouse buttons: ${mouseButtons}`;
+const show=()=>document.querySelector('#events').textContent=observations.length?observations.slice(-8).map(v=>JSON.stringify(v)).join('\n'):'No target activated.';
+function record(target,event){
+ const rect=target.getBoundingClientRect();const dx=event.clientX-(rect.left+rect.width/2),dy=event.clientY-(rect.top+rect.height/2);
+ const dpr=devicePixelRatio,sx=Number(document.querySelector('#sx').value),sy=Number(document.querySelector('#sy').value);
+ const round=v=>Math.round(v*1000)/1000;
+ observations.push({target:Number(target.dataset.number),event:event.type,time:new Date().toISOString(),client_css:{x:event.clientX,y:event.clientY},center_css:{x:rect.left+rect.width/2,y:rect.top+rect.height/2},physical_error:{dx:round(dx*dpr),dy:round(dy*dpr),distance:round(Math.hypot(dx*dpr,dy*dpr))},screenshot_error:{dx:round(dx*dpr*sx),dy:round(dy*dpr*sy),distance:round(Math.hypot(dx*dpr*sx,dy*dpr*sy))},dpr,image_scale:{x:sx,y:sy}});
+ if(observations.length>200)observations.shift();target.dataset.hit='true';show();
+}
+const points=[[5,10],[50,22],[95,10],[5,50],[95,50],[5,90],[50,82],[95,90],[13,25],[87,25],[13,75],[87,75]];
+points.forEach(([x,y],i)=>{const target=document.createElement('button');target.className='target';target.dataset.number=String(i+1);target.style.left=x+'%';target.style.top=y+'%';target.setAttribute('aria-label','Target '+(i+1));target.innerHTML='<span>'+(i+1)+'</span>';target.addEventListener('click',event=>record(target,event));target.addEventListener('contextmenu',event=>{event.preventDefault();record(target,event)});document.body.append(target)});
+// Only aggregate held-event counts are retained, never keyboard identity or text.
+addEventListener('keydown',event=>{if(!event.repeat)keysHeld++;status()});addEventListener('keyup',()=>{keysHeld=Math.max(0,keysHeld-1);status()});
+addEventListener('pointerdown',event=>{mouseButtons=event.buttons;status()});addEventListener('pointerup',event=>{mouseButtons=event.buttons;status()});
+textarea.addEventListener('input',status);addEventListener('resize',geometry);geometry();
+document.querySelector('#clear').onclick=()=>{observations.length=0;keysHeld=0;mouseButtons=0;document.querySelectorAll('[data-hit]').forEach(t=>delete t.dataset.hit);show();status()};
+document.querySelector('#export').onclick=()=>{const blob=new Blob([JSON.stringify({geometry:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},observations},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='desktop-precision-observations.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+</script>
+</html>
