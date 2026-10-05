@@ -21,6 +21,7 @@ var errInputMonitor = errors.New("desktop physical input monitor unavailable; in
 type Signal struct {
 	human         atomic.Bool
 	monitorFailed atomic.Bool
+	launchWaiting atomic.Bool
 	once          sync.Once
 	done          chan struct{}
 }
@@ -396,12 +397,14 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 					err = errors.New("focus must identify exactly one window in the screenshot")
 					break
 				}
-				expected, err = focusWindow(ctx, sig, b, input, matches[0], wait, checkpoint)
+				expected, err = focusWindow(b, matches[0], wait, checkpoint)
 				ar.Foreground = err == nil
 				ar.Status = "completed"
 			case "launch":
-				ar.PID, err = b.Launch(a)
+				sig.launchWaiting.Store(true)
+				ar.PID, err = launchProgram(b, a)
 				if err != nil {
+					sig.launchWaiting.Store(false)
 					err = errors.New("program could not be started")
 					break
 				}
@@ -431,8 +434,9 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 						break
 					}
 					if len(matches) == 1 {
+						sig.launchWaiting.Store(false)
 						ar.WindowAppeared = true
-						expected, err = focusWindow(ctx, sig, b, input, matches[0], wait, checkpoint)
+						expected, err = focusWindow(b, matches[0], wait, checkpoint)
 						ar.Foreground = err == nil
 						if err == nil {
 							ar.Status = "completed"
@@ -445,6 +449,7 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 					}
 					err = wait(20 * time.Millisecond)
 				}
+				sig.launchWaiting.Store(false)
 			default:
 				err = errors.New("unknown action type")
 			}
@@ -476,7 +481,18 @@ func (e Engine) Run(ctx context.Context, controller string, snapshot protocol.De
 	return
 }
 
-func focusWindow(ctx context.Context, sig *Signal, b Backend, input *inputState, w protocol.DesktopWindow, wait func(time.Duration) error, check func() error) (protocol.DesktopWindow, error) {
+func launchProgram(b Backend, a protocol.DesktopAction) (uint32, error) {
+	if strings.HasSuffix(strings.ToLower(a.Program), ".lnk") {
+		if shell, ok := b.(interface {
+			LaunchShortcut(protocol.DesktopAction) (uint32, error)
+		}); ok {
+			return shell.LaunchShortcut(a)
+		}
+	}
+	return b.Launch(a)
+}
+
+func focusWindow(b Backend, w protocol.DesktopWindow, wait func(time.Duration) error, check func() error) (protocol.DesktopWindow, error) {
 	if w.Elevated || !w.ElevationKnown {
 		return w, errors.New("cannot focus an elevated or unknown-integrity window")
 	}
@@ -489,14 +505,8 @@ func focusWindow(ctx context.Context, sig *Signal, b Backend, input *inputState,
 	if current, err := b.Foreground(); err == nil && FocusGuard(w, current) == nil {
 		return w, nil
 	}
-	// Foreground-lock handling belongs to the tool: release a synthetic Alt tap
-	// before retrying SetForegroundWindow. No permanent lock or global override.
-	if err := input.press(ctx, sig, held{key: 0x12}); err != nil {
-		return w, err
-	}
-	if err := input.release(); err != nil {
-		return w, err
-	}
+	// Retry activation without injecting Alt into the previous foreground,
+	// which may be elevated. The native backend handles input-queue attachment.
 	if err := check(); err != nil {
 		return w, err
 	}
