@@ -70,9 +70,16 @@ func desktopSession() (uint32, error) {
 	if session != windows.WTSGetActiveConsoleSessionId() {
 		return 0, errors.New("desktop unavailable: no active console user in this agent's session")
 	}
+	if err := checkSessionDesktop(session, querySessionState, checkInputDesktop); err != nil {
+		return 0, err
+	}
+	return session, nil
+}
+
+func checkInputDesktop() error {
 	desk, _, _ := user32.NewProc("OpenInputDesktop").Call(0, 0, 1) // DESKTOP_READOBJECTS
 	if desk == 0 {
-		return 0, errors.New("desktop unavailable: screen locked or secure desktop active")
+		return ErrLocked
 	}
 	defer user32.NewProc("CloseDesktop").Call(desk)
 	name := func(handle uintptr) string {
@@ -86,9 +93,9 @@ func desktopSession() (uint32, error) {
 	}
 	current, _, _ := user32.NewProc("GetThreadDesktop").Call(uintptr(windows.GetCurrentThreadId()))
 	if !strings.EqualFold(name(desk), "Default") || !strings.EqualFold(name(current), "Default") {
-		return 0, errors.New("desktop unavailable: screen locked or secure desktop active")
+		return ErrLocked
 	}
-	return session, nil
+	return nil
 }
 
 func displayState() (protocol.DesktopSnapshot, error) {
