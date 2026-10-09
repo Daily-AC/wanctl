@@ -87,6 +87,7 @@ type Agent struct {
 	workspaceMu      sync.Mutex
 	workspaces       map[string]*workspace
 	workspacesClosed bool
+	workspaceLinks   int // reusable workspace connections being served
 	jobs             *jobStore
 	elevator         *elevate.Manager
 
@@ -638,6 +639,9 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 	var check func() bool
 	if auth.GrantID != "" {
 		check = func() bool { return a.delegationActive(ctx, auth, fp) }
+	}
+	if hello.Kind == protocol.KindWorkspaceHello {
+		defer a.attachWorkspaceLink()()
 	}
 	a.serveAuthorized(conn, fp, hello.Name, auth.Capabilities, check, audit)
 }
