@@ -323,8 +323,8 @@ func (d *deviceConn) setMode(mode string) error {
 }
 
 // logs requests the device's event-log lines over the console session. The
-// returned RawMessage is a JSON array of eventlog.Event, forwarded verbatim to
-// the portal SPA.
+// returned RawMessage is a JSON array of eventlog.Event; handleDeviceLogs folds
+// runs of connects (mergeConnectRuns) before it reaches the portal SPA.
 func (d *deviceConn) logs(logType, grep, since string, limit int) (json.RawMessage, error) {
 	m, err := d.rpc(protocol.Message{Kind: protocol.KindLogs, LogType: logType, Grep: grep, Since: since, Limit: limit})
 	if err != nil {
