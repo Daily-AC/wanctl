@@ -42,7 +42,11 @@ func TestAcceptedConnReadsUpToTheLargestFrame(t *testing.T) {
 	if err := c.Write(ctx, websocket.MessageBinary, make([]byte, MaxMessageBytes)); err != nil {
 		t.Fatalf("a message of the largest size: %v", err)
 	}
-	c.Write(ctx, websocket.MessageBinary, make([]byte, MaxMessageBytes+1<<20))
+	// Once the reader refuses the oversized message it stops reading, and this
+	// end never reads the close frame it is sent, so the write can block until
+	// ctx expires. Waited on inline, it made the select below pick between two
+	// ready cases at 30 s and fail half the time.
+	go c.Write(ctx, websocket.MessageBinary, make([]byte, MaxMessageBytes+1<<20))
 	select {
 	case res := <-got:
 		if res.err == nil {
