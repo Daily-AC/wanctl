@@ -587,10 +587,14 @@ func (c *conn) Write(p []byte) (int, error) {
 	if len(c.pending) > 0 && c.flushTimer == nil {
 		c.flushGen++
 		gen := c.flushGen
-		c.flushTimer = time.AfterFunc(writeFlushDelay, func() { c.flushTimerFired(gen) })
+		c.flushTimer = afterFunc(writeFlushDelay, func() { c.flushTimerFired(gen) })
 	}
 	return len(p), nil
 }
+
+// afterFunc arms the write flush timer. Tests replace it to decide when the
+// delay has passed instead of racing the scheduler against 5 ms.
+var afterFunc = time.AfterFunc
 
 func (c *conn) flushTimerFired(gen uint64) {
 	c.writeM.Lock()
