@@ -433,10 +433,43 @@ func (a *Agent) closeWorkspaces() {
 	}
 }
 
+// workspacesBusy reports whether restarting would cut off workspace work: a
+// command waiting for approval or running in a workspace shell, or a
+// controller connected over a reusable workspace link.
+//
+// An idle workspace is not work. Nothing reaps workspaces, so counting every
+// open one kept a device that had used `wanctl workspace` off every later
+// release (found 2026-10-02). A restart costs an idle workspace its shell state; the
+// controller's next request is told the workspace is unknown and opens a new
+// one.
 func (a *Agent) workspacesBusy() bool {
 	a.workspaceMu.Lock()
 	defer a.workspaceMu.Unlock()
-	return len(a.workspaces) > 0
+	if a.workspaceLinks > 0 {
+		return true
+	}
+	for _, w := range a.workspaces {
+		w.mu.Lock()
+		active := w.active != ""
+		w.mu.Unlock()
+		if active {
+			return true
+		}
+	}
+	return false
+}
+
+// attachWorkspaceLink counts a reusable workspace connection for as long as it
+// is served; call the returned func when it ends.
+func (a *Agent) attachWorkspaceLink() (detach func()) {
+	a.workspaceMu.Lock()
+	a.workspaceLinks++
+	a.workspaceMu.Unlock()
+	return func() {
+		a.workspaceMu.Lock()
+		a.workspaceLinks--
+		a.workspaceMu.Unlock()
+	}
 }
 
 // handleWorkspace either handles a control/exec request, or unwraps a file

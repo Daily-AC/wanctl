@@ -103,7 +103,7 @@ func TestWorkspaceEndToEnd(t *testing.T) {
 			c, ag := workspaceFixture(t, tr)
 			rootA, rootB := t.TempDir(), t.TempDir()
 			a, b := openTestWorkspace(t, c, rootA), openTestWorkspace(t, c, rootB)
-			if a.ID == b.ID || !ag.Busy() {
+			if a.ID == b.ID {
 				t.Fatal("workspaces not independently owned")
 			}
 			runWorkspace(t, c, a, "env", "export WANCTL_LESSON=alpha; mkdir child; cd child")

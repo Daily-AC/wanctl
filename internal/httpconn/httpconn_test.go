@@ -173,11 +173,38 @@ func bodyLengths(bodies [][]byte) []int {
 // record at a time, records do not divide the batch size, and each upload takes
 // longer than the flush delay. The timer armed before a batch filled must not
 // survive the batch and post its leftover as an extra request.
+//
+// The test decides when the flush delay has passed: every timer still armed
+// comes due while an upload is in flight, and none between two writes. Run on
+// the real clock, a writer descheduled for 5 ms between two records flushed a
+// partial batch on its own, and the test failed under load.
 func TestBulkWriteSendsNoTailRequests(t *testing.T) {
+	var mu sync.Mutex
+	var armed []*time.Timer
+	var callbacks, due []func()
+	afterFunc = func(_ time.Duration, f func()) *time.Timer {
+		timer := time.AfterFunc(time.Hour, f)
+		mu.Lock()
+		armed, callbacks = append(armed, timer), append(callbacks, f)
+		mu.Unlock()
+		return timer
+	}
+	t.Cleanup(func() {
+		afterFunc = time.AfterFunc
+		for _, timer := range armed {
+			timer.Stop()
+		}
+	})
 	recorder := &uploadRecorder{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/h/up" {
-			time.Sleep(50 * time.Millisecond)
+			mu.Lock()
+			for i, timer := range armed {
+				if timer.Stop() {
+					due = append(due, callbacks[i])
+				}
+			}
+			mu.Unlock()
 		}
 		recorder.handler(w, req)
 	}))
@@ -195,6 +222,15 @@ func TestBulkWriteSendsNoTailRequests(t *testing.T) {
 			t.Fatal(err)
 		}
 		total += record
+		// A timer that came due during the upload runs once the write lock
+		// is free, which is now.
+		mu.Lock()
+		fire := due
+		due = nil
+		mu.Unlock()
+		for _, f := range fire {
+			f()
+		}
 	}
 	if err := connection.(*conn).flushWrites(); err != nil {
 		t.Fatal(err)

@@ -174,7 +174,9 @@ func (s *Server) handleAccessDecide(w http.ResponseWriter, r *http.Request) {
 				}
 				if err != nil {
 					log.Printf("portal: approval mail request %d: %s", request.ID, mailError(err, request.Email))
+					return
 				}
+				log.Printf("portal: approval mail for %s sent (request %d)", request.Login, request.ID)
 			}()
 		}
 	}

@@ -1,5 +1,5 @@
 # Multi-arch OCI index digests verified against Docker Hub on 2026-07-23.
-FROM golang:1.26.6-alpine3.24@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS build
+FROM golang:1.26.9-alpine3.24@sha256:cdfd4fe2da6b225d8b40c6b7a105736e548e83ff56d5d8f9394446eeb5eb84e0 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 # Keep the upstream module proxy explicit while allowing callers to override it.

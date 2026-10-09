@@ -44,22 +44,35 @@ func newRelay(t *testing.T, withH3 bool) *relay {
 		r.mu.Unlock()
 		w.Write([]byte(req.Proto))
 	})
-	srv := httptest.NewUnstartedServer(handler)
-	srv.EnableHTTP2 = true
-	srv.StartTLS()
-	t.Cleanup(srv.Close)
-	r.host = srv.Listener.Addr().String()
-	r.tlsConf = &tls.Config{RootCAs: srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs}
-	if withH3 {
-		pc, err := net.ListenPacket("udp", r.host)
-		if err != nil {
-			t.Fatalf("listen udp on %s: %v", r.host, err)
+	// HTTP/3 has to answer on the TCP server's port, and the system picks that
+	// port without knowing UDP will want it too. When the UDP port is taken,
+	// start over on another port instead of failing.
+	for attempt := 1; ; attempt++ {
+		srv := httptest.NewUnstartedServer(handler)
+		srv.EnableHTTP2 = true
+		srv.StartTLS()
+		host := srv.Listener.Addr().String()
+		var pc net.PacketConn
+		if withH3 {
+			var err error
+			if pc, err = net.ListenPacket("udp", host); err != nil {
+				srv.Close()
+				if attempt == 20 {
+					t.Fatalf("listen udp on %s: %v", host, err)
+				}
+				continue
+			}
 		}
-		r.h3 = &http3.Server{Handler: handler, TLSConfig: http3.ConfigureTLSConfig(&tls.Config{Certificates: srv.TLS.Certificates})}
-		go r.h3.Serve(pc)
-		t.Cleanup(func() { r.h3.Close() })
+		t.Cleanup(srv.Close)
+		r.host = host
+		r.tlsConf = &tls.Config{RootCAs: srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs}
+		if withH3 {
+			r.h3 = &http3.Server{Handler: handler, TLSConfig: http3.ConfigureTLSConfig(&tls.Config{Certificates: srv.TLS.Certificates})}
+			go r.h3.Serve(pc)
+			t.Cleanup(func() { r.h3.Close() })
+		}
+		return r
 	}
-	return r
 }
 
 func (r *relay) lastProto() string {

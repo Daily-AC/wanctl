@@ -93,7 +93,7 @@ sessions remain opaque; see the [adapter trust boundary](docs/webfetch.md).
 
 ## Build
 
-wanctl requires the Go release named by the `go` directive in `go.mod` (currently 1.26.6); the Go tool downloads it automatically.
+wanctl requires the Go release named by the `go` directive in `go.mod` (currently 1.26.9); the Go tool downloads it automatically.
 
 ```bash
 go build -o wanctl .
