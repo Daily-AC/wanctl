@@ -215,6 +215,8 @@ func (s *Server) handleEmailSend(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("portal: confirmation mail for %s: %s", p.Login, mailError(err, sent.Address))
 		outcome = "/admin/contact-email/failed"
+	} else {
+		log.Printf("portal: confirmation mail for %s sent", p.Login)
 	}
 	if resp, err := s.adminReq("POST", outcome, nil, map[string]int{"id": sent.ID}); err == nil {
 		resp.Body.Close()
