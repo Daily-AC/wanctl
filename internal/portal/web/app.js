@@ -67,6 +67,7 @@
       noRules: 'No rules — every request asks you.',
       noLog: 'No activity yet.',
       connected: 'Connected',
+      times: function (n) { return ' · ' + n + ' times'; },
       noTokens: 'No tokens yet.',
       noInvites: 'No invites yet.',
       noFriends: 'No friends yet.',
@@ -218,6 +219,20 @@
       noRules: '还没有规则，每条请求都会问你。',
       noLog: '还没有活动记录。',
       connected: '建立连接',
+      times: function (n) { return ' · ' + n + ' 次'; },
+      // 设备日志里的裁决是设备写的英文原值；中文界面逐个翻，没见过的原样显示。
+      verdicts: {
+        'accepted': '已接受', 'approved': '已批准', 'late-approved': '事后批准',
+        'pre-approved': '规则放行', 'bypass': '免审批',
+        'remembered:dir': '已批准并记住（本目录）', 'remembered:global': '已批准并记住（全局）',
+        'denied': '已拒绝', 'finished': '已结束', 'console': '控制台操作',
+        'auto-trust': '自动信任', 'delegation inactive': '委托已失效',
+        'workspace access inactive': '工作区授权已失效', 'unsupported-capability': '不支持的操作',
+        'rejected:unpaired': '拒绝：未配对', 'rejected:unlabeled': '拒绝：控制端没有标识',
+        'rejected:capability': '拒绝：权限不够', 'rejected:delegation': '拒绝：委托无效',
+        'rejected:not-console-admin': '拒绝：不是控制台管理员', 'rejected:pairing-full': '拒绝：待配对已满',
+        'rejected:session': '拒绝：会话无效', 'rejected:workspace-access': '拒绝：没有工作区授权'
+      },
       noTokens: '还没有令牌。',
       noInvites: '还没有邀请。',
       noFriends: '还没有好友。',
@@ -345,6 +360,8 @@
     });
     try { localStorage.setItem('wanctl.lang', l); } catch (_) {}
     repaint();
+    // 活动日志不在 repaint() 里：用手上那份重画，裁决和「建立连接」跟着换语言。
+    if (shownLog) paintLog(shownLog);
     // <th> 的文字刚换过，格子上的列名要跟着换 —— repaint() 只重画一部分表，
     // 活动日志那张就不在里面。
     relabel();
@@ -1150,23 +1167,47 @@
     });
   };
 
+  // 中文界面把裁决原值换成中文；英文界面照旧显示原值。
+  // 「denied: 原因」这种带原因的，只翻前缀，原因是设备写的，原样留着。
+  function verdictText(dec) {
+    var zh = t().verdicts;
+    if (!dec || !zh) return dec || '—';
+    if (zh[dec]) return zh[dec];
+    var m = /^denied: (.+)$/.exec(dec);
+    return m ? zh.denied + '：' + m[1] : dec;
+  }
+  // 合并过的连接（同一来源连续 n 次）显示成一段时间：同一天只写一次日期。
+  function logWhen(e) {
+    if (!e.count || !e.first_ts) return fmt(e.ts);
+    var a = fmt(e.first_ts), b = fmt(e.ts);
+    return a.slice(0, 10) === b.slice(0, 10) ? a + '–' + b.slice(11) : a + ' – ' + b;
+  }
+
+  // 最近一次取到的活动日志：切换语言时用它重画，不再去设备取一次。
+  var shownLog = null;
+  function paintLog(xs) {
+    shownLog = xs;
+    $('#devlog').innerHTML = xs.length ? xs.map(function (e) {
+      var dec = e.decision || '';
+      // 退出码由设备控制，必须转义（审计 2026-08-28, SEC-C-01）
+      var exit = (e.exit === 0 || e.exit) ? esc('' + e.exit) : '—';
+      return '<tr><td>' + esc(logWhen(e)) + '</td>' +
+        '<td class="mono">' + esc((e.detail || (e.type === 'connect' && dec === 'accepted' ? t().connected : '—')) +
+          (e.count > 1 ? t().times(e.count) : '')) +
+          (e.cwd ? '<span class="sub">' + esc(e.cwd) + '</span>' : '') + '</td>' +
+        '<td>' + esc(cut(e.peer_name || e.peer_fp || '—', 20)) + '</td>' +
+        '<td' + (/den/i.test(dec) ? ' class="no"' : '') + '>' + esc(verdictText(dec)) + '</td>' +
+        '<td class="num">' + exit + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" class="tempty">' + esc(t().noLog) + '</td></tr>';
+    relabel();
+  }
+
   function loadLog() {
     if (!cur) return;
+    shownLog = null;
     $('#devlog').innerHTML = '<tr><td colspan="5" class="tempty">' + esc(t().loading) + '</td></tr>';
     jget('/api/devices/logs?device=' + encodeURIComponent(cur)).then(function (d) {
-      var xs = (d.logs || []).slice().reverse();
-      $('#devlog').innerHTML = xs.length ? xs.map(function (e) {
-        var dec = e.decision || '';
-        // 退出码由设备控制，必须转义（审计 2026-08-28, SEC-C-01）
-        var exit = (e.exit === 0 || e.exit) ? esc('' + e.exit) : '—';
-        return '<tr><td>' + esc(fmt(e.ts)) + '</td>' +
-          '<td class="mono">' + esc(e.detail || (e.type === 'connect' && dec === 'accepted' ? t().connected : '—')) +
-            (e.cwd ? '<span class="sub">' + esc(e.cwd) + '</span>' : '') + '</td>' +
-          '<td>' + esc(cut(e.peer_name || e.peer_fp || '—', 20)) + '</td>' +
-          '<td' + (/den/i.test(dec) ? ' class="no"' : '') + '>' + esc(dec || '—') + '</td>' +
-          '<td class="num">' + exit + '</td></tr>';
-      }).join('') : '<tr><td colspan="5" class="tempty">' + esc(t().noLog) + '</td></tr>';
-      relabel();
+      paintLog((d.logs || []).slice().reverse());
     }).catch(function (e) {
       $('#devlog').innerHTML = '<tr><td colspan="5" class="tempty">' + esc(t().cantReach) + '</td></tr>';
       oops(e);

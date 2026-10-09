@@ -1851,6 +1851,9 @@ func (s *Server) handleDeviceLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	if merged, err := mergeConnectRuns(raw); err == nil {
+		raw = merged
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"logs":`))
 	w.Write(raw)

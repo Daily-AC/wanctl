@@ -145,12 +145,15 @@
     }
   };
 
+  // 形状照抄设备的 eventlog.Event（裁决是设备写的英文原值），以及门户
+  // handleDeviceLogs 合并后的样子：同一来源连续的连接带 count 和 first_ts。
   var logs = [
-    { ts: ago(90), type: 'exec', detail: 'nvidia-smi --query-gpu=memory.used --format=csv', peer_name: 'studio', decision: 'allowed by rule', exit: 0 },
-    { ts: ago(340), type: 'exec', detail: 'python train.py --epochs 40 --resume', cwd: '/data', peer_name: 'studio', decision: 'allowed by rule', exit: 0 },
-    { ts: ago(910), type: 'file', detail: 'read /data/config.yaml', peer_name: 'studio', decision: 'allowed once', exit: 0 },
-    { ts: ago(1800), type: 'exec', detail: 'shutdown -h now', peer_name: 'kestrel', decision: 'denied by owner', exit: 1 },
-    { ts: ago(3600), type: 'connect', detail: 'session opened', peer_name: 'portal', decision: '', exit: null }
+    { ts: ago(90), type: 'exec', detail: 'nvidia-smi --query-gpu=memory.used --format=csv', peer_name: 'studio', decision: 'pre-approved', exit: 0 },
+    { ts: ago(340), type: 'exec', detail: 'python train.py --epochs 40 --resume', cwd: '/data', peer_name: 'studio', decision: 'remembered:dir', exit: 0 },
+    { ts: ago(910), type: 'file', detail: 'read /data/config.yaml', peer_name: 'studio', decision: 'approved' },
+    { ts: ago(1800), type: 'exec', detail: 'shutdown -h now', peer_name: 'kestrel', decision: 'denied' },
+    { ts: ago(2400), type: 'connect', peer_name: 'kestrel', decision: 'rejected:unpaired' },
+    { ts: ago(3600), first_ts: ago(5 * 3600), count: 42, type: 'connect', peer_name: 'portal', decision: 'accepted' }
   ];
 
   var db = {
