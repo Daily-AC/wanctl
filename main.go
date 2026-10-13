@@ -180,6 +180,8 @@ func main() {
 		err = cmdExec(ctx, os.Args[2:])
 	case "workspace":
 		err = cmdWorkspace(ctx, os.Args[2:])
+	case "shell":
+		err = cmdShell(ctx, os.Args[2:])
 	case "screenshot":
 		err = cmdScreenshot(ctx, os.Args[2:])
 	case "act":
@@ -265,7 +267,7 @@ func main() {
 var relayCommands = map[string]bool{
 	"start": true, "login": true,
 	"exec": true, "screenshot": true, "act": true, "push": true, "pull": true,
-	"read": true, "edit": true, "write": true, "workspace": true,
+	"read": true, "edit": true, "write": true, "workspace": true, "shell": true,
 	"peers": true, "pair": true, "friends": true, "share": true,
 	"docs": true, "admin": true,
 }

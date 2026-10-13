@@ -123,3 +123,26 @@ func TestWorkspaceDirectoryRuleAppliesWhereTheShellMoved(t *testing.T) {
 		t.Fatalf("rule for the shell's directory did not apply: %+v", r)
 	}
 }
+
+// A finished command reports where it left the shell, so a caller showing the
+// directory does not need a second command to learn it.
+func TestWorkspaceResultReportsWhereTheShellStopped(t *testing.T) {
+	a := workspaceAgent(t)
+	a.setApprover(policy.AllowApprover{})
+	root, next := t.TempDir(), t.TempDir()
+	w, err := a.openWorkspace("controller", protocol.Message{WorkspaceID: "w-" + strings.Repeat("c", 32), Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	same := func(want, got string) bool {
+		a, errA := filepath.EvalSymlinks(want)
+		b, errB := filepath.EvalSymlinks(got)
+		return errA == nil && errB == nil && a == b
+	}
+	if r := runInWorkspace(t, a, w, "stay", "true"); !same(root, r.Cwd) {
+		t.Fatalf("cwd after a command that did not move = %q, want %q", r.Cwd, root)
+	}
+	if r := runInWorkspace(t, a, w, "move", "cd "+quoteSh(next)); !same(next, r.Cwd) {
+		t.Fatalf("cwd after cd = %q, want %q", r.Cwd, next)
+	}
+}

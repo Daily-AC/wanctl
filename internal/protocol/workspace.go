@@ -26,4 +26,7 @@ type WorkspaceResult struct {
 	OutputBytes     int64  `json:"output_bytes"`
 	RetainedBytes   int64  `json:"retained_bytes"`
 	Truncated       bool   `json:"truncated"`
+	// Cwd is the shell's directory once the inspected command finished. It
+	// is empty while the command runs, and when the shell could not name one.
+	Cwd string `json:"cwd,omitempty"`
 }
