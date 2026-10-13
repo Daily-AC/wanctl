@@ -1249,9 +1249,6 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 				a.deregisterHTTP(base)
 				return nil
 			}
-			if strings.Contains(err.Error(), "401") {
-				return fmt.Errorf("relay rejected token")
-			}
 			failures++
 			report("relay poll failed: %v", err)
 			sleepCtx(ctx, 2*time.Second) // backoff then re-poll (the loop top handles a cancelled ctx)
