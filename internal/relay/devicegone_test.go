@@ -144,3 +144,19 @@ func TestUnboundSessionIsNotJudged(t *testing.T) {
 		t.Fatalf("an unbound session was ended (reason %q, registered %v)", reason, ok)
 	}
 }
+
+// A device on a slow link can go a long time between polls without being
+// gone: the relay answers a poll, the answer queues behind the device's own
+// transfer, and the agent sends the next one only when it has the answer or
+// its 35 s client timeout has passed, then 2 s later. At 15 s the relay ended
+// every session such a device held, the transfer included (2026-10-13).
+func TestSessionKeptWhileItsDevicesNextPollIsLate(t *testing.T) {
+	const pollTimeout, retryDelay = 35 * time.Second, 2 * time.Second // agent.runHTTP
+	r := New(EnvTokenStore("tok-alice:alice"))
+	t.Cleanup(func() { closeAllHTTPSessions(r) })
+	sid := openBound(t, r, "one")
+	r.endSessionsOfGoneAgents(time.Now().Add(pollTimeout + retryDelay))
+	if reason, ok := endReason(r, sid); !ok || reason != "" {
+		t.Fatalf("a device whose next poll is %v late lost its session (reason %q, registered %v)", pollTimeout+retryDelay, reason, ok)
+	}
+}
