@@ -1530,10 +1530,17 @@ func (r *Relay) startHTTPReaper() {
 
 const (
 	// deviceGoneAfter is how long an HTTP agent may go with no /h/poll in
-	// flight before the relay takes its process for gone. A live agent sends
-	// the next poll as soon as one is answered, and retries a failed one
-	// every two seconds, so this is several missed retries, not a slow link.
-	deviceGoneAfter = 15 * time.Second
+	// flight before the relay takes its process for gone. It has to outlast
+	// the longest gap a live agent leaves: an answered poll whose answer is
+	// still crossing the device's link, or never arrives, ends on the agent's
+	// 35 s client timeout, and the next poll goes out 2 s later. At 15 s a
+	// device on a slow link lost every session it held whenever the answer to
+	// its poll queued behind its own transfer (a device serving a pull at
+	// 0.3-0.7 MB/s, 2026-10-13; reproduced with a push at 400 KB/s). It can be
+	// no longer than httpAgentTTL, past which the reaper drops the agent and
+	// its sessions end anyway. A replaced or deregistered agent does not wait
+	// for it: its sessions end on the next scan.
+	deviceGoneAfter = 40 * time.Second
 	deviceGoneScan  = 5 * time.Second
 	// sessionEndDeviceGone is the X-Wanctl-Session-End value for a session
 	// the relay ended because the device's agent went away.
