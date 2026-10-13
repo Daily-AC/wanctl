@@ -52,6 +52,32 @@ func TestWinExitEpilogueMirrorsSessionMarker(t *testing.T) {
 	}
 }
 
+// PowerShell decodes a session's stdin in the console's OEM code page, so
+// whatever a command contains, a Windows session must be sent printable ASCII.
+// It must also arrive as exactly two lines, the reset and the command, because
+// the session runs each line of stdin as it is read.
+func TestWinSessionCommandIsPrintableASCII(t *testing.T) {
+	for _, command := range []string{
+		"echo 中文",
+		"Write-Output 'it''s ünïcödé 😀'",
+		"if ($true) {\r\n\t'multi-line'\r\n}",
+		"",
+	} {
+		src := winSessionCommand(command)
+		lines := strings.Split(src, "\n")
+		if len(lines) != 2 {
+			t.Fatalf("%q is sent as %d lines, want 2: %q", command, len(lines), src)
+		}
+		for _, line := range lines {
+			for i := 0; i < len(line); i++ {
+				if c := line[i]; c < 0x20 || c > 0x7e {
+					t.Fatalf("%q is sent with byte %#x: %q", command, c, line)
+				}
+			}
+		}
+	}
+}
+
 func TestRunOneShotPropagatesNativeExitCode(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("exercises the PowerShell one-shot path")
