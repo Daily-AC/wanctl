@@ -116,6 +116,17 @@ var Commands = []Command{
 		Handler: "mcpExec",
 	},
 	{
+		Name:      "shell",
+		Group:     GroupControl,
+		IndexLine: "type commands on a device as if logged in (bypass mode)",
+		Summary:   "Type commands on a device at a prompt, as over ssh",
+		Desc:      "Open a prompt on a device and type commands as if you were logged in to it: `ls`, `cd`, `cat` — no `wanctl exec --target` in front of each. Every line runs in the same shell, one the device opens for this session alone, so cd and variables carry from line to line; it starts in the device's home directory. Up and down recall earlier lines. Ctrl-C stops the running command; because that ends the device's shell, a new one opens in the same directory without the variables set before. `exit` or Ctrl-D leaves and closes the device's shell.\n\nOnly for a device in bypass mode. In normal mode every command no rule covers waits for the owner's approval, so wanctl shell checks the mode first and says where to switch it.\n\nIt is line mode, not a terminal: commands run without one, so full-screen programs (vim, top, less) and anything that asks for a password do not work. For scripts and for AI use, wanctl exec is the interface.",
+		Params: []Param{
+			{Name: "target", CLI: "DEVICE | --target NS/DEV", Type: TypeString, CLIOnly: true, Required: true, Desc: "Device ID or unique name/alias, or NS/DEVICE for a shared device."},
+		},
+		CLIExample: "wanctl shell lab-box",
+	},
+	{
 		Name:      "read",
 		MCPName:   "wanctl_read",
 		Group:     GroupFiles,
@@ -351,8 +362,6 @@ var Commands = []Command{
 	{
 		Name:       "id",
 		MCPName:    "wanctl_id",
-		Group:      GroupSession,
-		IndexLine:  "show this controller's identity fingerprint",
 		Summary:    "Show this controller identity's fingerprint",
 		Desc:       "Show THIS controller's own fingerprint — the string a device owner sees on the approval screen and pins. Reach for it when a user is standing at their device deciding whether to approve a pairing and wants to check that the fingerprint in front of them is yours, or when a device lists a trusted controller and the question is whether that is this session.\n\nIt is about this side of the connection only. The DEVICE's fingerprint, the one you pin with wanctl_trust_server, is a different string and never comes from here — it arrives inside the DEVICE IDENTITY CONFIRMATION REQUIRED message.",
 		CLIExample: "wanctl id",

@@ -50,7 +50,7 @@ you do not run on, behind that device owner's policy. A refusal is an answer.
   wanctl_pull          copy a file from a device to this machine
   wanctl_logs          read a device's activity log, or portal/relay server logs
   wanctl_server_logs   read recent portal or relay process logs
-  wanctl_id            show this controller's identity fingerprint
+  wanctl_id            show this controller identity's fingerprint
   wanctl_trust         list pinned device identities, or trusted controllers
   wanctl_trust_server  pin a device's identity for this controller
   wanctl_rules         show or change this machine's local policy rules
@@ -83,6 +83,7 @@ REFUSALS — none of these mean retry as-is:
 | `peers` | `wanctl_peers` | List reachable devices and whether their identity is pinned |
 | `pair` | `wanctl_pair` | Check a device's trust state, or get the URL to pair with it |
 | `exec` | `wanctl_exec` | Run a command, or a whole script, on a device |
+| `shell` | — | Type commands on a device at a prompt, as over ssh |
 | `read` | `wanctl_read` | Read a range of lines from a text file on a device |
 | `edit` | `wanctl_edit` | Replace a string inside a file on a device, atomically |
 | `write` | `wanctl_write` | Create or completely replace a text file on a device |
@@ -384,6 +385,35 @@ wanctl_exec{"target":"home-pc","command":"uname -a"}
 | `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (local MCP). The hosted endpoint never says this: it answers a missing or revoked authorization with HTTP 401, and the AI host authorizes again. |
 | `could not reach adbd on this device` | The adb elevation channel found no adbd it could use, and the fix is on the phone. Usually wireless debugging is off: Android turns it off on every reboot, when Wi-Fi drops and when the phone joins a different access point, so ask the owner to turn Developer options → Wireless debugging back on. If it is on, the agent does not have its current port: apps up to v0.14.0 do not start looking when 提权通道 is switched on while the agent runs, and stop trusting a port half an hour after finding it — ask the owner to tap 停用 and then 启用 on the app's home screen (updating the app fixes both for good). A port whose own failure reads `remote error: tls` or `TLS handshake with adbd` had adbd on it refusing the key: see the next entry. |
 | `TLS handshake with adbd` | adbd is running but does not accept wanctl's key (an app up to v0.14.0 prints `remote error: tls: …` after the port number instead). The pairing lapsed — Android revokes one that has not connected for 7 days unless Developer options → Disable adb authorization timeout is on — or the owner used Revoke USB debugging authorizations. Ask the owner to pair again in the portal (Device settings → ADB pairing); retrying will not help. |
+
+## `wanctl shell`
+
+*Type commands on a device at a prompt, as over ssh*
+
+Open a prompt on a device and type commands as if you were logged in to it:
+`ls`, `cd`, `cat` — no `wanctl exec --target` in front of each. Every line
+runs in the same shell, one the device opens for this session alone, so cd and
+variables carry from line to line; it starts in the device's home directory.
+Up and down recall earlier lines. Ctrl-C stops the running command; because
+that ends the device's shell, a new one opens in the same directory without
+the variables set before. `exit` or Ctrl-D leaves and closes the device's
+shell.
+
+Only for a device in bypass mode. In normal mode every command no rule covers
+waits for the owner's approval, so wanctl shell checks the mode first and says
+where to switch it.
+
+It is line mode, not a terminal: commands run without one, so full-screen
+programs (vim, top, less) and anything that asks for a password do not work.
+For scripts and for AI use, wanctl exec is the interface.
+
+| Parameter | CLI | Type | Required | Meaning |
+|---|---|---|---|---|
+| — | `DEVICE \| --target NS/DEV` | string | **yes** | Device ID or unique name/alias, or NS/DEVICE for a shared device. |
+
+```
+wanctl shell lab-box
+```
 
 ## `wanctl read` / `wanctl_read`
 
