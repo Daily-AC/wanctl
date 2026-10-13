@@ -167,6 +167,17 @@ const (
 	downMaxFloor   = 2 << 20
 	downMaxCeiling = 16 << 20
 	downGrowWithin = 4 * time.Second
+
+	// laneZeroDownMax is the most a device's down poll without want asks for
+	// once the relay serves the download window. That poll rides lane 0, and
+	// on a device every byte of its answer delays the agent's /h/poll and
+	// every controller's handshake: the first 2 MiB of a push at 400 KB/s held
+	// a status up for 7.5 s. A full answer opens the window, which carries the
+	// rest over the bulk lanes, at the cost of a round trip on 256 KiB-1 MiB
+	// pushes. A controller does not cap it: its lane 0 carries only its own
+	// sessions, and capping cost every 256 KiB-2 MiB pull 0.2 s or more, its
+	// bulk lanes being cold in a fresh process.
+	laneZeroDownMax = 256 << 10
 )
 
 // downShrinkPast is how long a chunk may take before the next one is halved;
@@ -494,7 +505,11 @@ func (c *conn) Read(p []byte) (int, error) {
 		if windowed {
 			r = c.nextBatchResult()
 		} else {
-			r = c.downPoll(c.closeCtx, c.ackSeq, 0, c.downMax, c.ackable)
+			limit := c.downMax
+			if c.role == "agent" && c.downWindow.Load() {
+				limit = min(limit, laneZeroDownMax)
+			}
+			r = c.downPoll(c.closeCtx, c.ackSeq, 0, limit, c.ackable)
 		}
 		if r.err != nil {
 			if windowed {
