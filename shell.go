@@ -8,14 +8,15 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 	"unicode"
 
+	"github.com/ergochat/readline"
 	"github.com/google/uuid"
-	"github.com/peterh/liner"
 
 	"wanctl/internal/client"
 	"wanctl/internal/policy"
@@ -66,19 +67,53 @@ func cmdShell(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := c.Status(ctx, *target)
-	if err != nil {
-		return fmt.Errorf("remote device %q: %w", *target, err)
+	link := client.NewWorkspaceLink()
+	c.UseWorkspaceLink(link)
+	// The mode check and the workspace connection's handshake are separate
+	// trips through the relay, each a fresh dial, so they run side by side.
+	// Nothing that could ask the owner for anything goes out before the check
+	// passes: warming the link sends only its hello, and the workspace is
+	// opened afterwards.
+	var (
+		st          client.AgentStatus
+		stErr, rErr error
+		ref         client.WorkspaceRef
+		wg          sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		st, stErr = c.Status(ctx, *target)
+	}()
+	go func() {
+		defer wg.Done()
+		if ref, rErr = c.PrepareWorkspace(ctx, *target); rErr == nil {
+			link.Warm(ctx, c, ref) // a failure resurfaces on open
+		}
+	}()
+	wg.Wait()
+	if stErr != nil {
+		link.Close()
+		return fmt.Errorf("remote device %q: %w", *target, stErr)
 	}
 	if err := shellNeedsBypass(*target, st, settingValue("portal")); err != nil {
+		link.Close()
 		return err
 	}
-	c.UseWorkspaceLink(client.NewWorkspaceLink())
-	s := &remoteShell{c: c, target: *target, name: shellName(*target, st.Name)}
-	if err := s.start(ctx, ""); err != nil {
+	if rErr != nil {
+		return rErr
+	}
+	s := &remoteShell{c: c, target: *target, name: shellName(*target, st.Name), color: shellColor()}
+	if err := s.start(ctx, ref, ""); err != nil {
 		return err
 	}
 	return s.loop(ctx)
+}
+
+// shellColor is whether the prompt is colored the way a default ssh login's
+// is. NO_COLOR (no-color.org) and a dumb terminal turn it off.
+func shellColor() bool {
+	return os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
 }
 
 // shellName is what the prompt calls the device: the name the user typed,
@@ -119,6 +154,7 @@ type remoteShell struct {
 	cwd    string // where the device last said the shell is; "" if it never said
 	home   string
 	stale  bool // the workspace is gone and the next line needs a new one
+	color  bool
 
 	commands int
 	input    int
@@ -128,13 +164,9 @@ type remoteShell struct {
 	interrupt context.CancelFunc // stops waiting for the running line; nil at the prompt
 }
 
-// start opens a workspace in dir, or when that is empty or gone, on a root
-// and then home.
-func (s *remoteShell) start(ctx context.Context, dir string) error {
-	ref, err := s.c.PrepareWorkspace(ctx, s.target)
-	if err != nil {
-		return err
-	}
+// start opens ref in dir, or when that is empty or gone, on a root and then
+// home.
+func (s *remoteShell) start(ctx context.Context, ref client.WorkspaceRef, dir string) error {
 	roots := shellRoots
 	if dir != "" {
 		roots = append([]string{dir}, shellRoots...)
@@ -185,10 +217,15 @@ func (s *remoteShell) exec(ctx context.Context, rid, line string, out io.Writer)
 }
 
 func (s *remoteShell) loop(ctx context.Context) error {
-	line := liner.NewLiner()
+	// readline holds the terminal in raw mode only while it reads a line, so
+	// between prompts the terminal is as the user's shell left it: it echoes
+	// what is typed ahead and keeps it for the next prompt.
+	line, err := readline.NewFromConfig(&readline.Config{Prompt: s.prompt(), EOFPrompt: "\n"})
+	if err != nil {
+		return err
+	}
 	defer line.Close()
-	line.SetCtrlCAborts(true)
-	// At the prompt Ctrl-C is a key liner reads. While a line runs the
+	// At the prompt Ctrl-C is a key readline reads. While a line runs the
 	// terminal turns it into SIGINT, which cancels that line. A terminal that
 	// closes sends SIGHUP; that and SIGTERM end the session, closing the
 	// device's shell rather than leaving it open until the device restarts.
@@ -211,12 +248,12 @@ func (s *remoteShell) loop(ctx context.Context) error {
 		}
 	}()
 	for {
-		text, err := line.Prompt(s.prompt())
+		line.SetPrompt(s.prompt())
+		text, err := line.ReadLine()
 		switch {
-		case errors.Is(err, liner.ErrPromptAborted):
+		case errors.Is(err, readline.ErrInterrupt):
 			continue
 		case errors.Is(err, io.EOF):
-			fmt.Println()
 			s.close()
 			return nil
 		case err != nil:
@@ -227,7 +264,6 @@ func (s *remoteShell) loop(ctx context.Context) error {
 		if cmd == "" {
 			continue
 		}
-		line.AppendHistory(text)
 		if isShellExit(cmd) {
 			s.close()
 			return nil
@@ -302,7 +338,12 @@ func (s *remoteShell) interruptLine() {
 // its shell down with it (docs/adr/0011), so a new one replaces it unless the
 // line had already finished.
 func (s *remoteShell) cancelLine(ctx context.Context, requestID string) error {
-	fmt.Fprintln(os.Stderr, "^C")
+	// Between prompts the terminal is in its usual mode and echoes the ^C
+	// itself; Windows' console does not.
+	if runtime.GOOS == "windows" {
+		fmt.Fprint(os.Stderr, "^C")
+	}
+	fmt.Fprintln(os.Stderr)
 	if _, err := s.c.Workspace(ctx, s.ref, "cancel", protocol.Message{RequestID: requestID}); err != nil {
 		if st, serr := s.c.Workspace(ctx, s.ref, "status", protocol.Message{}); serr == nil && st.State == "open" {
 			return nil
@@ -322,7 +363,11 @@ func (s *remoteShell) checkAlive(ctx context.Context, lineErr error) error {
 
 func (s *remoteShell) restart(ctx context.Context, why string) error {
 	s.closeWorkspace(ctx)
-	if err := s.start(ctx, s.cwd); err != nil {
+	ref, err := s.c.PrepareWorkspace(ctx, s.target)
+	if err == nil {
+		err = s.start(ctx, ref, s.cwd)
+	}
+	if err != nil {
 		s.stale = true
 		return err
 	}
@@ -346,12 +391,20 @@ func (s *remoteShell) closeWorkspace(ctx context.Context) {
 // connection of their own, so this works while a line is still waiting.
 func (s *remoteShell) close() { s.closeWorkspace(context.Background()) }
 
+// prompt reads like a default ssh login's: the device where user@host goes,
+// in bold green, and the directory in bold blue.
 func (s *remoteShell) prompt() string {
-	p := s.name
-	if dir := s.displayDir(); dir != "" {
-		p += ":" + dir
+	name, dir := promptSafe(s.name), promptSafe(s.displayDir())
+	if s.color {
+		name = "\x1b[01;32m" + name + "\x1b[00m"
+		if dir != "" {
+			dir = "\x1b[01;34m" + dir + "\x1b[00m"
+		}
 	}
-	return promptSafe(p) + "$ "
+	if dir != "" {
+		name += ":" + dir
+	}
+	return name + "$ "
 }
 
 // displayDir is the shell's directory with the home prefix shortened to ~.
@@ -371,7 +424,8 @@ func (s *remoteShell) displayDir() string {
 }
 
 // promptSafe keeps text the device chose (its name, a directory name) from
-// carrying control characters into the prompt, which liner refuses outright.
+// carrying control characters into the prompt, an escape sequence above all:
+// a device must not be able to restyle or rewrite this terminal.
 func promptSafe(s string) string {
 	return strings.Map(func(r rune) rune {
 		if unicode.Is(unicode.C, r) {
