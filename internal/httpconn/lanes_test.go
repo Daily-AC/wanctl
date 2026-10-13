@@ -610,27 +610,37 @@ func TestPollAndHandshakesNeverQueueBehindBulk(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	// whileBulk runs the poll and a handshake, twice, while the transfer has
-	// a request crossing every bulk lane.
+	// whileBulk runs the poll and a handshake, up to twice, while the
+	// transfer has a request crossing every bulk lane. That is after the
+	// download window has opened: the first chunk before it is a plain poll
+	// on lane 0, and not what this test is about.
 	whileBulk := func(transfer func() error) {
 		done := make(chan error, 1)
 		go func() { done <- transfer() }()
-		for round := 0; round < 2; round++ {
-			deadline := time.Now().Add(5 * time.Second)
-			for {
-				busy := 0
-				for _, l := range links {
-					if l.up.queued.Load()+l.down.queued.Load() > 1<<10 {
-						busy++
-					}
+		for sampled := 0; sampled < 2; {
+			busy := 0
+			for _, l := range links[1:] {
+				if l.up.queued.Load()+l.down.queued.Load() > 1<<10 {
+					busy++
 				}
-				if busy >= DownWindowSize || time.Now().After(deadline) {
-					break
-				}
-				time.Sleep(time.Millisecond)
 			}
-			poll()
-			handshake()
+			if busy == len(links)-1 {
+				poll()
+				handshake()
+				sampled++
+				continue
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+				if sampled == 0 {
+					t.Fatal("the transfer ended before it had every bulk lane busy")
+				}
+				return
+			case <-time.After(time.Millisecond):
+			}
 		}
 		if err := <-done; err != nil {
 			t.Fatal(err)
@@ -650,7 +660,9 @@ func TestPollAndHandshakesNeverQueueBehindBulk(t *testing.T) {
 		if _, err := nc.Write(payload); err != nil {
 			return err
 		}
-		return c.flushWrites()
+		err := c.flushWrites()
+		c.upWG.Wait() // so no upload is still crossing when the push starts
+		return err
 	})
 	// ...and takes a push.
 	whileBulk(func() error {
