@@ -59,6 +59,39 @@ func TestShellPromptShortensHome(t *testing.T) {
 	}
 }
 
+// Colored like a default ssh login: bold green where user@host goes, bold
+// blue for the directory. Text from the device is made safe before it is
+// wrapped, so a device cannot close or restyle those colors itself.
+func TestShellPromptIsColoredLikeSSH(t *testing.T) {
+	for _, tc := range []struct{ name, cwd, want string }{
+		{"5090大机子", "/srv/数据", "\x1b[01;32m5090大机子\x1b[00m:\x1b[01;34m/srv/数据\x1b[00m$ "},
+		{"box", "", "\x1b[01;32mbox\x1b[00m$ "},
+		{"box\x1b[31m", "/tmp\x1b]0;owned\x07", "\x1b[01;32mbox?[31m\x1b[00m:\x1b[01;34m/tmp?]0;owned?\x1b[00m$ "},
+	} {
+		s := &remoteShell{name: tc.name, cwd: tc.cwd, color: true}
+		if got := s.prompt(); got != tc.want {
+			t.Errorf("prompt %q, want %q", got, tc.want)
+		}
+	}
+}
+
+func TestShellColorFollowsNoColorAndDumbTerminals(t *testing.T) {
+	for _, tc := range []struct {
+		noColor, term string
+		want          bool
+	}{
+		{"", "xterm-256color", true},
+		{"1", "xterm-256color", false},
+		{"", "dumb", false},
+	} {
+		t.Setenv("NO_COLOR", tc.noColor)
+		t.Setenv("TERM", tc.term)
+		if got := shellColor(); got != tc.want {
+			t.Errorf("NO_COLOR=%q TERM=%q: color %v, want %v", tc.noColor, tc.term, got, tc.want)
+		}
+	}
+}
+
 func TestShellExitWords(t *testing.T) {
 	for line, want := range map[string]bool{
 		"exit": true, "exit 3": true, "logout": true,
