@@ -53,6 +53,7 @@ type workspaceJob struct {
 	code           int
 	err            string
 	done           bool
+	dirAfter       string // where the shell stood once the command finished
 }
 
 func validWorkspaceID(id string) bool {
@@ -179,6 +180,7 @@ func (w *workspace) snapshot(id string, offset int64) (*protocol.WorkspaceResult
 	}
 	r.RequestID, r.Done, r.Code, r.Error = id, j.done, j.code, j.err
 	r.RequestState = j.state
+	r.Cwd = j.dirAfter
 	r.Output, r.NextOffset, r.OutputBytes = string(j.output[offset:end]), end, j.total
 	r.RetainedBytes = int64(len(j.output))
 	r.Truncated = j.total > int64(len(j.output))
@@ -333,7 +335,16 @@ func (a *Agent) startWorkspaceCommand(w *workspace, fp, peer string, m protocol.
 			changeDir = cwd
 		}
 		code, runErr := w.shell.ExecInDirContext(ctx, source, changeDir, workspaceWriter{w, m.RequestID})
+		// Reported with the result so a caller that shows the directory, as
+		// `wanctl shell` does in its prompt, needs no second command for it.
+		// Asked before the job counts as finished: the shell cannot move in
+		// between, because this request is still the workspace's active one.
+		dirAfter := ""
+		if runErr == nil {
+			dirAfter = w.currentDir()
+		}
 		w.mu.Lock()
+		w.jobs[m.RequestID].dirAfter = dirAfter
 		w.finishLocked(m.RequestID, code, runErr)
 		w.mu.Unlock()
 		a.logSessionEvent(audit, eventlog.Event{Type: "exec", PeerFP: fp, PeerName: peer, Detail: "[workspace " + w.id + " request " + m.RequestID + "] " + m.Command, Cwd: cwd, Decision: "finished", Exit: &code})
