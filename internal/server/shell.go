@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf16"
 
 	"wanctl/internal/protocol"
 )
@@ -303,19 +304,43 @@ func (s *ShellSession) markerPrefix() string { return "<<<WANCTL_END:" }
 // writeCommand sends the user command followed by the sentinel echo.
 func (s *ShellSession) writeCommand(command string) error {
 	var b strings.Builder
-	b.WriteString(command)
-	b.WriteString("\n")
 	if runtime.GOOS == "windows" {
-		// $LASTEXITCODE is only set by native executables; fall back to $? for
-		// cmdlet success/failure.
+		b.WriteString(winSessionCommand(command))
+		b.WriteString("\n")
+		// $LASTEXITCODE is only set by native executables; fall back to the
+		// command's own $? for cmdlet success/failure.
 		b.WriteString(fmt.Sprintf(
-			"\"%s$(if($null -ne $LASTEXITCODE){$LASTEXITCODE}else{[int](-not $?)}):%s>>>\"\n",
+			"\"%s$(if($null -ne $LASTEXITCODE){$LASTEXITCODE}else{[int](-not $wanctlOk)}):%s>>>\"\n",
 			s.markerPrefix(), s.token))
 	} else {
+		b.WriteString(command)
+		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("printf '\\n%s%%s:%s>>>\\n' \"$?\"\n", s.markerPrefix(), s.token))
 	}
 	_, err := io.WriteString(s.stdin, b.String())
 	return err
+}
+
+// winSessionCommand is what a Windows session is sent to run command: the
+// command spelled in printable ASCII, because PowerShell cannot be told how to
+// decode its stdin.
+//
+// `powershell -Command -` reads stdin through a decoder for the console's input
+// code page — the OEM one, 437 or 936, never UTF-8 — and builds it before the
+// first line arrives. Setting [Console]::InputEncoding from inside the session
+// changes what that property reports and nothing else (PowerShell 5.1,
+// measured 2026-10-13), so the UTF-8 bytes of `echo 中文` ran as
+// `echo Σ╕¡µûç`. Printable ASCII reads the same in every code page; anything
+// else goes as [char] code units, which ConstrainedLanguage mode still allows
+// where a base64 decode through [Convert] and [Text.Encoding] is refused.
+//
+// Invoke-Expression runs the text in the session's scope, so cd and variables
+// persist as before, and parses it as one unit, as -oneshot does. Its own $?
+// stays true when a cmdlet inside it fails, so the command records its last
+// statement's $? in $wanctlOk for the end marker. The reset on the line before
+// covers a command that never gets that far.
+func winSessionCommand(command string) string {
+	return "$wanctlOk=$false\nInvoke-Expression (" + powerShellASCIIString(command+"\n$wanctlOk=$?") + ")"
 }
 
 // Exec runs command in the session's current directory, streaming output to
@@ -579,6 +604,40 @@ func quotePOSIXLiteral(value string) string {
 
 func quotePowerShellLiteral(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+// powerShellASCIIString renders s as a PowerShell expression that evaluates to
+// s and contains only printable ASCII: runs of it as single-quoted literals,
+// every other UTF-16 code unit as [char]N. The list starts with an empty
+// literal so that -join has a string to return even when s is empty.
+func powerShellASCIIString(s string) string {
+	var b strings.Builder
+	b.WriteString("-join (''")
+	literal := false
+	for _, u := range utf16.Encode([]rune(s)) {
+		if u >= 0x20 && u < 0x7f {
+			if !literal {
+				b.WriteString(",'")
+				literal = true
+			}
+			if u == '\'' {
+				b.WriteByte('\'')
+			}
+			b.WriteByte(byte(u))
+			continue
+		}
+		if literal {
+			b.WriteByte('\'')
+			literal = false
+		}
+		b.WriteString(",[char]")
+		b.WriteString(strconv.Itoa(int(u)))
+	}
+	if literal {
+		b.WriteByte('\'')
+	}
+	b.WriteByte(')')
+	return b.String()
 }
 
 // FrameWriter adapts a writer into framed output of a fixed type, so command
