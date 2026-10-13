@@ -108,6 +108,7 @@ wanctl portal --addr :8080
 wanctl agent --relay https://relay.example.com --token TOKEN --name DEVICE
 wanctl peers                          # your online devices, plus any shared with you
 wanctl exec --target DEVICE "uname -a"
+wanctl shell DEVICE                   # a prompt on a bypass-mode device: type ls, cd, cat as if logged in
 ```
 
 ## Documentation

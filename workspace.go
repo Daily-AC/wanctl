@@ -165,18 +165,29 @@ func execWorkspace(ctx context.Context, c *client.Client, ref client.WorkspaceRe
 			*protocol.WorkspaceResult
 		}{ref.String(), result})
 	}
+	result, err = awaitWorkspace(ctx, c, ref, req.RequestID, result, out)
+	if err != nil {
+		return 1, err
+	}
+	if result.Truncated {
+		fmt.Fprintln(diagnostic, "wanctl: workspace output truncated; redirect large output to a remote file")
+	}
+	if result.Error != "" {
+		return 1, fmt.Errorf("%s", result.Error)
+	}
+	return result.Code, nil
+}
+
+// awaitWorkspace copies a submitted command's output to out, polling until the
+// device reports the command finished and every retained page has been read,
+// and returns that final result.
+func awaitWorkspace(ctx context.Context, c *client.Client, ref client.WorkspaceRef, requestID string, result *protocol.WorkspaceResult, out io.Writer) (*protocol.WorkspaceResult, error) {
 	for {
 		if _, err := io.WriteString(out, result.Output); err != nil {
-			return 1, err
+			return nil, err
 		}
 		if result.Done && result.NextOffset >= result.RetainedBytes {
-			if result.Truncated {
-				fmt.Fprintln(diagnostic, "wanctl: workspace output truncated; redirect large output to a remote file")
-			}
-			if result.Error != "" {
-				return 1, fmt.Errorf("%s", result.Error)
-			}
-			return result.Code, nil
+			return result, nil
 		}
 		// Drain retained pages immediately; wait only when caught up.
 		if result.NextOffset >= result.RetainedBytes {
@@ -184,13 +195,14 @@ func execWorkspace(ctx context.Context, c *client.Client, ref client.WorkspaceRe
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return 1, ctx.Err()
+				return nil, ctx.Err()
 			case <-timer.C:
 			}
 		}
-		result, err = c.Workspace(ctx, ref, "poll", protocol.Message{RequestID: req.RequestID, Offset: result.NextOffset})
+		var err error
+		result, err = c.Workspace(ctx, ref, "poll", protocol.Message{RequestID: requestID, Offset: result.NextOffset})
 		if err != nil {
-			return 1, err
+			return nil, err
 		}
 	}
 }
