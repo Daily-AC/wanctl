@@ -498,8 +498,8 @@ func TestSmallTrafficStaysOnLaneZero(t *testing.T) {
 // slowLink models one relay connection on a slow link. A request's body
 // crosses the up pipe and its response's body the down pipe, each after
 // whatever this connection sent before it, as bytes do on one TCP connection;
-// a long poll parked on the relay holds neither. It records what crossed and
-// how much bulk every small request found queued ahead of it.
+// a long poll parked on the relay holds neither. It records what crossed, and
+// how many bytes every request other than bulk found queued ahead of it.
 type slowLink struct {
 	base     http.RoundTripper
 	up, down linkPipe
@@ -507,6 +507,7 @@ type slowLink struct {
 	mu          sync.Mutex
 	fullUps     int // full upload batches
 	wants       int // windowed download polls
+	largest     int // largest body that crossed, either way
 	queuedAhead []int
 }
 
@@ -553,6 +554,9 @@ func (l *slowLink) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
+	l.mu.Lock()
+	l.largest = max(l.largest, len(body), len(data))
+	l.mu.Unlock()
 	l.down.cross(len(data) + 1)
 	resp.Body = io.NopCloser(bytes.NewReader(data))
 	return resp, nil
@@ -563,8 +567,9 @@ func (l *slowLink) RoundTrip(req *http.Request) (*http.Response, error) {
 // both. On a slow uplink every one of them used to wait behind a 1 MiB batch
 // or a windowed chunk on that lane: 8-22 s per hop of a new session, and a
 // poll late enough for the relay to end every session the device held
-// (2026-10-13). Bulk now keeps to the other lanes, so the poll and a second
-// session's handshake find nothing queued ahead of them.
+// (2026-10-13). Bulk now keeps to the other lanes. What lane 0 still carries
+// is the first chunk of a download before its window opens, capped at
+// laneZeroDownMax, so nothing waits behind more than that.
 func TestPollAndHandshakesNeverQueueBehindBulk(t *testing.T) {
 	payload := bytes.Repeat([]byte("0123456789abcdef"), 1<<20) // 16 MiB
 	var mu sync.Mutex
@@ -610,40 +615,22 @@ func TestPollAndHandshakesNeverQueueBehindBulk(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	// whileBulk runs the poll and a handshake, up to twice, while the
-	// transfer has a request crossing every bulk lane. That is after the
-	// download window has opened: the first chunk before it is a plain poll
-	// on lane 0, and not what this test is about.
+	// whileBulk keeps the poll and a handshake going for as long as the
+	// transfer runs.
 	whileBulk := func(transfer func() error) {
 		done := make(chan error, 1)
 		go func() { done <- transfer() }()
-		for sampled := 0; sampled < 2; {
-			busy := 0
-			for _, l := range links[1:] {
-				if l.up.queued.Load()+l.down.queued.Load() > 1<<10 {
-					busy++
-				}
-			}
-			if busy == len(links)-1 {
-				poll()
-				handshake()
-				sampled++
-				continue
-			}
+		for {
+			poll()
+			handshake()
 			select {
 			case err := <-done:
 				if err != nil {
 					t.Fatal(err)
 				}
-				if sampled == 0 {
-					t.Fatal("the transfer ended before it had every bulk lane busy")
-				}
 				return
-			case <-time.After(time.Millisecond):
+			default:
 			}
-		}
-		if err := <-done; err != nil {
-			t.Fatal(err)
 		}
 	}
 
@@ -680,15 +667,17 @@ func TestPollAndHandshakesNeverQueueBehindBulk(t *testing.T) {
 
 	for i, l := range links {
 		l.mu.Lock()
-		fullUps, wants, ahead := l.fullUps, l.wants, l.queuedAhead
+		fullUps, wants, largest, ahead := l.fullUps, l.wants, l.largest, l.queuedAhead
 		l.mu.Unlock()
 		if i == 0 {
-			if fullUps != 0 || wants != 0 {
-				t.Errorf("lane 0 carried %d full upload batches and %d windowed downloads", fullUps, wants)
+			if fullUps != 0 || wants != 0 || largest > laneZeroDownMax {
+				t.Errorf("lane 0 carried %d full upload batches, %d windowed downloads, and a body of %d bytes", fullUps, wants, largest)
 			}
+			// One capped chunk, plus the few hundred bytes of a handshake
+			// and a poll that may be crossing beside it.
 			for _, n := range ahead {
-				if n > 1<<10 {
-					t.Errorf("a poll or handshake on lane 0 queued behind %d bytes: %v", n, ahead)
+				if n > laneZeroDownMax+1<<10 {
+					t.Errorf("a request on lane 0 queued behind %d bytes", n)
 					break
 				}
 			}
