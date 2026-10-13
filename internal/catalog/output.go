@@ -100,6 +100,7 @@ func workspaceOutputSchema() map[string]any {
 		"output_bytes":      outputCount("Total produced bytes; may exceed retained_bytes."),
 		"retained_bytes":    outputCount("Bytes retained for this command; not a promise of a full log elsewhere."),
 		"truncated":         outputField("boolean", "Some produced output was not retained. No implicit full-output file exists."),
+		"cwd":               outputField("string", "Shell working directory after the inspected command finished; absent while it runs or when the shell cannot name one."),
 	}, "workspace", "id", "root", "state", "done", "code", "next_offset", "output_bytes", "retained_bytes", "truncated")
 }
 
