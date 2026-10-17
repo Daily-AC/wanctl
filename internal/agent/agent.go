@@ -174,6 +174,7 @@ func (a *Agent) Close() {
 		a.stop()
 	}
 	a.closeWorkspaces()
+	a.desktop.Close()
 	a.wg.Wait()
 }
 

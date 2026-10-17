@@ -20,3 +20,6 @@ func runPlatformHelper(ctx context.Context, job Job) (protocol.DesktopResult, []
 func executeJob(context.Context, Job) (protocol.DesktopResult, []byte) {
 	return protocol.DesktopResult{Status: "rejected", Error: protocol.DesktopWindowsOnly, FailedIndex: -1}, nil
 }
+
+func startPlatformOpenCUHelper(context.Context) (*helperProcess, error) { return nil, ErrWindowsOnly }
+func checkOpenCUSession() error                                         { return ErrWindowsOnly }

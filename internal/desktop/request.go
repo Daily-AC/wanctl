@@ -1,11 +1,13 @@
 // Package desktop implements one visible, cancellable batch in the logged-in
-// Windows user's desktop. Helpers are short-lived, including from session 0.
+// Windows user's desktop, plus workspace-scoped OpenCU MCP connections.
 package desktop
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"wanctl/internal/protocol"
@@ -18,6 +20,17 @@ const MaxText = 16384
 // notifications. No arbitrary strings (including keys, titles or paths) pass
 // through it, even for malformed requests.
 func Summary(action string, req *protocol.DesktopRequest, coordinates bool) string {
+	if req != nil && req.IsOpenCU() {
+		name := req.Tool
+		if req.Discover {
+			name = "discover"
+		}
+		var args struct {
+			App string `json:"app"`
+		}
+		_ = json.Unmarshal(req.Arguments, &args)
+		return strings.TrimSpace("opencu " + summaryWord(name) + " " + summaryWord(args.App))
+	}
 	if action == "screenshot" {
 		return "screenshot"
 	}
@@ -49,6 +62,30 @@ func Summary(action string, req *protocol.DesktopRequest, coordinates bool) stri
 func Validate(action string, req *protocol.DesktopRequest) error {
 	if req == nil {
 		return errors.New("desktop request missing")
+	}
+	if req.IsOpenCU() {
+		if action != "act" || req.Actions != nil || req.ScreenshotID != "" || req.Region != nil {
+			return errors.New("OpenCU mode is mutually exclusive with actions, screenshot_id and region")
+		}
+		if req.Discover == (req.Tool != "") {
+			return errors.New("choose discover or tool with arguments")
+		}
+		if req.WorkspaceID == "" {
+			return errors.New("OpenCU needs an explicit workspace; enter a workspace first")
+		}
+		if len(req.Tool) > 256 || strings.IndexFunc(req.Tool, unicode.IsControl) >= 0 {
+			return errors.New("invalid OpenCU tool name")
+		}
+		if req.Discover && len(req.Arguments) > 0 {
+			return errors.New("discovery does not accept arguments")
+		}
+		if len(req.Arguments) > 0 {
+			var obj map[string]json.RawMessage
+			if json.Unmarshal(req.Arguments, &obj) != nil || obj == nil {
+				return errors.New("OpenCU arguments must be a JSON object")
+			}
+		}
+		return nil
 	}
 	if action == "screenshot" {
 		if len(req.Actions) != 0 {
@@ -147,4 +184,19 @@ func ParseKeys(combo string) ([]uint16, error) {
 		keys = append(keys, v)
 	}
 	return keys, nil
+}
+
+// Only the tool and app identifier enter the audit surface, never other arguments.
+func summaryWord(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	r := []rune(s)
+	if len(r) > 256 {
+		r = r[:256]
+	}
+	return string(r)
 }

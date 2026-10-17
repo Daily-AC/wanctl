@@ -1,5 +1,7 @@
 package protocol
 
+import "encoding/json"
+
 // Desktop uses a JSON result followed by exactly one JPEG FrameData when
 // ImageBytes is nonzero. The old exec screenshot stream remains raw PNG.
 const (
@@ -69,6 +71,10 @@ type DesktopAction struct {
 	TimeoutMS int      `json:"timeout_ms,omitempty"`
 }
 type DesktopRequest struct {
+	Discover     bool            `json:"discover,omitempty"`
+	Tool         string          `json:"tool,omitempty"`
+	Arguments    json.RawMessage `json:"arguments,omitempty"`
+	WorkspaceID  string          `json:"workspace_id,omitempty"`
 	ScreenshotID string          `json:"screenshot_id,omitempty"`
 	Region       *Rect           `json:"region,omitempty"` // crop expressed in the referenced full screenshot's pixels
 	Actions      []DesktopAction `json:"actions,omitempty"`
@@ -82,7 +88,21 @@ type DesktopActionResult struct {
 	WindowAppeared bool   `json:"window_appeared,omitempty"`
 	Foreground     bool   `json:"foreground,omitempty"`
 }
+type OpenCUResult struct {
+	Discovery json.RawMessage `json:"discovery,omitempty"`
+	Result    json.RawMessage `json:"result,omitempty"`
+	RPCError  json.RawMessage `json:"rpc_error,omitempty"`
+	Code      string          `json:"code,omitempty"`
+	Message   string          `json:"message,omitempty"`
+}
+
+func (r *DesktopRequest) IsOpenCU() bool {
+	return r != nil && (r.Discover || r.Tool != "" || len(r.Arguments) != 0 || r.WorkspaceID != "")
+}
+
 type DesktopResult struct {
+	OpenCU      *OpenCUResult         `json:"opencu,omitempty"`
+	OpenCUBytes int                   `json:"opencu_bytes,omitempty"` // chunked JSON payload, separate from legacy JPEG
 	RequestID   string                `json:"request_id,omitempty"`
 	Status      string                `json:"status"` // completed, rejected, partial, interrupted, unknown
 	Error       string                `json:"error,omitempty"`
