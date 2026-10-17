@@ -127,12 +127,10 @@ has already fallen back to HTTP/2), or the bottleneck is elsewhere.
 
 ## Discover OpenCU before operating a Windows desktop
 
-Enter one workspace per conversation with `wanctl workspace enter --target DEVICE
---root 'C:\Users\you\work'`, keep the returned reference, then run
-`wanctl act --workspace REF --discover` (MCP: `wanctl_act` with `workspace` and
-`discover: true`). Prefer the discovered OpenCU tools and instructions; relay
-calls with `tool` and `arguments`. Independent CLI calls can share
-`WANCTL_WORKSPACE`.
+Run `wanctl act --target DEVICE --discover` (MCP: `wanctl_act` with `target`
+and `discover: true`). No project workspace is needed. Prefer the discovered
+OpenCU tools and instructions; relay calls with the same `target`, `tool` and
+`arguments`.
 
 If missing, ask the person to run this in PowerShell on that device, without admin:
 
@@ -140,9 +138,17 @@ If missing, ask the person to run this in PowerShell on that device, without adm
 irm https://github.com/Daily-AC/opencu/releases/latest/download/install.ps1 | iex
 ```
 
-Legacy `screenshot_id` + `actions[]` remains available; do not mix the modes.
-After ten minutes idle the connection closes; observe again before input. On
-stop or `PERSON_ACTIVE`, ask the person and never retry automatically. A person's
-stop requires fresh explicit approval to resume. Exit the workspace when done.
-CLI calls save the complete result JSON and display image sizes; `-o -` prints
-the complete raw result instead.
+All conversations under one controller identity share that device's OpenCU
+connection and stop latch. Another conversation's observation can invalidate
+element indexes or screenshots; observe again before input. Legacy
+`screenshot_id` + `actions[]` remains available; do not mix the modes.
+Connections close after ten minutes idle, on agent shutdown and before update.
+On stop or `PERSON_ACTIVE`, ask the person and never retry automatically. A
+person's stop blocks every conversation of that controller on the device until
+fresh explicit human approval, even after idle close or connection failure.
+
+CLI calls save each screenshot as a separate private PNG and print JSON with
+text, metadata and absolute image paths that a file/image reader can open.
+The default is a temporary directory; `-o DIR` selects a directory. Complete raw
+result JSON is saved alongside the PNGs. `-o -` prints the complete original
+result including base64 images and creates no image files.

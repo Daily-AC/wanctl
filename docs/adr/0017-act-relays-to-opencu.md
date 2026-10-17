@@ -6,7 +6,7 @@ Status: implemented; real Windows acceptance pending
 ## Decision
 
 Extend `wanctl act` / `wanctl_act`, without another MCP tool, with two OpenCU
-operations: `discover` and `{tool, arguments}`. Both require a workspace and
+operations: `discover` and `{tool, arguments}`. Both select `target` exactly as legacy act does and
 exclude legacy `actions`, `screenshot_id` and `region`. Discovery returns the
 peer's `serverInfo`, `instructions` and complete, paginated tool list. Prefer
 those tools when installed; otherwise ask the person to install OpenCU, while
@@ -25,37 +25,39 @@ The authoritative upstream contracts reviewed for this decision were
 
 ## Session identity and lifetime
 
-The key is **authenticated controller fingerprint + explicit workspace ID**,
-inside one device agent. An MCP transport connection, OAuth account, relay
-socket or CLI process does not identify a conversation: hosted clients can
-create a new transport session for every call, and one identity can own several
-conversations (ADRs 0012–0014).
+The key is **authenticated controller fingerprint + this device**. Each device
+agent owns its desktop service, keyed by the authenticated fingerprint; neither
+the caller's label, CLI process nor MCP transport session is part of that key.
+OpenCU mode takes `target`, with no project workspace, shell, root directory or
+workspace ownership check. This product decision replaces the initial workspace
+binding: operating a desktop must not require entering a project.
 
-Enter a workspace once and retain its reference. CLI calls accept `--workspace`
-or, in OpenCU mode only, `WANCTL_WORKSPACE`. Each can open a fresh authenticated
-relay connection while the device retains the same user helper and OpenCU MCP
-connection. Default/hosted MCP passes `workspace` explicitly. The existing restricted
+All conversations under one controller identity share that device's OpenCU
+connection and stop latch. Another conversation's observation can invalidate
+element indexes or screenshots; the agent must observe again before input.
+Serialization prevents concurrent calls, but does not make an observation and a
+later action atomic across conversations. A person's stop blocks **every**
+conversation of that controller on that device until fresh explicit approval.
+Different controller fingerprints have separate connections/latches, still
+subject to the same device-wide busy lock.
+
+CLI and ordinary stdio/hosted MCP use the existing target routing and fresh
+authenticated relay legs. Transient CLI/MCP/relay disconnects do not clear a stop
+or close an idle peer. An in-flight disconnect cancels that call and discards
+its connection, returning unknown outcome without replay. Unrelated workspaces
+retain their existing behavior and have no OpenCU lifecycle hooks. The restricted
 stdio `--workspace-session` profile remains shell/file scoped; use ordinary
-`wanctl mcp` for desktop tools. This keeps both profiles' tool counts unchanged.
-OpenCU calls use independent authenticated legs, not the reusable shell link. The device
-checks workspace ownership and its live context on each operation and again
-after approval. References grant no authority.
+`wanctl mcp` for desktop tools. Both profiles' tool counts remain unchanged.
 
-The workspace is the logical controller session. Explicit workspace exit ends
-it; cancellation invalidates it. Ending a transient CLI process or MCP transport
-does not end a workspace (and does not erase a person's stop). This also lets a
-replacement MCP process attach to the same conversation. Hosts must exit their
-workspace when the conversation finishes. A disconnected in-flight request
-cancels that call and discards its connection, with an unknown-outcome result.
-
-Each connection closes after ten minutes without a call, on workspace end,
-on agent shutdown, and before automatic update installation. Idle connections
-do not count as desktop Busy. The update hook holds the existing desktop lock
-while draining peers and installing; failure releases the lock without clearing
-stop latches. Existing shell/console/update Busy rules remain unchanged; a
-separately open reusable shell link can still count as work. Connection state
-is ephemeral: after idle, failure or restart, observe again before input.
-Agent restart also loses the workspace, so an old reference fails closed.
+Connections close after ten minutes idle, on agent shutdown, and before
+automatic update installation. Idle peers do not count as desktop Busy. The
+update hook holds the existing desktop lock while draining peers and installing;
+failure releases the lock without clearing stop latches. The stop latch is
+retained independently of the peer, including after idle close or failure, until
+a fresh human approval. Agent restart loses this in-memory state; agents must
+never restart it or change identity to circumvent a person's stop. After idle,
+failure or restart, observe again before input. Existing shell/console/update
+Busy rules remain unchanged.
 
 ## User-session launch
 
@@ -99,12 +101,16 @@ HTTP's existing batching, upload bounds and finite down-poll windows carry the
 chunks as a stream, without increasing relay limits. Over-limit, truncated or
 broken exchanges are unknown outcomes; there is no truncation or retry.
 
-CLI discovery prints JSON. Tool calls save the complete raw MCP result in a
-private JSON file (`-o FILE`, otherwise a unique `opencu-result-*.json`), and
-print JSON with text, metadata and decoded image byte sizes in place of base64.
-`-o -` outputs the complete raw result. `--arguments-file` avoids putting
-private typed/pasted text in argv. MCP returns native content items unchanged;
-wanctl does not resize or recompress them.
+CLI discovery prints JSON. Tool calls decode each image content item into a
+separate PNG file without recompressing it. The default is a private temporary
+directory; `-o DIR` selects an output directory. Files have unique names and 0600
+permissions, including in an existing directory. JSON stdout retains text,
+metadata and content order, replacing each image's base64 `data` with its absolute
+`path` and decoded `bytes`. A `result_file` path points to the complete raw MCP
+JSON saved alongside the PNGs. Thus a shell-driven agent can open images directly
+with its file/image reader. `-o -` prints the complete original MCP result, writes
+no image files and keeps any PERSON_ACTIVE note on stderr. `--arguments-file`
+avoids putting private typed/pasted text in argv. MCP content is unchanged.
 
 ## Authorization, stop latch and serialization
 
@@ -120,14 +126,15 @@ checking a stop and applying the human decision. There is one in-flight call
 per connection. Busy requests are refused, never queued or replayed.
 
 `USER_STOPPED` or `STOPPED_BY_PERSON`, either in `_meta["opencu/error"]` or the
-prefix of the first text content, latches the workspace's OpenCU session stopped.
+prefix of the first text content, latches this controller stopped on this device, across all its conversations.
 The latch is outside the child process and survives idle close and update
 preparation. Discovery also cannot reconnect around it. The next request asks
 the existing human approver **directly**: bypass, remembered rules and late
 grants cannot clear the latch. Denial/no approver leaves it stopped and creates
 no connection. Only a fresh explicit approval closes the old peer and permits
-a new one. That decision is not saved as a rule. Agents must not create another
-workspace or restart anything to circumvent the person's stop.
+a new one. That decision is not saved as a rule. Another conversation cannot
+reconnect around the latch; agents must not change identity or restart anything
+to circumvent the person's stop.
 
 Process/stream failure during a call discards the connection and reports that
 the outcome is unknown: observe again, never replay. Neither the MCP layer,
@@ -137,10 +144,12 @@ helper, device service nor desktop client retries the tool call.
 
 Tests compile a standalone Go MCP peer and exercise real OS pipes, initialization,
 pagination, dynamic schemas, missing manifests, multi-MB PNGs, exact metadata,
-process reuse, idle close, workspace ownership/end, shutdown/update cleanup,
+process reuse across conversations, controller isolation, idle close, shutdown/update cleanup,
 stop/approval races, bypass/saved-rule refusal, crash/no replay and device-wide
 serialization with legacy act. Additional tests carry a result larger than a
 16 MiB frame through both real relay carriers and through CLI/MCP renderers.
+CLI tests verify multiple decoded PNG files, their byte fidelity and private
+permissions in both default temporary and explicit output directories.
 Existing legacy tests remain unchanged. Windows launch code is cross-compiled;
 token/session/physical-Esc behavior still needs the isolated reviewer runbook:
 [Windows acceptance](../plans/2026-10-17-act-opencu-acceptance.md).
