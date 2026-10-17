@@ -38,6 +38,7 @@ const (
 	TypeBool   = "boolean"
 	TypeNumber = "number"
 	TypeArray  = "array"
+	TypeObject = "object"
 )
 
 // Param is one argument, on either surface or both.

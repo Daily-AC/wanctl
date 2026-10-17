@@ -5,17 +5,37 @@
       {
         "name": "actions",
         "type": "array",
-        "required": true
+        "required": false
+      },
+      {
+        "name": "arguments",
+        "type": "object",
+        "required": false
+      },
+      {
+        "name": "discover",
+        "type": "boolean",
+        "required": false
       },
       {
         "name": "screenshot_id",
         "type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "target",
         "type": "string",
-        "required": true
+        "required": false
+      },
+      {
+        "name": "tool",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "workspace",
+        "type": "string",
+        "required": false
       }
     ]
   },
