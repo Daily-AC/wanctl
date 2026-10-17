@@ -124,3 +124,25 @@ If it is clearly faster with HTTP/3 off, your network lets UDP through but
 carries it badly, so keep `WANCTL_HTTP3=0` from now on. If the two are about
 the same, HTTP/3 is not in use (for example because UDP is blocked and wanctl
 has already fallen back to HTTP/2), or the bottleneck is elsewhere.
+
+## Discover OpenCU before operating a Windows desktop
+
+Enter one workspace per conversation with `wanctl workspace enter --target DEVICE
+--root 'C:\Users\you\work'`, keep the returned reference, then run
+`wanctl act --workspace REF --discover` (MCP: `wanctl_act` with `workspace` and
+`discover: true`). Prefer the discovered OpenCU tools and instructions; relay
+calls with `tool` and `arguments`. Independent CLI calls can share
+`WANCTL_WORKSPACE`.
+
+If missing, ask the person to run this in PowerShell on that device, without admin:
+
+```powershell
+irm https://github.com/Daily-AC/opencu/releases/latest/download/install.ps1 | iex
+```
+
+Legacy `screenshot_id` + `actions[]` remains available; do not mix the modes.
+After ten minutes idle the connection closes; observe again before input. On
+stop or `PERSON_ACTIVE`, ask the person and never retry automatically. A person's
+stop requires fresh explicit approval to resume. Exit the workspace when done.
+CLI calls save the complete result JSON and display image sizes; `-o -` prints
+the complete raw result instead.
