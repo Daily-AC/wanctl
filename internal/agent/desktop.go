@@ -28,6 +28,9 @@ func (a *Agent) doDesktopUsing(conn io.ReadWriter, fp, peerName string, m protoc
 		_ = desktop.WriteResult(conn, protocol.DesktopResult{RequestID: m.RequestID, Status: "rejected", Error: err.Error(), FailedIndex: -1}, nil)
 		return nil
 	}
+	if m.Desktop.IsOpenCU() {
+		return a.doOpenCU(conn, fp, peerName, m, audit, desktop.StartOpenCU, checks...)
+	}
 	ctx, cancel := context.WithCancel(a.shutdown())
 	defer cancel()
 	// Observe cancellation while approval is pending too. This stream accepts
