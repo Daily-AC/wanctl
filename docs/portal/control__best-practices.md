@@ -73,3 +73,22 @@ time WANCTL_HTTP3=0 wanctl push --target DEVICE ./test.bin /tmp/test.bin
 ```
 
 关掉之后明显更快，说明你的网络放行 UDP 但转得差，以后带着 `WANCTL_HTTP3=0` 用；两次差不多，说明 HTTP/3 没用上（比如 UDP 被挡，wanctl 已经自动退回 HTTP/2），或者瓶颈不在这里。
+
+## Windows 桌面操作先发现 OpenCU
+
+先用 `wanctl workspace enter --target DEVICE --root 'C:\Users\你\工作目录'`
+进入一个工作区，把返回的引用留给这段对话。运行
+`wanctl act --workspace REF --discover`，或调用
+`wanctl_act` 的 `workspace`、`discover: true`。安装了 OpenCU 时优先使用返回的工具
+和说明，通过 `tool`、`arguments` 转发；CLI 也可用 `WANCTL_WORKSPACE` 接续多次调用。
+
+未安装时，请人在那台 Windows 的 PowerShell 中运行（不需要管理员）：
+
+```powershell
+irm https://github.com/Daily-AC/opencu/releases/latest/download/install.ps1 | iex
+```
+
+原有 `screenshot_id` + `actions[]` 仍可用。两种模式不能混用。
+OpenCU 空闲十分钟后会断开；继续前重新观察。收到停止或 `PERSON_ACTIVE` 时先问人，
+不要自动重试；人的停止必须经过新的明确审批才能恢复。完成后 `wanctl workspace exit`
+关闭该对话的连接。CLI 默认保存完整结果 JSON，并显示图片大小；`-o -` 可输出完整原始结果。
