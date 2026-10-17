@@ -83,21 +83,20 @@ comparing it with Windows. Resolve only the temporary device:
 # Substitute the temporary device ID shown by peers and its Windows fingerprint.
 DEVICE='lab/DEVICE_ID_FROM_PEERS'
 "$W" trust server --target "$DEVICE" --fingerprint 'SHA256:FINGERPRINT_FROM_WINDOWS'
-# Use the real absolute Windows test directory printed by $lab, with its username.
-"$W" workspace enter --target "$DEVICE" --root 'C:\Users\LAB_USER\wanctl-opencu-acceptance' > .acceptance/workspace.json
-export WANCTL_WORKSPACE="$(python3 -c 'import json; print(json.load(open(".acceptance/workspace.json"))["workspace"])')"
-"$W" workspace status
+"$W" act --target "$DEVICE" --discover
 ```
 
-Expected: `state: open`, and the reference ends in `#w-` plus 32 hex digits.
-The workspace reference, not each CLI process, identifies this conversation.
+No workspace, shell or project directory is needed. This command should reach the
+temporary Windows device (and report not-installed before the next step).
+Independent CLI processes using this controller config share one OpenCU connection
+on this device. An unrelated `WANCTL_WORKSPACE` value is ignored by act.
 
 ## Missing installation, install, discovery
 
 Before installing OpenCU for this new Windows account:
 
 ```sh
-"$W" act --discover
+"$W" act --target "$DEVICE" --discover
 ```
 
 Expected: nonzero exit and JSON `code: OPENCU_NOT_INSTALLED`, with this exact
@@ -111,7 +110,7 @@ Run that command **in another ordinary PowerShell under the same Windows test
 account**. Do not run it as SYSTEM or administrator. Then, on the Mac:
 
 ```sh
-"$W" act --discover > .acceptance/discovery.json
+"$W" act --target "$DEVICE" --discover > .acceptance/discovery.json
 python3 -m json.tool .acceptance/discovery.json
 ```
 
@@ -143,37 +142,43 @@ $f.Controls.Add($b); $f.Controls.Add($l)
 On the Mac, after the person agrees and leaves keyboard/mouse idle:
 
 ```sh
-"$W" act --tool get_app_state \
+"$W" act --target "$DEVICE" --tool get_app_state \
   --arguments '{"app":"wanctl OpenCU Acceptance","includeScreenshot":true}' \
-  -o .acceptance/state.json
+  -o .acceptance/state > .acceptance/state-output.json
 ```
 
-Expected: text with the observed Increment control and Count: 0, a PNG content
-item, `isError` absent/false, and any `_meta` preserved in `state.json`.
-Extract the actual image without recompressing it:
+Expected: text with the observed Increment control and Count: 0, `isError`
+absent/false, and unchanged `_meta`. Every image item in `state-output.json`
+contains an absolute `path` to a readable PNG and its decoded `bytes`. No manual
+base64 extraction is needed. The raw result is in the file named by `result_file`.
 
 ```sh
-python3 - <<'PY'
-import base64, json
-r = json.load(open('.acceptance/state.json'))
-for i, c in enumerate(r['content']):
+python3 - <<'PYIMAGES'
+import json
+r = json.load(open('.acceptance/state-output.json'))
+for c in r['content']:
     if c['type'] == 'text': print(c['text'])
-    elif c['type'] == 'image':
-        open(f'.acceptance/state-{i}.png', 'wb').write(base64.b64decode(c['data']))
-PY
+    elif c['type'] == 'image': print(c['path'], c['bytes'])
+print('Full original MCP result:', r['result_file'])
+PYIMAGES
 ```
+
+Open each printed PNG path with the agent's image/file reader or macOS Preview.
+Verify multiple image items, if present, have distinct files. A call without
+`-o` uses a private temporary directory; `-o -` instead prints the full raw MCP
+JSON (including base64) without creating image files.
 
 Read the element index for Increment from that observation; do not guess it.
 
 ```sh
 read 'BUTTON_INDEX?Observed Increment element index: '
-"$W" act --tool click \
+"$W" act --target "$DEVICE" --tool click \
   --arguments "{\"app\":\"wanctl OpenCU Acceptance\",\"element_index\":$BUTTON_INDEX}" \
-  -o .acceptance/click.json
+  -o .acceptance/click > .acceptance/click-output.json
 ```
 
 Expected: the app visibly says Count: 1 and the returned state confirms it.
-These are independent CLI invocations with one workspace. `PERSON_ACTIVE`
+These are independent CLI invocations under one controller identity. `PERSON_ACTIVE`
 means stop and ask the person, not repeat the click automatically. A tool
 `isError: true` gives a nonzero CLI exit while retaining its complete result.
 
@@ -204,9 +209,9 @@ Medium integrity, not High/System. No extra console window should appear.
 With explicit permission, hold only Shift over the disposable app:
 
 ```sh
-"$W" act --tool press_key \
+"$W" act --target "$DEVICE" --tool press_key \
   --arguments '{"app":"wanctl OpenCU Acceptance","key":"Shift","duration":10}' \
-  -o .acceptance/stopped.json
+  -o .acceptance/stopped > .acceptance/stopped-output.json
 ```
 
 While it is in progress, the person at Windows presses physical **Esc**.
@@ -216,7 +221,7 @@ Expected: `USER_STOPPED` in the first text prefix and/or `_meta["opencu/error"]`
 Request a new observation only after asking the person:
 
 ```sh
-"$W" act --tool get_app_state --arguments '{"app":"wanctl OpenCU Acceptance"}'
+"$W" act --target "$DEVICE" --tool get_app_state --arguments '{"app":"wanctl OpenCU Acceptance"}'
 ```
 
 Expected: despite `--mode bypass`, the test agent terminal asks for approval
@@ -225,32 +230,50 @@ The reply must be `OPENCU_STOPPED`; no new helper/OpenCU PID appears. After the
 person explicitly agrees, issue a new observation and approve **once** in the
 agent terminal. Only then should a new helper/peer PID appear and state return.
 A saved matching exec rule must behave the same way as bypass after another Esc.
-Do not use workspace replacement, process restart or installation to clear stop.
+Do not use another identity, process restart or installation to clear stop.
 
 For `PERSON_ACTIVE`, move the mouse during a separately authorized long hold.
 Expected: the peer's original result and wanctl's ask-the-person/no-auto-retry note.
 
-## Idle close, workspace close, transport and legacy checks
+## Shared conversations, idle close, transport and legacy checks
 
-Leave this workspace idle for **10 minutes plus 5 seconds**, with no discovery
-or tool calls. The recorded helper and peer PIDs must disappear. The workspace
-may still say open; idle process cleanup does not close the logical workspace.
-A new authorized observation creates new PIDs. If the connection was stopped
-before the idle interval, that observation must still ask for fresh approval.
+Open another Mac terminal and set the same `WANCTL_CONFIG_DIR`, relay/token and
+`W` values. Use the same `DEVICE`. It represents another conversation under the
+same identity. Repeat discovery or an observation, then verify the helper/peer
+PIDs are unchanged. Another conversation's observation can invalidate element
+indexes or screenshots: the original conversation must observe again before
+input. The busy lock serializes calls, not a sequence of separate observations
+and actions.
+
+Repeat the Esc test, then request discovery from that second terminal. It must
+also require fresh approval even under bypass. Denying it must return
+`OPENCU_STOPPED` without new PIDs. Only explicit human approval resumes all
+conversations of this controller on this device. This is not a per-chat latch.
+
+Leave all conversations of this controller idle for **10 minutes plus 5 seconds**,
+with no discovery or tool calls. The recorded helper and peer PIDs must disappear.
+A new authorized observation creates new PIDs. If stopped before the idle interval,
+that observation must still ask for fresh approval. Connection failure must not
+clear an already observed stop either.
 
 ```sh
-WANCTL_TRANSPORT=http "$W" act --tool get_app_state \
+WANCTL_TRANSPORT=http "$W" act --target "$DEVICE" --tool get_app_state \
   --arguments '{"app":"wanctl OpenCU Acceptance","includeScreenshot":true}' \
-  -o .acceptance/http-result.json
-"$W" workspace exit
+  -o .acceptance/http > .acceptance/http-output.json
 ```
 
-Expected: HTTP also returns full text/PNG/metadata; workspace exit closes the
-helper and peer immediately. Calling act with the now-closed reference refuses
-without starting a child. Finish this test before clearing the reference:
+Expected: HTTP also returns full text, metadata and readable PNG paths. For raw
+output without files:
 
 ```sh
-unset WANCTL_WORKSPACE
+"$W" act --target "$DEVICE" --tool get_app_state \
+  --arguments '{"app":"wanctl OpenCU Acceptance","includeScreenshot":true}' \
+  -o - > .acceptance/raw-result.json
+```
+
+Verify legacy mode independently:
+
+```sh
 "$W" screenshot --target "$DEVICE" -o .acceptance/legacy.jpg > .acceptance/legacy.json
 SHOT="$(python3 -c 'import json; print(json.load(open(".acceptance/legacy.json"))["snapshot"]["id"])')"
 "$W" act --target "$DEVICE" --screenshot-id "$SHOT" \
@@ -269,7 +292,8 @@ PID, never by killing all Node/OpenCU processes.
 
 ## Exercise the session-0 LocalSystem launch separately
 
-End the user-mode workspace and Ctrl-C **that test agent terminal** first.
+Ctrl-C **the user-mode test agent terminal** first and verify its recorded
+helper and peer PIDs disappear.
 Keep the SSH tunnel and the disposable account signed in at the physical
 console. OpenCU must remain installed in that account's LOCALAPPDATA only.
 
@@ -299,10 +323,10 @@ Get-Content "$s0\agent.log"
 ```
 
 On the Mac, use `peers`, compare/pin **this second test agent's** fingerprint
-from `agent.log`, enter a new workspace against its ID, and repeat discovery,
-get_app_state and one observed Increment click. Its config/identity is separate
-from both production and the first test agent. Use the same disposable app and
-signed-in user's test directory as the workspace root.
+from `agent.log`, set `DEVICE` to this temporary SYSTEM agent's ID, and repeat
+discovery, get_app_state and one observed Increment click using `--target`.
+Its config/identity is separate from both production and the first test agent.
+Use the same disposable app; no workspace is needed.
 
 Expected process evidence: the test agent has SessionId 0 and SYSTEM owner;
 `__desktop-pipe` and the manifest command have the signed-in user's nonzero
@@ -318,7 +342,8 @@ production portal or approval phone into this isolated test.
 
 ## Cleanup and acceptance record
 
-Exit all test workspaces first. Ctrl-C the user test agent/tunnel/relay terminals.
+Ctrl-C the user test agent/tunnel/relay terminals. Verify the recorded helper
+and OpenCU PIDs disappear when the test agent exits.
 For the SYSTEM test, in the same admin PowerShell:
 
 ```powershell
@@ -332,7 +357,8 @@ Unregister-ScheduledTask -TaskName 'Wanctl-OpenCU-Acceptance-S0' -Confirm:$false
 Check the recorded test helper/peer PIDs are gone before removing the temporary
 Windows directories or disposable account. Close the disposable form. Retain
 only the needed evidence, then delete the Mac `.acceptance` directory when done;
-result files contain screenshots. Do not remove the production config/task.
+result files and PNGs contain screenshots. Also delete the temporary output
+directories returned by any calls made without `-o`. Do not remove the production config/task.
 
 Record: branch commit, Windows build, OpenCU version, each check's actual result,
 user-mode and session-0 PID/owner/integrity evidence, exact stop code and refusal,
