@@ -63,12 +63,10 @@ func TestOpenCUSessionLifecycleAndSerialization(t *testing.T) {
 	}
 	s := &Service{cuIdle: 80 * time.Millisecond}
 	defer s.Close()
-	life, end := context.WithCancel(context.Background())
-	defer end()
 	allow := func(bool) bool { return true }
-	req := protocol.DesktopRequest{WorkspaceID: "workspace", Tool: "peer_apply", Arguments: json.RawMessage(`{"app":"Disposable"}`)}
+	req := protocol.DesktopRequest{Tool: "peer_apply", Arguments: json.RawMessage(`{"app":"Disposable"}`)}
 	call := func(r protocol.DesktopRequest, gate func(bool) bool) protocol.DesktopResult {
-		return s.DoOpenCU(context.Background(), life, "owner:workspace", NewID(), r, gate, start)
+		return s.DoOpenCU(context.Background(), "owner", NewID(), r, gate, start)
 	}
 	a := call(req, allow)
 	b := call(req, allow)
@@ -137,21 +135,12 @@ func TestOpenCUSessionLifecycleAndSerialization(t *testing.T) {
 	}
 	close(unblock)
 	<-done
-	end()
-	s.CloseOpenCUSession("owner:workspace")
-	if !peers[len(peers)-1].closed.Load() {
-		t.Fatal("workspace end left child alive")
-	}
-	live := s.DoOpenCU(context.Background(), context.Background(), "another-workspace", NewID(), req, allow, start)
-	if live.Status != "completed" {
-		t.Fatalf("%+v", live)
-	}
 	s.Close()
 	if !peers[len(peers)-1].closed.Load() {
 		t.Fatal("shutdown left peer alive")
 	}
 	before := starts.Load()
-	closed := s.DoOpenCU(context.Background(), context.Background(), "another-workspace", NewID(), req, allow, start)
+	closed := s.DoOpenCU(context.Background(), "owner", NewID(), req, allow, start)
 	if closed.Status != "rejected" || starts.Load() != before {
 		t.Fatal("closed service restarted peer")
 	}
@@ -169,8 +158,8 @@ func TestOpenCUCrashNeverReplaysAndCancels(t *testing.T) {
 		c, e := opencu.Start(ctx, cmd)
 		return &testOpenCUPeer{Client: c}, e
 	}
-	req := protocol.DesktopRequest{WorkspaceID: "w", Tool: "peer_apply", Arguments: json.RawMessage(`{"crash":true}`)}
-	res := s.DoOpenCU(context.Background(), context.Background(), "w", NewID(), req, func(bool) bool { return true }, start)
+	req := protocol.DesktopRequest{Tool: "peer_apply", Arguments: json.RawMessage(`{"crash":true}`)}
+	res := s.DoOpenCU(context.Background(), "w", NewID(), req, func(bool) bool { return true }, start)
 	if res.Status != "unknown" || !strings.Contains(res.Error, "observe again") || starts != 1 {
 		t.Fatalf("%+v starts=%d", res, starts)
 	}
@@ -181,7 +170,7 @@ func TestOpenCUCrashNeverReplaysAndCancels(t *testing.T) {
 	req.Arguments = json.RawMessage(`{"delay":20000}`)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	res = s.DoOpenCU(ctx, context.Background(), "w", NewID(), req, func(bool) bool { return true }, start)
+	res = s.DoOpenCU(ctx, "w", NewID(), req, func(bool) bool { return true }, start)
 	if res.Status != "unknown" {
 		t.Fatalf("cancel: %+v", res)
 	}
@@ -190,7 +179,7 @@ func TestOpenCUHelperManifestAndFraming(t *testing.T) {
 	binary := ocutest.Build(t)
 	dir := t.TempDir()
 	t.Setenv("LOCALAPPDATA", dir)
-	req := protocol.DesktopRequest{Discover: true, WorkspaceID: "w"}
+	req := protocol.DesktopRequest{Discover: true}
 	// Run the real persistent helper framing with only the native session check
 	// replaced. The manifest and child process are real, as on the user side.
 	run := func(first protocol.DesktopRequest) (io.WriteCloser, io.ReadCloser, <-chan int) {
@@ -260,7 +249,7 @@ func TestOpenCUHelperManifestAndFraming(t *testing.T) {
 }
 func TestOpenCUInvalidModesAndPayload(t *testing.T) {
 	for _, r := range []protocol.DesktopRequest{
-		{Discover: true}, {Discover: true, Tool: "x", WorkspaceID: "w"}, {Discover: true, WorkspaceID: "w", ScreenshotID: "x"}, {Tool: "x", WorkspaceID: "w", Actions: []protocol.DesktopAction{}}, {Tool: "x", WorkspaceID: "w", Arguments: json.RawMessage(`null`)},
+		{Discover: true, Arguments: json.RawMessage(`{}`)}, {Discover: true, Tool: "x"}, {Discover: true, ScreenshotID: "x"}, {Tool: "x", Actions: []protocol.DesktopAction{}}, {Tool: "x", Arguments: json.RawMessage(`null`)},
 	} {
 		if Validate("act", &r) == nil {
 			t.Fatalf("accepted %+v", r)

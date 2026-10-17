@@ -1,5 +1,5 @@
 // Package desktop implements one visible, cancellable batch in the logged-in
-// Windows user's desktop, plus workspace-scoped OpenCU MCP connections.
+// Windows user's desktop, plus controller-scoped OpenCU MCP connections.
 package desktop
 
 import (
@@ -69,9 +69,6 @@ func Validate(action string, req *protocol.DesktopRequest) error {
 		}
 		if req.Discover == (req.Tool != "") {
 			return errors.New("choose discover or tool with arguments")
-		}
-		if req.WorkspaceID == "" {
-			return errors.New("OpenCU needs an explicit workspace; enter a workspace first")
 		}
 		if len(req.Tool) > 256 || strings.IndexFunc(req.Tool, unicode.IsControl) >= 0 {
 			return errors.New("invalid OpenCU tool name")

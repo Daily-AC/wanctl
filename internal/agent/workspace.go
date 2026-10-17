@@ -553,7 +553,6 @@ func (a *Agent) handleWorkspace(conn io.ReadWriter, fp, peer string, m *protocol
 		w.shell.Close()
 	case "close":
 		w.stop()
-		a.desktop.CloseOpenCUSession(fp + ":" + w.id)
 		a.workspaceMu.Lock()
 		delete(a.workspaces, w.id)
 		a.workspaceMu.Unlock()

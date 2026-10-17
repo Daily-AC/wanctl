@@ -25,15 +25,10 @@
       {
         "name": "target",
         "type": "string",
-        "required": false
+        "required": true
       },
       {
         "name": "tool",
-        "type": "string",
-        "required": false
-      },
-      {
-        "name": "workspace",
         "type": "string",
         "required": false
       }
