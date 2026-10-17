@@ -74,7 +74,6 @@ type DesktopRequest struct {
 	Discover     bool            `json:"discover,omitempty"`
 	Tool         string          `json:"tool,omitempty"`
 	Arguments    json.RawMessage `json:"arguments,omitempty"`
-	WorkspaceID  string          `json:"workspace_id,omitempty"`
 	ScreenshotID string          `json:"screenshot_id,omitempty"`
 	Region       *Rect           `json:"region,omitempty"` // crop expressed in the referenced full screenshot's pixels
 	Actions      []DesktopAction `json:"actions,omitempty"`
@@ -97,7 +96,7 @@ type OpenCUResult struct {
 }
 
 func (r *DesktopRequest) IsOpenCU() bool {
-	return r != nil && (r.Discover || r.Tool != "" || len(r.Arguments) != 0 || r.WorkspaceID != "")
+	return r != nil && (r.Discover || r.Tool != "" || len(r.Arguments) != 0)
 }
 
 type DesktopResult struct {

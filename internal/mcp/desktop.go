@@ -60,13 +60,6 @@ func mcpAct(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolRe
 		}
 	}
 	target := reqStr(req, "target", "")
-	if request.IsOpenCU() || reqStr(req, "workspace", "") != "" {
-		var hint *mcpapi.CallToolResult
-		target, request.WorkspaceID, hint = workspaceRoute(req)
-		if hint != nil {
-			return hint, nil
-		}
-	}
 	res, err := c.Act(ctx, target, request)
 	return desktopToolResponse(sess, res, err), nil
 }

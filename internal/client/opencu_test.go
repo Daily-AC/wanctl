@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -64,10 +63,6 @@ func TestOpenCULargeResultThroughRelayCarriers(t *testing.T) {
 					served <- err
 					return
 				}
-				if req.Desktop.WorkspaceID != "w-"+strings.Repeat("1", 32) {
-					served <- fmt.Errorf("workspace lost")
-					return
-				}
 				raw, err := peer.Call(ctx, req.Desktop.Tool, req.Desktop.Arguments)
 				if err != nil {
 					served <- err
@@ -121,7 +116,7 @@ func TestOpenCULargeResultThroughRelayCarriers(t *testing.T) {
 				}
 				return httpconn.Dial(ctx, srv.URL, open.Session, "client", "opencu-test")
 			}
-			res, err := desktopCallWithDial(ctx, "alice/opencu-lab", "act", "", protocol.DesktopRequest{WorkspaceID: "w-" + strings.Repeat("1", 32), Tool: "peer_apply", Arguments: json.RawMessage(`{"large":true,"error":true,"app":"Disposable"}`)}, dial)
+			res, err := desktopCallWithDial(ctx, "alice/opencu-lab", "act", "", protocol.DesktopRequest{Tool: "peer_apply", Arguments: json.RawMessage(`{"large":true,"error":true,"app":"Disposable"}`)}, dial)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -143,7 +138,7 @@ func TestOpenCUClientBreakNeverRedials(t *testing.T) {
 		go func() { defer dev.Close(); protocol.ReadMessage(dev) }()
 		return ctl, nil
 	}
-	_, err := desktopCallWithDial(context.Background(), "device", "act", "", protocol.DesktopRequest{Tool: "arbitrary", WorkspaceID: "w"}, dial)
+	_, err := desktopCallWithDial(context.Background(), "device", "act", "", protocol.DesktopRequest{Tool: "arbitrary"}, dial)
 	if err == nil || !strings.Contains(err.Error(), "observe again") || dials.Load() != 1 {
 		t.Fatalf("%v dials=%d", err, dials.Load())
 	}

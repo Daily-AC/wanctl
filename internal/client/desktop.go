@@ -147,10 +147,3 @@ func legacyScreenshotOver(ctx context.Context, rw io.ReadWriter, target, via str
 	}
 	return &DesktopResponse{Result: protocol.DesktopResult{Status: "completed", FailedIndex: -1, ImageBytes: image.Len(), MIME: "image/png"}, Image: image.Bytes(), Legacy: true}, nil
 }
-
-// ActWorkspace retains OpenCU state across independently authenticated CLI/MCP
-// requests. Workspace ownership is checked on the device on every call.
-func (c *Client) ActWorkspace(ctx context.Context, ref WorkspaceRef, req protocol.DesktopRequest) (*DesktopResponse, error) {
-	req.WorkspaceID = ref.ID
-	return c.Act(ctx, ref.Target, req)
-}

@@ -77,7 +77,7 @@ func TestOpenCUArgumentsSurviveSDKDecoding(t *testing.T) {
 		got, _ = json.Marshal(r.GetArguments()["arguments"])
 		return mcpapi.NewToolResultText("ok"), nil
 	})
-	raw := json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wanctl_act","arguments":{"tool":"arbitrary","workspace":"lab/device#w-11111111111111111111111111111111","arguments":{"large":9007199254740993,"nested":{"x":0.12345678901234567890123},"text":"unchanged"}}}}`)
+	raw := json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wanctl_act","arguments":{"tool":"arbitrary","target":"lab/device","arguments":{"large":9007199254740993,"nested":{"x":0.12345678901234567890123},"text":"unchanged"}}}}`)
 	result := s.HandleMessage(context.Background(), raw)
 	if !strings.Contains(string(got), "9007199254740993") || !strings.Contains(string(got), "0.12345678901234567890123") {
 		t.Fatalf("precision lost: %s result=%+v", got, result)

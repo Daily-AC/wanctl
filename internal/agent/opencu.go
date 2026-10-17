@@ -12,11 +12,6 @@ import (
 )
 
 func (a *Agent) doOpenCU(conn io.ReadWriter, fp, peer string, m protocol.Message, audit sessionAudit, start desktop.OpenCUStart, checks ...func() bool) <-chan peerRead {
-	w, err := a.getWorkspace(fp, m.Desktop.WorkspaceID)
-	if err != nil {
-		_ = desktop.WriteResult(conn, protocol.DesktopResult{RequestID: m.RequestID, Status: "rejected", Error: err.Error(), FailedIndex: -1}, nil)
-		return nil
-	}
 	ctx, cancel := context.WithCancel(a.shutdown())
 	defer cancel()
 	pending := watchDesktopPeer(conn, cancel)
@@ -25,7 +20,7 @@ func (a *Agent) doOpenCU(conn io.ReadWriter, fp, peer string, m protocol.Message
 	var session *uint32
 	ctx = desktop.WithSessionObserver(ctx, func(id uint32) { session = &id })
 	approve := func(fresh bool) bool {
-		if ctx.Err() != nil || w.ctx.Err() != nil || !checksPass(checks) {
+		if ctx.Err() != nil || !checksPass(checks) {
 			return false
 		}
 		request := policy.Request{Kind: policy.KindExec, Cmd: summary, Peer: fp}
@@ -44,9 +39,9 @@ func (a *Agent) doOpenCU(conn io.ReadWriter, fp, peer string, m protocol.Message
 		} else {
 			ok, decision = a.gate(request, checks...)
 		}
-		return ok && ctx.Err() == nil && w.ctx.Err() == nil && checksPass(checks)
+		return ok && ctx.Err() == nil && checksPass(checks)
 	}
-	res := a.desktop.DoOpenCU(ctx, w.ctx, fp+":"+w.id, m.RequestID, *m.Desktop, approve, start)
+	res := a.desktop.DoOpenCU(ctx, fp, m.RequestID, *m.Desktop, approve, start)
 	code := 0
 	var toolResult struct {
 		IsError bool `json:"isError"`

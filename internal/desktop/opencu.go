@@ -26,13 +26,13 @@ type openCUSession struct {
 	active     bool
 	timer      *time.Timer
 	generation uint64
-	end        func() bool
 }
 
 // DoOpenCU shares the legacy device lock, including while approval is pending.
-// lifetime is the authenticated workspace's lifetime, not this one-shot socket.
+// key is the authenticated controller fingerprint. The Service belongs to one
+// device, so conversations under that identity share a connection and stop latch.
 // approve(true) MUST ask a person directly, ignoring rules and bypass.
-func (s *Service) DoOpenCU(ctx, lifetime context.Context, key, requestID string, req protocol.DesktopRequest, approve func(bool) bool, start OpenCUStart) protocol.DesktopResult {
+func (s *Service) DoOpenCU(ctx context.Context, key, requestID string, req protocol.DesktopRequest, approve func(bool) bool, start OpenCUStart) protocol.DesktopResult {
 	res := protocol.DesktopResult{RequestID: requestID, Status: "rejected", FailedIndex: -1}
 	if err := Validate("act", &req); err != nil {
 		res.Error = err.Error()
@@ -48,9 +48,9 @@ func (s *Service) DoOpenCU(ctx, lifetime context.Context, key, requestID string,
 	}
 	defer s.busy.Unlock()
 	s.cuMu.Lock()
-	if s.cuClosed || lifetime.Err() != nil {
+	if s.cuClosed {
 		s.cuMu.Unlock()
-		res.Error = "OpenCU workspace ended"
+		res.Error = "OpenCU service closed"
 		return res
 	}
 	if s.cu == nil {
@@ -60,7 +60,6 @@ func (s *Service) DoOpenCU(ctx, lifetime context.Context, key, requestID string,
 	if e == nil {
 		e = &openCUSession{}
 		s.cu[key] = e
-		e.end = context.AfterFunc(lifetime, func() { s.CloseOpenCUSession(key) })
 	}
 	e.active = true
 	e.generation++
@@ -97,20 +96,16 @@ func (s *Service) DoOpenCU(ctx, lifetime context.Context, key, requestID string,
 		}
 		return res
 	}
-	if ctx.Err() != nil || lifetime.Err() != nil {
+	if ctx.Err() != nil {
 		res.Error = "OpenCU request cancelled before execution"
 		return res
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	end := context.AfterFunc(lifetime, cancel)
-	defer func() { end(); cancel() }()
-	if lifetime.Err() != nil {
-		cancel()
-	}
+	defer cancel()
 	s.cuMu.Lock()
 	if s.cuClosed || s.cu[key] != e {
 		s.cuMu.Unlock()
-		res.Error = "OpenCU workspace ended"
+		res.Error = "OpenCU service closed"
 		return res
 	}
 	if stopped {
@@ -167,31 +162,12 @@ func (s *Service) DoOpenCU(ctx, lifetime context.Context, key, requestID string,
 	return res
 }
 
-func (s *Service) CloseOpenCUSession(key string) {
-	s.cuMu.Lock()
-	defer s.cuMu.Unlock()
-	if e := s.cu[key]; e != nil {
-		delete(s.cu, key)
-		if e.end != nil {
-			e.end()
-		}
-		if e.timer != nil {
-			e.timer.Stop()
-		}
-		if e.conn != nil {
-			e.conn.Close()
-		}
-	}
-}
 func (s *Service) Close() {
 	s.cuMu.Lock()
 	defer s.cuMu.Unlock()
 	s.cuClosed = true
 	for key, e := range s.cu {
 		delete(s.cu, key)
-		if e.end != nil {
-			e.end()
-		}
 		if e.timer != nil {
 			e.timer.Stop()
 		}
