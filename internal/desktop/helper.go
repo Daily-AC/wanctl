@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"time"
 
+	"wanctl/internal/opencu"
 	"wanctl/internal/protocol"
 )
 
@@ -108,6 +109,25 @@ func exchangeHelper(ctx context.Context, job Job, start helperStart) (protocol.D
 }
 
 func WriteResult(w io.Writer, res protocol.DesktopResult, data []byte) error {
+	if res.OpenCU != nil {
+		raw, err := json.Marshal(res.OpenCU)
+		if err != nil || len(raw) > opencu.MaxResult {
+			return errors.New("OpenCU result exceeds 64 MiB; outcome unknown; observe again, never replay")
+		}
+		res.OpenCU = nil
+		res.OpenCUBytes = len(raw)
+		if err = protocol.WriteMessage(w, protocol.Message{Kind: protocol.KindDesktopResult, DesktopResult: &res}); err != nil {
+			return err
+		}
+		for len(raw) > 0 {
+			n := min(len(raw), 256<<10)
+			if err = protocol.WriteFrame(w, protocol.FrameData, raw[:n]); err != nil {
+				return err
+			}
+			raw = raw[n:]
+		}
+		return nil
+	}
 	res.ImageBytes = len(data)
 	if len(data) > 0 {
 		res.MIME = "image/jpeg"
@@ -132,6 +152,27 @@ func ReadResultBody(r io.Reader, m protocol.Message) (protocol.DesktopResult, []
 		return protocol.DesktopResult{}, nil, errors.New("invalid desktop result header")
 	}
 	res := *m.DesktopResult
+	if res.OpenCUBytes != 0 {
+		if res.OpenCUBytes < 0 || res.OpenCUBytes > opencu.MaxResult || res.ImageBytes != 0 || res.OpenCU != nil {
+			return res, nil, errors.New("invalid OpenCU result length")
+		}
+		raw := make([]byte, 0, res.OpenCUBytes)
+		for len(raw) < res.OpenCUBytes {
+			ft, b, err := protocol.ReadFrame(r)
+			if err != nil {
+				return res, nil, err
+			}
+			if ft != protocol.FrameData || len(b) == 0 || len(b) > 256<<10 || len(b) > res.OpenCUBytes-len(raw) {
+				return res, nil, errors.New("invalid OpenCU result chunk")
+			}
+			raw = append(raw, b...)
+		}
+		if json.Unmarshal(raw, &res.OpenCU) != nil || res.OpenCU == nil {
+			return res, nil, errors.New("invalid OpenCU result")
+		}
+		res.OpenCUBytes = 0
+		return res, nil, nil
+	}
 	if res.ImageBytes < 0 || res.ImageBytes > protocol.MaxFrame {
 		return res, nil, errors.New("invalid desktop image length")
 	}
@@ -151,8 +192,9 @@ func ReadResultBody(r io.Reader, m protocol.Message) (protocol.DesktopResult, []
 	return res, data, nil
 }
 
-// HelperMain is reachable before any relay/config initialization. It runs only
-// once, in the selected user's desktop. Input EOF means the owner agent left.
+// HelperMain is reachable before relay/config initialization, in the selected
+// user's desktop. Legacy jobs exit after one call; OpenCU jobs reuse a peer.
+// Input EOF means the owner agent left.
 func HelperMain(in io.Reader, out io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -167,6 +209,9 @@ func HelperMain(in io.Reader, out io.Writer) int {
 	if err = Validate(job.Action, &job.Request); err != nil {
 		_ = WriteResult(out, protocol.DesktopResult{Status: "rejected", Error: err.Error(), FailedIndex: -1}, nil)
 		return 0
+	}
+	if job.Request.IsOpenCU() {
+		return openCUHelperMain(in, out, job)
 	}
 	go func() { var b [1]byte; _, _ = in.Read(b[:]); cancel() }()
 	res, data := executeJob(ctx, job)

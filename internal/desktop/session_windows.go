@@ -104,3 +104,47 @@ func helperStartError(operation string, err error) error {
 	}
 	return fmt.Errorf("desktop helper %s failed", operation)
 }
+
+// Both install forms use the same launchers as legacy desktop calls. A helper
+// refuses elevated inherited tokens; SYSTEM only launches with the WTS user token.
+func startPlatformOpenCUHelper(ctx context.Context) (*helperProcess, error) {
+	id, err := processSession()
+	if err != nil {
+		return nil, err
+	}
+	if id != 0 {
+		p, err := startInheritedHelper(ctx)
+		if err == nil {
+			RecordSession(ctx, id)
+		}
+		return p, err
+	}
+	session := windows.WTSGetActiveConsoleSessionId()
+	if session == 0 || session == ^uint32(0) {
+		return nil, errNoConsoleUser
+	}
+	user, err := queryConsoleUser(session)
+	if err != nil {
+		return nil, err
+	}
+	defer user.close()
+	if windows.WTSGetActiveConsoleSessionId() != session {
+		return nil, errNoConsoleUser
+	}
+	return user.start(ctx)
+}
+func checkOpenCUSession() error {
+	id, err := processSession()
+	if err != nil {
+		return err
+	}
+	if id == 0 {
+		return errors.New("OpenCU cannot run in session 0")
+	}
+	token := windows.GetCurrentProcessToken()
+	elevated, err := tokenUint32(token, windows.TokenElevation)
+	if err != nil || elevated != 0 {
+		return errors.New("OpenCU needs the signed-in user's normal non-elevated token; start the agent without elevation")
+	}
+	return CheckCaptureSession()
+}
