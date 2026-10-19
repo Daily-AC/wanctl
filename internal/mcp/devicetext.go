@@ -78,7 +78,7 @@ func escapeDeviceOutput(tool string, next server.ToolHandlerFunc) server.ToolHan
 			}
 			return res, err
 		}
-		if res == nil || (tool == rawContentTool && !res.IsError) {
+		if res == nil || (tool == rawContentTool && !res.IsError) || (tool == "wanctl_act" && (reqStr(req, "tool", "") != "" || req.GetArguments()["discover"] == true)) {
 			return res, nil
 		}
 		escapeResult(res)

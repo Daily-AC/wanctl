@@ -651,7 +651,7 @@ func newMCPServer(hosted bool, bindings ...*workspaceConversation) *server.MCPSe
 	case len(bindings) > 0:
 		instructions = catalog.WorkspaceSessionInstructions
 	}
-	s := server.NewMCPServer("wanctl", "1.0.0", server.WithInstructions(instructions), server.WithOutputSchemaValidation())
+	s := server.NewMCPServer("wanctl", "1.0.0", server.WithInstructions(instructions), server.WithOutputSchemaValidation(), server.WithHooks(openCUArgumentHooks()))
 	registerMCPTools(s, hosted, bindings...)
 	return s
 }
@@ -736,6 +736,8 @@ func toolOptions(c catalog.Command) []mcpapi.ToolOption {
 			opts = append(opts, mcpapi.WithBoolean(p.Name, props...))
 		case catalog.TypeNumber:
 			opts = append(opts, mcpapi.WithNumber(p.Name, props...))
+		case catalog.TypeObject:
+			opts = append(opts, mcpapi.WithObject(p.Name, props...))
 		case catalog.TypeArray:
 			// The item schema is what tells a caller the shape of the objects
 			// it may put in the list. Without it the argument is "an array of

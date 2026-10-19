@@ -21,8 +21,12 @@ type Runner func(context.Context, Job) (protocol.DesktopResult, []byte, error)
 // Service is embedded in Agent, not a resident desktop process. TryLock avoids
 // queueing input behind another controller or behind a stale screenshot.
 type Service struct {
-	busy  sync.Mutex
-	Store Store
+	cuMu     sync.Mutex
+	cu       map[string]*openCUSession
+	cuClosed bool
+	cuIdle   time.Duration // zero uses the production ten-minute timeout
+	busy     sync.Mutex
+	Store    Store
 }
 
 func (s *Service) Do(ctx context.Context, peer, label, action, requestID string, req *protocol.DesktopRequest, run Runner) (protocol.DesktopResult, []byte) {

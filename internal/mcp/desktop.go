@@ -11,6 +11,7 @@ import (
 
 	mcpapi "github.com/mark3labs/mcp-go/mcp"
 	"wanctl/internal/client"
+	"wanctl/internal/opencu"
 	"wanctl/internal/protocol"
 )
 
@@ -50,7 +51,16 @@ func mcpAct(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolRe
 	if err != nil {
 		return mcpapi.NewToolResultError(err.Error()), nil
 	}
-	res, err := c.Act(ctx, reqStr(req, "target", ""), protocol.DesktopRequest{ScreenshotID: reqStr(req, "screenshot_id", ""), Actions: actions})
+	request := protocol.DesktopRequest{ScreenshotID: reqStr(req, "screenshot_id", ""), Actions: actions, Tool: reqStr(req, "tool", "")}
+	request.Discover, _ = req.GetArguments()["discover"].(bool)
+	if raw, ok := req.GetArguments()["arguments"]; ok {
+		request.Arguments, err = json.Marshal(raw)
+		if err != nil {
+			return mcpapi.NewToolResultError("invalid arguments object"), nil
+		}
+	}
+	target := reqStr(req, "target", "")
+	res, err := c.Act(ctx, target, request)
 	return desktopToolResponse(sess, res, err), nil
 }
 func desktopActions(raw any) ([]protocol.DesktopAction, error) {
@@ -80,6 +90,9 @@ func desktopToolResponse(sess sessionAPI, res *client.DesktopResponse, err error
 		return screenshotResult(res.Image)
 	}
 	header := res.Result
+	if header.OpenCU != nil && err == nil {
+		return openCUToolResponse(header)
+	}
 	if err != nil {
 		header.Status = "unknown"
 		header.Error = err.Error()
@@ -97,4 +110,53 @@ func desktopToolResponse(sess sessionAPI, res *client.DesktopResponse, err error
 		result.Content = append(result.Content, mcpapi.TextContent{Type: "text", Text: fmt.Sprintf("%s. Stop and ask your user; never retry automatically.", protocol.DesktopHumanInput)})
 	}
 	return result
+}
+
+// Embedding Content preserves its sealed marker while MarshalJSON relays even
+// future peer content kinds/fields without losing them through SDK decoding.
+type openCUContent struct {
+	mcpapi.Content
+	raw json.RawMessage
+}
+
+func (c openCUContent) MarshalJSON() ([]byte, error) { return c.raw, nil }
+
+func openCUToolResponse(header protocol.DesktopResult) *mcpapi.CallToolResult {
+	r := header.OpenCU
+	if len(r.Result) > 0 {
+		var raw struct {
+			Content    []json.RawMessage          `json:"content"`
+			IsError    bool                       `json:"isError"`
+			Meta       map[string]json.RawMessage `json:"_meta"`
+			Structured json.RawMessage            `json:"structuredContent"`
+		}
+		if json.Unmarshal(r.Result, &raw) != nil {
+			return mcpapi.NewToolResultError("invalid OpenCU result; outcome unknown; observe again, never replay")
+		}
+		result := &mcpapi.CallToolResult{IsError: raw.IsError, Content: make([]mcpapi.Content, 0, len(raw.Content))}
+		for _, item := range raw.Content {
+			result.Content = append(result.Content, openCUContent{raw: item})
+		}
+		if raw.Meta != nil {
+			meta := map[string]any{}
+			for k, v := range raw.Meta {
+				meta[k] = v
+			}
+			result.Meta = mcpapi.NewMetaFromMap(meta)
+		}
+		if len(raw.Structured) > 0 {
+			result.StructuredContent = raw.Structured
+		}
+		if opencu.ErrorCode(r.Result) == "PERSON_ACTIVE" {
+			result.Content = append(result.Content, mcpapi.TextContent{Type: "text", Text: "Stop and ask your user; never retry automatically."})
+		}
+		return result
+	}
+	if len(r.Discovery) > 0 {
+		result := mcpapi.NewToolResultText(string(r.Discovery))
+		result.StructuredContent = r.Discovery
+		return result
+	}
+	raw, _ := json.Marshal(r)
+	return mcpapi.NewToolResultError(string(raw))
 }

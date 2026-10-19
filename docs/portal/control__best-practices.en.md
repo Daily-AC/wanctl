@@ -124,3 +124,31 @@ If it is clearly faster with HTTP/3 off, your network lets UDP through but
 carries it badly, so keep `WANCTL_HTTP3=0` from now on. If the two are about
 the same, HTTP/3 is not in use (for example because UDP is blocked and wanctl
 has already fallen back to HTTP/2), or the bottleneck is elsewhere.
+
+## Discover OpenCU before operating a Windows desktop
+
+Run `wanctl act --target DEVICE --discover` (MCP: `wanctl_act` with `target`
+and `discover: true`). No project workspace is needed. Prefer the discovered
+OpenCU tools and instructions; relay calls with the same `target`, `tool` and
+`arguments`.
+
+If missing, ask the person to run this in PowerShell on that device, without admin:
+
+```powershell
+irm https://github.com/Daily-AC/opencu/releases/latest/download/install.ps1 | iex
+```
+
+All conversations under one controller identity share that device's OpenCU
+connection and stop latch. Another conversation's observation can invalidate
+element indexes or screenshots; observe again before input. Legacy
+`screenshot_id` + `actions[]` remains available; do not mix the modes.
+Connections close after ten minutes idle, on agent shutdown and before update.
+On stop or `PERSON_ACTIVE`, ask the person and never retry automatically. A
+person's stop blocks every conversation of that controller on the device until
+fresh explicit human approval, even after idle close or connection failure.
+
+CLI calls save each screenshot as a separate private PNG and print JSON with
+text, metadata and absolute image paths that a file/image reader can open.
+The default is a temporary directory; `-o DIR` selects a directory. Complete raw
+result JSON is saved alongside the PNGs. `-o -` prints the complete original
+result including base64 images and creates no image files.

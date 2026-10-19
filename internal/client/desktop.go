@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"wanctl/internal/desktop"
+	"wanctl/internal/opencu"
 	"wanctl/internal/protocol"
 	"wanctl/internal/wsconn"
 )
@@ -23,9 +24,15 @@ type DesktopResponse struct {
 
 // DesktopStateUnknownError must never be handled with an automatic retry.
 // Completed actions, if a header arrived, remain available in the response.
-type DesktopStateUnknownError struct{ Cause error }
+type DesktopStateUnknownError struct {
+	Cause  error
+	OpenCU bool
+}
 
 func (e *DesktopStateUnknownError) Error() string {
+	if e.OpenCU {
+		return opencu.ErrUnknown.Error()
+	}
 	return "state unknown: desktop input may be partially completed; do not replay; ask the user before acting again"
 }
 func (e *DesktopStateUnknownError) Unwrap() error { return e.Cause }
@@ -83,7 +90,7 @@ func desktopCallWithDial(ctx context.Context, target, action, via string, req pr
 func desktopOver(rw io.ReadWriter, req protocol.Message) (*DesktopResponse, error) {
 	unknown := func(err error) error {
 		if req.Action == "act" {
-			return &DesktopStateUnknownError{Cause: err}
+			return &DesktopStateUnknownError{Cause: err, OpenCU: req.Desktop.IsOpenCU()}
 		}
 		return err
 	}

@@ -73,3 +73,26 @@ time WANCTL_HTTP3=0 wanctl push --target DEVICE ./test.bin /tmp/test.bin
 ```
 
 关掉之后明显更快，说明你的网络放行 UDP 但转得差，以后带着 `WANCTL_HTTP3=0` 用；两次差不多，说明 HTTP/3 没用上（比如 UDP 被挡，wanctl 已经自动退回 HTTP/2），或者瓶颈不在这里。
+
+## Windows 桌面操作先发现 OpenCU
+
+直接运行 `wanctl act --target DEVICE --discover`，或调用 `wanctl_act` 的
+`target`、`discover: true`，不需要项目工作区。安装了 OpenCU 时优先使用返回的工具
+和说明，通过同一 `target` 加 `tool`、`arguments` 转发。
+
+未安装时，请人在那台 Windows 的 PowerShell 中运行（不需要管理员）：
+
+```powershell
+irm https://github.com/Daily-AC/opencu/releases/latest/download/install.ps1 | iex
+```
+
+同一控制端身份的所有对话，共享该设备的一条 OpenCU 连接和停止状态。
+另一个对话的观察可能使元素索引或截图失效，输入前要重新观察。
+原有 `screenshot_id` + `actions[]` 仍可用，两种模式不能混用。
+连接空闲十分钟、agent 退出或更新前会关闭。收到停止或 `PERSON_ACTIVE` 时先问人，
+不要自动重试；人的停止会阻止该控制端在这台设备上的所有对话，直到新的明确人工审批，
+空闲断开和连接故障不会清除停止状态。
+
+CLI 把每个截图保存为独立的私有 PNG，JSON 输出含文字、元数据和可直接打开的图片绝对路径。
+默认保存在临时目录，`-o DIR` 可指定目录；完整原始结果 JSON 也保存在同一目录。
+`-o -` 输出包含 base64 图片的完整原始结果，不另存图片。
