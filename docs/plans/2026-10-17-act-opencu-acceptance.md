@@ -24,7 +24,7 @@ console window.
 ## Build and start the isolated relay (Mac, zsh)
 
 ```sh
-cd /Users/e0_7/projects/wanctl-oss-worktrees/act-opencu
+cd /path/to/wanctl   # a checkout of this branch
 mkdir -p .acceptance/controller .acceptance/relay
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o .acceptance/wanctl-test.exe .
 go build -o .acceptance/wanctl .
@@ -62,7 +62,7 @@ In a second Windows terminal, under the disposable non-admin account:
 $lab = Join-Path $env:USERPROFILE 'wanctl-opencu-acceptance'
 New-Item -ItemType Directory -Force $lab | Out-Null
 Set-Location $lab
-scp MAC_USER@MAC_LAN_ADDRESS:/Users/e0_7/projects/wanctl-oss-worktrees/act-opencu/.acceptance/wanctl-test.exe .
+scp MAC_USER@MAC_LAN_ADDRESS:/path/to/wanctl/.acceptance/wanctl-test.exe .
 $env:WANCTL_CONFIG_DIR = Join-Path $lab 'agent-config'
 $env:WANCTL_RELAY = 'ws://127.0.0.1:18080'
 $env:WANCTL_TRANSPORT = 'ws'
