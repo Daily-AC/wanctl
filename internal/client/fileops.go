@@ -98,6 +98,8 @@ func unsupportedWhat(kind string) string {
 	switch kind {
 	case protocol.KindDesktop:
 		return "desktop act"
+	case kindOpenCU:
+		return "OpenCU mode (agent v0.24.0 or later)"
 	case protocol.KindWorkspace:
 		return "workspaces"
 	case protocol.KindFileWrite:

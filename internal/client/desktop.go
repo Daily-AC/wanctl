@@ -87,6 +87,13 @@ func desktopCallWithDial(ctx context.Context, target, action, via string, req pr
 	}
 	return res, err
 }
+
+// legacyMissingScreenshot is what a pre-OpenCU agent answers to an OpenCU request.
+const legacyMissingScreenshot = "act needs a fresh screenshot_id"
+
+// kindOpenCU names OpenCU mode in UnsupportedError; it is not a frame kind.
+const kindOpenCU = "desktop/opencu"
+
 func desktopOver(rw io.ReadWriter, req protocol.Message) (*DesktopResponse, error) {
 	unknown := func(err error) error {
 		if req.Action == "act" {
@@ -120,6 +127,11 @@ func desktopOver(rw io.ReadWriter, req protocol.Message) (*DesktopResponse, erro
 	}
 	if header.RequestID != req.RequestID {
 		return res, unknown(errors.New("desktop request/result identity mismatch"))
+	}
+	// Agents before v0.24.0 ignore the OpenCU fields and validate the request
+	// as a legacy batch, which always fails here first. Their wording is frozen.
+	if req.Desktop.IsOpenCU() && header.OpenCU == nil && header.Error == legacyMissingScreenshot {
+		return nil, &UnsupportedError{Kind: kindOpenCU}
 	}
 	if len(data) > 0 {
 		cfg, err := jpeg.DecodeConfig(bytes.NewReader(data))
