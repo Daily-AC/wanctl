@@ -209,3 +209,35 @@ func TestDesktopCancellationClosesStreamAndDoesNotReplay(t *testing.T) {
 		t.Fatal("cancelled call reconnected")
 	}
 }
+
+func TestOpenCURequestToPreOpenCUAgentAsksForUpdate(t *testing.T) {
+	c, d := net.Pipe()
+	defer c.Close()
+	defer d.Close()
+	_ = c.SetDeadline(time.Now().Add(time.Second))
+	go func() {
+		m, _ := protocol.ReadMessage(d)
+		// A v0.23 agent drops the unknown fields and fails legacy validation.
+		_ = desktop.WriteResult(d, protocol.DesktopResult{RequestID: m.RequestID, Status: "rejected", Error: "act needs a fresh screenshot_id", FailedIndex: -1}, nil)
+	}()
+	_, err := desktopOver(c, protocol.Message{Kind: protocol.KindDesktop, Action: "act", RequestID: "id", Desktop: &protocol.DesktopRequest{Discover: true}})
+	var unsupported *UnsupportedError
+	if !errors.As(err, &unsupported) || !strings.Contains(err.Error(), "OpenCU mode") || !strings.Contains(err.Error(), "wanctl update") {
+		t.Fatalf("want an update instruction for OpenCU mode, got %v", err)
+	}
+}
+
+func TestLegacyActKeepsMissingScreenshotError(t *testing.T) {
+	c, d := net.Pipe()
+	defer c.Close()
+	defer d.Close()
+	_ = c.SetDeadline(time.Now().Add(time.Second))
+	go func() {
+		m, _ := protocol.ReadMessage(d)
+		_ = desktop.WriteResult(d, protocol.DesktopResult{RequestID: m.RequestID, Status: "rejected", Error: "act needs a fresh screenshot_id", FailedIndex: -1}, nil)
+	}()
+	res, err := desktopOver(c, protocol.Message{Kind: protocol.KindDesktop, Action: "act", RequestID: "id", Desktop: &protocol.DesktopRequest{}})
+	if err != nil || res.Result.Error != "act needs a fresh screenshot_id" {
+		t.Fatalf("%+v %v", res, err)
+	}
+}
