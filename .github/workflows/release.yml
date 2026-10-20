@@ -25,6 +25,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Check promotion
+        run: ./scripts/check-promotion.sh "$GITHUB_REF_NAME"
 
       # No cache: the signing run must never restore a module or build cache
       # written by another workflow (audit 2026-08-28, SEC-F-03).
@@ -53,17 +58,19 @@ jobs:
             exit 1
           }
 
-          # A release without the APKs strands every installed Android app on
+          # A stable release without APKs strands every installed Android app on
           # its current version (the manifest's APK hash is the only thing it
           # can verify an update against), so a missing keystore fails the
           # release instead of quietly skipping the APKs
           # (audit 2026-08-28, SEC-F-04).
-          if [ -z "$WANCTL_ANDROID_KEYSTORE_B64" ] || [ -z "$WANCTL_ANDROID_KEYSTORE_PASS" ]; then
-            echo 'WANCTL_ANDROID_KEYSTORE_B64 and WANCTL_ANDROID_KEYSTORE_PASS are required in the release environment:' >&2
-            echo 'an official release must include the signed Android APKs; refusing to build one without them.' >&2
-            exit 1
+          if [ "${GITHUB_REF_NAME#*-beta.}" = "$GITHUB_REF_NAME" ]; then
+            if [ -z "$WANCTL_ANDROID_KEYSTORE_B64" ] || [ -z "$WANCTL_ANDROID_KEYSTORE_PASS" ]; then
+              echo 'WANCTL_ANDROID_KEYSTORE_B64 and WANCTL_ANDROID_KEYSTORE_PASS are required in the release environment:' >&2
+              echo 'an official release must include the signed Android APKs; refusing to build one without them.' >&2
+              exit 1
+            fi
+            echo 'Android release keystore found; the signed APKs will be included.'
           fi
-          echo 'Android release keystore found; the signed APKs will be included.'
 
       # A red vulnerability scan blocks the tag instead of being a separate
       # green-or-red badge nobody has to look at (audit 2026-08-28, SEC-F-04).
@@ -96,6 +103,7 @@ jobs:
       # These steps receive no release signing or Android keystore secrets
       # (SEC-F-03). Cosign uses the job's GitHub OIDC identity instead.
       - name: Install cosign
+        if: ${{ !contains(github.ref_name, '-beta.') }}
         run: |
           set -euo pipefail
           # Published checksum: https://github.com/sigstore/cosign/releases/download/v2.6.1/cosign_checksums.txt
@@ -109,6 +117,7 @@ jobs:
           chmod 0755 "$RUNNER_TEMP/cosign"
 
       - name: Build, push and sign container image
+        if: ${{ !contains(github.ref_name, '-beta.') }}
         env:
           GHCR_TOKEN: ${{ github.token }}
           WANCTL_RELEASE_PUBLIC_KEYS: ${{ steps.release.outputs.keys }}
@@ -139,15 +148,20 @@ jobs:
           "$RUNNER_TEMP/cosign" sign --yes "ghcr.io/daily-ac/wanctl@$digest"
           printf '### Signed container image\n\nghcr.io/daily-ac/wanctl@%s\n' "$digest" >> "$GITHUB_STEP_SUMMARY"
 
-      # The portal's embedded changelog is the release notes. It used to be
-      # optional here, falling back to an empty body — which is how v0.7.0 went
-      # out with no entry, leaving the portal's version badge stuck on v0.6.1.
-      # validate-release.sh above now refuses a tag without one, so by this
-      # point the file exists and there is no second path to take.
+      # Stable notes are the portal's changelog; beta notes come from merged PRs.
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --verify-tag \
-            --title "wanctl $GITHUB_REF_NAME" \
-            --notes-file "internal/portal/changelog/$GITHUB_REF_NAME.md" release/*
+          case "$GITHUB_REF_NAME" in
+            *-beta.*)
+              gh release create "$GITHUB_REF_NAME" --verify-tag \
+                --title "wanctl $GITHUB_REF_NAME" \
+                --prerelease --latest=false --generate-notes release/*
+              ;;
+            *)
+              gh release create "$GITHUB_REF_NAME" --verify-tag \
+                --title "wanctl $GITHUB_REF_NAME" --latest \
+                --notes-file "internal/portal/changelog/$GITHUB_REF_NAME.md" release/*
+              ;;
+          esac
