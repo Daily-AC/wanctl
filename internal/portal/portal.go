@@ -179,6 +179,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/assets/", s.handleAsset)
+	mux.HandleFunc("/manifest.webmanifest", s.handleManifest)
 	mux.HandleFunc("/whoami", s.handleWhoami)
 	mux.HandleFunc("/enroll", s.handleEnroll)
 	mux.HandleFunc("/webfetch/approve", s.handleDelegationPage)

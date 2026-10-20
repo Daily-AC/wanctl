@@ -24,11 +24,12 @@ import (
 //     one in place.
 //
 // The portal has no build step and no CDN in front of its own origin, so this
-// is deliberately the whole of it: no manifest, no fingerprinted file names on
+// is deliberately the whole of it: no build manifest, no fingerprinted file names on
 // disk, nothing a contributor has to run before editing a stylesheet.
 var (
 	assetVersion string
 	indexPage    []byte
+	manifestPage []byte
 )
 
 func init() {
@@ -54,6 +55,16 @@ func init() {
 
 	b, _ := assets.ReadFile("web/index.html")
 	indexPage = []byte(strings.ReplaceAll(string(b), "__V__", assetVersion))
+	b, _ = assets.ReadFile("web/manifest.webmanifest")
+	manifestPage = []byte(strings.ReplaceAll(string(b), "__V__", assetVersion))
+}
+
+// The install metadata is public, including before the first sign-in. Revalidate
+// it so updated icons get their current immutable asset URLs.
+func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/manifest+json")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(manifestPage)
 }
 
 // handleAsset serves the SPA's stylesheet, script, fonts and favicon. It is
@@ -67,7 +78,7 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	// HTML never comes out of here. web/ also holds index.html and the three
 	// page templates, and handing those out raw would serve a page with its
 	// placeholders still in it — /assets/index.html used to do exactly that.
-	if name == "" || strings.HasPrefix(name, "..") || strings.HasSuffix(name, ".html") {
+	if name == "" || strings.HasPrefix(name, "..") || strings.HasSuffix(name, ".html") || strings.HasSuffix(name, ".webmanifest") {
 		http.NotFound(w, r)
 		return
 	}
