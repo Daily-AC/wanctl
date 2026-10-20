@@ -543,3 +543,44 @@ func TestAutoUpdateNeverEnrollsTheHost(t *testing.T) {
 		t.Errorf("the auto-update started an agent: pid file names %d", pid)
 	}
 }
+
+func TestAutoUpdaterReleaseChannels(t *testing.T) {
+	for _, tc := range []struct {
+		name, current, offered string
+		install                bool
+	}{
+		{"stable refuses beta", "v0.25.0", "v0.26.0-beta.1", false},
+		{"beta rejoins stable", "v0.26.0-beta.1", "v0.26.0", true},
+		{"beta rehearsal", "v0.26.0-beta.1", "v0.26.0-beta.2", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, runtime.GOARCH, tc.offered, nil)
+			defer srv.Close()
+			tu := newTestUpdater(t, srv.URL+"/dl", tc.current, no0)
+			decision := decideAutoUpdate(t.Context(), tu.probe)
+			want := autoUpdateFailed
+			if tc.install {
+				want = autoUpdateReady
+			}
+			if decision.action != want {
+				t.Fatalf("decision = %+v", decision)
+			}
+			_, done := tu.tick(t.Context())
+			if done != tc.install {
+				t.Fatalf("done = %v", done)
+			}
+			if tc.install {
+				if tu.binary(t) != "new binary" || tu.restarts != 1 {
+					t.Fatal("did not install and restart")
+				}
+			} else {
+				if tu.binary(t) != "old binary" || tu.restarts != 0 {
+					t.Fatal("installed beta onto stable")
+				}
+				if len(tu.logs) != 1 || !strings.Contains(tu.logs[0], "自动更新检查失败") {
+					t.Fatalf("logs = %v", tu.logs)
+				}
+			}
+		})
+	}
+}
