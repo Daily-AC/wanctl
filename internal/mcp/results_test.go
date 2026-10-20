@@ -200,6 +200,18 @@ func checkToolResults(t *testing.T, call func(string, map[string]any) (string, b
 			t.Fatalf("literal U+FFFD run %d: shown %d + skipped %s != 60000", i, shown, skipped[1])
 		}
 	}
+	// A printed U+FFFD at the tail start and a byte that is not UTF-8 later
+	// in the tail: the excess cannot be placed, so the forward page comes
+	// back untouched, with the printed character in it.
+	for i, prefix := range []int{19040, 19041} {
+		text = invoke("wanctl_exec", map[string]any{"workspace": ref, "request_id": "results-mixed-" + strconv.Itoa(i),
+			"command": fmt.Sprintf("head -c %d /dev/zero | tr '\\0' Q; printf '\\357\\277\\275'; head -c %d /dev/zero | tr '\\0' Q; printf '\\377'; head -c %d /dev/zero | tr '\\0' Z",
+				prefix, 55000-prefix-3, 60000-55001)})
+		d = parseWorkspaceText(t, text)
+		if d["done"] != true || d["next_offset"] != int64(48<<10) || strings.Contains(text, "bytes skipped") || strings.Count(text, "\uFFFD") != 1 {
+			t.Fatalf("printed U+FFFD with a later invalid byte, run %d: %.300q", i, text)
+		}
+	}
 	// Bytes that are not UTF-8 grow on the way, so byte arithmetic on the
 	// text would be false: the device's own forward page comes back instead,
 	// with an offset the device accepts.

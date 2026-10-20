@@ -213,15 +213,18 @@ func clampWorkspace(ctx context.Context, c *client.Client, ref client.WorkspaceR
 	}
 	// tailStart is an arbitrary byte, so it can split a character, whose
 	// remaining bytes arrive as one U+FFFD each: two text bytes more than the
-	// device sent, per byte. Only that excess identifies them; a U+FFFD the
-	// command really printed is as long as its bytes and stays.
+	// device sent, per byte. A U+FFFD the command really printed is as long
+	// as its bytes. So the leading ones are the split character only when
+	// they account for all of the excess and no U+FFFD follows them; any
+	// other excess has no known place, and the forward page is returned.
 	tail := t.Output
-	excess := int64(len(tail)) - (t.NextOffset - tailStart)
-	for i := 0; i < utf8.UTFMax-1 && excess > 0 && strings.HasPrefix(tail, "\uFFFD"); i++ {
-		tail, tailStart, excess = tail[len("\uFFFD"):], tailStart+1, excess-2
-	}
-	if excess != 0 {
-		return r
+	if excess := int64(len(tail)) - (t.NextOffset - tailStart); excess != 0 {
+		k := int(excess / 2)
+		split := strings.Repeat("\uFFFD", k)
+		if excess%2 != 0 || k >= utf8.UTFMax || !strings.HasPrefix(tail, split) || strings.ContainsRune(tail[len(split):], utf8.RuneError) {
+			return r
+		}
+		tail, tailStart = tail[len(split):], tailStart+int64(k)
 	}
 	if int64(len(tail)) > tailN {
 		// The command kept writing between the two polls, and the device
