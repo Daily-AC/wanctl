@@ -73,6 +73,20 @@
     { name: 'quarry', alias: '', fingerprint: 'SHA256:Yb2NpQ8sMxKe5Wj1TrLvA7ZcHnFo3DiU6gPqRtEwSaM=', online: true, last_seen: ago(20), shared: true, owner: 'rowan', manage: true }
   ];
 
+  // Mirrors /admin/devices (proxied unchanged by /api/devices).
+  var latestWanctlVersion = 'v0.30.0';
+  devices.forEach(function (d, i) {
+    d.owner = d.owner || 'acme';
+    d.shared = d.shared === true;
+    if (d.shared) d.perms = 'full';
+    d.display_name = d.name;
+    d.legacy_name = d.name;
+    d.wanctl_version = i === 4 ? '' : (i === 2 ? 'v0.31.0-beta.1' : (i === 0 || i === 6 ? 'v0.29.0' : latestWanctlVersion));
+    d.opencu_version = i === 1 || i === 6 ? '0.3.99' : '';
+    d.versions_reported_at = i === 4 ? null : d.last_seen;
+    d.wanctl_status = i === 4 ? 'unknown' : (i === 2 ? 'ahead' : (i === 0 || i === 6 ? 'behind' : 'latest'));
+  });
+
   var waiting = [
     {
       device: 'bench-02', id: 'a41f9c22', kind: 'exec',
@@ -174,7 +188,7 @@
     '/api/instance': { relay: 'https://relay.example.com', transport: 'quic' },
     '/auth/email/status': { confirmed: 'ardith@example.dev', pending: scene === 'emailpending' ? 'ardith.new@example.dev' : '' },
     '/api/approval-phone': { device: 'bench-02', online: true },
-    '/api/devices': { devices: devices },
+    '/api/devices': { devices: devices, latest_wanctl_version: latestWanctlVersion },
     '/api/pending': { items: waiting },
     '/api/tokens': {
       tokens: [
@@ -248,7 +262,7 @@
 
   function match(url) {
     var p = url.split('?')[0];
-    if (scene === 'empty' && p === '/api/devices') return { devices: [] };
+    if (scene === 'empty' && p === '/api/devices') return { devices: [], latest_wanctl_version: latestWanctlVersion };
     // 「没人在等你」同时清空两个队列：设备的待审批，和门口的访问申请。
     // 两块都是「有人等你决定」，空掉时都该整块消失。
     if (scene === 'noask' && p === '/api/pending') return { items: [] };

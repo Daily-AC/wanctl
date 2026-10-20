@@ -40,6 +40,7 @@
       kind: { exec: 'command', 'exec-elevated': 'ELEVATED command', read: 'read a file', write: 'write a file', logs: 'read the event log' },
       wantsTo: function (d) { return d; },
       from: 'from', cwd: 'in',
+      versionUnknown: 'unknown', versionLatest: 'latest', versionUpdate: function (v) { return 'update available: ' + v; },
       kName: 'name', kFP: 'fingerprint', kDevice: 'device', kController: 'controller',
       once: 'Allow once', dir: 'Always here', global: 'Always anywhere', refuse: 'Refuse',
       scopeDir: function (p) { return p ? '(' + p + ')' : ''; },
@@ -192,6 +193,7 @@
       kind: { exec: '命令', 'exec-elevated': '提权命令', read: '读取文件', write: '写入文件', logs: '读取事件日志' },
       wantsTo: function (d) { return d; },
       from: '来自', cwd: '工作目录',
+      versionUnknown: '未知', versionLatest: '最新', versionUpdate: function (v) { return '可升级到 ' + v; },
       kName: '名称', kFP: '指纹', kDevice: '设备', kController: '控制端',
       once: '允许一次', dir: '这个目录一直允许', global: '所有目录一直允许', refuse: '拒绝',
       scopeDir: function (p) { return p ? '（' + p + '）' : ''; },
@@ -749,6 +751,7 @@
   }
 
   var waitCount = {};   // device -> 待审批条数，用于设备卡上的角标
+  var latestWanctlVersion = '';
   var deviceListVersion = 0;
   var devLoadFailed = false;   // 上一次拉设备清单失败了吗（空清单和拉不到是两回事）
 
@@ -781,6 +784,7 @@
           (n ? '<span class="badge waiting">' + n + ' ' + esc(t().waiting) + '</span>' : '') + '</span>' +
         // 别名是显示名，不是替身：机器自己报的名字始终在旁边。
         realHTML(d) +
+        (x.wanctl_status === 'behind' && latestWanctlVersion ? '<span class="seen">' + esc(t().versionUpdate(latestWanctlVersion)) + '</span>' : '') +
         // 「最近」只在离线时出现：在线设备这一行永远是「刚刚」，等于空转。
         (on ? '' : '<span class="seen">' + esc(t().offline) + ' · ' + esc(ago(x.last_seen)) + '</span>') +
         (x.shared ? '<span class="shared">' + esc(t().shared) + ' ' + esc(x.owner || '—') +
@@ -797,6 +801,7 @@
     return jget('/api/devices').then(function (d) {
       if (version !== deviceListVersion) return;
       devLoadFailed = false;
+      latestWanctlVersion = d.latest_wanctl_version || '';
       noteDevices(d.devices);
       renderDevices();
       // route() can beat this request: setting a hash while the page is still
@@ -860,6 +865,15 @@
     $('#dReal').hidden = !d.real;
   }
 
+  function paintDeviceVersions(d) {
+    var installed = d.wanctl_version || t().versionUnknown;
+    var status = '';
+    if (d.wanctl_status === 'latest') status = t().versionLatest;
+    if (d.wanctl_status === 'behind' && latestWanctlVersion) status = t().versionUpdate(latestWanctlVersion);
+    $('#dWanctlVersion').textContent = installed + (status ? ' · ' + status : '');
+    $('#dOpenCUVersion').textContent = d.opencu_version || t().versionUnknown;
+  }
+
   // 这一屏上「你是谁」决定的每一处，都在这里，一次算完。
   // 它要能跑两遍：设备页可能在设备清单到达之前就画完了（见 loadDevices），
   // 而这些结论一条都不能停在「清单还没到」那一刻的样子 —— 那一刻 devMeta 是
@@ -884,6 +898,7 @@
     $$('.tab[data-tab="asks"],.tab[data-tab="trust"]').forEach(function (b) { b.hidden = !admin; });
     var d = devRow(name);
     $('#dFp').textContent = d ? (d.fingerprint || '') : '';
+    paintDeviceVersions(d || {});
     return admin;
   }
 
@@ -2121,6 +2136,7 @@
 
   /* 语言切换后重画所有 JS 生成的内容 */
   function repaint() {
+    if (cur) paintDeviceVersions(devRow(cur) || {});
     if (cur && lastState) applyState(lastState);
     else renderDevices();
     $('#dsAliasIn').placeholder = t().aliasNone;
