@@ -138,7 +138,7 @@
     // 截图上长得一样，看不出差别的状态等于没摆出来。
     'quarry': {
       mode: 'normal',
-      pending: [{ id: 77, peer: 'rowan-laptop', cmd: 'rsync -a /data/quarry/ /backup/quarry/', cwd: '/data/quarry', created: ago(18) }],
+      pending: [{ id: '77', kind: 'exec', peer: 'rowan-laptop', cmd: 'rsync -a /data/quarry/ /backup/quarry/', cwd: '/data/quarry', created: ago(18) }],
       pending_pairings: [{ fp: 'SHA256:Lq7WdEr2ZmXc4Nv8TbKiA1YpHs6UoJf3RgQeSxCwPaB=', name: 'rowan-phone', label: 'wanctl on rowan-phone', created: ago(40) }],
       rules: [{ kind: 'read', pattern: '/data/quarry/**', scope: 'global' }],
       trusted: [{ fp: 'SHA256:Xy3OMBhwVLhhfU0aYX5DUh5AB+QJVKqniQ1YzC9+osd=', name: 'portal', label: 'portal', last_seen: ago(9) }]
@@ -163,12 +163,17 @@
     '/api/me': {
       identity: 'ardith', login: 'ardith', name: 'Ardith Vale',
       namespace: 'acme', provider: 'github', role: role,
-      lark: true, relay_origin: 'https://relay.example.com',
+      lark: true, mail: true, relay_origin: 'https://relay.example.com',
       // 形状照抄 githubAvatarURL：同一个源、u/<数字账号 id>、?s=96。
       avatar_url: avatar === 'off' ? undefined
         : avatar === 'broken' ? 'https://avatars.githubusercontent.com/u/0/nope?s=96'
         : 'https://avatars.githubusercontent.com/u/583231?s=96'
     },
+    // Shapes checked against handleInstance, handleEmailStatus and
+    // handleApprovalPhone. These are read-only preview responses.
+    '/api/instance': { relay: 'https://relay.example.com', transport: 'quic' },
+    '/auth/email/status': { confirmed: 'ardith@example.dev', pending: scene === 'emailpending' ? 'ardith.new@example.dev' : '' },
+    '/api/approval-phone': { device: 'bench-02', online: true },
     '/api/devices': { devices: devices },
     '/api/pending': { items: waiting },
     '/api/tokens': {
