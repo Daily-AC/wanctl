@@ -197,8 +197,9 @@ func overSources(bases []string, attempt func(base string) (updateFetch, error))
 	return updateFetch{}, last
 }
 
-// An exact request reports every failed source: a mirror offering a different
-// signed version is useful evidence, but cannot satisfy this request.
+// An exact request reports every failed source, once, in the returned error: a
+// mirror offering a different signed version is useful evidence, but cannot
+// satisfy this request.
 func fetchUpdateVersion(ctx context.Context, bases []string, dir, goos, goarch, current, requested string) (updateFetch, error) {
 	var failures []error
 	got, err := overSources(bases, func(base string) (updateFetch, error) {
@@ -206,12 +207,11 @@ func fetchUpdateVersion(ctx context.Context, bases []string, dir, goos, goarch, 
 		path, version, err := downloadSignedVersion(ctx, base, dir, goos, goarch, current, requested)
 		if err != nil && requested != "" {
 			failures = append(failures, fmt.Errorf("%s: %w", base, err))
-			fmt.Fprintf(os.Stderr, "跳过 %s: %s\n", base, err)
 		}
 		return updateFetch{path: path, version: version}, err
 	})
 	if err != nil && requested != "" {
-		return updateFetch{}, fmt.Errorf("无法安装指定版本 %s；已尝试来源 %s: %w", requested, strings.Join(bases, ", "), errors.Join(failures...))
+		return updateFetch{}, fmt.Errorf("无法安装指定版本 %s，没有来源提供它:\n%w", requested, errors.Join(failures...))
 	}
 	return got, err
 }
