@@ -37,9 +37,9 @@ stdio server sent, against a real device on the production relay.
 
 | | v0.24.0 | v0.25.0 |
 | --- | --- | --- |
-| Tool definitions, stdio | 18,401 | 8,457 |
-| Tool definitions, hosted | 18,004 | 7,714 |
-| Instructions | 971 | ~460 |
+| Tool definitions, stdio | 18,401 | 8,542 |
+| Tool definitions, hosted | 18,004 | 7,799 |
+| Instructions | 971 | 464 |
 
 Dev-loop scenario (peers, workspace enter, git status/log, a 160-line and a
 1,900-line read, a 3-second command, `git log --stat -60`, read/edit/write, a
@@ -48,8 +48,8 @@ Dev-loop scenario (peers, workspace enter, git status/log, a 160-line and a
 | | v0.24.0 | v0.25.0 |
 | --- | --- | --- |
 | Tool calls | 19 | 15 |
-| Result tokens, Claude Code / Codex | 65,585 | 43,907 |
-| Result tokens, host showing both forms | 123,731 | 43,907 |
+| Result tokens, Claude Code / Codex | 65,585 | 44,011 |
+| Result tokens, host showing both forms | 123,731 | 44,011 |
 
 Part of the read saving is content not delivered by default: a model that wants
 the rest of the 1,900-line file makes a second call.
