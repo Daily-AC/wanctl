@@ -20,10 +20,9 @@ APP="$ROOT/android"
 OUT=${WANCTL_APK_OUT:-"$ROOT/build/android"}
 
 if [ "$VERSION" != "dev" ]; then
-  printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
-    echo "invalid release version: $VERSION" >&2
-    exit 1
-  }
+  . "$ROOT/scripts/release-version.sh"
+  KIND=$(wanctl_release_kind "$VERSION")
+  [ "$KIND" = stable ] || { echo "beta releases do not ship APKs" >&2; exit 1; }
 fi
 
 # ---------------------------------------------------------------- toolchain
