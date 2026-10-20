@@ -20,12 +20,11 @@ import (
 	wanrelease "wanctl/internal/release"
 )
 
-// buildVersion is set to an immutable vMAJOR.MINOR.PATCH by the release job.
+// buildVersion is set to an immutable stable or beta tag by the release job.
 // Development builds may update to a signed release but cannot claim a version.
 var buildVersion = "dev"
 
-// cmdUpdate replaces the running wanctl binary with the latest one served by
-// the relay's /dl/<bin> endpoint. If the background daemon is running, it is
+// cmdUpdate replaces the running wanctl binary with a signed release. If the background daemon is running, it is
 // stopped before the swap and restarted after — so users keep their session.
 //
 // On Unix the swap is a tempfile-in-same-dir + rename, which is atomic and safe
@@ -44,6 +43,22 @@ func cmdUpdate(ctx context.Context, args []string) error {
 	fetchAPK := fs.String("fetch-apk", "", "download and verify the Android APK into this directory, print its path, and exit;\n"+
 		"\tused by the Android app, which installs it through the system package installer")
 	fs.Parse(args)
+	if fs.NArg() > 1 {
+		return fmt.Errorf("用法: wanctl update [选项] [version]")
+	}
+	requested := fs.Arg(0)
+	if fs.NArg() == 1 {
+		if err := wanrelease.ValidateVersion(requested); err != nil {
+			return err
+		}
+		if *fetchAPK != "" {
+			return fmt.Errorf("--fetch-apk 不支持指定版本")
+		}
+		if requested == buildVersion {
+			fmt.Printf("已在运行 wanctl %s，无需安装。\n", requested)
+			return nil
+		}
+	}
 
 	if *fetchAPK != "" {
 		return fetchAndroidAPK(ctx, *fetchAPK)
@@ -66,20 +81,24 @@ func cmdUpdate(ctx context.Context, args []string) error {
 	}
 
 	if !canWriteDir(dir) {
-		return splitUpdateViaSudo(ctx, self)
+		return splitUpdateViaSudo(ctx, self, requested)
 	}
 
-	bases, err := updateSources()
+	bases, err := updateSourcesForVersion(requested)
+	if err != nil {
+		if requested != "" {
+			return fmt.Errorf("无法安装指定版本 %s；没有可尝试的发布来源: %w", requested, err)
+		}
+		return err
+	}
+	got, err := fetchUpdateVersion(ctx, bases, dir, runtime.GOOS, runtime.GOARCH, buildVersion, requested)
 	if err != nil {
 		return err
 	}
-	got, err := overSources(bases, func(base string) (updateFetch, error) {
-		fmt.Printf("正在验证 %s 的签名发布清单 …\n", base)
-		path, version, err := downloadSignedUpdate(ctx, base, dir, runtime.GOOS, runtime.GOARCH, buildVersion)
-		return updateFetch{path: path, version: version}, err
-	})
-	if err != nil {
-		return err
+	if requested != "" {
+		if cmp, err := wanrelease.CompareVersions(requested, buildVersion); err == nil && cmp < 0 {
+			fmt.Printf("警告：这是降级（%s 到 %s）。若 auto_update=on 且此版本不是最新稳定版，下次自动检查会重新安装最新稳定版。\n", buildVersion, requested)
+		}
 	}
 	tmp, version := got.path, got.version
 	defer os.Remove(tmp) // safe no-op once Rename consumes it
@@ -123,9 +142,17 @@ var errAPKSelfUpdate = fmt.Errorf(
 // The mirror serves the same manifest under the same signature, so falling back
 // to it changes what is downloaded from where, never what is trusted.
 func updateSources() ([]string, error) {
+	return updateSourcesForVersion("")
+}
+
+func updateSourcesForVersion(requested string) ([]string, error) {
 	var bases []string
 	if base := config.ReleaseBase(); base != "" {
-		bases = append(bases, strings.TrimRight(base, "/"))
+		base = strings.TrimRight(base, "/")
+		if requested != "" && strings.HasSuffix(base, "/releases/latest/download") {
+			base = strings.TrimSuffix(base, "/latest/download") + "/download/" + requested
+		}
+		bases = append(bases, base)
 	}
 	relay, relayErr := config.Relay()
 	if relayErr == nil {
@@ -168,6 +195,25 @@ func overSources(bases []string, attempt func(base string) (updateFetch, error))
 		last = fmt.Errorf("no release source configured")
 	}
 	return updateFetch{}, last
+}
+
+// An exact request reports every failed source: a mirror offering a different
+// signed version is useful evidence, but cannot satisfy this request.
+func fetchUpdateVersion(ctx context.Context, bases []string, dir, goos, goarch, current, requested string) (updateFetch, error) {
+	var failures []error
+	got, err := overSources(bases, func(base string) (updateFetch, error) {
+		fmt.Printf("正在验证 %s 的签名发布清单 …\n", base)
+		path, version, err := downloadSignedVersion(ctx, base, dir, goos, goarch, current, requested)
+		if err != nil && requested != "" {
+			failures = append(failures, fmt.Errorf("%s: %w", base, err))
+			fmt.Fprintf(os.Stderr, "跳过 %s: %s\n", base, err)
+		}
+		return updateFetch{path: path, version: version}, err
+	})
+	if err != nil && requested != "" {
+		return updateFetch{}, fmt.Errorf("无法安装指定版本 %s；已尝试来源 %s: %w", requested, strings.Join(bases, ", "), errors.Join(failures...))
+	}
+	return got, err
 }
 
 // runningFromAPK reports whether this binary is the copy an installed Android
@@ -256,7 +302,7 @@ func canWriteDir(dir string) bool {
 // then restart the daemon as the original user. This keeps the long-running
 // daemon owned by the user — running it as root would change file ownership of
 // the config dir / pid file / logs.
-func splitUpdateViaSudo(ctx context.Context, self string) error {
+func splitUpdateViaSudo(ctx context.Context, self, requested string) error {
 	if runtime.GOOS == "windows" {
 		return fmt.Errorf("升级 %s 需要管理员权限。请用「以管理员身份运行」打开终端再跑 wanctl update", self)
 	}
@@ -271,7 +317,11 @@ func splitUpdateViaSudo(ctx context.Context, self string) error {
 	}
 
 	fmt.Printf("wanctl: %s 需要 sudo 才能替换,请在下方提示输入密码 …\n", filepath.Dir(self))
-	cmd := exec.CommandContext(ctx, sudo, self, "update", "--no-restart")
+	args := []string{self, "update", "--no-restart"}
+	if requested != "" {
+		args = append(args, requested)
+	}
+	cmd := exec.CommandContext(ctx, sudo, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -524,7 +574,7 @@ func reportPATHShadow(self string) {
 // trusted key, and picks the artifact for one platform. It stops short of
 // downloading, so the auto-updater can learn what is on offer before deciding
 // whether it is in a position to install it.
-func selectSignedUpdate(ctx context.Context, base, goos, goarch, currentVersion string) (wanrelease.Manifest, wanrelease.Artifact, error) {
+func selectSignedUpdate(ctx context.Context, base, goos, goarch, currentVersion, requested string) (wanrelease.Manifest, wanrelease.Artifact, error) {
 	manifestRaw, err := fetchLimited(ctx, base+"/"+wanrelease.ManifestName, wanrelease.MaxManifestSize)
 	if err != nil {
 		return wanrelease.Manifest{}, wanrelease.Artifact{}, err
@@ -537,7 +587,12 @@ func selectSignedUpdate(ctx context.Context, base, goos, goarch, currentVersion 
 	if err != nil {
 		return wanrelease.Manifest{}, wanrelease.Artifact{}, fmt.Errorf("verify release manifest: %w", err)
 	}
-	artifact, err := wanrelease.Select(manifest, goos, goarch, currentVersion)
+	var artifact wanrelease.Artifact
+	if requested == "" {
+		artifact, err = wanrelease.Select(manifest, goos, goarch, currentVersion)
+	} else {
+		artifact, err = wanrelease.SelectExact(manifest, goos, goarch, requested)
+	}
 	if err != nil {
 		return wanrelease.Manifest{}, wanrelease.Artifact{}, err
 	}
@@ -547,7 +602,7 @@ func selectSignedUpdate(ctx context.Context, base, goos, goarch, currentVersion 
 // checkSignedUpdate reports the version base offers for this platform, or
 // wraps ErrUpToDate when the manifest verified and holds nothing newer.
 func checkSignedUpdate(ctx context.Context, base, goos, goarch, currentVersion string) (string, error) {
-	manifest, _, err := selectSignedUpdate(ctx, base, goos, goarch, currentVersion)
+	manifest, _, err := selectSignedUpdate(ctx, base, goos, goarch, currentVersion, "")
 	if err != nil {
 		return "", err
 	}
@@ -558,7 +613,11 @@ func checkSignedUpdate(ctx context.Context, base, goos, goarch, currentVersion s
 // which the artifacts live flat: a relay's /dl mirror or a GitHub release's
 // download path — both serve manifest.json and the binaries side by side.
 func downloadSignedUpdate(ctx context.Context, base, dir, goos, goarch, currentVersion string) (string, string, error) {
-	manifest, artifact, err := selectSignedUpdate(ctx, base, goos, goarch, currentVersion)
+	return downloadSignedVersion(ctx, base, dir, goos, goarch, currentVersion, "")
+}
+
+func downloadSignedVersion(ctx context.Context, base, dir, goos, goarch, currentVersion, requested string) (string, string, error) {
+	manifest, artifact, err := selectSignedUpdate(ctx, base, goos, goarch, currentVersion, requested)
 	if err != nil {
 		return "", "", err
 	}
