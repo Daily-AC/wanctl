@@ -40,6 +40,14 @@ android amd64
 EOF
 }
 
+# Beta clients are desktop-only; stable keeps the complete platform matrix.
+wanctl_release_targets() {
+  wanctl_targets | while read -r os arch; do
+    if [ "$1" = beta ] && [ "$os" = android ]; then continue; fi
+    printf '%s %s\n' "$os" "$arch"
+  done
+}
+
 # One APK per ABI rather than one universal APK: a universal one would be four
 # binaries deep and every in-app update would download all four to use one.
 # Each APK carries exactly the lib/<abi>/ its GOARCH maps to, and rides in the

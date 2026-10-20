@@ -4,12 +4,10 @@ set -eu
 VERSION=${1:?usage: scripts/build-release.sh vMAJOR.MINOR.PATCH}
 : "${WANCTL_RELEASE_SIGNING_KEY:?protected WANCTL_RELEASE_SIGNING_KEY is required}"
 
-printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
-  echo "invalid release version: $VERSION" >&2
-  exit 1
-}
+ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
+. "$ROOT/scripts/release-version.sh"
+KIND=$(wanctl_release_kind "$VERSION")
 
-ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 DIST="$ROOT/release"
 rm -rf "$DIST"
 mkdir -p "$DIST"
@@ -37,7 +35,7 @@ fi
 # back to 127.0.0.1). Serving a linux binary to a phone would install cleanly
 # and then fail every dial.
 . "$ROOT/scripts/release-targets.sh"
-wanctl_targets | while read -r os arch; do
+wanctl_release_targets "$KIND" | while read -r os arch; do
   echo "building $os/$arch"
   (cd "$ROOT" && wanctl_go_build "$os" "$arch" "$DIST/$(wanctl_artifact_name "$os" "$arch")" "$LDFLAGS")
 done
@@ -48,7 +46,7 @@ done
 # architectures such as amd64.tar.gz, which older clients safely ignore.
 PACKAGE_DIR="$DIST/.package"
 mkdir "$PACKAGE_DIR"
-wanctl_targets | while read -r os arch; do
+wanctl_release_targets "$KIND" | while read -r os arch; do
   raw=$(wanctl_artifact_name "$os" "$arch")
   download=$(wanctl_download_name "$os" "$arch")
   [ "$raw" != "$download" ] || continue
@@ -79,7 +77,9 @@ apks_staged() {
     [ -f "$APK_DIR/wanctl-android-$arch.apk" ] || return 1
   done
 }
-if [ "${WANCTL_SKIP_APK:-}" = 1 ]; then
+if [ "$KIND" = beta ]; then
+  echo "beta release: no Android artifacts"
+elif [ "${WANCTL_SKIP_APK:-}" = 1 ]; then
   echo "WARNING: skipping the Android APKs (WANCTL_SKIP_APK=1); installed Android apps will not see this release" >&2
 else
   if apks_staged; then

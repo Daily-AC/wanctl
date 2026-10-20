@@ -1,6 +1,6 @@
 # ADR 0006 — The agent updates itself, on by default, by re-execing in place
 
-Status: accepted (2026-09-08)
+Status: accepted (2026-09-08); amended by ADR 0018
 
 ## Context
 

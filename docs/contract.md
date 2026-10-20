@@ -79,7 +79,7 @@ REFUSALS — none of these mean retry as-is:
 | `stop` | — | Stop the agent started by `wanctl start` |
 | `service` | — | Install, remove or inspect an OS-native always-on service |
 | `agent` | — | Run the agent in the foreground |
-| `update` | — | Replace this binary with the latest signed release |
+| `update` | — | 安装最新或指定版本的签名发布 |
 | `version` | — | Print the release version |
 | `mcp` | — | Run wanctl as an MCP server |
 | `docs` | — | Read and write the portal's documentation articles |
@@ -831,22 +831,25 @@ wanctl agent --name lab-box --relay https://relay.example.com
 
 ## `wanctl update`
 
-*Replace this binary with the latest signed release*
+*安装最新或指定版本的签名发布*
 
-Fetch the release manifest, verify the signature and swap this binary in
-place. A running agent keeps its pid across the swap, so systemd, launchd and
-`wanctl status` still point at it. Development builds are never replaced.
+`wanctl update` 安装来源提供的更新版本：stable 或 dev 构建只接受 stable，beta 构建接受更新的 beta 或
+stable。`wanctl update <version>` 安装指定的签名版本，支持加入 beta 和降级；已在运行该版本时直接退出。开启
+auto_update 后，降级的版本会在下次自动检查时更新到最新稳定版（若有更新）。验签后替换二进制，并按原方式重启运行中的
+agent。开发构建不会自动更新，但可以手动更新。
 
-On Android the APK cannot be installed by the binary, so --fetch-apk downloads
-and verifies it and prints the path for the app to install.
+Android 的 --fetch-apk 下载并验签稳定版 APK，输出路径供应用安装，不支持指定版本。
 
 | Parameter | CLI | Type | Required | Meaning |
 |---|---|---|---|---|
+| — | `[version]` | string | no | 可选，精确安装 vX.Y.Z 或 vX.Y.Z-beta.N；N 为无前导零的正整数。选项须放在版本之前。 |
 | — | `--fetch-apk DIR` | string | no | Android only. Download and verify the APK into this directory, print its path and exit. The binary cannot install an APK; the app does that with the printed path. |
 | — | `--no-restart` | boolean | no | Internal. Skips the daemon stop/start, used by the sudo-elevated second phase of an update. |
 
 ```
 wanctl update
+  wanctl update v0.26.0-beta.1
+  wanctl update v0.25.0
   wanctl update --fetch-apk /sdcard/Download
 ```
 
