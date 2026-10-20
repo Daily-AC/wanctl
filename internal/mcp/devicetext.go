@@ -1,9 +1,7 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"unicode/utf8"
@@ -62,9 +60,8 @@ func escapeDeviceText(s string) string {
 // control character in it impossible to edit. Its description says so.
 const rawContentTool = "wanctl_read"
 
-// escapeDeviceOutput runs every string in a tool's result through
-// escapeDeviceText: the text a model reads, and every key and value of the
-// structured content. It is applied to every tool rather than at each place a
+// escapeDeviceOutput runs the text of every tool result through
+// escapeDeviceText. It is applied to every tool rather than at each place a
 // device's words are copied into a result — output, error reasons, names,
 // pairing prompts, job IDs — because missing one of those places would be
 // silent, and a tool's own wording has no control characters for this to
@@ -96,41 +93,4 @@ func escapeResult(res *mcpapi.CallToolResult) {
 			c.Text = escapeDeviceText(c.Text)
 		}
 	}
-	if res.StructuredContent == nil {
-		return
-	}
-	// Structured content is whatever Go value the tool built — maps, typed
-	// slices, structs. Its JSON shape is what reaches the client, and what the
-	// output schema is checked against, so that is the shape escaped here.
-	raw, err := json.Marshal(res.StructuredContent)
-	if err != nil {
-		return
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var generic any
-	if dec.Decode(&generic) != nil {
-		return
-	}
-	res.StructuredContent = escapeJSONValue(generic)
-}
-
-func escapeJSONValue(v any) any {
-	switch x := v.(type) {
-	case string:
-		return escapeDeviceText(x)
-	case []any:
-		for i, item := range x {
-			x[i] = escapeJSONValue(item)
-		}
-		return x
-	case map[string]any:
-		// Keys too: a listing keyed by device name is keyed by the device.
-		out := make(map[string]any, len(x))
-		for k, item := range x {
-			out[escapeDeviceText(k)] = escapeJSONValue(item)
-		}
-		return out
-	}
-	return v
 }

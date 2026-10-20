@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 
 	mcpapi "github.com/mark3labs/mcp-go/mcp"
@@ -48,7 +47,7 @@ func workspaceSessionTool(name string) bool {
 		return true
 	}
 	switch name {
-	case "wanctl_workspace", "wanctl_login", "wanctl_logout", "wanctl_status", "wanctl_peers", "wanctl_pair", "wanctl_id", "wanctl_trust", "wanctl_trust_server":
+	case "wanctl_workspace", "wanctl_login", "wanctl_logout", "wanctl_status", "wanctl_peers", "wanctl_pair", "wanctl_trust_server":
 		return true
 	}
 	return false
@@ -99,23 +98,18 @@ func (b *workspaceConversation) wrap(name string, next server.ToolHandlerFunc) s
 			defer func() { b.mu.Lock(); b.changing = false; b.mu.Unlock() }()
 		}
 		ctx = context.WithValue(ctx, workspaceLinkKey{}, b.link)
+		var outcome workspaceOutcome
+		ctx = context.WithValue(ctx, workspaceOutcomeKey{}, &outcome)
 		result, err := next(ctx, req)
 		if change && err == nil && result != nil && !result.IsError {
-			var state struct {
-				Workspace string `json:"workspace"`
-				State     string `json:"state"`
+			b.mu.Lock()
+			if action == "exit" && outcome.state == "closed" {
+				b.ref = ""
 			}
-			data, encodeErr := json.Marshal(result.StructuredContent)
-			if encodeErr == nil && json.Unmarshal(data, &state) == nil {
-				b.mu.Lock()
-				if action == "exit" && state.State == "closed" {
-					b.ref = ""
-				}
-				if (action == "enter" || action == "attach") && state.Workspace != "" {
-					b.ref = state.Workspace
-				}
-				b.mu.Unlock()
+			if (action == "enter" || action == "attach") && outcome.ref != "" {
+				b.ref = outcome.ref
 			}
+			b.mu.Unlock()
 		}
 		return result, err
 	}

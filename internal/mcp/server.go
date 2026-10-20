@@ -25,15 +25,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"wanctl/internal/catalog"
 	"wanctl/internal/client"
 	"wanctl/internal/config"
 	"wanctl/internal/mcpauth"
-	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/script"
-	"wanctl/internal/serverlog"
 	"wanctl/internal/transport"
 
 	mcpapi "github.com/mark3labs/mcp-go/mcp"
@@ -281,8 +280,6 @@ type sessionStore struct {
 }
 
 var sessions *sessionStore
-
-var serverLogsHTTPClient = http.DefaultClient
 
 func (s *sessionStore) get(ctx context.Context) sessionAPI {
 	if s.stdio != nil {
@@ -593,13 +590,15 @@ func (r *remoteSession) info() string {
 		out += "status:                NOT authorized — this connection's grant was revoked; authorize the connector again\n"
 	} else {
 		out += "status:                logged in to namespace \"" + r.namespace + "\"\n"
-		if r.identity != nil {
+		// Status is the one place that answers "which fingerprint is this
+		// session", so derive the identity here rather than only on the first
+		// device call. It is per namespace: a reconnect keeps the same one.
+		if err := r.ensureIdentity(); err == nil {
 			out += "controller fingerprint: " + r.identity.Fingerprint + "\n"
 		}
 	}
 	out += "relay:                 " + configuredValue(hostedRelayDisplay()) + "\n"
 	out += "portal:                " + configuredValue(settingValue("portal")) + "\n"
-	out += "note:                  identity is derived per-namespace, so the same person reconnecting keeps the same fingerprint (no re-pairing).\n"
 	return out
 }
 
@@ -651,7 +650,7 @@ func newMCPServer(hosted bool, bindings ...*workspaceConversation) *server.MCPSe
 	case len(bindings) > 0:
 		instructions = catalog.WorkspaceSessionInstructions
 	}
-	s := server.NewMCPServer("wanctl", "1.0.0", server.WithInstructions(instructions), server.WithOutputSchemaValidation(), server.WithHooks(openCUArgumentHooks()))
+	s := server.NewMCPServer("wanctl", "1.0.0", server.WithInstructions(instructions), server.WithHooks(openCUArgumentHooks()))
 	registerMCPTools(s, hosted, bindings...)
 	return s
 }
@@ -676,11 +675,7 @@ func registerMCPTools(s *server.MCPServer, hosted bool, bindings ...*workspaceCo
 		"mcpPushBlob":    mcpPushBlob,
 		"mcpPull":        mcpPull,
 		"mcpLogs":        mcpLogs,
-		"mcpServerLogs":  mcpServerLogs,
-		"mcpID":          mcpID,
-		"mcpTrust":       mcpTrust,
 		"mcpTrustServer": mcpTrustServer,
-		"mcpRules":       mcpRules,
 	}
 	for _, c := range catalog.MCPCommands() {
 		if len(bindings) > 0 && !workspaceSessionTool(c.MCPName) {
@@ -716,13 +711,6 @@ func registerMCPTools(s *server.MCPServer, hosted bool, bindings ...*workspaceCo
 // toolOptions turns one catalog entry into the mcp-go options that describe it.
 func toolOptions(c catalog.Command) []mcpapi.ToolOption {
 	opts := []mcpapi.ToolOption{mcpapi.WithDescription(c.MCPDescription())}
-	if schema := c.MCPOutputSchema(); schema != nil {
-		raw, err := json.Marshal(schema)
-		if err != nil {
-			panic("mcp: invalid output schema for " + c.MCPName + ": " + err.Error())
-		}
-		opts = append(opts, mcpapi.WithRawOutputSchema(raw))
-	}
 	for _, p := range c.MCPParams() {
 		var props []mcpapi.PropertyOption
 		if p.Required {
@@ -754,15 +742,6 @@ func toolOptions(c catalog.Command) []mcpapi.ToolOption {
 }
 
 // --- helpers ---
-
-// Preserve the existing human-readable content while adding machine-readable
-// fields. Errors keep their existing isError/diagnostic contract; do not turn
-// uncertain writes or failed authorizations into successful-looking objects.
-func structuredResult(text string, data map[string]any) *mcpapi.CallToolResult {
-	result := mcpapi.NewToolResultText(text)
-	result.StructuredContent = data
-	return result
-}
 
 func reqStr(req mcpapi.CallToolRequest, key, def string) string {
 	if v, ok := req.GetArguments()[key].(string); ok {
@@ -985,34 +964,19 @@ func canonicalTarget(namespace, device string) string {
 
 // identityNote is the suffix that tells a model, before it dials anything,
 // which devices will stop it with DEVICE IDENTITY CONFIRMATION REQUIRED.
+// identityNote marks only the devices still ahead of first contact: a listing
+// of devices this session already pinned should not repeat that on every line.
 func identityNote(pinned map[string]bool, name string) string {
 	if pinned[name] {
-		return "  [identity: pinned]"
+		return ""
 	}
 	return "  [identity: unpinned]"
 }
 
 func peerToolResult(view client.Peers, pinned map[string]bool) *mcpapi.CallToolResult {
 	devs, aliases, shared := view.Devices, view.Aliases, view.Shared
-	identity := map[string]string{}
-	for name, ok := range pinned {
-		if ok {
-			identity[name] = "pinned"
-		} else {
-			identity[name] = "unpinned"
-		}
-	}
-	structured := map[string]any{"devices": devs, "aliases": aliases, "identity": identity}
-	if view.Namespace != "" {
-		structured["namespace"] = view.Namespace
-	}
-	if len(shared) > 0 {
-		structured["shared"] = shared
-	}
 	if len(devs) == 0 && len(shared) == 0 {
-		result := mcpapi.NewToolResultText("no devices online for this token")
-		result.StructuredContent = structured
-		return result
+		return mcpapi.NewToolResultText("no devices online for this token")
 	}
 	out := ""
 	anyUnpinned := false
@@ -1049,9 +1013,7 @@ func peerToolResult(view client.Peers, pinned map[string]bool) *mcpapi.CallToolR
 			"The first call that dials it returns DEVICE IDENTITY CONFIRMATION REQUIRED. " +
 			"wanctl_trust_server records a first-contact pin; honor the user's authorization and the host's approval requirements before changing trust.\n"
 	}
-	result := mcpapi.NewToolResultText(out)
-	result.StructuredContent = structured
-	return result
+	return mcpapi.NewToolResultText(out)
 }
 
 func mcpPair(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
@@ -1154,38 +1116,27 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		}
 		return hint, nil
 	}
-	code := res.Code
-	stdoutText, stderrText := stdout.tailText(res), stderr.clampText()
-	out := fmt.Sprintf("exit: %d\n", code)
+	// The exit code, then the output as it came. A persistent shell sends
+	// both streams down stdout, so a stderr section appears only when the
+	// device really kept them apart.
+	out := fmt.Sprintf("exit: %d\n", res.Code)
 	if stdout.total > 0 {
-		s := stdoutText
-		out += "\n--- stdout ---\n" + s
-		if !strings.HasSuffix(s, "\n") {
-			out += "\n"
-		}
+		out += lineEnded(stdout.tailText(res))
 	}
 	if stderr.total > 0 {
-		s := stderrText
-		out += "\n--- stderr ---\n" + s
-		if !strings.HasSuffix(s, "\n") {
-			out += "\n"
-		}
+		out += "--- stderr ---\n" + lineEnded(stderr.clampText())
 	}
 	if stdout.total == 0 && stderr.total == 0 {
 		out += "(no output)\n"
 	}
-	data := map[string]any{
-		"target": target, "done": true, "code": code,
-		"stdout": stdoutText, "stderr": stderrText,
-		"stdout_truncated": stdout.total > maxExecStream, "stderr_truncated": stderr.total > maxExecStream,
+	return mcpapi.NewToolResultText(out), nil
+}
+
+func lineEnded(s string) string {
+	if strings.HasSuffix(s, "\n") {
+		return s
 	}
-	if res.SpillPath != "" {
-		data["spill_path"] = res.SpillPath
-	}
-	if res.SpillBytes > 0 {
-		data["spill_bytes"], data["spill_kept"] = res.SpillBytes, res.SpillKept
-	}
-	return structuredResult(out, data), nil
+	return s + "\n"
 }
 
 // errorTextOf pulls the message back out of a tool result so a caller can add
@@ -1229,30 +1180,53 @@ func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	if err != nil {
 		return fileOpErrorResult(sess, err), nil
 	}
-	head := fmt.Sprintf("%s\nlines %d-%d of %d, %d bytes, sha256 %s\n",
-		path, res.FirstLine, res.LastLine, res.TotalLines, res.SizeBytes, res.SHA256)
+	capRead(res, maxReadReturn)
+	head := fmt.Sprintf("lines %d-%d of %d, %d bytes, sha256 %s\n",
+		res.FirstLine, res.LastLine, res.TotalLines, res.SizeBytes, res.SHA256)
 	if res.TotalLines == 0 {
-		head = fmt.Sprintf("%s\nempty file, 0 bytes, sha256 %s\n", path, res.SHA256)
+		head = fmt.Sprintf("empty file, 0 bytes, sha256 %s\n", res.SHA256)
 	}
 	switch {
 	case res.LongLine != 0:
 		// Telling the model to continue past this line would send it back for
 		// the same line every time, because the line itself is the thing that
 		// does not fit.
-		head += fmt.Sprintf("TRUNCATED: line %d is larger than the 256 KiB cap on its own, so only its first part is above. "+
-			"Do NOT call this tool again for that line — read it with wanctl_exec (sed/cut) instead.\n", res.LongLine)
+		head += fmt.Sprintf("TRUNCATED: line %d alone is over the %d KiB cap, so only its start is shown. "+
+			"Do NOT call this tool again for that line — read it with wanctl_exec (sed/cut) instead.\n", res.LongLine, maxReadReturn>>10)
 	case res.Truncated:
-		head += fmt.Sprintf("TRUNCATED at the 256 KiB cap after a whole number of lines: call again with offset=%d for the rest.\n", res.LastLine+1)
+		head += fmt.Sprintf("TRUNCATED at the %d KiB cap after a whole line: call again with offset=%d for the rest.\n", maxReadReturn>>10, res.LastLine+1)
 	}
-	data := map[string]any{
-		"path": path, "content": res.Content, "first_line": res.FirstLine, "last_line": res.LastLine,
-		"total_lines": res.TotalLines, "size_bytes": res.SizeBytes, "sha256": res.SHA256,
-		"truncated": res.Truncated, "long_line": res.LongLine,
+	return mcpapi.NewToolResultText(head + "--- content ---\n" + res.Content), nil
+}
+
+// maxReadReturn is what one wanctl_read hands a model: the same budget as one
+// page of command output. A device returns up to protocol.MaxReadBytes (256
+// KiB, about 70k tokens of code) and the CLI keeps all of that for a file
+// redirect, but in a conversation a whole lockfile or bundle in one call is a
+// cost nobody chose; paging by offset loses nothing.
+const maxReadReturn = maxExecStream
+
+// capRead cuts a read down to limit bytes the way the device cuts at its own
+// cap: after the last whole line that fits, or, when the first line alone is
+// longer, to that line's start, named as the line that cannot be paged.
+func capRead(res *client.ReadResult, limit int) {
+	if len(res.Content) <= limit {
+		return
 	}
-	if res.Truncated && res.LongLine == 0 {
-		data["next_offset"] = res.LastLine + 1
+	res.Truncated = true
+	if res.LongLine == 0 {
+		if cut := strings.LastIndexByte(res.Content[:limit], '\n'); cut >= 0 {
+			res.Content = res.Content[:cut+1]
+			res.LastLine = res.FirstLine + strings.Count(res.Content, "\n") - 1
+			return
+		}
+		res.LastLine, res.LongLine = res.FirstLine, res.FirstLine
 	}
-	return structuredResult(head+"\n--- content ---\n"+res.Content, data), nil
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(res.Content[cut]) {
+		cut--
+	}
+	res.Content = res.Content[:cut]
 }
 
 func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
@@ -1294,9 +1268,8 @@ func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	if err != nil {
 		return fileOpErrorResult(sess, err), nil
 	}
-	return structuredResult(fmt.Sprintf(
-		"replaced %d occurrence(s) in %s\nnew sha256 %s, %d bytes\n", res.Replaced, path, res.SHA256, res.SizeBytes),
-		map[string]any{"path": path, "replaced": res.Replaced, "sha256": res.SHA256, "size_bytes": res.SizeBytes}), nil
+	return mcpapi.NewToolResultText(fmt.Sprintf(
+		"replaced %d, new sha256 %s, %d bytes\n", res.Replaced, res.SHA256, res.SizeBytes)), nil
 }
 
 // reqEdits reads the batch form of the edit argument. A malformed entry is
@@ -1367,9 +1340,7 @@ func mcpWrite(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 	if res.Created {
 		verb = "created"
 	}
-	return structuredResult(fmt.Sprintf(
-		"%s %s\nsha256 %s, %d bytes\n", verb, path, res.SHA256, res.SizeBytes),
-		map[string]any{"path": path, "created": res.Created, "sha256": res.SHA256, "size_bytes": res.SizeBytes}), nil
+	return mcpapi.NewToolResultText(fmt.Sprintf("%s, sha256 %s, %d bytes\n", verb, res.SHA256, res.SizeBytes)), nil
 }
 
 // mcpScreenshot returns what is on the device's screen as image content, which
@@ -1444,9 +1415,7 @@ func mcpExecAsync(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Call
 	if err != nil {
 		return dialErrorResult(sess, err), nil
 	}
-	return structuredResult(fmt.Sprintf(
-		"started background job %s on %q.\nPoll it with wanctl_exec_poll(target=%q, job_id=%q) until state is 'done'. The job runs for at most 30 minutes and retains at most 8 MiB output; finished results remain available for up to 1h subject to device-wide retention budgets.",
-		id, target, target, id), map[string]any{"target": target, "job_id": id}), nil
+	return mcpapi.NewToolResultText("job_id: " + id + "\n"), nil
 }
 
 func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
@@ -1466,33 +1435,38 @@ func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallT
 	if hint != nil {
 		return hint, nil
 	}
+	// Everything since offset goes into one keeper, so however many times
+	// the wait below looks again, the caller gets one bounded page.
 	buf := keepEnds()
-	newOffset, running, code, err := c.ExecPollTo(ctx, target, jobID, int64(reqInt(req, "offset")), buf)
+	offset := int64(reqInt(req, "offset"))
+	newOffset, running, code, err := c.ExecPollTo(ctx, target, jobID, offset, buf)
 	if err != nil {
 		return dialErrorResult(sess, err), nil
 	}
-	head := fmt.Sprintf("state: running\nnext_offset: %d\n", newOffset)
-	if !running {
-		head = fmt.Sprintf("state: done\nexit: %d\nnext_offset: %d\n", code, newOffset)
+	deadline := time.Now().Add(execWait)
+	for i := 0; running; i++ {
+		pause := pollPause(i)
+		if time.Now().Add(pause).After(deadline) || !sleepCtx(ctx, pause) {
+			break
+		}
+		next, stillRunning, nextCode, err := c.ExecPollTo(ctx, target, jobID, newOffset, buf)
+		if err != nil {
+			// What already arrived is true and newOffset says where it
+			// ends; the next poll reports the failure.
+			break
+		}
+		newOffset, running, code = next, stillRunning, nextCode
 	}
-	out := head
+	out := fmt.Sprintf("state: running, next_offset: %d\n", newOffset)
+	if !running {
+		out = fmt.Sprintf("state: done, exit: %d, next_offset: %d\n", code, newOffset)
+	}
 	if buf.total > 0 {
-		out += "\n--- new output ---\n" + buf.clampText()
+		out += lineEnded(buf.clampText())
 	} else {
-		out += "\n(no new output since offset)\n"
+		out += "(no new output)\n"
 	}
-	state := "running"
-	if !running {
-		state = "done"
-	}
-	data := map[string]any{
-		"target": target, "job_id": jobID, "state": state, "done": !running,
-		"output": buf.clampText(), "next_offset": newOffset, "truncated": buf.total > maxExecStream,
-	}
-	if !running {
-		data["code"] = code
-	}
-	return structuredResult(out, data), nil
+	return mcpapi.NewToolResultText(out), nil
 }
 
 func mcpPush(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
@@ -1598,115 +1572,6 @@ func mcpLogs(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	return mcpapi.NewToolResultText(buf.String()), nil
 }
 
-func mcpServerLogs(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
-	service := reqStr(req, "service", "")
-	if service != "portal" && service != "relay" {
-		return mcpapi.NewToolResultError("service must be portal or relay"), nil
-	}
-	if _, ok := sessions.get(ctx).(*remoteSession); ok {
-		// On a shared server the admin secret in this process's environment
-		// belongs to the operator, not to whichever tenant is logged in
-		// (audit 2026-08-28, SEC-E-03).
-		return mcpapi.NewToolResultError("wanctl_server_logs is available in stdio mode only: on a shared MCP server it would read the operator's logs with the operator's secret"), nil
-	}
-	if _, hint := sessions.get(ctx).client(); hint != nil {
-		return hint, nil
-	}
-	since := serverlog.DefaultSince
-	if raw := reqStr(req, "since", ""); raw != "" {
-		var err error
-		since, err = time.ParseDuration(raw)
-		if err != nil || since < 0 {
-			return mcpapi.NewToolResultError("since must be a non-negative duration such as '30m'"), nil
-		}
-	}
-	limit := reqInt(req, "limit")
-	if limit == 0 {
-		limit = serverlog.DefaultLimit
-	}
-	if limit < 0 {
-		return mcpapi.NewToolResultError("limit must be positive"), nil
-	}
-	limit = min(limit, serverlog.MaxLimit)
-	q := serverlog.Query{Service: service, Since: since, Limit: limit, Grep: reqStr(req, "grep", "")}
-	portalURL, err := config.Portal()
-	if err != nil {
-		return mcpapi.NewToolResultError(err.Error()), nil
-	}
-	resp, err := serverlog.Fetch(ctx, serverLogsHTTPClient,
-		portalURL, os.Getenv("WANCTL_ADMIN_SECRET"), q)
-	if err != nil {
-		return mcpapi.NewToolResultError(err.Error()), nil
-	}
-	var out bytes.Buffer
-	if err := serverlog.Format(&out, resp); err != nil {
-		return mcpapi.NewToolResultError(err.Error()), nil
-	}
-	if out.Len() == 0 {
-		return mcpapi.NewToolResultText("(no matching server log lines)"), nil
-	}
-	return mcpapi.NewToolResultText(out.String()), nil
-}
-
-// --- info tools (use the session's identity if any) ---
-
-func mcpID(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
-	s := sessions.get(ctx)
-	if r, ok := s.(*remoteSession); ok {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		if r.token == "" {
-			return notAuthorized(), nil
-		}
-		if err := r.ensureIdentity(); err != nil {
-			return mcpapi.NewToolResultError("derive identity: " + err.Error()), nil
-		}
-		return mcpapi.NewToolResultText(fmt.Sprintf("fingerprint: %s\nnamespace:   %s", r.identity.Fingerprint, r.namespace)), nil
-	}
-	// stdio: local config
-	id, err := transport.LoadOrCreateIdentity()
-	if err != nil {
-		return mcpapi.NewToolResultError(err.Error()), nil
-	}
-	dir, _ := transport.ConfigDir()
-	return mcpapi.NewToolResultText(fmt.Sprintf("fingerprint: %s\nconfig dir:  %s", id.Fingerprint, dir)), nil
-}
-
-func mcpTrust(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
-	which := reqStr(req, "which", "servers")
-	if r, ok := sessions.get(ctx).(*remoteSession); ok {
-		// In HTTP mode there is no on-disk trust file. List in-memory known peers.
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		peers := r.known.List()
-		if len(peers) == 0 {
-			return mcpapi.NewToolResultText("known servers (this MCP session, memory-only): (none)"), nil
-		}
-		out := fmt.Sprintf("known servers (this MCP session, memory-only): %d\n", len(peers))
-		for _, p := range peers {
-			out += fmt.Sprintf("  %-20s %s\n", p.Name, transport.ShortFingerprint(p.Fingerprint))
-		}
-		return mcpapi.NewToolResultText(out), nil
-	}
-	file, label := "known_servers.json", "trusted devices (TOFU-pinned)"
-	if which == "clients" {
-		file, label = "known_clients.json", "trusted controllers (this machine as agent)"
-	}
-	store, err := transport.OpenStore(file)
-	if err != nil {
-		return mcpapi.NewToolResultError(err.Error()), nil
-	}
-	peers := store.List()
-	if len(peers) == 0 {
-		return mcpapi.NewToolResultText(label + ": (none)"), nil
-	}
-	out := fmt.Sprintf("%s: %d\n", label, len(peers))
-	for _, p := range peers {
-		out += fmt.Sprintf("  %-20s %s  (added %s)\n", p.Name, transport.ShortFingerprint(p.Fingerprint), p.Added.Format("2006-01-02"))
-	}
-	return mcpapi.NewToolResultText(out), nil
-}
-
 func mcpTrustServer(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
 	if os.Getenv("WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER") != "1" {
 		return mcpapi.NewToolResultError("device identity pinning is not enabled on this MCP server: the operator has not set WANCTL_MCP_ALLOW_UNSAFE_TRUST_SERVER=1, so this tool cannot pin anything and retrying will not help. A human has to do it from a terminal on this machine: verify the fingerprint with the device owner, then run `wanctl trust server --target OWNER/DEVICE --fingerprint SHA256:...`. Report that to the user, with the exact target and fingerprint from the confirmation result, and stop"), nil
@@ -1730,32 +1595,6 @@ func mcpTrustServer(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Ca
 		return dialErrorResult(sess, err), nil
 	}
 	return mcpapi.NewToolResultText(fmt.Sprintf("confirmed device identity: %s %s", canonical, fingerprint)), nil
-}
-
-func mcpRules(ctx context.Context, _ mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
-	if _, ok := sessions.get(ctx).(*remoteSession); ok {
-		return mcpapi.NewToolResultText("policy rules: (none — HTTP MCP mode has no local agent policies)"), nil
-	}
-	eng, err := policy.Open("rules.json", policy.ModeNormal)
-	if err != nil {
-		return mcpapi.NewToolResultError(err.Error()), nil
-	}
-	rules := eng.List()
-	if len(rules) == 0 {
-		return mcpapi.NewToolResultText("policy rules: (none — this machine is controller-only, or no rules added)"), nil
-	}
-	out := fmt.Sprintf("policy rules: %d\n", len(rules))
-	for i, r := range rules {
-		scope := string(r.Scope)
-		if r.Scope == policy.ScopeDir {
-			scope = "dir:" + r.Dir
-			if r.Kind != policy.KindExec {
-				scope = "dir:" + r.Pattern
-			}
-		}
-		out += fmt.Sprintf("  [%d] %-5s %-30q %s\n", i, r.Kind, r.Pattern, scope)
-	}
-	return mcpapi.NewToolResultText(out), nil
 }
 
 // maxExecStream bounds how many bytes of one output stream (stdout/stderr) we
