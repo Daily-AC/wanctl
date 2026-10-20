@@ -33,7 +33,6 @@ import (
 	"wanctl/internal/elevate"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/httpconn"
-	"wanctl/internal/opencu"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/relayhttp"
@@ -83,6 +82,8 @@ type Agent struct {
 	notifyPolicy agentNotifyPolicy
 	notifyClient *http.Client
 
+	openCUVersion *installedVersionCache
+
 	sessMu           sync.Mutex
 	sessions         map[string]*server.ShellSession
 	workspaceMu      sync.Mutex
@@ -99,7 +100,8 @@ type Agent struct {
 	grants lateGrants
 	adb    adbLinkState
 
-	// Owned goroutines. Every goroutine the agent starts is registered in wg
+	// Owned operational goroutines (the metadata-only version reader is the
+	// single documented exception; see device_versions.go). Each is registered in wg
 	// and takes its context from stopCtx, so Close can cancel them all and then
 	// wait for the last one to return. Without that join the agent has no
 	// moment where it is provably quiet: the control loop, a session handler or
@@ -302,6 +304,7 @@ func New(opts Options) (*Agent, error) {
 	// construction time would survive the portal turning bypass off, auto-allowing
 	// everything while the audit log claimed a human said "approved".
 	a.appr = a.console
+	a.openCUVersion = newInstalledVersionCache()
 	return a, nil
 }
 
@@ -439,6 +442,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	ctx, cancel := a.runContext(ctx)
 	defer cancel()
 
+	a.openCUVersion.start(a.shutdown())
 	a.spawn(func() { a.runNotifyPolicy(ctx) })
 	a.spawn(func() { a.watchADBLink(ctx) })
 	if a.phone != nil {
@@ -460,7 +464,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	// cancellation (SIGTERM, `wanctl stop`) is never observed.
 	defer wsconn.CloseOnCancel(ctx, nc)()
 	enc := json.NewEncoder(nc)
-	if err := enc.Encode(map[string]string{"op": "register", "device": a.DeviceID(), "device_id": a.DeviceID(), "name": a.opts.Name, "fingerprint": a.id.Fingerprint, "inst": a.inst, "delegation": "1", "wanctl_version": a.opts.Version, "opencu_version": opencu.InstalledVersion()}); err != nil {
+	reg := map[string]string{"op": "register", "device": a.DeviceID(), "device_id": a.DeviceID(), "name": a.opts.Name, "fingerprint": a.id.Fingerprint, "inst": a.inst, "delegation": "1"}
+	for k, v := range a.versionFields() {
+		reg[k] = v
+	}
+	if err := enc.Encode(reg); err != nil {
 		return err
 	}
 	fmt.Printf("wanctl agent %q online via %s\n  fingerprint: %s\n", a.opts.Name, a.opts.RelayURL, a.id.Fingerprint)
@@ -1217,7 +1225,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 	// The poll loop shares the relay transport with the sessions it spawns, so
 	// the connection it keeps warm (and its HTTP/3 probe) serves them too.
 	hc := &http.Client{Transport: relayhttp.Shared(), Timeout: 35 * time.Second}
-	q := url.Values{"device": {a.DeviceID()}, "device_id": {a.DeviceID()}, "name": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}, "delegation": {"1"}}.Encode()
+	q := url.Values{"device": {a.DeviceID()}, "device_id": {a.DeviceID()}, "name": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}, "delegation": {"1"}}
 	// Registration lives or dies by this loop: the relay keeps a device listed
 	// only while its polls keep arriving. Until 2026-08-07 every failure here
 	// was swallowed — sleep two seconds, try again, say nothing — so an agent
@@ -1242,7 +1250,10 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 			a.deregisterHTTP(base)
 			return nil
 		}
-		req, _ := http.NewRequestWithContext(ctx, "GET", base+"/h/poll?"+q+"&wanctl_version="+url.QueryEscape(a.opts.Version)+"&opencu_version="+url.QueryEscape(opencu.InstalledVersion()), nil)
+		for k, v := range a.versionFields() {
+			q.Set(k, v)
+		}
+		req, _ := http.NewRequestWithContext(ctx, "GET", base+"/h/poll?"+q.Encode(), nil)
 		admission.SetBearer(req, a.opts.Token)
 		resp, err := hc.Do(req)
 		if err != nil {
