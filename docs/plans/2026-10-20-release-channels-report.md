@@ -78,5 +78,11 @@ the command.
 - Rehearsal: both agents' own updaters installed beta.2. The Windows one
   needed a second restart: its first check left no log line, probably a
   transient GitHub failure masked by the relay mirror (issue #170).
-- Still open: no Linux systemd device was available; the 24-hour soak ends
-  2026-10-21 12:45; then tag `v0.26.0` on the beta.2 commit with its changelog.
+- Linux systemd: a transient system unit on a spare VM (no relay, no
+  enrollment) ran beta.1, which updated itself to beta.2 in place: same
+  MainPID, zero restarts. The unit was removed afterwards.
+- Not covered: a Windows device under `wanctl service install`'s own
+  `__supervise` task (the v0.20.3 `.old` path); the Windows device above uses
+  a PowerShell restart loop instead.
+- Still open: the 24-hour soak ends 2026-10-21 12:45; then tag `v0.26.0` on
+  the beta.2 commit plus a changelog-only commit.
