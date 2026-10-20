@@ -157,3 +157,37 @@ func TestTruncationReportsTheDeviceByteCount(t *testing.T) {
 		t.Errorf("line = %q, want the returned length to stay the cap", head)
 	}
 }
+
+// A wait that polls several times keeps each poll's output apart until that
+// poll succeeds, then joins it. Joining must show exactly what writing the
+// whole stream into one keeper would have shown.
+func TestKeeperAbsorbMatchesOneStream(t *testing.T) {
+	stream := make([]byte, 300_000)
+	for i := range stream {
+		stream[i] = byte('a' + i%26)
+	}
+	for _, cuts := range [][]int{
+		{10},
+		{3_000, 6_000},
+		{3_000, 100_000},
+		{100_000, 100_010, 200_000},
+		{47_000, 49_000, 52_000, 299_999},
+		{8_191, 8_193, 57_343},
+	} {
+		for _, total := range []int{0, 5_000, 49_000, 60_000, 300_000} {
+			whole := keepEnds()
+			whole.Write(stream[:total])
+			joined, from := keepEnds(), 0
+			for _, cut := range append(cuts, total) {
+				cut = min(cut, total)
+				part := keepEnds()
+				part.Write(stream[from:max(from, cut)])
+				joined.absorb(part)
+				from = max(from, cut)
+			}
+			if got, want := joined.clampText(), whole.clampText(); got != want || joined.total != whole.total {
+				t.Fatalf("cuts %v over %d bytes: joined %d bytes/%d total, want %d/%d", cuts, total, len(got), joined.total, len(want), whole.total)
+			}
+		}
+	}
+}

@@ -190,3 +190,16 @@ func TestRefusalsCarryTheirOwnInstructions(t *testing.T) {
 		t.Errorf("an ordinary error grew a remedy: %s", got)
 	}
 }
+
+// An agent reports every adb port it tried inside one "could not reach"
+// error. A port whose adbd refused the key means the pairing lapsed, and that
+// is the remedy to give, not "turn on wireless debugging".
+func TestRemedyPrefersTheKeyRefusal(t *testing.T) {
+	got := withRemedy("could not reach adbd on this device (41031: remote error: tls: bad certificate; 5555: connection refused)")
+	if !strings.Contains(got, "ADB pairing") || strings.Contains(got, "Wireless debugging") {
+		t.Fatalf("aggregate adb failure got the wrong remedy: %s", got)
+	}
+	if strings.Contains(withRemedy("could not reach adbd on this device (5555: connection refused)"), "next entry") {
+		t.Fatal("the reachability remedy points at an entry the caller never sees")
+	}
+}

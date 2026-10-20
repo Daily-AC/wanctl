@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"wanctl/internal/protocol"
+	"wanctl/internal/wsconn"
 )
 
 // ExecAsync starts command as a background job on target and returns the job id
@@ -49,6 +50,9 @@ func (c *Client) ExecPollTo(ctx context.Context, target, jobID string, offset in
 		return offset, false, -1, err
 	}
 	defer conn.Close()
+	// A caller waiting on a deadline has to get its answer by then, so a
+	// stalled read ends with ctx instead of with the relay.
+	defer wsconn.CloseOnCancel(ctx, conn)()
 	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExecPoll, JobID: jobID, Offset: offset}); err != nil {
 		return offset, false, -1, err
 	}
