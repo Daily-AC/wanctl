@@ -10,12 +10,9 @@ set -eu
 VERSION=${1:?usage: scripts/validate-release.sh vMAJOR.MINOR.PATCH DIST_DIR}
 DIST=${2:?usage: scripts/validate-release.sh vMAJOR.MINOR.PATCH DIST_DIR}
 
-printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
-  echo "invalid release version: $VERSION" >&2
-  exit 1
-}
-
-ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
+. "$ROOT/scripts/release-version.sh"
+KIND=$(wanctl_release_kind "$VERSION")
 
 # The portal's version badge is the newest file in internal/portal/changelog/,
 # and it is the only place most people ever see which version is live. v0.7.0
@@ -26,14 +23,16 @@ ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 # The tag is known here, so the check belongs here — and this script is the one
 # both the manual publisher and the release workflow run, so neither path can
 # ship a version the portal cannot name.
-test -f "$ROOT/internal/portal/changelog/$VERSION.md" || {
-  echo "no changelog entry for $VERSION: internal/portal/changelog/$VERSION.md is missing" >&2
-  echo "the portal's version badge reads the newest file in that directory, and the" >&2
-  echo "release notes are published from it. Add the entry before tagging." >&2
-  exit 1
-}
+if [ "$KIND" = stable ]; then
+  test -f "$ROOT/internal/portal/changelog/$VERSION.md" || {
+    echo "no changelog entry for $VERSION: internal/portal/changelog/$VERSION.md is missing" >&2
+    echo "the portal's version badge reads the newest file in that directory, and the" >&2
+    echo "release notes are published from it. Add the entry before tagging." >&2
+    exit 1
+  }
+fi
 
-DIST=$(CDPATH= cd -- "$DIST" && pwd)
+DIST=$(CDPATH='' cd -- "$DIST" && pwd)
 
 # The expected file list is derived from the same matrix the build loop runs
 # over, so the two cannot drift; what this check still catches is a build that
@@ -41,13 +40,15 @@ DIST=$(CDPATH= cd -- "$DIST" && pwd)
 . "$ROOT/scripts/release-targets.sh"
 EXPECTED=$({
   printf '%s\n' install.ps1 install.sh manifest.json manifest.json.rsa.sig manifest.json.sig release-public-rsa.pem release-public.pem
-  wanctl_targets | while read -r os arch; do
+  wanctl_release_targets "$KIND" | while read -r os arch; do
     raw=$(wanctl_artifact_name "$os" "$arch")
     download=$(wanctl_download_name "$os" "$arch")
     printf '%s\n' "$raw"
     [ "$raw" = "$download" ] || printf '%s\n' "$download"
   done
-  wanctl_apk_arches | while read -r arch; do echo "wanctl-android-$arch.apk"; done
+  if [ "$KIND" = stable ]; then
+    wanctl_apk_arches | while read -r arch; do echo "wanctl-android-$arch.apk"; done
+  fi
 } | LC_ALL=C sort)
 ACTUAL=$(find "$DIST" -mindepth 1 -maxdepth 1 -exec basename {} \; | LC_ALL=C sort)
 if [ "$ACTUAL" != "$EXPECTED" ]; then

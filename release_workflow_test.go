@@ -2,7 +2,10 @@ package main
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -71,7 +74,15 @@ func TestReleaseWorkflowSupplyChain(t *testing.T) {
 			}
 			counts[secret[1]]++
 		}
-		if strings.Contains(s.body, "continue-on-error:") || regexp.MustCompile(`(?m)^        if:`).MatchString(s.body) {
+		if strings.Contains(s.body, "continue-on-error:") {
+			t.Errorf("%s must fail closed before publishing", s.name)
+		}
+		conditional := s.name == "Install cosign" || s.name == "Build, push and sign container image"
+		if conditional {
+			if !strings.Contains(s.body, "if: ${{ !contains(github.ref_name, '-beta.') }}") {
+				t.Errorf("%s must run only for stable", s.name)
+			}
+		} else if regexp.MustCompile(`(?m)^        if:`).MatchString(s.body) {
 			t.Errorf("%s must fail closed before publishing", s.name)
 		}
 	}
@@ -94,11 +105,30 @@ func TestReleaseWorkflowSupplyChain(t *testing.T) {
 		t.Fatalf("missing workflow command %q", command)
 		return -1, ""
 	}
+	checkout, checkoutBody := find("uses: actions/checkout")
+	promotion, _ := find("./scripts/check-promotion.sh \"$GITHUB_REF_NAME\"")
+	secrets, secretBody := find("test -n \"$WANCTL_RELEASE_SIGNING_KEY\"")
+	if checkout >= promotion || promotion >= secrets || !strings.Contains(checkoutBody, "fetch-depth: 0") {
+		t.Fatal("promotion must see all tags and run before secrets are read")
+	}
+	for i, s := range steps {
+		if strings.Contains(s.body, "secrets.") && i <= promotion {
+			t.Fatal("secret read before promotion gate")
+		}
+	}
+	if !strings.Contains(secretBody, `if [ "${GITHUB_REF_NAME#*-beta.}" = "$GITHUB_REF_NAME" ]; then`) {
+		t.Fatal("Android keystore must only be required for stable")
+	}
 	build, release := find(". ./scripts/build-release.sh")
 	validate, _ := find("./scripts/validate-release.sh")
 	install, cosign := find("https://github.com/sigstore/cosign/releases/download/")
 	image, container := find("docker build --platform linux/amd64")
-	publish, _ := find("gh release create")
+	publish, publishing := find("gh release create")
+	for _, required := range []string{`case "$GITHUB_REF_NAME" in`, `*-beta.*)`, `--prerelease --latest=false --generate-notes`, `--latest \`, `--notes-file "internal/portal/changelog/$GITHUB_REF_NAME.md"`} {
+		if !strings.Contains(publishing, required) {
+			t.Errorf("missing publication rule %q", required)
+		}
+	}
 	if !(build < validate && validate < install && install < image && image < publish) {
 		t.Fatal("image installation/build/signing must succeed before publication")
 	}
@@ -141,5 +171,79 @@ func TestReleaseWorkflowSupplyChain(t *testing.T) {
 	}
 	if strings.Contains(container, ":latest") || strings.Contains(workflow, "container-image.txt") {
 		t.Fatal("moving tags and device-manifest image metadata are forbidden")
+	}
+}
+
+func TestReleaseWorkflowChannelCommands(t *testing.T) {
+	raw, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(raw)
+	body := func(name string) string {
+		t.Helper()
+		start := strings.Index(workflow, "      - name: "+name+"\n")
+		if start < 0 {
+			t.Fatal("missing step " + name)
+		}
+		step := workflow[start:]
+		if end := strings.Index(step[1:], "      - name:"); end >= 0 {
+			step = step[:end+1]
+		}
+		at := strings.Index(step, "        run: |\n")
+		if at < 0 {
+			t.Fatal("missing run block")
+		}
+		var lines []string
+		for _, line := range strings.Split(step[at+len("        run: |\n"):], "\n") {
+			if strings.HasPrefix(line, "          ") {
+				lines = append(lines, strings.TrimPrefix(line, "          "))
+			} else if strings.TrimSpace(line) != "" {
+				break
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
+	t.Setenv("WANCTL_RELEASE_SIGNING_KEY", "test")
+	t.Setenv("WANCTL_RELEASE_RSA_KEY", "test")
+	t.Setenv("WANCTL_ANDROID_KEYSTORE_B64", "")
+	t.Setenv("WANCTL_ANDROID_KEYSTORE_PASS", "")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, tag := range []string{"v1.2.3-beta.1", "v1.2.3"} {
+		t.Run(tag, func(t *testing.T) {
+			t.Setenv("GITHUB_REF_NAME", tag)
+			beta := strings.Contains(tag, "-beta.")
+			out, err := exec.Command("bash", "-eu", "-c", body("Validate release secrets")).CombinedOutput()
+			if (err == nil) != beta {
+				t.Fatalf("keystore gate for %s: %v\n%s", tag, err, out)
+			}
+			t.Setenv("WANCTL_ANDROID_KEYSTORE_B64", "test")
+			t.Setenv("WANCTL_ANDROID_KEYSTORE_PASS", "test")
+			if out, err := exec.Command("bash", "-eu", "-c", body("Validate release secrets")).CombinedOutput(); err != nil {
+				t.Fatalf("with keystore: %v %s", err, out)
+			}
+			out, err = exec.Command("bash", "-eu", "-c", body("Publish GitHub Release")).CombinedOutput()
+			if err != nil {
+				t.Fatalf("publish: %v %s", err, out)
+			}
+			args := strings.Split(strings.TrimSpace(string(out)), "\n")
+			if !slices.Contains(args, tag) || !slices.Contains(args, "--verify-tag") {
+				t.Fatalf("publication: %v", args)
+			}
+			for _, flag := range []string{"--prerelease", "--latest=false", "--generate-notes"} {
+				if slices.Contains(args, flag) != beta {
+					t.Errorf("%s: %v", flag, args)
+				}
+			}
+			for _, flag := range []string{"--latest", "--notes-file", "internal/portal/changelog/" + tag + ".md"} {
+				if slices.Contains(args, flag) == beta {
+					t.Errorf("%s: %v", flag, args)
+				}
+			}
+		})
 	}
 }

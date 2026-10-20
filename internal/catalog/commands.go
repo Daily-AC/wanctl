@@ -447,13 +447,14 @@ var Commands = []Command{
 	},
 	{
 		Name:    "update",
-		Summary: "Replace this binary with the latest signed release",
-		Desc:    "Fetch the release manifest, verify the signature and swap this binary in place. A running agent keeps its pid across the swap, so systemd, launchd and `wanctl status` still point at it. Development builds are never replaced.\n\nOn Android the APK cannot be installed by the binary, so --fetch-apk downloads and verifies it and prints the path for the app to install.",
+		Summary: "安装最新或指定版本的签名发布",
+		Desc:    "`wanctl update` 安装来源提供的更新版本：stable 或 dev 构建只接受 stable，beta 构建接受更新的 beta 或 stable。`wanctl update <version>` 安装指定的签名版本，支持加入 beta 和降级；已在运行该版本时直接退出。开启 auto_update 后，降级的版本会在下次自动检查时更新到最新稳定版（若有更新）。验签后替换二进制，并按原方式重启运行中的 agent。开发构建不会自动更新，但可以手动更新。\n\nAndroid 的 --fetch-apk 下载并验签稳定版 APK，输出路径供应用安装，不支持指定版本。",
 		Params: []Param{
+			{Name: "version", CLI: "[version]", Type: TypeString, CLIOnly: true, Desc: "可选，精确安装 vX.Y.Z 或 vX.Y.Z-beta.N；N 为无前导零的正整数。选项须放在版本之前。"},
 			{Name: "fetch-apk", CLI: "--fetch-apk DIR", Type: TypeString, CLIOnly: true, Desc: "Android only. Download and verify the APK into this directory, print its path and exit. The binary cannot install an APK; the app does that with the printed path."},
 			{Name: "no-restart", CLI: "--no-restart", Type: TypeBool, CLIOnly: true, Desc: "Internal. Skips the daemon stop/start, used by the sudo-elevated second phase of an update."},
 		},
-		CLIExample: "wanctl update\n  wanctl update --fetch-apk /sdcard/Download",
+		CLIExample: "wanctl update\n  wanctl update v0.26.0-beta.1\n  wanctl update v0.25.0\n  wanctl update --fetch-apk /sdcard/Download",
 	},
 	{
 		Name:       "version",

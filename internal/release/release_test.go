@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +89,63 @@ func TestManifestRejectsOversizeAndUnknownFields(t *testing.T) {
 	} {
 		if _, err := ParseManifest([]byte(duplicate)); err == nil {
 			t.Fatal("duplicate manifest field accepted")
+		}
+	}
+}
+
+func TestVersionGrammar(t *testing.T) {
+	for _, v := range []string{"v0.26.0", "v0.26.0-beta.1", "v0.26.0-beta.10", "v0.26.0-beta.18446744073709551616"} {
+		raw, _, _, _ := signedFixture(t, v, "linux", "amd64", []byte("binary"))
+		if _, err := ParseManifest(raw); err != nil {
+			t.Errorf("%s: %v", v, err)
+		}
+	}
+	for _, suffix := range []string{"-beta", "-beta.0", "-beta.01", "-rc.1", "-alpha.1", "-Beta.1", "+meta", "-beta.1+meta", "-beta.1.2"} {
+		raw, _, _, _ := signedFixture(t, "v0.26.0"+suffix, "linux", "amd64", []byte("binary"))
+		if _, err := ParseManifest(raw); err == nil {
+			t.Errorf("accepted %s", suffix)
+		}
+	}
+	for _, v := range []string{"0.26.0", "v01.2.3", "v1.02.3", "v1.2.03", "v1.2", "v1.2.3\n"} {
+		if err := ValidateVersion(v); err == nil {
+			t.Errorf("accepted %q", v)
+		}
+	}
+}
+
+func TestVersionOrdering(t *testing.T) {
+	versions := []string{"v0.25.9", "v0.26.0-beta.1", "v0.26.0-beta.2", "v0.26.0-beta.10", "v0.26.0", "v1.0.0"}
+	for i, a := range versions {
+		for j, b := range versions {
+			got, err := CompareVersions(a, b)
+			if err != nil || (i < j && got >= 0) || (i == j && got != 0) || (i > j && got <= 0) {
+				t.Errorf("compare %s, %s = %d, %v", a, b, got, err)
+			}
+		}
+	}
+}
+
+func TestSelectReleaseChannel(t *testing.T) {
+	for _, current := range []string{"", "dev", "v0.25.9", "v0.26.0", "v0.26.0-beta.1", "v0.26.0-beta.2", "v0.26.0-beta.10"} {
+		for _, next := range []string{"v0.25.9", "v0.26.0-beta.1", "v0.26.0-beta.2", "v0.26.0-beta.10", "v0.26.0"} {
+			raw, _, _, _ := signedFixture(t, next, "linux", "amd64", []byte("binary"))
+			m, err := ParseManifest(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Select(m, "linux", "amd64", current)
+			var want error
+			if strings.Contains(next, "-beta.") && !strings.Contains(current, "-beta.") {
+				want = ErrBetaNotAllowed
+			} else if current != "" && current != "dev" {
+				cmp, _ := CompareVersions(next, current)
+				if cmp <= 0 {
+					want = ErrUpToDate
+				}
+			}
+			if !errors.Is(err, want) {
+				t.Errorf("%s -> %s: %v, want %v", current, next, err, want)
+			}
 		}
 	}
 }
