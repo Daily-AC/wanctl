@@ -65,3 +65,18 @@ stable needs a beta first. So for the first cycle only, install `-beta.1` on
 the maintainers' devices from the prerelease's assets by hand (verify against
 its `manifest.json`); from that beta on, the rehearsal and every later beta use
 the command.
+
+## First cycle (2026-10-20)
+
+- `v0.26.0-beta.1` and `v0.26.0-beta.2` (rehearsal, same commit) went through
+  the Release workflow: prereleases, 26 assets, no Android artifact, image steps
+  skipped, `latest` still v0.25.0. Their real run closes the first "not
+  verified" item above.
+- beta.1 was installed by hand, checked against the signed manifest whose keys
+  match v0.25.0's byte for byte, on two maintainer devices: macOS under launchd
+  (approval phone attached) and Windows under a SYSTEM supervisor loop.
+- Rehearsal: both agents' own updaters installed beta.2. The Windows one
+  needed a second restart: its first check left no log line, probably a
+  transient GitHub failure masked by the relay mirror (issue #170).
+- Still open: no Linux systemd device was available; the 24-hour soak ends
+  2026-10-21 12:45; then tag `v0.26.0` on the beta.2 commit with its changelog.
