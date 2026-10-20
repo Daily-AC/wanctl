@@ -45,7 +45,7 @@ var delegatedTools = []struct{ Name, MCPName, Line, Instead string }{
 // a rule that is about primitives it does not have.
 var delegatedRules = []struct{ Source, Rule string }{
 	{
-		Source: "For project work, enter wanctl_workspace and carry its reference on each call: cwd/env persist there. Use exec_async then exec_poll for long work.",
+		Source: "For project work, enter wanctl_workspace once and pass its reference on every call: cwd/env persist there. Use exec_async then exec_poll for long work.",
 		// Neither half survives delegation: no shell persists between calls, and
 		// long work stays in one exec with a longer timeout because the device
 		// refuses background jobs here. Pass cwd instead of cd; the protocol's
@@ -59,7 +59,7 @@ var delegatedRules = []struct{ Source, Rule string }{
 		Rule: "Read with read_text, patch with edit_text (one span per call), write files with write_text. Never cat/sed/echo a file through a shell.",
 	},
 	{
-		Source: "Workspace output is paged and bounded; legacy exec returns its TAIL and a log.",
+		Source: "Output is bounded: exec keeps its TAIL and names a device file with the rest; polled and workspace output keep the start and the end.",
 		// The opposite is true here: a delegated exec keeps the FIRST 16 KiB of
 		// each stream and cancels the command, so the end a tail rule promises
 		// is exactly what is missing. Bound the output before running it.

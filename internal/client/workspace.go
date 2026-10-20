@@ -90,7 +90,8 @@ func (c *Client) workspaceRoundTrip(ctx context.Context, ref WorkspaceRef, req p
 		return protocol.Message{}, err
 	}
 	defer conn.Close()
-	defer wsconn.CloseOnCancel(ctx, conn)()
+	// The transport, not the TLS conn: see ExecPollTo.
+	defer wsconn.CloseOnCancel(ctx, conn.NetConn())()
 	if err := protocol.WriteMessage(conn, req); err != nil {
 		return protocol.Message{}, &workspaceExchangeError{err}
 	}

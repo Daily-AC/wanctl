@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"math/rand/v2"
 	"strings"
@@ -49,36 +48,20 @@ func TestEscapeDeviceTextIsIdempotent(t *testing.T) {
 	}
 }
 
-// Every place a device's words can be copied into a result ends up as a string
-// in the text or somewhere in the structured content, whatever Go type holds
-// it; all of them come out escaped, and numbers come out exact. wanctl_read's
-// content is left alone, but not its errors.
+// Every place a device's words can be copied into a result ends up in its
+// text, and all of it comes out escaped. wanctl_read's content is left alone,
+// but not its errors.
 func TestEveryStringInAToolResultIsEscaped(t *testing.T) {
 	const evil, shown = "x\x1b[2Jy", `x\x1b[2Jy`
-	type reason struct {
-		Reason string `json:"reason"`
-	}
 	build := func(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
-		r := mcpapi.NewToolResultText("PAIRING REQUIRED. Reason: " + evil)
-		r.StructuredContent = map[string]any{
-			"name": evil, "list": []string{evil}, "by_name": map[string]string{evil: evil},
-			"nested": reason{evil}, "size": int64(1 << 60),
-		}
-		return r, nil
+		return mcpapi.NewToolResultText("PAIRING REQUIRED. Reason: " + evil), nil
 	}
 	res, err := escapeDeviceOutput("wanctl_peers", build)(context.Background(), mcpapi.CallToolRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire, _ := json.Marshal(res)
-	var decoded any
-	json.Unmarshal(wire, &decoded)
-	flat, _ := json.Marshal(decoded)
-	if strings.Contains(string(wire), `\u001b`) || strings.Count(string(flat), `x\\x1b[2Jy`) != 6 {
-		t.Fatalf("result on the wire: %s", wire)
-	}
-	if !strings.Contains(string(wire), `"size":1152921504606846976`) {
-		t.Fatalf("a large number did not survive: %s", wire)
+	if text := res.Content[0].(mcpapi.TextContent).Text; text != "PAIRING REQUIRED. Reason: "+shown {
+		t.Fatalf("result text = %q", text)
 	}
 
 	raw, _ := escapeDeviceOutput("wanctl_read", build)(context.Background(), mcpapi.CallToolRequest{})

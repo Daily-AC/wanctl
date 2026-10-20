@@ -114,7 +114,6 @@ wanctl shell DEVICE                   # a prompt on a bypass-mode device: type l
 ## Documentation
 
 - [Remote workspaces over CLI and MCP](docs/workspaces.md) — usage, recovery and validation
-- [MCP structured results](docs/mcp-output.md) — output schemas, completion state and compatibility
 - [远程工作区架构课程](https://wc.z10.dev/docs/remote-workspace-course/) — seven Chinese lessons, diagrams and optional self-checks, breadth-first
 - [Command contract](docs/contract.md) — every CLI command and MCP tool, generated from one catalog
 - [Self-hosting](docs/self-hosting.md)

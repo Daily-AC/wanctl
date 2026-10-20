@@ -184,9 +184,11 @@ func TestWorkspaceCLIThroughSeparateProcesses(t *testing.T) {
 		if !ok || result["isError"] == true {
 			t.Fatalf("MCP inherited workspace: %v", response)
 		}
-		_, state := decode(result["content"].([]any)[0].(map[string]any)["text"].(string))
-		if !state.Done || state.Code != 0 || (i == 1 && strings.TrimSpace(state.Output) != "from_mcp") {
-			t.Fatalf("MCP restarted workspace: %+v", state)
+		// MCP answers in text: the request line, then the output.
+		text := result["content"].([]any)[0].(map[string]any)["text"].(string)
+		header, shown, _ := strings.Cut(text, "\n\n")
+		if !strings.HasPrefix(header, "request ") || !strings.Contains(header, ": done, exit 0") || (i == 1 && strings.TrimSpace(shown) != "from_mcp") {
+			t.Fatalf("MCP restarted workspace: %q", text)
 		}
 	}
 	if got := run(0, a, "exec", "printf '%s' \"$WORKSPACE_LESSON\""); strings.TrimSpace(got) != "from_mcp" {
