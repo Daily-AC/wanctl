@@ -155,10 +155,15 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // command keeps running on the device either way, and the caller's next poll
 // reports whatever went wrong.
 func waitWorkspace(ctx context.Context, c *client.Client, ref client.WorkspaceRef, offset int64, r *protocol.WorkspaceResult) *protocol.WorkspaceResult {
-	// The budget bounds the re-polls too, not only the pauses between them:
-	// a poll that stalls past it is cut off and the last answer stands.
-	ctx, cancel := context.WithTimeout(ctx, execWait)
-	defer cancel()
+	// ctx carries the whole budget (see settleWorkspace). It bounds the
+	// re-polls too, not only the pauses between them: a poll that stalls past
+	// it is cut off and the last answer stands. Re-polling stops early enough
+	// to leave clampWorkspace its one fetch inside the same budget.
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-min(clampReserve, execWait/10)))
+		defer cancel()
+	}
 	for i := 0; !r.Done; i++ {
 		if !sleepCtx(ctx, pollPause(i)) {
 			break
@@ -172,34 +177,51 @@ func waitWorkspace(ctx context.Context, c *client.Client, ref client.WorkspaceRe
 	return r
 }
 
-// clampFetch bounds the one extra poll clampWorkspace makes for the tail.
-const clampFetch = 10 * time.Second
+// clampReserve is the part of execWait kept for clampWorkspace's tail fetch.
+const clampReserve = 2 * time.Second
+
+// settleWorkspace waits for a request and bounds what it returns, all within
+// one execWait: a host's deadline on the call has to cover both.
+func settleWorkspace(ctx context.Context, c *client.Client, ref client.WorkspaceRef, offset int64, r *protocol.WorkspaceResult) *protocol.WorkspaceResult {
+	ctx, cancel := context.WithTimeout(ctx, execWait)
+	defer cancel()
+	return clampWorkspace(ctx, c, ref, offset, waitWorkspace(ctx, c, ref, offset, r))
+}
 
 // clampWorkspace bounds what one answer carries the way polled legacy output
 // is bounded: everything from offset when it fits in maxExecStream, otherwise
 // its first clampHead bytes and its last bytes around a line naming the offset
 // the gap starts at. next_offset is the end either way, so a long build costs
 // one page per look instead of one page per 48 KiB of output.
+//
+// The offsets are device bytes, but the output arrives as JSON text, in which
+// each byte that is not UTF-8 has become a three-byte U+FFFD. Byte arithmetic
+// on the text is only true where the text is exactly as long as the bytes it
+// came from, so whenever a page is not, the forward page the device itself cut
+// is returned instead: longer, but every offset in it is the device's own.
 func clampWorkspace(ctx context.Context, c *client.Client, ref client.WorkspaceRef, offset int64, r *protocol.WorkspaceResult) *protocol.WorkspaceResult {
-	if r.RequestID == "" || r.RetainedBytes-offset <= maxExecStream {
+	if r.RequestID == "" || r.RetainedBytes-offset <= maxExecStream || int64(len(r.Output)) != r.NextOffset-offset {
 		return r
 	}
 	tailN := int64(maxExecStream - clampHead)
 	tailStart := r.RetainedBytes - tailN
-	fetch, cancel := context.WithTimeout(ctx, clampFetch)
-	t, err := c.Workspace(fetch, ref, "poll", protocol.Message{RequestID: r.RequestID, Offset: tailStart})
-	cancel()
+	t, err := c.Workspace(ctx, ref, "poll", protocol.Message{RequestID: r.RequestID, Offset: tailStart})
 	if err != nil {
 		// The forward page already in hand is still true, and its
 		// next_offset says where to continue.
 		return r
 	}
-	// tailStart is an arbitrary byte, so it can split a character. The device
-	// sends text as JSON, which has already turned each byte of the split
-	// character into U+FFFD; those belong to the gap, one byte each.
+	// tailStart is an arbitrary byte, so it can split a character, whose
+	// remaining bytes arrive as one U+FFFD each: two text bytes more than the
+	// device sent, per byte. Only that excess identifies them; a U+FFFD the
+	// command really printed is as long as its bytes and stays.
 	tail := t.Output
-	for i := 0; i < utf8.UTFMax-1 && strings.HasPrefix(tail, "\uFFFD"); i++ {
-		tail, tailStart = tail[len("\uFFFD"):], tailStart+1
+	excess := int64(len(tail)) - (t.NextOffset - tailStart)
+	for i := 0; i < utf8.UTFMax-1 && excess > 0 && strings.HasPrefix(tail, "\uFFFD"); i++ {
+		tail, tailStart, excess = tail[len("\uFFFD"):], tailStart+1, excess-2
+	}
+	if excess != 0 {
+		return r
 	}
 	if int64(len(tail)) > tailN {
 		// The command kept writing between the two polls, and the device
@@ -310,7 +332,7 @@ func mcpWorkspaceExec(ctx context.Context, req mcpapi.CallToolRequest, immediate
 		return mcpapi.NewToolResultError(errorTextOf(dialErrorResult(sess, err)) + fmt.Sprintf("\nworkspace=%s request_id=%s", ref.String(), rid)), nil
 	}
 	if !immediate {
-		r = clampWorkspace(ctx, c, ref, 0, waitWorkspace(ctx, c, ref, 0, r))
+		r = settleWorkspace(ctx, c, ref, 0, r)
 	}
 	return workspaceResult(ref, r), nil
 }
@@ -335,6 +357,6 @@ func mcpWorkspacePoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.
 	if err != nil {
 		return dialErrorResult(sess, err), nil
 	}
-	r = clampWorkspace(ctx, c, ref, offset, waitWorkspace(ctx, c, ref, offset, r))
+	r = settleWorkspace(ctx, c, ref, offset, r)
 	return workspaceResult(ref, r), nil
 }

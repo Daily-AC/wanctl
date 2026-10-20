@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"fmt"
 	"os"
 
 	"path/filepath"
@@ -180,6 +181,34 @@ func checkToolResults(t *testing.T, call func(string, map[string]any) (string, b
 		if shown := strings.Count(text, "中") * 3; shown+mustAtoi(t, skipped[1]) != 60000 {
 			t.Fatalf("shown %d and skipped %s bytes do not add up to the output", shown, skipped[1])
 		}
+	}
+	// A U+FFFD the command really printed is three bytes and must survive
+	// where the tail starts; two prefix lengths put the tail on its first
+	// byte in one run or inside it in the other.
+	for i, prefix := range []int{19040, 19041} {
+		pad := 60000 - prefix - 3
+		text = invoke("wanctl_exec", map[string]any{"workspace": ref, "request_id": "results-fffd-" + strconv.Itoa(i),
+			"command": fmt.Sprintf("head -c %d /dev/zero | tr '\\0' Q; printf '\\357\\277\\275'; head -c %d /dev/zero | tr '\\0' Z", prefix, pad)})
+		d = parseWorkspaceText(t, text)
+		out := d["output"].(string)
+		skipped := regexp.MustCompile(`\[\.\.\. (\d+) bytes skipped`).FindStringSubmatch(out)
+		if d["done"] != true || skipped == nil {
+			t.Fatalf("literal U+FFFD run %d: %.300q", i, text)
+		}
+		shown := strings.Count(out, "Q") + strings.Count(out, "Z") + 3*strings.Count(out, "\uFFFD")
+		if shown+mustAtoi(t, skipped[1]) != 60000 {
+			t.Fatalf("literal U+FFFD run %d: shown %d + skipped %s != 60000", i, shown, skipped[1])
+		}
+	}
+	// Bytes that are not UTF-8 grow on the way, so byte arithmetic on the
+	// text would be false: the device's own forward page comes back instead,
+	// with an offset the device accepts.
+	text = invoke("wanctl_exec", map[string]any{"workspace": ref, "request_id": "results-binary", "command": "head -c 60000 /dev/zero | LC_ALL=C tr '\\0' '\\377'"})
+	if d = parseWorkspaceText(t, text); d["done"] != true || d["next_offset"] != int64(48<<10) || strings.Contains(text, "bytes skipped") {
+		t.Fatalf("binary output: %.300q", text)
+	}
+	if text = invoke("wanctl_exec_poll", map[string]any{"workspace": ref, "job_id": "results-binary", "offset": 48 << 10}); parseWorkspaceText(t, text)["done"] != true {
+		t.Fatalf("continuing binary output at the advertised offset: %.300q", text)
 	}
 	// File metadata is useful to the next tool: a read's hash must be usable
 	// by edit, while a stale hash must still refuse the write.

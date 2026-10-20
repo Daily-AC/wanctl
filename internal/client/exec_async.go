@@ -51,8 +51,10 @@ func (c *Client) ExecPollTo(ctx context.Context, target, jobID string, offset in
 	}
 	defer conn.Close()
 	// A caller waiting on a deadline has to get its answer by then, so a
-	// stalled read ends with ctx instead of with the relay.
-	defer wsconn.CloseOnCancel(ctx, conn)()
+	// stalled read ends with ctx instead of with the relay. The transport
+	// under TLS is closed, not the TLS conn: closing that first tries to send
+	// close_notify, which a stalled peer holds up for five seconds.
+	defer wsconn.CloseOnCancel(ctx, conn.NetConn())()
 	if err := protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindExecPoll, JobID: jobID, Offset: offset}); err != nil {
 		return offset, false, -1, err
 	}
