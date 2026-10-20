@@ -2,12 +2,15 @@ package mcp
 
 import (
 	"os"
+
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"wanctl/internal/client"
+	"wanctl/internal/protocol"
 )
 
 // parseWorkspaceText reads back the lines workspaceText writes: a header of
@@ -44,6 +47,15 @@ func parseWorkspaceText(t *testing.T, text string) map[string]any {
 		}
 	}
 	return d
+}
+
+func mustAtoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 var (
@@ -153,6 +165,22 @@ func checkToolResults(t *testing.T, call func(string, map[string]any) (string, b
 	if _, more := d["next_offset"]; more {
 		t.Fatalf("a finished, clamped result still asks for another page: %.300q", text)
 	}
+	// The tail starts at an arbitrary byte. In 60,000 bytes of three-byte
+	// characters it can split one, which must go into the gap rather than
+	// show up as a replacement character. Whether it splits depends on what
+	// follows the characters, so two lengths one byte apart cover both cases.
+	for i, suffix := range []string{"", "x"} {
+		text = invoke("wanctl_exec", map[string]any{"workspace": ref, "request_id": "results-cjk-" + strconv.Itoa(i),
+			"command": "i=0; while [ $i -lt 20000 ]; do printf '中'; i=$((i+1)); done; printf '" + suffix + "'"})
+		d = parseWorkspaceText(t, text)
+		skipped := regexp.MustCompile(`\[\.\.\. (\d+) bytes skipped`).FindStringSubmatch(text)
+		if d["done"] != true || strings.ContainsRune(text, '\uFFFD') || skipped == nil {
+			t.Fatalf("clamped multi-byte output: %d bytes, %.300q", len(text), text)
+		}
+		if shown := strings.Count(text, "中") * 3; shown+mustAtoi(t, skipped[1]) != 60000 {
+			t.Fatalf("shown %d and skipped %s bytes do not add up to the output", shown, skipped[1])
+		}
+	}
 	// File metadata is useful to the next tool: a read's hash must be usable
 	// by edit, while a stale hash must still refuse the write.
 	file := filepath.Join(root, "results-file.txt")
@@ -216,5 +244,19 @@ func checkToolResults(t *testing.T, call func(string, map[string]any) (string, b
 	text = invoke("wanctl_read", map[string]any{"workspace": ref, "path": "results-file.txt"})
 	if m = readHeader.FindStringSubmatch(text); m == nil || m[2] != "1" || !strings.Contains(text, "offset=2") {
 		t.Fatalf("read before an oversized line: %.300q", text)
+	}
+}
+
+// What a caller must act on survives the compact form: the request now
+// running when another is inspected, and the shell's directory even when it
+// is back at the root.
+func TestWorkspaceTextKeepsWhatACallerActsOn(t *testing.T) {
+	ref := client.WorkspaceRef{Target: "alice/box", ID: "w-1"}
+	text := workspaceText(ref, &protocol.WorkspaceResult{ID: "w-1", Root: "/repo", State: "open",
+		RequestID: "old", Done: true, ActiveRequestID: "current", Cwd: "/repo"})
+	for _, want := range []string{"request old: done, exit 0", "active request: current", "cwd: /repo"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("workspace text lacks %q:\n%s", want, text)
+		}
 	}
 }

@@ -71,7 +71,14 @@ func workspaceText(ref client.WorkspaceRef, r *protocol.WorkspaceResult) string 
 	if r.State != "open" {
 		fmt.Fprintf(&b, "workspace state: %s\n", r.State)
 	}
-	if r.Done && r.Cwd != "" && r.Cwd != r.Root {
+	if r.ActiveRequestID != "" && r.ActiveRequestID != r.RequestID {
+		// Inspecting an old request must not hide the one now running: it
+		// is the id a caller needs to poll or cancel.
+		fmt.Fprintf(&b, "active request: %s\n", r.ActiveRequestID)
+	}
+	if r.Done && r.Cwd != "" {
+		// Shown even when it is the root: leaving it out would read the same
+		// as "the shell could not say", after a command that went back.
 		fmt.Fprintf(&b, "cwd: %s\n", r.Cwd)
 	}
 	if !r.Done || r.NextOffset < r.RetainedBytes {
@@ -148,10 +155,12 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // command keeps running on the device either way, and the caller's next poll
 // reports whatever went wrong.
 func waitWorkspace(ctx context.Context, c *client.Client, ref client.WorkspaceRef, offset int64, r *protocol.WorkspaceResult) *protocol.WorkspaceResult {
-	deadline := time.Now().Add(execWait)
+	// The budget bounds the re-polls too, not only the pauses between them:
+	// a poll that stalls past it is cut off and the last answer stands.
+	ctx, cancel := context.WithTimeout(ctx, execWait)
+	defer cancel()
 	for i := 0; !r.Done; i++ {
-		pause := pollPause(i)
-		if time.Now().Add(pause).After(deadline) || !sleepCtx(ctx, pause) {
+		if !sleepCtx(ctx, pollPause(i)) {
 			break
 		}
 		next, err := c.Workspace(ctx, ref, "poll", protocol.Message{RequestID: r.RequestID, Offset: offset})
@@ -163,6 +172,9 @@ func waitWorkspace(ctx context.Context, c *client.Client, ref client.WorkspaceRe
 	return r
 }
 
+// clampFetch bounds the one extra poll clampWorkspace makes for the tail.
+const clampFetch = 10 * time.Second
+
 // clampWorkspace bounds what one answer carries the way polled legacy output
 // is bounded: everything from offset when it fits in maxExecStream, otherwise
 // its first clampHead bytes and its last bytes around a line naming the offset
@@ -172,16 +184,33 @@ func clampWorkspace(ctx context.Context, c *client.Client, ref client.WorkspaceR
 	if r.RequestID == "" || r.RetainedBytes-offset <= maxExecStream {
 		return r
 	}
-	tailStart := r.RetainedBytes - (maxExecStream - clampHead)
-	t, err := c.Workspace(ctx, ref, "poll", protocol.Message{RequestID: r.RequestID, Offset: tailStart})
+	tailN := int64(maxExecStream - clampHead)
+	tailStart := r.RetainedBytes - tailN
+	fetch, cancel := context.WithTimeout(ctx, clampFetch)
+	t, err := c.Workspace(fetch, ref, "poll", protocol.Message{RequestID: r.RequestID, Offset: tailStart})
+	cancel()
 	if err != nil {
 		// The forward page already in hand is still true, and its
 		// next_offset says where to continue.
 		return r
 	}
+	// tailStart is an arbitrary byte, so it can split a character. The device
+	// sends text as JSON, which has already turned each byte of the split
+	// character into U+FFFD; those belong to the gap, one byte each.
 	tail := t.Output
-	for i := 0; i < utf8.UTFMax && tail != "" && !utf8.RuneStart(tail[0]); i++ {
-		tail, tailStart = tail[1:], tailStart+1
+	for i := 0; i < utf8.UTFMax-1 && strings.HasPrefix(tail, "\uFFFD"); i++ {
+		tail, tailStart = tail[len("\uFFFD"):], tailStart+1
+	}
+	if int64(len(tail)) > tailN {
+		// The command kept writing between the two polls, and the device
+		// pages a full 48 KiB from tailStart. Keep the page within budget;
+		// next_offset then points at what follows instead of the end.
+		cut := int(tailN)
+		for cut > 0 && !utf8.RuneStart(tail[cut]) {
+			cut--
+		}
+		t.NextOffset -= int64(len(tail) - cut)
+		tail = tail[:cut]
 	}
 	head := r.Output
 	if len(head) > clampHead {

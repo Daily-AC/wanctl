@@ -820,10 +820,14 @@ func dialErrorResult(sess sessionAPI, err error) *mcpapi.CallToolResult {
 // A phone keeps whatever app it was given, so its own text may predate any
 // advice; the catalog's entry is appended when the failure arrives instead of
 // being carried in every exec description for the sessions that never meet it.
+//
+// The key refusal is checked first: an agent reports every port it tried
+// inside "could not reach adbd on this device (...)", and a port whose adbd
+// refused the key means the pairing lapsed, not that debugging is off.
 var remedied = []struct{ marker, failure string }{
-	{"could not reach adbd on this device", "could not reach adbd on this device"},
 	{"TLS handshake with adbd", "TLS handshake with adbd"},
 	{"remote error: tls", "TLS handshake with adbd"},
+	{"could not reach adbd on this device", "could not reach adbd on this device"},
 }
 
 func withRemedy(msg string) string {
@@ -1462,18 +1466,22 @@ func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallT
 	if err != nil {
 		return dialErrorResult(sess, err), nil
 	}
-	deadline := time.Now().Add(execWait)
+	wait, cancel := context.WithTimeout(ctx, execWait)
+	defer cancel()
 	for i := 0; running; i++ {
-		pause := pollPause(i)
-		if time.Now().Add(pause).After(deadline) || !sleepCtx(ctx, pause) {
+		if !sleepCtx(wait, pollPause(i)) {
 			break
 		}
-		next, stillRunning, nextCode, err := c.ExecPollTo(ctx, target, jobID, newOffset, buf)
+		// A poll streams output before it knows it will succeed, so each one
+		// fills its own keeper and joins buf only once it has.
+		got := keepEnds()
+		next, stillRunning, nextCode, err := c.ExecPollTo(wait, target, jobID, newOffset, got)
 		if err != nil {
 			// What already arrived is true and newOffset says where it
 			// ends; the next poll reports the failure.
 			break
 		}
+		buf.absorb(got)
 		newOffset, running, code = next, stillRunning, nextCode
 	}
 	out := fmt.Sprintf("state: running, next_offset: %d\n", newOffset)
@@ -1670,6 +1678,17 @@ func (k *outputKeeper) Write(p []byte) (int, error) {
 	}
 	k.tail = append(k.tail, p...)
 	return n, nil
+}
+
+// absorb appends what another keeper kept, as if its whole stream had been
+// written here. Only bytes that keeper dropped are left out, and they are
+// counted: when it dropped any, its head alone fills this keeper's head, so
+// nothing written after the gap lands in the head.
+func (k *outputKeeper) absorb(o *outputKeeper) {
+	k.Write(o.head)
+	tail := o.last()
+	k.total += o.total - int64(len(o.head)) - int64(len(tail))
+	k.Write(tail)
 }
 
 // last is the stream's final tailN bytes, or all of what followed the head
