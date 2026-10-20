@@ -92,6 +92,8 @@ type Relay struct {
 	portalNS        string
 	logs            *serverlog.Buffer
 
+	versionsMu     sync.Mutex
+	versions       map[string]*deviceVersionState
 	registrationMu sync.Mutex
 	mu             sync.Mutex
 	agents         map[string]*agentConn      // key "ns/device" (WebSocket transport)
@@ -510,11 +512,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	if reg.DeviceID == "" {
 		created = r.recordDeviceRegistration(ns, reg.Device, reg.Fingerprint)
 	}
-	if err := r.recordDeviceVersions(ns, reg.Device, jsonVersion(reg.WanctlVersion), jsonVersion(reg.OpenCUVersion), reg.WanctlVersion != nil || reg.OpenCUVersion != nil); err != nil {
-		r.registrationMu.Unlock()
-		c.Close(websocket.StatusInternalError, "device versions could not be stored")
-		return
-	}
+	kickVersions := r.queueDeviceVersions(ns, reg.Device, reg.Inst, jsonVersion(reg.WanctlVersion), jsonVersion(reg.OpenCUVersion), reg.WanctlVersion != nil || reg.OpenCUVersion != nil)
 	key := ns + "/" + reg.Device
 	wasLive := r.deviceLive(ns, reg.Device)
 	ac := &agentConn{device: reg.Device, name: reg.Name, ns: ns, inst: reg.Inst, ctrl: nc, delegation: reg.Delegation == "1", kick: func() { nc.Close() }}
@@ -522,6 +520,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	r.agents[key] = ac
 	r.mu.Unlock()
 	r.registrationMu.Unlock()
+	kickVersions()
 	if !wasLive {
 		r.emitDeviceEvent(ns, reg.Device, onlineEvent(reg.Device))
 	}
