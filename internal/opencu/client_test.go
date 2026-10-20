@@ -109,7 +109,7 @@ func TestOpenCUManifestAndStopCodes(t *testing.T) {
 func TestInstalledVersionReadsManifestWithoutStartingEngine(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("LOCALAPPDATA", dir)
-	if got := InstalledVersion(); got != "" {
+	if got := readInstalledVersion(filepath.Join(dir, "OpenCU", "opencu.json")); got != "" {
 		t.Fatalf("missing install: %q", got)
 	}
 	if err := os.Mkdir(filepath.Join(dir, "OpenCU"), 0700); err != nil {
@@ -122,7 +122,7 @@ func TestInstalledVersionReadsManifestWithoutStartingEngine(t *testing.T) {
 		if err := os.WriteFile(path, raw, 0600); err != nil {
 			t.Fatal(err)
 		}
-		if got := InstalledVersion(); got != version {
+		if got := readInstalledVersion(filepath.Join(dir, "OpenCU", "opencu.json")); got != version {
 			t.Fatalf("got %q, want %q", got, version)
 		}
 	}
@@ -134,13 +134,13 @@ func TestInstalledVersionReadsManifestWithoutStartingEngine(t *testing.T) {
 	if _, err := ReadManifest(); err != nil {
 		t.Fatalf("metadata broke act discovery: %v", err)
 	}
-	if got := InstalledVersion(); got != "" {
+	if got := readInstalledVersion(filepath.Join(dir, "OpenCU", "opencu.json")); got != "" {
 		t.Fatalf("non-string version: %q", got)
 	}
 	if err := os.WriteFile(path, []byte(`{"version":"1.0.0","mcp":{"command":"relative"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if got := InstalledVersion(); got != "" {
+	if got := readInstalledVersion(filepath.Join(dir, "OpenCU", "opencu.json")); got != "" {
 		t.Fatalf("invalid install: %q", got)
 	}
 }

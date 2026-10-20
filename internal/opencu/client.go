@@ -32,8 +32,7 @@ type Manifest struct {
 	} `json:"mcp"`
 }
 
-// ReadManifest discovers the current user's install without launching OpenCU.
-// act calls it inside the selected user's helper; registration reads metadata only.
+// ReadManifest is used by act inside the selected user's helper.
 func ReadManifest() (Manifest, error) {
 	var m Manifest
 	dir := os.Getenv("LOCALAPPDATA")
@@ -53,19 +52,6 @@ func ReadManifest() (Manifest, error) {
 		}
 	}
 	return m, nil
-}
-
-// InstalledVersion uses the same install discovery as act, without starting MCP.
-func InstalledVersion() string {
-	m, err := ReadManifest()
-	if err != nil {
-		return ""
-	}
-	var version string
-	if json.Unmarshal(m.Version, &version) != nil {
-		return ""
-	}
-	return version
 }
 
 type Client struct {
