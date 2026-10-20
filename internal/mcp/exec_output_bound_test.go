@@ -177,11 +177,14 @@ func TestHostedExecHoldsOnlyWhatItReturns(t *testing.T) {
 		t.Fatalf("exec: %d %s", rr.Code, rr.Body.String())
 	}
 	result, _ := out["result"].(map[string]any)
-	data, _ := result["structuredContent"].(map[string]any)
-	if data == nil || data["code"] != float64(0) {
-		t.Fatalf("exec result = %v", result)
+	var text string
+	if content, _ := result["content"].([]any); len(content) == 1 {
+		text, _ = content[0].(map[string]any)["text"].(string)
 	}
-	stdout, _ := data["stdout"].(string)
+	stdout, ok := strings.CutPrefix(text, "exit: 0\n")
+	if !ok {
+		t.Fatalf("exec result = %.200v", result)
+	}
 	wantHead := fmt.Sprintf("[output truncated: showing last %d of %d bytes;", maxExecStream, outputBytes+len("the end\n"))
 	if !strings.HasPrefix(stdout, wantHead) || !strings.HasSuffix(stdout, "xxxx\nthe end\n") {
 		t.Errorf("stdout is not the marked tail: %.100q ... %q", stdout, stdout[max(0, len(stdout)-40):])
@@ -189,8 +192,8 @@ func TestHostedExecHoldsOnlyWhatItReturns(t *testing.T) {
 	if _, tail, _ := strings.Cut(stdout, "\n"); len(tail) != maxExecStream {
 		t.Errorf("returned %d bytes of output, want the %d-byte cap", len(tail), maxExecStream)
 	}
-	if data["stdout_truncated"] != true || data["stderr"] != "" || data["stderr_truncated"] != false {
-		t.Errorf("truncation flags = %v, stderr = %q / %v", data["stdout_truncated"], data["stderr"], data["stderr_truncated"])
+	if strings.Contains(stdout, "--- stderr ---") {
+		t.Errorf("a stderr section appeared for a command that wrote none")
 	}
 	t.Logf("with all %d MiB of output produced and the command still running, the heap was %d KiB above where it started", outputBytes>>20, held>>10)
 	if held > maxHeld {

@@ -153,9 +153,7 @@ func openCUToolResponse(header protocol.DesktopResult) *mcpapi.CallToolResult {
 		return result
 	}
 	if len(r.Discovery) > 0 {
-		result := mcpapi.NewToolResultText(string(r.Discovery))
-		result.StructuredContent = r.Discovery
-		return result
+		return mcpapi.NewToolResultText(string(r.Discovery))
 	}
 	raw, _ := json.Marshal(r)
 	return mcpapi.NewToolResultError(string(raw))

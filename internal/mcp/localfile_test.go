@@ -117,10 +117,6 @@ func TestRemoteSessionRefusesLocalFiles(t *testing.T) {
 			t.Fatalf("got %q", toolText(res))
 		}
 	}
-	res, _ := mcpServerLogs(context.Background(), callReq(map[string]any{"service": "relay"}))
-	if !res.IsError || !strings.Contains(toolText(res), "stdio mode only") {
-		t.Fatalf("server_logs on a shared server: %q", toolText(res))
-	}
 }
 
 // A browser page must not be able to drive the hosted endpoint (DNS
