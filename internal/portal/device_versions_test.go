@@ -27,7 +27,7 @@ func TestDeviceVersionsProxyIncludesReadOnlyShares(t *testing.T) {
 		}
 	})
 	rec := httptest.NewRecorder()
-	s.handleDevices(rec, userReq(http.MethodGet, "/api/devices", nil))
+	s.handleDevices(rec, userReq(http.MethodGet, "/api/devices?namespace=bob", nil))
 	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != body {
 		t.Fatalf("proxy: %d %s", rec.Code, rec.Body.String())
 	}

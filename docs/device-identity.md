@@ -67,21 +67,45 @@ WebSocket registration and HTTP polling. Subsequent session, notification,
 pairing, and deregistration requests use the UUID. `inst` remains an ephemeral
 process instance marker, not the persistent identity.
 
-Registrations also carry optional `wanctl_version` and `opencu_version` strings:
-JSON fields in the WebSocket `register` message, query parameters on every
+Registrations carry optional `wanctl_version` and `opencu_version` strings:
+JSON fields in the WebSocket `register` message, query parameters on
 `GET /h/poll`. `wanctl_version` is the build string printed by `wanctl version`
-(including `dev` or beta tags). `opencu_version` is read from the same install
-manifest used by `act`, without starting OpenCU; absent installs, missing
-versions, or invalid manifests report an empty string. Discovery runs again on
-reconnection and on every HTTP poll.
+(including `dev` or beta tags), subject to the display-metadata validation below.
+Non-Windows agents never discover OpenCU and omit `opencu_version` entirely.
 
-These values are untrusted display metadata. Each is limited to 128 ASCII bytes
-and `[A-Za-z0-9.+_-]`; invalid values (including non-string JSON) become empty.
-They never authorize an update or select an executable. The relay stores the
-last registration's values and `versions_reported_at` (server receipt time).
-Existing rows and old agents have empty values and a null report time; a
-registration without either field clears previous metadata, including the time.
-A report with explicit empty or invalid values still has a report time.
+Windows agents send the cached OpenCU version, empty until known. One background
+reader per agent refreshes at most once a minute, independently of registration;
+reconnects do not spawn more readers. It only reads a regular install manifest,
+limited to 16 KiB, and never starts OpenCU or a helper. OS profile/file I/O can
+block, so shutdown does not join this single metadata-only task; a completed
+read after cancellation is discarded. A missing install, missing version,
+invalid manifest or no console user yields empty. Normal Windows processes use
+`LOCALAPPDATA`; LocalSystem in session 0 uses the active console user's token to
+find their profile's `AppData\Local\OpenCU\opencu.json`. It never falls back to
+SYSTEM's profile if that lookup fails or the active session changes.
+
+Both the agent (before building either payload) and relay apply the same rule:
+each value is limited to 128 ASCII bytes and `[A-Za-z0-9.+_-]`; invalid values
+(including non-string JSON received by the relay) become empty. These values
+never authorize an update or select an executable.
+
+Version persistence is best effort and never refuses registration or delays
+liveness. After identity registration, a per-device background writer stores
+changes outside the global registration lock, with a five-second context limit.
+Unchanged values within the same instance do not write or advance
+`versions_reported_at`; an instance change causes a fresh write. Writes are
+serialized per device, and pending reports coalesce to the latest accepted one,
+so older work cannot overwrite a newer stored report. Failed writes leave the
+last successfully stored metadata intact, retry on subsequent registrations,
+and log once per device per failure streak without values or driver errors.
+Identity failures still refuse registration normally.
+
+Existing rows have empty values and a null report time. A successfully persisted
+old-agent registration without either field clears previous values and time;
+a single missing field clears only that value. Explicit empty or invalid fields
+still count as a report. `versions_reported_at` records the server time of the
+successful metadata write, not a heartbeat. The portal always shows wanctl
+(unknown if absent), and shows the OpenCU row only when its version is known.
 
 `PGStore.ListDevices` includes `wanctl_version`, `opencu_version`, and
 `versions_reported_at` for owned and shared devices. `/admin/devices`, proxied
