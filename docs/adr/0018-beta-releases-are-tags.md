@@ -36,16 +36,17 @@ spelling and all build metadata stay invalid.
 - A device running a stable (or `dev`) build only accepts a newer stable. A
   beta served where a stable was expected is refused after verification: the
   signature says the bytes are ours, not that they are meant for this device.
-- A device running a beta accepts a newer beta or a newer stable. Today its
-  update sources only ever offer stables, so in practice it stays on its beta
+- A device running a beta accepts a newer beta or a newer stable. By default its
+  update sources only offer stables, so in practice it stays on its beta
   until the stable passes it, then rejoins stable for good.
 - `wanctl update <version>` installs that exact signed version, including an
   older one. It is how a person joins a beta, and how they leave one at once.
 
 **Betas are GitHub prereleases and nothing else.** Never marked latest, so
-`releases/latest/download` — the only source an existing binary reads besides
-the relay mirror — never offers one. No APK, no container image, no portal
-changelog entry; notes are generated from the merged pull requests.
+`releases/latest/download` — the default source besides the relay mirror —
+never offers one. An explicit `release_base` may point at a beta directory
+for the automatic-update rehearsal. No Android artifacts, no container image,
+no portal changelog entry; notes are generated from the merged pull requests.
 
 **The production relay and portal run stable releases only.** Beta clients are
 tested against the production stable server. A feature that needs new server
@@ -78,7 +79,7 @@ never offered by any source and never replaced by auto-update.
 
 ## Consequences
 
-- A beta tester runs `wanctl update` again for each new beta. If testers ask
+- A beta tester runs `wanctl update <version>` for each new beta. If testers ask
   for betas to follow automatically, or devices that cannot reach GitHub need
   betas, a beta source can be added later without changing the rules above.
 - Stable releases come out less often: every one waits for a beta, a soak and
