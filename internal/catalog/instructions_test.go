@@ -1,9 +1,12 @@
 package catalog
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
+
+var toolNames = regexp.MustCompile(`wanctl_[a-z_]+`)
 
 // The instructions are read before any work, every session, by something that
 // pays for every token. Forty lines is the budget; eighty columns is the same
@@ -20,16 +23,18 @@ func TestInstructionsFitTheBudget(t *testing.T) {
 	}
 }
 
-// What they have to contain: the claim, every primitive by name, the rule about
-// a project's own instructions, and the four refusals a caller matches on.
+// What they have to contain: the claim, the rule about a project's own
+// instructions, and the refusals a caller matches on. Not the tool list: the
+// host already has every name and description, and a second copy here was
+// most of what this text cost. A tool it does name has to exist.
 func TestInstructionsCarryTheContract(t *testing.T) {
 	got := Instructions()
 	if !strings.Contains(got, Headline) {
 		t.Errorf("instructions do not carry the headline %q", Headline)
 	}
-	for _, c := range MCPCommands() {
-		if !strings.Contains(got, c.MCPName) {
-			t.Errorf("instructions never mention %s", c.MCPName)
+	for _, name := range toolNames.FindAllString(got, -1) {
+		if c, ok := Lookup(name); !ok || c.MCPName != name {
+			t.Errorf("instructions name %s, which is not a tool", name)
 		}
 	}
 	for _, phrase := range []string{"AGENTS.md", "CLAUDE.md", "follow it"} {
@@ -64,9 +69,9 @@ func TestHostedInstructionsHaveNoLogin(t *testing.T) {
 			t.Errorf("hosted instructions mention %q:\n%s", stale, got)
 		}
 	}
-	for _, c := range MCPCommands() {
-		if !c.StdioOnly && !strings.Contains(got, c.MCPName) {
-			t.Errorf("hosted instructions never mention %s", c.MCPName)
+	for _, name := range toolNames.FindAllString(got, -1) {
+		if c, ok := Lookup(name); !ok || c.MCPName != name || c.StdioOnly {
+			t.Errorf("hosted instructions name %s, which the hosted endpoint does not offer", name)
 		}
 	}
 	if !strings.Contains(Instructions(), "wanctl_login") {

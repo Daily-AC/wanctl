@@ -173,7 +173,7 @@ func TestHelpPrintsTheInstructions(t *testing.T) {
 	if n := len(strings.Split(strings.TrimRight(out, "\n"), "\n")); n > 40 {
 		t.Errorf("instructions are %d lines, budget is 40", n)
 	}
-	for _, want := range append([]string{catalog.Headline, "AGENTS.md", "wanctl_write", "wanctl_screenshot"},
+	for _, want := range append([]string{catalog.Headline, "AGENTS.md", "wanctl_write", "wanctl_workspace"},
 		catalog.CriticalErrors()...) {
 		if !strings.Contains(out, want) {
 			t.Errorf("instructions do not mention %q", want)

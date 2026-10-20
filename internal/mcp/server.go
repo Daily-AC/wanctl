@@ -813,7 +813,26 @@ func dialErrorResult(sess sessionAPI, err error) *mcpapi.CallToolResult {
 			return identityMismatchResult(mismatch)
 		}
 	}
-	return mcpapi.NewToolResultError(err.Error())
+	return mcpapi.NewToolResultError(withRemedy(err.Error()))
+}
+
+// remedied are the device failures whose fix is on the phone, not in a retry.
+// A phone keeps whatever app it was given, so its own text may predate any
+// advice; the catalog's entry is appended when the failure arrives instead of
+// being carried in every exec description for the sessions that never meet it.
+var remedied = []struct{ marker, failure string }{
+	{"could not reach adbd on this device", "could not reach adbd on this device"},
+	{"TLS handshake with adbd", "TLS handshake with adbd"},
+	{"remote error: tls", "TLS handshake with adbd"},
+}
+
+func withRemedy(msg string) string {
+	for _, r := range remedied {
+		if strings.Contains(msg, r.marker) {
+			return msg + "\n" + catalog.Remedy(r.failure)
+		}
+	}
+	return msg
 }
 
 // Describe the trust mutation and the MCP operation that performs it. A tool

@@ -29,16 +29,25 @@ func TestExecDescribesElevationAsItIs(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"bypass mode AND has its elevation channel switched on",
-		"Bypass mode alone refuses them",
-		"elevated command denied by device policy",
-		// The markers below are what the device prints; MCP hosts never see
-		// Errors, so the flag has to carry them too.
-		"could not reach adbd on this device", "停用 then 启用",
-		"TLS handshake with adbd", "remote error: tls", "ADB pairing",
+		"OWN exec-elevated policy rule",
+		"bypass mode covers it only with the phone's elevation channel on",
 	} {
 		if !strings.Contains(elevate, want) {
 			t.Errorf("--elevate no longer says %q", want)
+		}
+	}
+	// What to do about each adb failure is told when it happens: the MCP
+	// server appends the entry below to the device's error text (see
+	// internal/mcp), so it is not paid for in every exec description.
+	for text, wants := range map[string][]string{
+		"could not reach adbd on this device": {"停用", "启用", "Wireless debugging"},
+		"TLS handshake with adbd":             {"remote error: tls", "ADB pairing"},
+	} {
+		means := Remedy(text)
+		for _, want := range wants {
+			if !strings.Contains(means, want) {
+				t.Errorf("the remedy for %q no longer says %q", text, want)
+			}
 		}
 	}
 	if strings.Contains(elevate, "bypass mode still refuses them") {
