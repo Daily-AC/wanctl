@@ -33,6 +33,7 @@ import (
 	"wanctl/internal/elevate"
 	"wanctl/internal/eventlog"
 	"wanctl/internal/httpconn"
+	"wanctl/internal/opencu"
 	"wanctl/internal/policy"
 	"wanctl/internal/protocol"
 	"wanctl/internal/relayhttp"
@@ -459,7 +460,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// cancellation (SIGTERM, `wanctl stop`) is never observed.
 	defer wsconn.CloseOnCancel(ctx, nc)()
 	enc := json.NewEncoder(nc)
-	if err := enc.Encode(map[string]string{"op": "register", "device": a.DeviceID(), "device_id": a.DeviceID(), "name": a.opts.Name, "fingerprint": a.id.Fingerprint, "inst": a.inst, "delegation": "1"}); err != nil {
+	if err := enc.Encode(map[string]string{"op": "register", "device": a.DeviceID(), "device_id": a.DeviceID(), "name": a.opts.Name, "fingerprint": a.id.Fingerprint, "inst": a.inst, "delegation": "1", "wanctl_version": a.opts.Version, "opencu_version": opencu.InstalledVersion()}); err != nil {
 		return err
 	}
 	fmt.Printf("wanctl agent %q online via %s\n  fingerprint: %s\n", a.opts.Name, a.opts.RelayURL, a.id.Fingerprint)
@@ -1217,7 +1218,6 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 	// the connection it keeps warm (and its HTTP/3 probe) serves them too.
 	hc := &http.Client{Transport: relayhttp.Shared(), Timeout: 35 * time.Second}
 	q := url.Values{"device": {a.DeviceID()}, "device_id": {a.DeviceID()}, "name": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}, "delegation": {"1"}}.Encode()
-	pollURL := base + "/h/poll?" + q
 	// Registration lives or dies by this loop: the relay keeps a device listed
 	// only while its polls keep arriving. Until 2026-08-07 every failure here
 	// was swallowed — sleep two seconds, try again, say nothing — so an agent
@@ -1242,7 +1242,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 			a.deregisterHTTP(base)
 			return nil
 		}
-		req, _ := http.NewRequestWithContext(ctx, "GET", pollURL, nil)
+		req, _ := http.NewRequestWithContext(ctx, "GET", base+"/h/poll?"+q+"&wanctl_version="+url.QueryEscape(a.opts.Version)+"&opencu_version="+url.QueryEscape(opencu.InstalledVersion()), nil)
 		admission.SetBearer(req, a.opts.Token)
 		resp, err := hc.Do(req)
 		if err != nil {
