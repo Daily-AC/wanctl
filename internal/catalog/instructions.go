@@ -1,14 +1,12 @@
 package catalog
 
 import (
-	"fmt"
 	"strings"
 )
 
-// Instructions is the harness's own system prompt: what wanctl is, the whole
-// list of primitives, how they fit into a loop, and the refusals a caller
-// has to recognise — each of which has to be answered before the same call is
-// worth making again.
+// Instructions is the harness's own system prompt: what wanctl is, how the
+// primitives fit into a loop, and the refusals a caller has to recognise —
+// each of which has to be answered before the same call is worth making again.
 //
 // MCP has a place for exactly this — the `instructions` field of the initialize
 // response — and until now wanctl left it empty, so a host learned the tools
@@ -23,8 +21,9 @@ import (
 // person deciding whether to trust this thing — reads the same words.
 //
 // The budget is forty lines. It is read before any work, every session, by
-// something that pays for every token; the command reference is one
-// `wanctl help <command>` away and does not belong here.
+// something that pays for every token. It does not list the tools: the host
+// already holds every name and description from tools/list, and a second copy
+// here cost each session about seven hundred tokens to say nothing new.
 func Instructions() string { return instructions(false) }
 
 // HostedInstructions is what the hosted endpoint (/mcp on a relay) hands out:
@@ -36,14 +35,6 @@ func HostedInstructions() string { return instructions(true) }
 func instructions(hosted bool) string {
 	var b strings.Builder
 	b.WriteString(instructionsHeader)
-
-	for _, c := range MCPCommands() {
-		if hosted && c.StdioOnly {
-			continue
-		}
-		b.WriteString(fmt.Sprintf("  %-20s %s\n", c.MCPName, instructionLine(c)))
-	}
-
 	b.WriteString("DEV LOOP\n")
 	for _, rule := range devLoop {
 		b.WriteString(wrapPlainPrefixed(rule, Width-2, "  ") + "\n")
@@ -74,9 +65,9 @@ func wrapPlainPrefixed(s string, width int, prefix string) string {
 // reach for, in what order, and what not to do instead. Every line here was a
 // mistake an agent made in the field before it was written down.
 var devLoop = []string{
-	"For project work, enter wanctl_workspace and carry its reference on each call: cwd/env persist there. Use exec_async then exec_poll for long work.",
+	"For project work, enter wanctl_workspace once and pass its reference on every call: cwd/env persist there. Use exec_async then exec_poll for long work.",
 	"Read with wanctl_read, patch with wanctl_edit (several {old,new} in ONE call), write files with wanctl_write. Never cat/sed/echo a file through a shell.",
-	"Workspace output is paged and bounded; legacy exec returns its TAIL and a log.",
+	"Output is bounded: exec keeps its TAIL and names a device file with the rest; polled and workspace output keep the start and the end.",
 	"Before working in a project directory, read its AGENTS.md or CLAUDE.md with wanctl_read if one exists and follow it: it outranks how you would proceed.",
 }
 
@@ -91,8 +82,8 @@ var devLoop = []string{
 // work, and the full explanation is one `wanctl help <command>` away.
 var criticalErrors = []struct{ Text, Do string }{
 	{"有人在用这台电脑", "stop, ask your user; NEVER retry automatically."},
-	{"PAIRING REQUIRED", "give the URL in the message to the user, then retry."},
-	{"DEVICE IDENTITY CONFIRMATION REQUIRED", "authorize trust, then pin."},
+	{"PAIRING REQUIRED", "give the user the URL VERBATIM, then retry."},
+	{"DEVICE IDENTITY CONFIRMATION REQUIRED", "wanctl_trust_server, if authorized."},
 	{"DEVICE IDENTITY MISMATCH", "refused, nothing sent; report both fingerprints."},
 	{loginRequired, "call wanctl_login."},
 }
@@ -108,6 +99,22 @@ func CriticalErrors() []string {
 		out = append(out, e.Text)
 	}
 	return out
+}
+
+// Remedy is what a declared failure obliges a caller to do, or "" for a text
+// no command declares. The MCP server appends it to a device's error at the
+// moment that error happens, which is the only moment a model needs it; a
+// tool description that carried every remedy would charge every session for
+// failures most of them never meet.
+func Remedy(text string) string {
+	for _, c := range Commands {
+		for _, f := range c.Errors {
+			if f.Text == text {
+				return f.Means
+			}
+		}
+	}
+	return ""
 }
 
 // Declares reports whether any command declares this exact failure text.

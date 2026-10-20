@@ -159,3 +159,34 @@ func freshClient(t *testing.T) *client.Client {
 	}
 	return c
 }
+
+// The refusals that block a first call say what to do themselves, because
+// that is where a model is when it needs to know; the tool descriptions no
+// longer repeat it.
+func TestRefusalsCarryTheirOwnInstructions(t *testing.T) {
+	pairing := toolText(pairingResult(&client.RejectError{PairingURL: "https://portal.example/pair/abc", Reason: "not trusted"}))
+	for _, want := range []string{"PAIRING REQUIRED", "VERBATIM", "https://portal.example/pair/abc", "retry"} {
+		if !strings.Contains(pairing, want) {
+			t.Errorf("pairing refusal lacks %q:\n%s", want, pairing)
+		}
+	}
+	first := toolText(trustRequiredResult(&client.TrustRequiredError{Target: "alice/box", Fingerprint: "SHA256:x"}))
+	for _, want := range []string{"DEVICE IDENTITY CONFIRMATION REQUIRED", "wanctl_trust_server", "authorization", "retry"} {
+		if !strings.Contains(first, want) {
+			t.Errorf("first-contact refusal lacks %q:\n%s", want, first)
+		}
+	}
+	changed := toolText(identityMismatchResult(&transport.MismatchError{Name: "alice/box", Stored: "SHA256:a", Offered: "SHA256:b"}))
+	for _, want := range []string{"DEVICE IDENTITY MISMATCH", "Do NOT call wanctl_trust_server", "SHA256:a", "SHA256:b"} {
+		if !strings.Contains(changed, want) {
+			t.Errorf("mismatch refusal lacks %q:\n%s", want, changed)
+		}
+	}
+	adb := withRemedy("remote error: could not reach adbd on this device (5555: connection refused)")
+	if !strings.Contains(adb, "停用") || !strings.Contains(adb, "Wireless debugging") {
+		t.Errorf("adb failure arrives without its remedy: %s", adb)
+	}
+	if got := withRemedy("exit status 1"); got != "exit status 1" {
+		t.Errorf("an ordinary error grew a remedy: %s", got)
+	}
+}

@@ -149,8 +149,11 @@ type Command struct {
 	// dropping a tool.
 	Handler string
 	// StdioOnly keeps the MCP tool off the hosted endpoint (/mcp on a relay).
-	// Only the local login is: a hosted session is authenticated by its OAuth
-	// bearer before any tool runs, so it has nothing to log in to.
+	// The local login is: a hosted session is authenticated by its OAuth
+	// bearer before any tool runs, so it has nothing to log in to. So are push
+	// and pull, whose local path would name a file on the shared server rather
+	// than on the caller's machine; a tool that can only refuse is a tool
+	// description every hosted request pays for.
 	StdioOnly bool
 }
 
