@@ -61,6 +61,11 @@ func signedDist(t *testing.T) string {
 // wanctl-linux-amd64, holds payload.
 func signedDistWith(t *testing.T, payload []byte) string {
 	t.Helper()
+	return signedDistWithVersion(t, payload, "v1.0.0")
+}
+
+func signedDistWithVersion(t *testing.T, payload []byte, version string) string {
+	t.Helper()
 	dir := t.TempDir()
 	name := wanrelease.ArtifactName("linux", "amd64")
 	if err := os.WriteFile(filepath.Join(dir, name), payload, 0o755); err != nil {
@@ -68,7 +73,7 @@ func signedDistWith(t *testing.T, payload []byte) string {
 	}
 	h := sha256.Sum256(payload)
 	manifest := wanrelease.Manifest{
-		Schema: 1, Version: "v1.0.0", PublishedAt: time.Now().UTC(),
+		Schema: 1, Version: version, PublishedAt: time.Now().UTC(),
 		Artifacts: []wanrelease.Artifact{{OS: "linux", Arch: "amd64", Name: name, Size: int64(len(payload)), SHA256: hex.EncodeToString(h[:])}},
 	}
 	raw, _ := json.Marshal(manifest)
@@ -322,5 +327,32 @@ func TestInstallerOriginRejectsUnsafeValues(t *testing.T) {
 	body := []byte("RELAY_SELF=\"\"\n")
 	if out := localizeInstaller(body, "install.sh", ""); string(out) != string(body) {
 		t.Fatalf("empty origin rewrote the installer: %q", out)
+	}
+}
+
+func TestDeviceLatestVersionRequiresSignedStableDistribution(t *testing.T) {
+	for _, version := range []string{"v1.0.0", "v1.1.0-beta.1"} {
+		t.Run(version, func(t *testing.T) {
+			dir := signedDistWithVersion(t, []byte("binary"), version)
+			t.Setenv("WANCTL_DIST_DIR", dir)
+			r := New(EnvTokenStore(""))
+			r.Handler()
+			want := version
+			if strings.Contains(version, "-beta.") {
+				want = ""
+			}
+			if r.latestStable != want {
+				t.Fatalf("stable = %q, want %q", r.latestStable, want)
+			}
+			// An invalid signature must not supply a tempting but untrusted latest tag.
+			if err := os.WriteFile(filepath.Join(dir, wanrelease.SignatureName), []byte("invalid"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			r = New(EnvTokenStore(""))
+			r.Handler()
+			if r.latestStable != "" {
+				t.Fatalf("untrusted stable = %q", r.latestStable)
+			}
+		})
 	}
 }

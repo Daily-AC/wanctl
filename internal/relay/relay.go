@@ -88,6 +88,7 @@ type Relay struct {
 	forgetPin       func(namespace, device string)
 	webfetchHandler http.Handler // optional: GET adapter for delegated controllers
 	adminSecret     string
+	latestStable    string // verified distribution version, fixed when Handler is built
 	portalNS        string
 	logs            *serverlog.Buffer
 
@@ -467,8 +468,10 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	body.N = limits.RelayControlBodyBytes
 	var reg struct {
 		Op, Device, Fingerprint, Inst, Name string
-		DeviceID                            string `json:"device_id"`
-		Delegation                          string `json:"delegation"`
+		DeviceID                            string          `json:"device_id"`
+		Delegation                          string          `json:"delegation"`
+		WanctlVersion                       json.RawMessage `json:"wanctl_version"`
+		OpenCUVersion                       json.RawMessage `json:"opencu_version"`
 	}
 	if err := dec.Decode(&reg); err != nil || reg.Op != "register" || reg.Device == "" {
 		c.Close(websocket.StatusPolicyViolation, "expected register")
@@ -504,15 +507,20 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
+	if reg.DeviceID == "" {
+		created = r.recordDeviceRegistration(ns, reg.Device, reg.Fingerprint)
+	}
+	if err := r.recordDeviceVersions(ns, reg.Device, jsonVersion(reg.WanctlVersion), jsonVersion(reg.OpenCUVersion), reg.WanctlVersion != nil || reg.OpenCUVersion != nil); err != nil {
+		r.registrationMu.Unlock()
+		c.Close(websocket.StatusInternalError, "device versions could not be stored")
+		return
+	}
 	key := ns + "/" + reg.Device
 	wasLive := r.deviceLive(ns, reg.Device)
 	ac := &agentConn{device: reg.Device, name: reg.Name, ns: ns, inst: reg.Inst, ctrl: nc, delegation: reg.Delegation == "1", kick: func() { nc.Close() }}
 	r.mu.Lock()
 	r.agents[key] = ac
 	r.mu.Unlock()
-	if reg.DeviceID == "" {
-		created = r.recordDeviceRegistration(ns, reg.Device, reg.Fingerprint)
-	}
 	r.registrationMu.Unlock()
 	if !wasLive {
 		r.emitDeviceEvent(ns, reg.Device, onlineEvent(reg.Device))
