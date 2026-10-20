@@ -14,7 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -248,17 +248,47 @@ const AndroidAPKArch = "arm64.apk"
 // it to a user need to tell the two apart.
 var ErrUpToDate = errors.New("already up to date")
 
+// ErrBetaNotAllowed is a failed source check, not evidence that the device is
+// current: another source may still offer an eligible stable release.
+var ErrBetaNotAllowed = errors.New("当前构建不接受 beta 发布")
+
 func Select(m Manifest, goos, goarch, currentVersion string) (Artifact, error) {
+	next, err := parseVersion(m.Version)
+	if err != nil {
+		return Artifact{}, err
+	}
+	var current version
+
 	if currentVersion != "" && currentVersion != "dev" {
-		current, err := parseVersion(currentVersion)
+		current, err = parseVersion(currentVersion)
 		if err != nil {
 			return Artifact{}, fmt.Errorf("invalid current build version %q: %w", currentVersion, err)
 		}
-		next, _ := parseVersion(m.Version)
+	}
+	if next.beta != "" && current.beta == "" {
+		return Artifact{}, fmt.Errorf("%w: %s", ErrBetaNotAllowed, m.Version)
+	}
+	if currentVersion != "" && currentVersion != "dev" {
 		if compareVersion(next, current) <= 0 {
 			return Artifact{}, fmt.Errorf("%w: release %s is not newer than installed %s", ErrUpToDate, m.Version, currentVersion)
 		}
 	}
+	return selectArtifact(m, goos, goarch)
+}
+
+// SelectExact is for an explicit user request, after manifest verification. It
+// bypasses channel and age policy, never the requested version or platform.
+func SelectExact(m Manifest, goos, goarch, requested string) (Artifact, error) {
+	if err := ValidateVersion(requested); err != nil {
+		return Artifact{}, err
+	}
+	if m.Version != requested {
+		return Artifact{}, fmt.Errorf("签名清单版本 %s 与指定版本 %s 不一致", m.Version, requested)
+	}
+	return selectArtifact(m, goos, goarch)
+}
+
+func selectArtifact(m Manifest, goos, goarch string) (Artifact, error) {
 	for _, a := range m.Artifacts {
 		if a.OS == goos && a.Arch == goarch {
 			return a, nil
@@ -320,39 +350,59 @@ func requireEOF(dec *json.Decoder) error {
 	return nil
 }
 
-type version [3]uint64
+type version struct {
+	core [3]string
+	beta string
+}
+
+var versionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-beta\.([1-9][0-9]*))?$`)
+
+func ValidateVersion(value string) error {
+	_, err := parseVersion(value)
+	return err
+}
+
+func CompareVersions(a, b string) (int, error) {
+	av, err := parseVersion(a)
+	if err != nil {
+		return 0, err
+	}
+	bv, err := parseVersion(b)
+	if err != nil {
+		return 0, err
+	}
+	return compareVersion(av, bv), nil
+}
 
 func parseVersion(value string) (version, error) {
-	value = strings.TrimPrefix(value, "v")
-	if strings.ContainsAny(value, "+-") {
-		return version{}, errors.New("pre-release/build metadata is not allowed")
+	parts := versionPattern.FindStringSubmatch(value)
+	if parts == nil {
+		return version{}, errors.New("版本格式必须为 vX.Y.Z 或 vX.Y.Z-beta.N（N 为无前导零的正整数）")
 	}
-	parts := strings.Split(value, ".")
-	if len(parts) != 3 {
-		return version{}, errors.New("expected vMAJOR.MINOR.PATCH")
-	}
-	var v version
-	for i, part := range parts {
-		if part == "" || (len(part) > 1 && part[0] == '0') {
-			return version{}, errors.New("invalid numeric version component")
-		}
-		n, err := strconv.ParseUint(part, 10, 64)
-		if err != nil {
-			return version{}, errors.New("invalid numeric version component")
-		}
-		v[i] = n
-	}
-	return v, nil
+	return version{core: [3]string{parts[1], parts[2], parts[3]}, beta: parts[4]}, nil
 }
 
 func compareVersion(a, b version) int {
-	for i := range a {
-		if a[i] < b[i] {
+	// Compare decimal strings without imposing a machine integer limit on tags.
+	compareNumber := func(a, b string) int {
+		if len(a) < len(b) {
 			return -1
 		}
-		if a[i] > b[i] {
+		if len(a) > len(b) {
 			return 1
 		}
+		return strings.Compare(a, b)
 	}
-	return 0
+	for i := range a.core {
+		if cmp := compareNumber(a.core[i], b.core[i]); cmp != 0 {
+			return cmp
+		}
+	}
+	if a.beta == "" && b.beta != "" {
+		return 1
+	}
+	if a.beta != "" && b.beta == "" {
+		return -1
+	}
+	return compareNumber(a.beta, b.beta)
 }
