@@ -87,6 +87,9 @@
     d.wanctl_status = i === 4 ? 'unknown' : (i === 2 ? 'ahead' : (i === 0 || i === 6 ? 'behind' : 'latest'));
   });
 
+  // Negative rendering test: simulate a tampered response (same endpoint shape).
+  if (scene === 'version-html') devices[6].opencu_version = '<img src=x onerror=globalThis.versionXSS=1>';
+
   var waiting = [
     {
       device: 'bench-02', id: 'a41f9c22', kind: 'exec',

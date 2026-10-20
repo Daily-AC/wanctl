@@ -62,9 +62,9 @@ cdp.ws.addEventListener('message', event => {
 });
 let checks = 0;
 const text = id => cdp.eval(`return document.getElementById(${JSON.stringify(id)}).textContent;`);
-async function navigate(lang, device = '') {
+async function navigate(lang, device = '', scene = 'noask') {
  await cdp.send('Page.navigate', {url:'about:blank'});
- await cdp.send('Page.navigate', {url: `${BASE}/?lang=${lang}&avatar=off&scene=noask&slow=100&trial=${checks}-${Date.now()}${device ? '#device/'+encodeURIComponent(device) : ''}`});
+ await cdp.send('Page.navigate', {url: `${BASE}/?lang=${lang}&avatar=off&scene=${scene}&slow=100&trial=${checks}-${Date.now()}${device ? '#device/'+encodeURIComponent(device) : ''}`});
  for (let i=0; i<100; i++) {
   const ready = await cdp.eval(`return document.querySelectorAll('#grid .dev').length === 8 && ${device ? "document.querySelector('#dWanctlVersion').textContent !== '' && document.querySelector('#dFp').textContent !== ''" : 'true'};`);
   if (ready) return;
@@ -94,19 +94,24 @@ try {
    let shot = await cdp.send('Page.captureScreenshot', {format:'png'});
    writeFileSync(join(OUT,`list-${lang}-${width}.png`), Buffer.from(shot.data,'base64'));
    for(const [device,wanctl,opencu] of [
-    ['bench-02','v0.29.0 · '+update,unknown],
+    ['bench-02','v0.29.0 · '+update,''],
     ['DESKTOP-RQFV0SH-workstation-long','v0.30.0 · '+latest,'0.3.99'],
-    ['atlas','v0.31.0-beta.1',unknown],
-    ['mill-01',unknown,unknown],
+    ['atlas','v0.31.0-beta.1',''],
+    ['mill-01',unknown,''],
     ['slate','v0.29.0 · '+update,'0.3.99'],
-    ['quarry','v0.30.0 · '+latest,unknown],
+    ['quarry','v0.30.0 · '+latest,''],
    ]) {
     await navigate(lang,device);
     assert.equal(await text('dWanctlVersion'),wanctl,device);
     assert.equal(await text('dOpenCUVersion'),opencu,device);
+    assert.equal(await cdp.eval(`return getComputedStyle(document.querySelector('#dOpenCURow')).display !== 'none';`), !!opencu, device);
     assert.equal(await cdp.eval('return document.documentElement.scrollWidth > innerWidth;'),false);
     const visible=await cdp.eval(`const e=document.querySelector('.device-versions');return e.getBoundingClientRect().height>0 && getComputedStyle(e).display!=='none';`);
     assert.equal(visible,true);
+    if (device==='mill-01') {
+     shot = await cdp.send('Page.captureScreenshot',{format:'png'});
+     writeFileSync(join(OUT,`unknown-${lang}-${width}.png`),Buffer.from(shot.data,'base64'));
+    }
     if (device==='slate') {
      shot = await cdp.send('Page.captureScreenshot',{format:'png'});
      writeFileSync(join(OUT,`shared-${lang}-${width}.png`),Buffer.from(shot.data,'base64'));
@@ -117,6 +122,10 @@ try {
    }
   }
  }
+ await navigate('en','slate','version-html');
+ assert.equal(await text('dOpenCUVersion'), '<img src=x onerror=globalThis.versionXSS=1>');
+ assert.equal(await cdp.eval("return document.querySelectorAll('#dOpenCUVersion img').length;"), 0);
+ assert.equal(await cdp.eval('return !!globalThis.versionXSS;'), false);
  assert.deepEqual(errors, [], 'browser errors');
  console.log(`PASS: ${checks} detail cases; both languages, desktop/mobile, read-only/managed shares, delayed list, language switch, endpoint shape and list markers.`);
 } finally {

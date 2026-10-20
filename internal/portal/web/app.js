@@ -871,7 +871,8 @@
     if (d.wanctl_status === 'latest') status = t().versionLatest;
     if (d.wanctl_status === 'behind' && latestWanctlVersion) status = t().versionUpdate(latestWanctlVersion);
     $('#dWanctlVersion').textContent = installed + (status ? ' · ' + status : '');
-    $('#dOpenCUVersion').textContent = d.opencu_version || t().versionUnknown;
+    $('#dOpenCURow').hidden = !d.opencu_version;
+    $('#dOpenCUVersion').textContent = d.opencu_version || '';
   }
 
   // 这一屏上「你是谁」决定的每一处，都在这里，一次算完。
