@@ -142,20 +142,11 @@ func TestPeersReportsIdentityPinStateBeforeAndAfterTrusting(t *testing.T) {
 	}
 
 	after := resultText(peerToolResult(view, pinStateOf(freshClient(t), view)))
-	if !strings.Contains(after, "build  (desk)  [identity: pinned]") {
+	if !strings.Contains(after, "build  (desk)\n") {
 		t.Fatalf("after trusting alice/build:\n%s", after)
 	}
 	if !strings.Contains(after, "daily-ac/aa11  (bms)  [identity: unpinned]") {
 		t.Fatalf("pinning one device must not mark the others pinned:\n%s", after)
-	}
-
-	structured, ok := peerToolResult(view, pinStateOf(freshClient(t), view)).StructuredContent.(map[string]any)
-	if !ok {
-		t.Fatalf("structured content type = %T", structured)
-	}
-	identity, ok := structured["identity"].(map[string]string)
-	if !ok || identity[trustTarget] != "pinned" || identity["daily-ac/aa11"] != "unpinned" {
-		t.Fatalf("structured identity = %#v", structured["identity"])
 	}
 }
 
@@ -167,4 +158,48 @@ func freshClient(t *testing.T) *client.Client {
 		t.Fatalf("client: %s", toolText(hint))
 	}
 	return c
+}
+
+// The refusals that block a first call say what to do themselves, because
+// that is where a model is when it needs to know; the tool descriptions no
+// longer repeat it.
+func TestRefusalsCarryTheirOwnInstructions(t *testing.T) {
+	pairing := toolText(pairingResult(&client.RejectError{PairingURL: "https://portal.example/pair/abc", Reason: "not trusted"}))
+	for _, want := range []string{"PAIRING REQUIRED", "VERBATIM", "https://portal.example/pair/abc", "retry"} {
+		if !strings.Contains(pairing, want) {
+			t.Errorf("pairing refusal lacks %q:\n%s", want, pairing)
+		}
+	}
+	first := toolText(trustRequiredResult(&client.TrustRequiredError{Target: "alice/box", Fingerprint: "SHA256:x"}))
+	for _, want := range []string{"DEVICE IDENTITY CONFIRMATION REQUIRED", "wanctl_trust_server", "authorization", "retry"} {
+		if !strings.Contains(first, want) {
+			t.Errorf("first-contact refusal lacks %q:\n%s", want, first)
+		}
+	}
+	changed := toolText(identityMismatchResult(&transport.MismatchError{Name: "alice/box", Stored: "SHA256:a", Offered: "SHA256:b"}))
+	for _, want := range []string{"DEVICE IDENTITY MISMATCH", "Do NOT call wanctl_trust_server", "SHA256:a", "SHA256:b"} {
+		if !strings.Contains(changed, want) {
+			t.Errorf("mismatch refusal lacks %q:\n%s", want, changed)
+		}
+	}
+	adb := withRemedy("remote error: could not reach adbd on this device (5555: connection refused)")
+	if !strings.Contains(adb, "停用") || !strings.Contains(adb, "Wireless debugging") {
+		t.Errorf("adb failure arrives without its remedy: %s", adb)
+	}
+	if got := withRemedy("exit status 1"); got != "exit status 1" {
+		t.Errorf("an ordinary error grew a remedy: %s", got)
+	}
+}
+
+// An agent reports every adb port it tried inside one "could not reach"
+// error. A port whose adbd refused the key means the pairing lapsed, and that
+// is the remedy to give, not "turn on wireless debugging".
+func TestRemedyPrefersTheKeyRefusal(t *testing.T) {
+	got := withRemedy("could not reach adbd on this device (41031: remote error: tls: bad certificate; 5555: connection refused)")
+	if !strings.Contains(got, "ADB pairing") || strings.Contains(got, "Wireless debugging") {
+		t.Fatalf("aggregate adb failure got the wrong remedy: %s", got)
+	}
+	if strings.Contains(withRemedy("could not reach adbd on this device (5555: connection refused)"), "next entry") {
+		t.Fatal("the reachability remedy points at an entry the caller never sees")
+	}
 }

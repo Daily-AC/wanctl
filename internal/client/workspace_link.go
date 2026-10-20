@@ -66,7 +66,9 @@ func (l *WorkspaceLink) exchange(ctx context.Context, c *Client, ref WorkspaceRe
 	// Join a firing cancellation before another request can reuse this conn.
 	// Merely stopping the callback can let request A close request B's socket.
 	done := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() { conn.Close(); close(done) })
+	// The transport, not the TLS conn: closing that first waits up to five
+	// seconds to send close_notify to a peer that may be the thing stalled.
+	stop := context.AfterFunc(ctx, func() { conn.NetConn().Close(); close(done) })
 	defer func() {
 		if !stop() {
 			<-done

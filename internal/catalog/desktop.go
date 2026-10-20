@@ -1,15 +1,11 @@
 package catalog
 
-// The nested action schema is shared by MCP registration and generated docs.
+// desktopActionItems is the schema of one legacy action. It names the action
+// types and nothing else: the act description already spells out every type's
+// fields, and the agent refuses an unknown field, so declaring each field again
+// here cost every caller three hundred tokens to say what the prose says.
 func desktopActionItems() map[string]any {
-	props := map[string]any{}
-	for _, name := range []string{"button", "text", "key", "title", "program", "cwd"} {
-		props[name] = map[string]any{"type": "string"}
-	}
-	for _, name := range []string{"x", "y", "to_x", "to_y", "count", "delta", "ms", "pid", "timeout_ms"} {
-		props[name] = map[string]any{"type": "integer"}
-	}
-	props["type"] = map[string]any{"type": "string", "enum": []string{"click", "drag", "scroll", "type", "key", "wait", "focus", "launch"}}
-	props["args"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
-	return map[string]any{"type": "object", "properties": props, "required": []string{"type"}, "additionalProperties": false}
+	return map[string]any{"type": "object", "required": []string{"type"}, "properties": map[string]any{
+		"type": map[string]any{"type": "string", "enum": []string{"click", "drag", "scroll", "type", "key", "wait", "focus", "launch"}},
+	}}
 }

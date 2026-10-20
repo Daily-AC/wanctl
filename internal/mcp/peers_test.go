@@ -16,17 +16,8 @@ func TestPeerToolResultIncludesAliasesWithoutRemovingDevices(t *testing.T) {
 	if !strings.Contains(text, "legion  (desk)") || !strings.Contains(text, "plain") {
 		t.Fatalf("text result = %q", text)
 	}
-	structured, ok := result.StructuredContent.(map[string]any)
-	if !ok {
-		t.Fatalf("structured content type = %T", result.StructuredContent)
-	}
-	gotDevices, ok := structured["devices"].([]string)
-	if !ok || len(gotDevices) != 2 || gotDevices[0] != "legion" {
-		t.Fatalf("structured devices = %#v", structured["devices"])
-	}
-	gotAliases, ok := structured["aliases"].(map[string]string)
-	if !ok || gotAliases["legion"] != "desk" {
-		t.Fatalf("structured aliases = %#v", structured["aliases"])
+	if result.StructuredContent != nil {
+		t.Fatalf("structured content = %#v, want text only", result.StructuredContent)
 	}
 }
 

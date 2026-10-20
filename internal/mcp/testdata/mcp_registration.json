@@ -190,10 +190,6 @@
     ]
   },
   {
-    "name": "wanctl_id",
-    "params": []
-  },
-  {
     "name": "wanctl_login",
     "params": [
       {
@@ -347,10 +343,6 @@
     ]
   },
   {
-    "name": "wanctl_rules",
-    "params": []
-  },
-  {
     "name": "wanctl_screenshot",
     "params": [
       {
@@ -376,43 +368,8 @@
     ]
   },
   {
-    "name": "wanctl_server_logs",
-    "params": [
-      {
-        "name": "grep",
-        "type": "string",
-        "required": false
-      },
-      {
-        "name": "limit",
-        "type": "number",
-        "required": false
-      },
-      {
-        "name": "service",
-        "type": "string",
-        "required": true
-      },
-      {
-        "name": "since",
-        "type": "string",
-        "required": false
-      }
-    ]
-  },
-  {
     "name": "wanctl_status",
     "params": []
-  },
-  {
-    "name": "wanctl_trust",
-    "params": [
-      {
-        "name": "which",
-        "type": "string",
-        "required": false
-      }
-    ]
   },
   {
     "name": "wanctl_trust_server",
