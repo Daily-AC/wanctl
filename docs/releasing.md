@@ -14,9 +14,9 @@ what each kind of build is allowed to reach. The reasoning is in
 | Development | `go build`, `scripts/cross-compile.sh` | `dev` | whoever built it | never replaced |
 
 A device's channel is the version it runs. On a stable it only takes newer
-stables. On a beta it takes a newer beta or a newer stable; since the update
-sources only offer stables, it stays on its beta until the stable passes it and
-then is back on stable.
+stables. On a beta it takes a newer beta or a newer stable; since the default
+update sources only offer stables, it stays on its beta until the stable passes
+it and then is back on stable.
 
 ## Branches
 
@@ -36,8 +36,8 @@ branch once the next minor's stable is out.
 2. `git tag -a vX.Y.Z-beta.N -m "vX.Y.Z-beta.N" <commit> && git push origin vX.Y.Z-beta.N`.
    N starts at 1 for each X.Y.Z. Tags are never moved or reused.
 3. The Release workflow publishes a prerelease with generated notes and the
-   signed desktop binaries. It builds no APK and no container image, and needs
-   no changelog file.
+   signed desktop binaries. It builds no Android artifacts and no container
+   image, and needs no changelog file.
 4. Install it on the maintainers' own devices:
    `wanctl update vX.Y.Z-beta.N`. To leave a broken beta at once, install the
    current stable the same way. A device that cannot reach GitHub needs
@@ -64,11 +64,17 @@ Promote only when all of the following hold:
 3. **Its own updater works.** Tag a rehearsal beta `vX.Y.Z-beta.(N+1)` from the
    same commit. On each device from step 2, without rebooting:
    ```sh
-   wanctl config set release_base=https://github.com/Daily-AC/wanctl/releases/download/vX.Y.Z-beta.(N+1)
+   # Example: candidate v0.26.0-beta.1, rehearsal v0.26.0-beta.2
+   wanctl config set release_base=https://github.com/Daily-AC/wanctl/releases/download/v0.26.0-beta.2
    # restart the agent through its supervisor; the first check runs 60 s later
-   wanctl version            # must print the rehearsal beta
+   # wait for that check to install the rehearsal and restart the agent
+   wanctl version            # must print v0.26.0-beta.2
    wanctl config unset release_base
    ```
+   Ensure `auto_update` is on and no `WANCTL_RELEASE_BASE` environment override
+   masks the persisted setting. The agent must be idle and able to write its
+   binary directory for the check to install.
+
    This is the automatic path, run by the candidate's code. v0.20.0–v0.20.2
    shipped an updater that could not update; this step is what catches that.
 
