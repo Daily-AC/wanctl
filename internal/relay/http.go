@@ -905,6 +905,12 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "device registration failed", 409)
 		return
 	}
+	q := req.URL.Query()
+	if err := r.recordDeviceVersions(ns, device, q.Get("wanctl_version"), q.Get("opencu_version"), q.Has("wanctl_version") || q.Has("opencu_version")); err != nil {
+		r.registrationMu.Unlock()
+		http.Error(w, "device versions could not be stored", http.StatusInternalServerError)
+		return
+	}
 	r.hmu.Lock()
 	if inst != "" {
 		if a.inst != "" && a.inst != inst {

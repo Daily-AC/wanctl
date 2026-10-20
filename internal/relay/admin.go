@@ -395,8 +395,10 @@ func (r *Relay) adminDevices(w http.ResponseWriter, req *http.Request) {
 			owner = ns
 		}
 		d["online"] = r.deviceLive(owner, name)
+		installed, _ := d["wanctl_version"].(string)
+		d["wanctl_status"] = deviceVersionStatus(installed, r.latestStable)
 	}
-	writeJSON(w, map[string]any{"devices": out})
+	writeJSON(w, map[string]any{"devices": out, "latest_wanctl_version": r.latestStable})
 }
 
 func (r *Relay) adminDeviceAlias(w http.ResponseWriter, req *http.Request) {
@@ -1085,7 +1087,7 @@ func (p *PGStore) RevokeToken(namespace string, id int) error {
 
 func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 	rows, err := p.db.Query(
-		`SELECT device_id, alias, fingerprint, last_seen, owner_namespace, shared, perms, manage, display_name, legacy_name, uses_device_id
+		`SELECT device_id, alias, fingerprint, last_seen, owner_namespace, shared, perms, manage, display_name, legacy_name, uses_device_id, wanctl_version, opencu_version, versions_reported_at
 		   FROM (
 		     SELECT d.device_id,
 		            COALESCE(d.alias,'') AS alias,
@@ -1093,7 +1095,7 @@ func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 		            d.last_seen,
 		            d.owner_namespace,
 		            false AS shared,
-		            '' AS perms, false AS manage, d.display_name, COALESCE(d.legacy_name,'') AS legacy_name, d.uses_device_id
+		            '' AS perms, false AS manage, d.display_name, COALESCE(d.legacy_name,'') AS legacy_name, d.uses_device_id, d.wanctl_version, d.opencu_version, d.versions_reported_at
 		       FROM devices d
 		      WHERE d.owner_namespace = $1
 		     UNION ALL
@@ -1103,7 +1105,7 @@ func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 		            d.last_seen,
 		            d.owner_namespace,
 		            true AS shared,
-		            a.perms, a.manage, d.display_name, COALESCE(d.legacy_name,'') AS legacy_name, d.uses_device_id
+		            a.perms, a.manage, d.display_name, COALESCE(d.legacy_name,'') AS legacy_name, d.uses_device_id, d.wanctl_version, d.opencu_version, d.versions_reported_at
 		       FROM acl a
 		       JOIN devices d
 		         ON d.owner_namespace = a.owner_namespace
@@ -1120,14 +1122,16 @@ func (p *PGStore) ListDevices(namespace string) ([]map[string]any, error) {
 	for rows.Next() {
 		var name, alias, fp, owner, perms, displayName, legacyName string
 		var usesID, manage bool
-		var seen sql.NullTime
+		var seen, reported sql.NullTime
+		var wanctlVersion, opencuVersion string
 		var shared bool
-		if err := rows.Scan(&name, &alias, &fp, &seen, &owner, &shared, &perms, &manage, &displayName, &legacyName, &usesID); err != nil {
+		if err := rows.Scan(&name, &alias, &fp, &seen, &owner, &shared, &perms, &manage, &displayName, &legacyName, &usesID, &wanctlVersion, &opencuVersion, &reported); err != nil {
 			return nil, err
 		}
 		row := map[string]any{
 			// `name` is retained as a compatibility alias for the canonical route.
 			"name": name, "alias": alias, "fingerprint": fp, "last_seen": nullTime(seen),
+			"wanctl_version": wanctlVersion, "opencu_version": opencuVersion, "versions_reported_at": nullTime(reported),
 			"owner": owner, "shared": shared, "display_name": displayName, "legacy_name": legacyName,
 		}
 		if usesID {

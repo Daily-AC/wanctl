@@ -67,6 +67,39 @@ WebSocket registration and HTTP polling. Subsequent session, notification,
 pairing, and deregistration requests use the UUID. `inst` remains an ephemeral
 process instance marker, not the persistent identity.
 
+Registrations also carry optional `wanctl_version` and `opencu_version` strings:
+JSON fields in the WebSocket `register` message, query parameters on every
+`GET /h/poll`. `wanctl_version` is the build string printed by `wanctl version`
+(including `dev` or beta tags). `opencu_version` is read from the same install
+manifest used by `act`, without starting OpenCU; absent installs, missing
+versions, or invalid manifests report an empty string. Discovery runs again on
+reconnection and on every HTTP poll.
+
+These values are untrusted display metadata. Each is limited to 128 ASCII bytes
+and `[A-Za-z0-9.+_-]`; invalid values (including non-string JSON) become empty.
+They never authorize an update or select an executable. The relay stores the
+last registration's values and `versions_reported_at` (server receipt time).
+Existing rows and old agents have empty values and a null report time; a
+registration without either field clears previous metadata, including the time.
+A report with explicit empty or invalid values still has a report time.
+
+`PGStore.ListDevices` includes `wanctl_version`, `opencu_version`, and
+`versions_reported_at` for owned and shared devices. `/admin/devices`, proxied
+unchanged by the portal's `/api/devices`, adds `latest_wanctl_version` at the top
+level and `wanctl_status` (`unknown`, `latest`, `behind`, or `ahead`) per device.
+The comparison uses the existing release parser and the verified stable manifest
+already served under `/dl`; no outbound release lookup is made. Without a stable
+distribution, or for unparseable installed build strings, status is `unknown`.
+A beta whose core version exceeds stable is `ahead`, not `behind`. OpenCU has no
+release comparison. These fields use the existing device visibility permissions,
+including read-only shares, and remain available while a device is offline.
+
+Compatibility: the pre-version WebSocket registration decoder ignores unknown
+JSON fields (it does not call `DisallowUnknownFields`); the HTTP handler reads
+only known query keys. New agents therefore still register with old relays.
+New relays accept old agents with both version fields omitted. No endpoint,
+console command, installation behavior, or release workflow changes.
+
 For compatibility with existing consumers, `/peers` still returns canonical
 routes in `devices`, and labels in `aliases`. Device-list JSON retains `name` as a
 legacy alias for the canonical route and adds explicit `device_id`,
