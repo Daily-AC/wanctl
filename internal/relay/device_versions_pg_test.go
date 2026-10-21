@@ -73,6 +73,7 @@ func TestDeviceVersionsPostgresMigrationAndRegistration(t *testing.T) {
 	check("", "", false)
 	t.Setenv("WANCTL_DIST_DIR", signedDist(t))
 	r := New(EnvTokenStore("tok:alice"))
+	r.versionWriteInterval = time.Millisecond // keep this metadata/SQL test within its three-second deadlines
 	r.SetAdmin(p)
 	r.SetAdminSecret("admin")
 	srv := httptest.NewServer(r.Handler())

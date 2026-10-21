@@ -92,12 +92,13 @@ type Relay struct {
 	portalNS        string
 	logs            *serverlog.Buffer
 
-	versionsMu     sync.Mutex
-	versions       map[string]*deviceVersionState
-	registrationMu sync.Mutex
-	mu             sync.Mutex
-	agents         map[string]*agentConn      // key "ns/device" (WebSocket transport)
-	pending        map[string]*pendingSession // key session id (WebSocket transport)
+	versionWriteInterval time.Duration // zero uses the production minimum
+	versionsMu           sync.Mutex
+	versions             map[string]*deviceVersionState
+	registrationMu       sync.Mutex
+	mu                   sync.Mutex
+	agents               map[string]*agentConn      // key "ns/device" (WebSocket transport)
+	pending              map[string]*pendingSession // key session id (WebSocket transport)
 
 	hmu      sync.Mutex
 	hagents  map[string]*httpAgent   // key "ns/device" (HTTP transport)
