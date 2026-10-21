@@ -42,6 +42,9 @@ branch once the next minor's stable is out.
    `wanctl update vX.Y.Z-beta.N`. To leave a broken beta at once, install the
    current stable the same way. A device that cannot reach GitHub needs
    `HTTPS_PROXY` for this command; the relay mirror only carries the stable.
+   A device whose `release_base` is set to the relay mirror needs
+   `WANCTL_RELEASE_BASE=https://github.com/Daily-AC/wanctl/releases/latest/download`
+   in front of the command, since a custom base is used as it is.
 
 The production relay and portal are not deployed from a beta.
 
@@ -65,15 +68,23 @@ Promote only when all of the following hold:
    same commit. On each device from step 2, without rebooting:
    ```sh
    # Example: candidate v0.26.0-beta.1, rehearsal v0.26.0-beta.2
+   wanctl config             # note release_base and where it comes from
    wanctl config set release_base=https://github.com/Daily-AC/wanctl/releases/download/v0.26.0-beta.2
    # restart the agent through its supervisor; the first check runs 60 s later
    # wait for that check to install the rehearsal and restart the agent
    wanctl version            # must print v0.26.0-beta.2
-   wanctl config unset release_base
+   wanctl config set release_base=<the value noted above>   # or unset it if it was the build default
    ```
    Ensure `auto_update` is on and no `WANCTL_RELEASE_BASE` environment override
    masks the persisted setting. The agent must be idle and able to write its
    binary directory for the check to install.
+
+   On a slow link the download alone can take several minutes; the agent log
+   says when the check found the rehearsal. If the log stays silent, the first
+   check probably failed on GitHub and the relay mirror answered "up to date"
+   (issue #170): restart the agent again rather than waiting six hours. A
+   device that needs `HTTPS_PROXY` to reach GitHub needs it in the
+   environment the supervisor starts the agent with, for the rehearsal only.
 
    This is the automatic path, run by the candidate's code. v0.20.0–v0.20.2
    shipped an updater that could not update; this step is what catches that.
