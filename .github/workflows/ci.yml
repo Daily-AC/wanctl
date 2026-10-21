@@ -1,11 +1,19 @@
 name: CI
 
+# Pull requests and main only. Running on every branch push as well ran each
+# PR twice, and tags are built and scanned by the Release workflow.
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
+
+# A new push to a pull request cancels its older run; main runs every commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   docsite:
@@ -43,6 +51,21 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
+          cache: false
+
+      # setup-go's own cache is off: its single key is shared by every job, so
+      # whichever job finished first saved its small cache and the large one
+      # was refused, and every run compiled from scratch. Each job keeps its
+      # own build cache, saved from main only; pull requests restore main's.
+      - name: Restore build cache
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: go-test-${{ runner.os }}-${{ runner.arch }}-
 
       # `go vet` says nothing about formatting. This check deliberately prints
       # offenders because `gofmt -l` alone exits successfully even when files
@@ -55,32 +78,77 @@ jobs:
             exit 1
           }
 
+      # -count=1: the restored cache holds main's test results, and every run
+      # still runs every test.
       - name: Test
-        run: go test ./...
+        run: go test -count=1 ./...
 
       - name: Vet
         run: go vet ./...
 
       # The `lark` tag guards the Feishu SDK so it stays out of signed release
-      # binaries. CI exercises the tagged path so it cannot rot unnoticed.
-      - name: Build with lark tag
-        run: go build -tags lark ./...
-
-      - name: Test with lark tag
-        run: go test -tags lark ./...
-
+      # binaries. Vetting every package with the tag keeps the tagged path
+      # compiling; only internal/lark has tagged files and only internal/portal
+      # imports it, so those two are the packages whose tests the tag changes.
+      # Re-running the whole suite with the tag never caught a lark problem:
+      # its 14 failures up to 2026-10-21 were all flaky tests elsewhere.
       - name: Vet with lark tag
         run: go vet -tags lark ./...
 
-      # Every platform a release ships, built the way build-release.sh builds
-      # it — including the three Android targets that link through the NDK
-      # (present on GitHub's Ubuntu image as ANDROID_NDK_LATEST_HOME). Android's
-      # build-tagged DNS implementation is invisible to every other target, and
-      # 32-bit targets have their own ways to break (int width, atomic
-      # alignment), so a target that stopped compiling is caught here rather
-      # than at the tag.
+      - name: Test lark-tagged packages
+        run: go test -count=1 -tags lark ./internal/lark/ ./internal/portal/
+
+      - name: Save build cache
+        if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.mod', 'go.sum') }}
+
+  # Every platform a release ships, built the way build-release.sh builds
+  # it — including the three Android targets that link through the NDK
+  # (present on GitHub's Ubuntu image as ANDROID_NDK_LATEST_HOME). Android's
+  # build-tagged DNS implementation is invisible to every other target, and
+  # 32-bit targets have their own ways to break (int width, atomic
+  # alignment), so a target that stopped compiling is caught here rather
+  # than at the tag. Its own job so it runs beside the tests. Building the
+  # targets side by side was measured slower on these 4-vCPU runners; the
+  # cache is what makes it fast.
+  cross-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Restore build cache
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-cross-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: go-cross-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Cross-compile every release target
         run: ./scripts/cross-compile.sh
+
+      - name: Save build cache
+        if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-cross-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.mod', 'go.sum') }}
 
   supply-chain:
     runs-on: ubuntu-latest
@@ -92,6 +160,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
+          cache: false
 
       # GitHub-hosted Ubuntu runners provide the Docker daemon needed to build,
       # smoke-test, inventory, and scan the production image.
