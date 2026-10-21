@@ -10,9 +10,11 @@ on:
 permissions:
   contents: read
 
-# A new push to a pull request cancels its older run; main runs every commit.
+# A new push to a pull request cancels its older run. Each main commit gets
+# its own group: sharing one let a newer merge drop the queued run of the
+# commit before it, which then had no CI result to tag a beta on.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
