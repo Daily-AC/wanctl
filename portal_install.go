@@ -17,7 +17,6 @@ type portalUpdateProbe struct {
 	version, self, platform string
 	apk                     func(string) bool
 	writable                func(string) bool
-	restart                 func() error
 }
 
 func checkPortalUpdate(p portalUpdateProbe, target string) error {
@@ -40,7 +39,7 @@ func checkPortalUpdate(p portalUpdateProbe, target string) error {
 	if p.platform == "android" {
 		return errors.New("this Android installation cannot restart on the new binary; run wanctl update on the device")
 	}
-	return p.restart()
+	return nil
 }
 
 type portalUpdater struct {
@@ -59,7 +58,7 @@ func configurePortalUpdate(a *agent.Agent, version string, restart func()) *port
 			if pathErr != nil {
 				return fmt.Errorf("cannot locate running binary: %w", pathErr)
 			}
-			return checkPortalUpdate(portalUpdateProbe{version, self, runtime.GOOS, runningFromAPK, canWriteDir, portalRestartSupported}, target)
+			return checkPortalUpdate(portalUpdateProbe{version, self, runtime.GOOS, runningFromAPK, canWriteDir}, target)
 		},
 		Run: func(ctx context.Context, target string, stage func(string)) (string, error) {
 			bases, err := updateSourcesForVersion(target)
@@ -90,23 +89,4 @@ func configurePortalUpdate(a *agent.Agent, version string, restart func()) *port
 		Restart: restart,
 	})
 	return u
-}
-
-// The Windows managed flag alone says nothing about whether a wrapper restarts
-// after a clean exit. Only our parent loop makes that promise. Unix exec keeps
-// the supervisor's original PID, so no wrapper behaviour is assumed there.
-func checkPortalRestartMode(platform string, managed, supervised, sessionZero bool) error {
-	if platform != "windows" {
-		return nil
-	}
-	if managed {
-		if supervised {
-			return nil
-		}
-		return errors.New("this Windows supervisor is not known to restart the new binary; run wanctl update on the device and restart its service or task")
-	}
-	if sessionZero {
-		return errors.New("this session-0 agent has no verified restart supervisor; run wanctl update on the device and restart its service or task")
-	}
-	return nil
 }
