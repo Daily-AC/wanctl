@@ -65,3 +65,47 @@ stable needs a beta first. So for the first cycle only, install `-beta.1` on
 the maintainers' devices from the prerelease's assets by hand (verify against
 its `manifest.json`); from that beta on, the rehearsal and every later beta use
 the command.
+
+## First cycle (2026-10-20)
+
+- `v0.26.0-beta.1` and `v0.26.0-beta.2` (rehearsal, same commit) went through
+  the Release workflow: prereleases, 26 assets, no Android artifact, image steps
+  skipped, `latest` still v0.25.0. Their real run closes the first "not
+  verified" item above.
+- beta.1 was installed by hand, checked against the signed manifest whose keys
+  match v0.25.0's byte for byte, on two maintainer devices: macOS under launchd
+  (approval phone attached) and Windows under a SYSTEM supervisor loop.
+- Rehearsal: both agents' own updaters installed beta.2. The Windows one
+  needed a second restart: its first check left no log line, probably a
+  transient GitHub failure masked by the relay mirror (issue #170).
+- Linux systemd: a transient system unit on a spare VM (no relay, no
+  enrollment) ran beta.1, which updated itself to beta.2 in place: same
+  MainPID, zero restarts. The unit was removed afterwards.
+- A Windows device under `wanctl service install`'s own `__supervise` task
+  (2026-10-21, a test VM restored from a snapshot with v0.24.0 installed that
+  way): a manual swap to beta.2 was restarted by the supervisor;
+  `wanctl update v0.26.0-beta.1` replaced the binary and restarted the agent
+  (exit 0) while the supervisor itself kept running from a renamed old image;
+  with `release_base` at beta.2 the agent's own check installed it 70 s after
+  start. The VM reaches GitHub only through a proxy, so `HTTPS_PROXY` was set
+  for the command and, for the rehearsal, in the user's environment before
+  restarting the task.
+
+## Promotion (2026-10-21)
+
+- The soak ended at 12:45 with both maintainer devices online and no open
+  regression. Minutes earlier govulncheck began failing on GO-2026-6809
+  (crypto/x509, fixed in Go 1.26.10), so the Release workflow would refuse to
+  build v0.26.0 on the beta.2 commit.
+- PR #177 added the changelog and Go 1.26.10. `v0.26.0-beta.3` and the
+  rehearsal `v0.26.0-beta.4` were tagged on its merge commit, and steps 2 and
+  3 were rerun under all four supervisors (launchd with the approval phone,
+  the SYSTEM loop, `service install`, a systemd user unit). Every one installed
+  beta.3 with `wanctl update` and beta.4 with its own updater.
+- The second 24-hour soak was skipped under the emergency-fix clause: the code
+  was the soaked beta.2 code plus the toolchain patch, and the stable it
+  replaced was built with the affected Go. `v0.26.0` was tagged on the same
+  commit (`check-promotion`: promotes beta.4) and deployed.
+- After the deploy, the systemd unit rejoined the stable 61 s after a restart,
+  and the `service install` VM, which reaches only the relay mirror, picked it
+  up from `/dl` about 3 minutes after a restart.
