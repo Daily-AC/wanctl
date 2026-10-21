@@ -35,7 +35,10 @@ concurrent-install and running-process guards.
 
 Only one install runs on a device. Active sessions, jobs, desktop calls or
 pending approvals are refused, not queued. The device logs requests and
-outcomes. Explicit owner requests ignore `auto_update`; automatic scheduling
+outcomes. A successful swap makes restart-pending irreversible under that
+same install lock; no later install is accepted by the old process. Version
+checks use the lock-protected installed version, and a CLI binary replacement
+also fences off new requests. Explicit owner requests ignore `auto_update`; automatic scheduling
 and version decisions remain unchanged.
 
 wanctl uses the automatic updater's eligibility and handover assumptions:
@@ -64,6 +67,10 @@ process tree. Success re-reads the manifest; WebSocket version metadata is
 sent on the existing registration connection, HTTP metadata on the next
 existing poll, and the portal receives the version in unsolicited progress.
 
+Device progress versions are cleaned with `versionmeta.Clean`; reasons lose
+control/format characters and are capped at 400 characters before storage.
+Relay version writes have a ten-second per-device minimum interval, retaining
+and eventually flushing only the latest pending report, including after failures.
 Progress lives in portal memory, not the database. wanctl is only done after
 an online device registration reports the requested version; a successful
 binary swap alone is still installing. After ten minutes without completion,
@@ -72,5 +79,6 @@ not the installation or device version metadata.
 
 Portal and relay deploy together; old portal/new agent and new portal/old
 relay are not supported deployment shapes. Old agents' existing `unknown RPC
-kind` reply becomes a readable suggestion to wait for their six-hour automatic
-update or run `wanctl update` locally. No relay/portal release fetches are added.
+kind` reply says: "This device's wanctl is too old to be upgraded from the web.
+Run `wanctl update` on the device; if auto-update is on, it will also update
+itself." No relay/portal release fetches are added.

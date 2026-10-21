@@ -5,14 +5,17 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"wanctl/internal/protocol"
 	"wanctl/internal/release"
+	"wanctl/internal/versionmeta"
 )
 
-const oldInstallAgent = "this device's wanctl is too old to be upgraded from the web; it will update itself within six hours, or run wanctl update on it"
+const oldInstallAgent = "This device's wanctl is too old to be upgraded from the web. Run `wanctl update` on the device; if auto-update is on, it will also update itself."
 const installDeadline = 10 * time.Minute
 
 type deviceInstall struct {
@@ -91,6 +94,7 @@ func (s *Server) handleDeviceInstall(w http.ResponseWriter, r *http.Request) {
 	s.installs.devices[key] = current
 	s.installs.mu.Unlock()
 	update := func(p protocol.InstallProgress) {
+		p = cleanInstallProgress(p)
 		s.installs.mu.Lock()
 		defer s.installs.mu.Unlock()
 		if s.installs.devices[key] != current || !current.active() || p.Package != current.Package {
@@ -137,4 +141,25 @@ func (s *Server) handleDeviceInstall(w http.ResponseWriter, r *http.Request) {
 	defer s.installs.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(current)
+}
+
+// A device is not trusted to enforce the official helper's output limits.
+// Copy at most 400 printable runes, so a short stored reason cannot retain a
+// large backing string from the incoming protocol frame.
+func cleanInstallProgress(p protocol.InstallProgress) protocol.InstallProgress {
+	p.Version = versionmeta.Clean(p.Version)
+	var b strings.Builder
+	n := 0
+	for _, r := range p.Reason {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			continue
+		}
+		b.WriteRune(r)
+		n++
+		if n == 400 {
+			break
+		}
+	}
+	p.Reason = strings.TrimSpace(b.String())
+	return p
 }

@@ -61,7 +61,7 @@ cdp.ws.addEventListener('message', event => {
  if(m.method==='Runtime.consoleAPICalled' && m.params.type==='error') errors.push(m.params.args);
 });
 const device='DESKTOP-RQFV0SH-workstation-long';
-const cases=[['behind','install-behind',device],['installed','noask',device],['not-installed','install-empty',device],['beta','install-behind',device],['downloading','install-downloading',device],['installing','install-installing',device],['done','install-done',device],['failure','install-failed',device],['missing','install-missing',device],['unreachable','install-unreachable',device],['old-agent','install-old',device],['shared','noask','slate'],['shared-manage','noask','quarry'],['offline','install-offline',device]];
+const cases=[['behind','install-behind',device],['installed','noask',device],['not-installed','install-empty',device],['beta','install-behind',device],['downloading','install-downloading',device],['installing','install-installing',device],['done','install-done',device],['opencu-done','install-opencu-done',device],['failure','install-failed',device],['missing','install-missing',device],['unreachable','install-unreachable',device],['old-agent','install-old',device],['shared','noask','slate'],['shared-manage','noask','quarry'],['offline','install-offline',device]];
 const results=[];
 async function until(expr){for(let i=0;i<120;i++){if(await cdp.eval('return '+expr+';'))return;await sleep(50);}throw Error('not ready: '+expr);}
 async function click(selector){
@@ -80,7 +80,7 @@ try{
    await until("document.querySelectorAll('#grid .dev').length===8 && document.querySelector('#dFp').textContent!==''");
    const shared=name.startsWith('shared');
    if(!shared)await until("!document.querySelector('#dUpgrade').hidden");
-   if(['downloading','installing','done','failure','missing','unreachable','old-agent'].includes(name))await until("!document.querySelector('#dInstallProgress').hidden");
+   if(['downloading','installing','done','opencu-done','failure','missing','unreachable','old-agent'].includes(name))await until("!document.querySelector('#dInstallProgress').hidden");
    if(name==='not-installed')await until("document.querySelector('#dOpenCUVersion').textContent==='"+(lang==='en'?'not installed':'未安装')+"'");
    if(name==='beta'){
     await click('#dUpgrade');await until("document.querySelector('#form').classList.contains('show')");
@@ -100,6 +100,8 @@ try{
    if(width<500)for(const b of metrics.buttons.filter(b=>b.shown)){assert.ok(b.w>=40&&b.h>=40,JSON.stringify(b));}
    if(name==='offline')assert.ok(metrics.buttons.every(b=>b.disabled));
    if(['failure','missing','unreachable','old-agent'].includes(name)) assert.ok(metrics.progress.includes(lang==='zh'?'失败：':'Failed: '),metrics.progress);
+   if(name==='old-agent') assert.equal(metrics.progress,lang==='zh'?'wanctl · 失败：这台设备的 wanctl 太旧，不能从网页升级。请在设备上运行 wanctl update；开着自动更新的话，它也会自己更新。':'wanctl · Failed: This device\'s wanctl is too old to be upgraded from the web. Run `wanctl update` on the device; if auto-update is on, it will also update itself.');
+   if(name==='opencu-done') assert.equal(metrics.progress,lang==='zh'?'OpenCU · 已完成 0.4.1':'OpenCU · Done 0.4.1');
    if(name==='missing') assert.equal(metrics.progress,lang==='zh'?'wanctl · 失败：找不到 v0.29.0-beta.9 这个版本':'wanctl · Failed: version v0.29.0-beta.9 was not found in the official releases');
    if(name==='unreachable') assert.equal(metrics.progress,lang==='zh'?'wanctl · 失败：设备连不上 github.com':'wanctl · Failed: the device could not reach github.com');
    const shot=await cdp.send('Page.captureScreenshot',{format:'png'});
@@ -111,6 +113,7 @@ try{
    }
    if(name==='not-installed'){
     await click('#dOpenCUInstall');
+    await until("document.querySelector('#dInstallProgress').textContent.startsWith('OpenCU · ')");
     const result=await cdp.eval("return await (await fetch('/api/devices/install?device="+device+"')).json();");
     assert.equal(result.package,'opencu');assert.equal(result.version,'latest');
    }

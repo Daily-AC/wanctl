@@ -887,7 +887,7 @@
     $('#dInstallHint').textContent = lang === 'zh' ? '设备离线，上线后即可安装。' : 'Device offline. Install when it is back online.';
     $('#dInstallProgress').hidden = !owner || !state.stage;
     var stages = lang === 'zh' ? {downloading:'正在下载', installing:'正在安装', done:'已完成', failed:'失败'} : {downloading:'Downloading', installing:'Installing', done:'Done', failed:'Failed'};
-    $('#dInstallProgress').textContent = state.stage ? state.package + ' · ' + stages[state.stage] + (state.stage === 'done' ? ' ' + state.version : state.stage === 'failed' ? (lang === 'zh' ? '：' : ': ') + installReason(state.reason) : '…') : '';
+    $('#dInstallProgress').textContent = state.stage ? (state.package === 'opencu' ? 'OpenCU' : state.package) + ' · ' + stages[state.stage] + (state.stage === 'done' ? ' ' + state.version : state.stage === 'failed' ? (lang === 'zh' ? '：' : ': ') + installReason(state.reason) : '…') : '';
   }
 
   function installReason(reason) {
@@ -900,8 +900,9 @@
     var unreachable = /^the device could not reach (.+)$/.exec(reason || '');
     if (unreachable) return '设备连不上 ' + unreachable[1];
     var translations = [
+      [/an update was just installed; the agent is restarting/, '更新已安装，agent 正在重启。'],
       [/^wanctl installation failed; check the device logs$/, 'wanctl 安装失败，请查看设备日志。'],
-      [/too old to be upgraded/, '这台设备的 wanctl 太旧，无法从网页升级；它会在六小时内自动更新，也可在设备上运行 wanctl update。'],
+      [/too old to be upgraded/, '这台设备的 wanctl 太旧，不能从网页升级。请在设备上运行 wanctl update；开着自动更新的话，它也会自己更新。'],
       [/did not finish within 10 minutes/, '安装未在 10 分钟内完成，请在设备上运行 wanctl logs 查看日志。'],
       [/an install is already running/, '已有安装正在进行。'],
       [/device is offline/, '设备已离线，请上线后重试。'],
