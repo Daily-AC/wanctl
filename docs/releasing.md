@@ -82,7 +82,9 @@ Promote only when all of the following hold:
    On a slow link the download alone can take several minutes; the agent log
    says when the check found the rehearsal. If the log stays silent, the first
    check probably failed on GitHub and the relay mirror answered "up to date"
-   (issue #170): restart the agent again rather than waiting six hours.
+   (issue #170): restart the agent again rather than waiting six hours. A
+   device that needs `HTTPS_PROXY` to reach GitHub needs it in the
+   environment the supervisor starts the agent with, for the rehearsal only.
 
    This is the automatic path, run by the candidate's code. v0.20.0–v0.20.2
    shipped an updater that could not update; this step is what catches that.

@@ -81,8 +81,31 @@ the command.
 - Linux systemd: a transient system unit on a spare VM (no relay, no
   enrollment) ran beta.1, which updated itself to beta.2 in place: same
   MainPID, zero restarts. The unit was removed afterwards.
-- Not covered: a Windows device under `wanctl service install`'s own
-  `__supervise` task (the v0.20.3 `.old` path); the Windows device above uses
-  a PowerShell restart loop instead.
-- Still open: the 24-hour soak ends 2026-10-21 12:45; then tag `v0.26.0` on
-  the beta.2 commit plus a changelog-only commit.
+- A Windows device under `wanctl service install`'s own `__supervise` task
+  (2026-10-21, a test VM restored from a snapshot with v0.24.0 installed that
+  way): a manual swap to beta.2 was restarted by the supervisor;
+  `wanctl update v0.26.0-beta.1` replaced the binary and restarted the agent
+  (exit 0) while the supervisor itself kept running from a renamed old image;
+  with `release_base` at beta.2 the agent's own check installed it 70 s after
+  start. The VM reaches GitHub only through a proxy, so `HTTPS_PROXY` was set
+  for the command and, for the rehearsal, in the user's environment before
+  restarting the task.
+
+## Promotion (2026-10-21)
+
+- The soak ended at 12:45 with both maintainer devices online and no open
+  regression. Minutes earlier govulncheck began failing on GO-2026-6809
+  (crypto/x509, fixed in Go 1.26.10), so the Release workflow would refuse to
+  build v0.26.0 on the beta.2 commit.
+- PR #177 added the changelog and Go 1.26.10. `v0.26.0-beta.3` and the
+  rehearsal `v0.26.0-beta.4` were tagged on its merge commit, and steps 2 and
+  3 were rerun under all four supervisors (launchd with the approval phone,
+  the SYSTEM loop, `service install`, a systemd user unit). Every one installed
+  beta.3 with `wanctl update` and beta.4 with its own updater.
+- The second 24-hour soak was skipped under the emergency-fix clause: the code
+  was the soaked beta.2 code plus the toolchain patch, and the stable it
+  replaced was built with the affected Go. `v0.26.0` was tagged on the same
+  commit (`check-promotion`: promotes beta.4) and deployed.
+- After the deploy, the systemd unit rejoined the stable 61 s after a restart,
+  and the `service install` VM, which reaches only the relay mirror, picked it
+  up from `/dl` about 3 minutes after a restart.
