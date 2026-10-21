@@ -26,6 +26,8 @@ sed -e 's/__V__/dev/g' \
 <script src="/assets/app.js?v=dev"></script>#' \
     "$SRC/index.html" > "$OUT/index.html"
 
+sed 's/__V__/dev/g' "$SRC/manifest.webmanifest" > "$OUT/manifest.webmanifest"
+
 # 三张认证页（登录 / 等待邀请 / 设备授权）由 Go 渲染，模板就是同一批文件。
 # 这里用真实形状的假值把占位符填上 —— 形状不对就是工装在替真代码撒谎：
 #   授权码  9 位、中间一道横杠、字母表去掉了 I O 0 1（internal/relay/enroll.go）

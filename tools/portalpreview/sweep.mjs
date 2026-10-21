@@ -37,6 +37,7 @@ const arg = (k, d) => {
 };
 const BASE = arg('--base', 'http://127.0.0.1:8724');
 const OUT = arg('--out', join(tmpdir(), 'portal-sweep'));
+const SHOT_DIR = arg('--shot-dir', join(OUT, 'shots'));
 const ONLY = arg('--only', '');
 const SHOT_WIDTHS = arg('--shots', '412,1200').split(',').map(Number);
 const LANGS = arg('--langs', 'en,zh').split(',');
@@ -50,6 +51,9 @@ const QUERY = arg('--query', '');
 
 const VIEWPORTS = arg('--viewports', '360x780,390x844,412x915,430x932,768x1024,1200x820,1440x900')
   .split(',').map((s) => { const [w, h] = s.split('x').map(Number); return { w, h }; });
+
+// Optional real CSS env() emulation: top,right,bottom,left in CSS pixels.
+const SAFE = arg('--safe-area', '').split(',').filter(Boolean).map(Number);
 
 const PHONE_MAX = 480;   // 手指靶子只在这个宽度以下量
 
@@ -87,6 +91,9 @@ const STATES = [
   // 不摆出 role=user 这一屏，藏起来的东西有没有真藏住就没有一个状态问得出。
   { id: 'settings-user', q: '&view=settings&role=user' },
   { id: 'set-tokens', q: '&view=settings/tokens' },
+  { id: 'set-email', q: '&view=settings/email' },
+  { id: 'set-email-edit', q: '&view=settings/email', open: `document.querySelector('#eEdit').click()` },
+  { id: 'set-email-pending', q: '&view=settings/email&scene=emailpending' },
   { id: 'set-notify', q: '&view=settings/notify' },
   { id: 'set-invites', q: '&view=settings/invites' },
   // 申请队列空掉的样子。整块该消失，下面那张邀请表不该因此塌掉。
@@ -147,6 +154,8 @@ const STATES = [
   { id: 'avatar-letter', q: '&avatar=broken' },
 
   // D. 认证页（Go 渲染，预览里是静态的）
+  ...['delegation', 'delegation-done', 'delegation-error', 'webfetch-connect', 'webfetch-help', 'oauth', 'oauth-error',
+      'confirm-done', 'confirm-used', 'confirm-unknown'].map(id => ({ id, page: id + '.html' })),
   { id: 'login', page: 'login.html' },
   { id: 'pending', page: 'pending.html' },
   // 申请访问的另外三种样子。同一份模板，服务端给的 data-req 不同。
@@ -188,7 +197,7 @@ const AUDIT = (REF) => String.raw`(() => {
     cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0' &&
     (r.width > 0 || r.height > 0);
 
-  const over = [], trunc = [], small = [], unbreak = [], scroll = [];
+  const over = [], trunc = [], small = [], unbreak = [], scroll = [], clippedControls = [];
   /* 藏不住的元素。hidden 是这套界面里唯一的「不存在」开关，可浏览器默认表里
      [hidden]{display:none} 只有 (0,1,0) —— 随手一句带类名的 display 就压得过它，
      而那一句通常离出问题的地方很远（.sgroup button{display:block} 把「邀请」
@@ -231,6 +240,19 @@ const AUDIT = (REF) => String.raw`(() => {
       if (/^[^\s]{28,}$/.test(txt) && el.scrollWidth > el.clientWidth + 1) {
         unbreak.push({ sel: sel(el), text: txt.slice(0, 60), w: Math.round(el.scrollWidth) });
       }
+    }
+
+    if (el.matches('button,a[href],select,input,textarea,[role="button"]')) {
+      let reason = r.left < -1 || r.right > vw + 1 ? 'viewport' : '';
+      let canScrollY = false;
+      for (let p = el.parentElement; p && !reason; p = p.parentElement) {
+        const ps = getComputedStyle(p), pr = p.getBoundingClientRect();
+        // Vertical scrolling is usable; clipping without a scroll path isn't.
+        if (/(hidden|clip|auto|scroll)/.test(ps.overflowX) && (r.left < pr.left - 1 || r.right > pr.right + 1)) reason = sel(p) + ' horizontal';
+        if (/(auto|scroll)/.test(ps.overflowY)) canScrollY = true;
+        if (!canScrollY && /(hidden|clip)/.test(ps.overflowY) && (r.top < pr.top - 1 || r.bottom > pr.bottom + 1)) reason = sel(p) + ' vertical';
+      }
+      if (reason) clippedControls.push({sel: sel(el), reason});
     }
 
     // 手指靶子。量的是**真正接受点击的那个盒子**：一个 13px 的复选框包在
@@ -281,7 +303,19 @@ const AUDIT = (REF) => String.raw`(() => {
     };
   }
 
+  const rootStyle = getComputedStyle(document.documentElement);
+  const inset = edge => parseFloat(rootStyle.getPropertyValue('--safe-' + edge)) || 0;
+  const safe = { top: inset('top'), right: inset('right'), bottom: inset('bottom'), left: inset('left') };
+  const topControls = [...document.querySelectorAll('.top button,.top a')].filter(el => el.getClientRects().length);
+  const safeAreaClear = topControls.every(el => {
+    const r = el.getBoundingClientRect();
+    return r.top >= safe.top && r.left >= safe.left && r.right <= vw - safe.right;
+  }) && (!modal || (modal.top >= safe.top && modal.bottom <= vh - safe.bottom &&
+                    modal.left >= safe.left && modal.right <= vw - safe.right)) &&
+    parseFloat(getComputedStyle(document.querySelector('main')).paddingBottom) >= safe.bottom;
+
   return {
+    safe, safeAreaClear,
     vw, vh, innerWidth,
     scrollWidth: document.documentElement.scrollWidth,
     // 三个信号取最大，绝不少报：最右的那条墨迹、文档的滚动宽度、以及被撑宽的
@@ -290,6 +324,8 @@ const AUDIT = (REF) => String.raw`(() => {
     overflowX: Math.max(0, Math.round(maxRight) - REF,
                         document.documentElement.scrollWidth - REF, innerWidth - REF),
     maxRight: Math.round(maxRight),
+    language: document.documentElement.lang,
+    clippedControls,
     over: overLeaf, trunc, small, unbreak, scroll, modal, ghost,
   };
 })()`;
@@ -372,7 +408,9 @@ async function connect(port) {
       return r.result.value;
     },
     async shot(file) {
-      const r = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+      const { cssContentSize: size } = await send('Page.getLayoutMetrics');
+      const r = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true,
+        clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 } });
       writeFileSync(file, Buffer.from(r.data, 'base64'));
     },
     close() { ws.close(); },
@@ -385,6 +423,8 @@ rmSync(chromeDir, { recursive: true, force: true });
 const chrome = spawn(CHROME, [
   '--headless=new', `--remote-debugging-port=${PORT}`, `--user-data-dir=${chromeDir}`,
   '--no-first-run', '--no-default-browser-check', '--disable-extensions',
+  '--disable-features=CalculateNativeWinOcclusion', '--disable-backgrounding-occluded-windows',
+  '--disable-renderer-backgrounding', '--disable-background-timer-throttling',
   '--hide-scrollbars', '--force-device-scale-factor=1', 'about:blank',
 ], { stdio: 'ignore' });
 
@@ -392,9 +432,13 @@ process.on('exit', () => { try { chrome.kill(); } catch {} });
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { try { chrome.kill(); } catch {} process.exit(1); });
 
 mkdirSync(OUT, { recursive: true });
-mkdirSync(join(OUT, 'shots'), { recursive: true });
+mkdirSync(SHOT_DIR, { recursive: true });
 
 const cdp = await connect(PORT);
+if (SAFE.length) {
+  const [top, right, bottom, left] = SAFE;
+  await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top, right, bottom, left } });
+}
 const rows = [];
 const states = ONLY ? STATES.filter((s) => ONLY.split(',').includes(s.id)) : STATES;
 
@@ -410,6 +454,9 @@ for (const vp of VIEWPORTS) {
   await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: mobile, maxTouchPoints: mobile ? 5 : 1 });
 
   for (const lang of LANGS) {
+    const { identifier: languageScript } = await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `try { localStorage.setItem('wanctl.lang', ${JSON.stringify(lang)}) } catch {}`,
+    });
     for (const st of states) {
       const url = st.page
         ? `${BASE}/${st.page}`
@@ -424,12 +471,16 @@ for (const vp of VIEWPORTS) {
       try { await cdp.send('Page.navigate', { url }, 45000); }
       catch (e) { navErr = String(e).slice(0, 120); }
       await sleep(500);
-      if (st.page && lang === 'zh') {
-        // 三张认证页由 auth.js 自己读 localStorage，导航后切一次即可
-        await cdp.eval(`try{localStorage.setItem('wanctl.lang','zh')}catch(e){}; location.reload(); return 1`);
-        await sleep(600);
+      let loaded = false;
+      for (let i = 0; i < 30; i++) {
+        loaded = await cdp.eval(`return document.readyState === 'complete' && document.documentElement.lang.split('-')[0] === ${JSON.stringify(lang)}`).catch(() => false);
+        if (loaded) break;
+        await sleep(200);
       }
+      if (!loaded) navErr = 'Page or requested language did not finish loading';
+      await cdp.eval('await document.fonts.ready; return true');
       if (!st.page) {
+        let ready = false;
         // 等到**这个状态那一屏真的画出来**，不是等「有数据了」。
         // 以前的判据是 #grid 里有卡片 —— 而那只说明 loadDevices 回来了。
         // route() 等的是 Promise.all([loadDevices(), whoami])，所以设备页
@@ -437,17 +488,18 @@ for (const vp of VIEWPORTS) {
         // 在 dev-asks 上量到、在 ask-bypass 上量不到 —— 一台时灵时不灵的
         // 量具比没有量具更坏。
         for (let i = 0; i < 30; i++) {
-          const ready = await cdp.eval(READY).catch(() => false);
+          ready = await cdp.eval(READY).catch(() => false);
           if (ready) break;
           await sleep(200);
         }
+        if (!ready) navErr = 'Page did not reach the requested state';
         if (st.hash) {
           await cdp.eval(`location.hash = ${JSON.stringify(st.q)}; return 1`);
           await sleep(400);
         }
       }
       await sleep(st.settle ?? 350);
-      if (st.open) { await cdp.eval(st.open).catch(() => {}); await sleep(st.settle ?? 450); }
+      if (st.open) { await cdp.eval(st.open).catch(e => { navErr = String(e); }); await sleep(st.settle ?? 450); }
       await cdp.eval(FREEZE).catch(() => {});
 
 
@@ -456,7 +508,7 @@ for (const vp of VIEWPORTS) {
       catch (e) { audit = { error: String(e).slice(0, 200) }; }
       const errors = cdp.takeErrors().filter((e) => !/favicon|ERR_/.test(e));
 
-      const row = { state: st.id, w: vp.w, h: vp.h, lang, ...audit, errors };
+      const row = { state: st.id, safeArea: SAFE, w: vp.w, h: vp.h, lang, ...audit, errors };
       if (navErr) row.navErr = navErr;
       rows.push(row);
       n++;
@@ -464,11 +516,12 @@ for (const vp of VIEWPORTS) {
       writeFileSync(join(OUT, 'sweep.json'), JSON.stringify(rows, null, 1));
 
       if (SHOT_WIDTHS.includes(vp.w)) {
-        const f = join(OUT, 'shots', `${st.id}-${vp.w}-${lang}.png`);
-        await cdp.shot(f).catch(() => {});
+        const f = join(SHOT_DIR, `${st.id}-${vp.w}-${lang}.png`);
+        await cdp.shot(f).catch(e => { row.error = 'Screenshot failed: ' + e; });
       }
       process.stdout.write(`\r${n} runs · ${st.id} ${vp.w}×${vp.h} ${lang}            `);
     }
+    await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: languageScript });
   }
 }
 process.stdout.write('\n');
@@ -476,24 +529,28 @@ process.stdout.write('\n');
 writeFileSync(join(OUT, 'sweep.json'), JSON.stringify(rows, null, 1));
 
 /* ── 汇总 ─────────────────────────────────────────────────────────── */
-const bad = rows.filter((r) =>
-  (r.overflowX > 0) ||
+const bad = rows.filter((r) => r.safeAreaClear === false || r.navErr || r.language?.split('-')[0] !== r.lang ||
+  (r.overflowX > 0) || r.clippedControls?.length ||
   (r.modal && (!r.modal.inside || !r.modal.centered || r.modal.btns.some((b) => !b.inside))) ||
-  (r.trunc && r.trunc.length) || (r.unbreak && r.unbreak.length) || (r.scroll && r.scroll.length) ||
-  (r.small && r.small.length) || (r.ghost && r.ghost.length) ||
+  r.trunc?.length || r.unbreak?.length || r.scroll?.length ||
+  r.small?.length || (r.ghost && r.ghost.length) ||
   (r.errors && r.errors.length) || r.error);
 
 const lines = [];
 lines.push(`runs: ${rows.length}   flagged: ${bad.length}`);
 const kinds = {
+  safeArea: rows.filter(r => r.safeAreaClear === false).length,
+  loadError: rows.filter(r => r.navErr || r.error).length,
+  wrongLanguage: rows.filter(r => r.language?.split('-')[0] !== r.lang).length,
+  clippedControls: rows.filter(r => r.clippedControls?.length).length,
   overflow: rows.filter((r) => r.overflowX > 0).length,
   modalOut: rows.filter((r) => r.modal && !r.modal.inside).length,
   modalOff: rows.filter((r) => r.modal && !r.modal.centered).length,
   btnOut: rows.filter((r) => r.modal && r.modal.btns.some((b) => !b.inside)).length,
-  truncated: rows.filter((r) => r.trunc.length).length,
-  sideScroll: rows.filter((r) => r.scroll.length).length,
-  unbreakable: rows.filter((r) => r.unbreak.length).length,
-  tinyTaps: rows.filter((r) => r.small.length).length,
+  truncated: rows.filter((r) => r.trunc?.length).length,
+  sideScroll: rows.filter((r) => r.scroll?.length).length,
+  unbreakable: rows.filter((r) => r.unbreak?.length).length,
+  tinyTaps: rows.filter((r) => r.small?.length).length,
   notHidden: rows.filter((r) => (r.ghost || []).length).length,
   consoleErr: rows.filter((r) => r.errors.length).length,
 };
@@ -524,5 +581,5 @@ console.log(summary);
 
 cdp.close();
 chrome.kill();
-// 只有「藏不住的元素」判退出码。别的六条是给人读的清单，不是断言。
-if (ghosts.size) process.exitCode = 1;
+// Fail on broken navigation, wrong language, overflow, clipped controls or runtime errors.
+if (rows.some(r => r.error || r.safeAreaClear === false || r.navErr || r.language?.split('-')[0] !== r.lang || r.overflowX > 0 || r.clippedControls?.length || (r.ghost || []).length || r.errors.length)) process.exitCode = 1;
