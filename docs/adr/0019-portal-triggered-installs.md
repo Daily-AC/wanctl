@@ -38,15 +38,22 @@ pending approvals are refused, not queued. The device logs requests and
 outcomes. Explicit owner requests ignore `auto_update`; automatic scheduling
 and version decisions remain unchanged.
 
-wanctl refuses development builds, the Android APK copy (use the app update
-check), unwritable binary directories (run `wanctl update` with sufficient
-rights), and modes without a known restart path. Unix re-execs, preserving the
-PID for foreground, detached, launchd, systemd and supervisor runs. Windows
-foreground/detached agents start a successor; managed agents must identify
-our `__supervise` parent, which restarts the stable path. An old/unidentified
-Windows supervisor, native Windows service or bare session-0 task is refused;
-update manually and restart the service/task. Android standalone installs
-cannot complete the automatic restart and are also refused.
+wanctl uses the automatic updater's eligibility and handover assumptions:
+development builds, APK copies, standalone Android/Termux and unwritable
+binary directories are refused before downloading. Unix re-execs, preserving
+the PID for foreground, detached, launchd, systemd and supervisor runs.
+Windows `--managed` means an external supervisor restarts the same binary path
+after exit, including PowerShell loops running as SYSTEM and existing
+`__supervise` parents. No parent marker or second supervisor trust test is
+required. Unmanaged Windows agents use the automatic updater's successor
+process path, including session 0; web upgrades add no stricter mode gate.
+Any defect in those restart assumptions is an auto-update issue too.
+
+If every source reports the requested tag absent, the portal names the missing
+version. If a source cannot be reached, it names only the host; a later 404
+must not hide that uncertainty. Full per-source errors remain in the device
+event log. Other installation failures give a plain sentence directing the
+owner to that log, rather than exposing raw Go diagnostics.
 
 OpenCU refuses non-Windows devices, a missing console user, unavailable user
 environment, an elevated inherited user token, and any active desktop call.
