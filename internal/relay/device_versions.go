@@ -13,6 +13,7 @@ import (
 
 const maxDeviceVersionBytes = versionmeta.MaxBytes
 const deviceVersionWriteTimeout = 5 * time.Second
+const deviceVersionWriteInterval = 10 * time.Second
 
 func cleanDeviceVersion(value string) string { return versionmeta.Clean(value) }
 
@@ -38,6 +39,7 @@ type deviceVersionState struct {
 	stored          *versionReport
 	revision        uint64
 	running, failed bool
+	nextWrite       time.Time
 }
 
 // Called under registrationMu so accepted registrations retain their order.
@@ -82,11 +84,24 @@ func (r *Relay) writeDeviceVersions(store deviceVersionStore, ns, device string,
 			r.versionsMu.Unlock()
 			return
 		}
+		// Enforce the interval since the previous completed write attempt.
+		// Wait without holding the mutex, then read want again: only the latest
+		// report survives the interval, including reports from a new connection.
+		if delay := time.Until(state.nextWrite); delay > 0 {
+			r.versionsMu.Unlock()
+			time.Sleep(delay)
+			continue
+		}
+		interval := r.versionWriteInterval
+		if interval <= 0 {
+			interval = deviceVersionWriteInterval
+		}
 		r.versionsMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), deviceVersionWriteTimeout)
 		err := store.RecordDeviceVersions(ctx, ns, device, report.wanctl, report.opencu, report.reported)
 		cancel()
 		r.versionsMu.Lock()
+		state.nextWrite = time.Now().Add(interval)
 		logFailure := err != nil && !state.failed
 		if err == nil {
 			state.stored = &report

@@ -90,6 +90,7 @@ func TestVersionStoreFailureNeverRefusesRegistration(t *testing.T) {
 					return nil
 				}}
 				r := New(EnvTokenStore("alice:alice"))
+				r.versionWriteInterval = time.Millisecond
 				r.SetAdmin(store)
 				srv := httptest.NewServer(http.HandlerFunc(r.handleAgent))
 				defer srv.Close()
@@ -159,6 +160,7 @@ func TestSlowVersionStoreDoesNotBlockAnotherNamespace(t *testing.T) {
 		return nil
 	}}
 	r := New(EnvTokenStore("alice:alice,bob:bob"))
+	r.versionWriteInterval = time.Millisecond
 	r.SetAdmin(store)
 	reg := versionRegistration()
 	reg["wanctl_version"] = "v1.0.0"
@@ -202,6 +204,7 @@ func TestVersionWritesKeepLatestAcceptedReport(t *testing.T) {
 		return nil
 	}}
 	r := New(EnvTokenStore("alice:alice"))
+	r.versionWriteInterval = time.Millisecond
 	r.SetAdmin(store)
 	reg := versionRegistration()
 	reg["wanctl_version"] = "v1.0.0"
@@ -279,6 +282,7 @@ func TestIdenticalPollsWriteVersionsOnce(t *testing.T) {
 	}
 	defer db.Close()
 	r := New(EnvTokenStore("alice:alice"))
+	r.versionWriteInterval = time.Millisecond
 	state.relay = r
 	r.SetAdmin(&PGStore{db: db})
 	reg := versionRegistration()
@@ -311,6 +315,7 @@ func TestIdentityFailureStillRefusesRegistration(t *testing.T) {
 				return nil
 			}}
 			r := New(EnvTokenStore("alice:alice"))
+			r.versionWriteInterval = time.Millisecond
 			r.SetAdmin(store)
 			reg := versionRegistration()
 			if tr == "http" {
@@ -354,6 +359,7 @@ func TestLiveVersionReportWithoutReconnect(t *testing.T) {
 		return nil
 	}}
 	r := New(EnvTokenStore("alice:alice"))
+	r.versionWriteInterval = time.Millisecond
 	r.SetAdmin(store)
 	srv := httptest.NewServer(http.HandlerFunc(r.handleAgent))
 	defer srv.Close()
