@@ -601,7 +601,7 @@ func cmdAgent(ctx context.Context, args []string) error {
 	runCtx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
 	webUpdater := configurePortalUpdate(ag, buildVersion, stopRun)
-	updater := startAutoUpdate(runCtx, buildVersion, ag.Busy, stopRun, ag.PrepareDesktopUpdate)
+	updater := startAutoUpdate(runCtx, buildVersion, ag.Busy, stopRun, ag.InstallAutoUpdate)
 	runErr := ag.Run(runCtx)
 	ag.CloseDesktop() // Close persistent peers before shutdown or self-update re-exec.
 	if webUpdater.updated.Load() || (updater != nil && updater.updated()) {

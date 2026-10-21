@@ -53,18 +53,31 @@ func configurePortalUpdate(a *agent.Agent, version string, restart func()) *port
 		self = real
 	}
 	u := &portalUpdater{self: self}
+	original, statErr := os.Stat(self)
 	a.ConfigureInstall(agent.InstallHooks{
-		Check: func(target string) error {
+		Version: version,
+		Unchanged: func() bool {
+			if statErr != nil {
+				return true
+			} // Check reports path/permission failures.
+			now, err := os.Stat(self)
+			return err == nil && os.SameFile(original, now) && original.Size() == now.Size() && original.ModTime() == now.ModTime()
+		},
+		Check: func(current, target string) error {
 			if pathErr != nil {
 				return fmt.Errorf("cannot locate running binary: %w", pathErr)
 			}
-			return checkPortalUpdate(portalUpdateProbe{version, self, runtime.GOOS, runningFromAPK, canWriteDir}, target)
+			return checkPortalUpdate(portalUpdateProbe{current, self, runtime.GOOS, runningFromAPK, canWriteDir}, target)
 		},
-		Run: func(ctx context.Context, target string, stage func(string)) (installed string, runErr error) {
+		Run: func(ctx context.Context, current, target string, stage func(string)) (installed string, runErr error) {
 			defer func() {
 				var failure *agent.InstallError
 				if runErr != nil && !errors.As(runErr, &failure) {
-					runErr = &agent.InstallError{Reason: "wanctl installation failed; check the device logs", Err: runErr}
+					reason := "wanctl installation failed; check the device logs"
+					if errors.Is(runErr, agent.ErrRestartPending) {
+						reason = agent.ErrRestartPending.Error()
+					}
+					runErr = &agent.InstallError{Reason: reason, Err: runErr}
 				}
 			}()
 			bases, err := updateSourcesForVersion(target)
@@ -72,7 +85,7 @@ func configurePortalUpdate(a *agent.Agent, version string, restart func()) *port
 				return "", err
 			}
 			got, err := fetchPortalUpdate(target, bases, func(base string) (updateFetch, error) {
-				path, v, err := downloadSignedVersion(ctx, base, filepath.Dir(self), runtime.GOOS, runtime.GOARCH, version, target)
+				path, v, err := downloadSignedVersion(ctx, base, filepath.Dir(self), runtime.GOOS, runtime.GOARCH, current, target)
 				return updateFetch{path: path, version: v}, err
 			})
 			if err != nil {
@@ -83,6 +96,9 @@ func configurePortalUpdate(a *agent.Agent, version string, restart func()) *port
 				return "", err
 			}
 			stage("installing")
+			if now, err := os.Stat(self); statErr == nil && (err != nil || !os.SameFile(original, now) || original.Size() != now.Size() || original.ModTime() != now.ModTime()) {
+				return "", agent.ErrRestartPending
+			}
 			if err := os.Chmod(got.path, 0755); err != nil {
 				return "", err
 			}

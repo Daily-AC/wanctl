@@ -84,6 +84,8 @@ type Agent struct {
 
 	openCUVersion  *installedVersionCache
 	installMu      sync.Mutex
+	installVersion string // protected by installMu
+	restartPending bool   // protected by installMu
 	installer      InstallHooks
 	versionChanged chan struct{}
 

@@ -40,7 +40,7 @@ func TestPackageInstallThroughRelay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			a.ConfigureInstall(agent.InstallHooks{Check: func(string) error { return nil }, Run: func(_ context.Context, v string, stage func(string)) (string, error) {
+			a.ConfigureInstall(agent.InstallHooks{Check: func(string, string) error { return nil }, Run: func(_ context.Context, current, v string, stage func(string)) (string, error) {
 				stage("installing")
 				return v, nil
 			}})
