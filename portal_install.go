@@ -60,12 +60,18 @@ func configurePortalUpdate(a *agent.Agent, version string, restart func()) *port
 			}
 			return checkPortalUpdate(portalUpdateProbe{version, self, runtime.GOOS, runningFromAPK, canWriteDir}, target)
 		},
-		Run: func(ctx context.Context, target string, stage func(string)) (string, error) {
+		Run: func(ctx context.Context, target string, stage func(string)) (installed string, runErr error) {
+			defer func() {
+				var failure *agent.InstallError
+				if runErr != nil && !errors.As(runErr, &failure) {
+					runErr = &agent.InstallError{Reason: "wanctl installation failed; check the device logs", Err: runErr}
+				}
+			}()
 			bases, err := updateSourcesForVersion(target)
 			if err != nil {
 				return "", err
 			}
-			got, err := overSources(bases, func(base string) (updateFetch, error) {
+			got, err := fetchPortalUpdate(target, bases, func(base string) (updateFetch, error) {
 				path, v, err := downloadSignedVersion(ctx, base, filepath.Dir(self), runtime.GOOS, runtime.GOARCH, version, target)
 				return updateFetch{path: path, version: v}, err
 			})

@@ -887,7 +887,7 @@
     $('#dInstallHint').textContent = lang === 'zh' ? '设备离线，上线后即可安装。' : 'Device offline. Install when it is back online.';
     $('#dInstallProgress').hidden = !owner || !state.stage;
     var stages = lang === 'zh' ? {downloading:'正在下载', installing:'正在安装', done:'已完成', failed:'失败'} : {downloading:'Downloading', installing:'Installing', done:'Done', failed:'Failed'};
-    $('#dInstallProgress').textContent = state.stage ? state.package + ' · ' + stages[state.stage] + (state.stage === 'done' ? ' ' + state.version : state.stage === 'failed' ? ': ' + installReason(state.reason) : '…') : '';
+    $('#dInstallProgress').textContent = state.stage ? state.package + ' · ' + stages[state.stage] + (state.stage === 'done' ? ' ' + state.version : state.stage === 'failed' ? (lang === 'zh' ? '：' : ': ') + installReason(state.reason) : '…') : '';
   }
 
   function installReason(reason) {
@@ -895,7 +895,12 @@
       if (/版本格式/.test(reason || '')) return 'Use vX.Y.Z or vX.Y.Z-beta.N (N must be a positive integer without leading zeros).';
       return reason || 'Installation failed; check wanctl logs on the device.';
     }
+    var missing = /^version (.+) was not found in the official releases$/.exec(reason || '');
+    if (missing) return '找不到 ' + missing[1] + ' 这个版本';
+    var unreachable = /^the device could not reach (.+)$/.exec(reason || '');
+    if (unreachable) return '设备连不上 ' + unreachable[1];
     var translations = [
+      [/^wanctl installation failed; check the device logs$/, 'wanctl 安装失败，请查看设备日志。'],
       [/too old to be upgraded/, '这台设备的 wanctl 太旧，无法从网页升级；它会在六小时内自动更新，也可在设备上运行 wanctl update。'],
       [/did not finish within 10 minutes/, '安装未在 10 分钟内完成，请在设备上运行 wanctl logs 查看日志。'],
       [/an install is already running/, '已有安装正在进行。'],
@@ -906,7 +911,7 @@
       [/Android installation cannot restart/, '此 Android 安装无法在更新后自动重启，请在设备上运行 wanctl update。'],
       [/busy/, '设备正忙于会话、任务、桌面操作或审批，请完成后重试。'],
       [/no signed-in user/, '控制台没有已登录的用户，请先在设备上登录。'],
-      [/supervisor|cannot restart after/, '无法确认此进程能在更新后重启；请在设备上运行 wanctl update，再重启服务或任务。'],
+      [/cannot restart after/, '无法确认此进程能在更新后重启；请在设备上运行 wanctl update，再重启服务或任务。'],
       [/OpenCU installation requires Windows/, 'OpenCU 只能在 Windows 上安装。'],
       [/normal non-elevated token/, 'OpenCU 安装需要控制台用户的普通权限，请不要以管理员身份运行该用户的 agent。'],
       [/console user's session/, 'OpenCU 安装需要在已登录控制台用户的会话中运行。'],

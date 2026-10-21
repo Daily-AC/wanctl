@@ -657,7 +657,7 @@ func downloadSignedVersion(ctx context.Context, base, dir, goos, goarch, current
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("fetch %s: %s", url, resp.Status)
+		return "", "", &updateHTTPError{URL: url, Status: resp.Status, StatusCode: resp.StatusCode}
 	}
 	if resp.ContentLength > artifact.Size {
 		return "", "", fmt.Errorf("artifact content length %d exceeds signed size %d", resp.ContentLength, artifact.Size)
@@ -695,7 +695,7 @@ func fetchLimited(ctx context.Context, url string, limit int64) ([]byte, error) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch %s: %s", url, resp.Status)
+		return nil, &updateHTTPError{URL: url, Status: resp.Status, StatusCode: resp.StatusCode}
 	}
 	if resp.ContentLength > limit {
 		return nil, fmt.Errorf("fetch %s: response too large", url)
@@ -709,3 +709,12 @@ func fetchLimited(ctx context.Context, url string, limit int64) ([]byte, error) 
 	}
 	return raw, nil
 }
+
+// Keep HTTP status available without parsing diagnostic strings. CLI and
+// automatic-update error text remains unchanged.
+type updateHTTPError struct {
+	URL, Status string
+	StatusCode  int
+}
+
+func (e *updateHTTPError) Error() string { return fmt.Sprintf("fetch %s: %s", e.URL, e.Status) }
