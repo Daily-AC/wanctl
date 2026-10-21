@@ -144,10 +144,10 @@ func (s adminTestStmt) Query(args []driver.Value) (driver.Rows, error) {
 		rows = append(rows, []driver.Value{"devbox", "office", "fp-devbox", seen, "bob", true, "exec", true})
 	}
 	for i := range rows {
-		rows[i] = append(rows[i], rows[i][0], "", false)
+		rows[i] = append(rows[i], rows[i][0], "", false, "v0.9.0", "0.3.99", seen)
 	}
 	return &adminRows{
-		columns: []string{"name", "alias", "fingerprint", "last_seen", "owner", "shared", "perms", "manage", "display_name", "legacy_name", "uses_device_id"},
+		columns: []string{"name", "alias", "fingerprint", "last_seen", "owner", "shared", "perms", "manage", "display_name", "legacy_name", "uses_device_id", "wanctl_version", "opencu_version", "versions_reported_at"},
 		values:  rows,
 	}, nil
 }

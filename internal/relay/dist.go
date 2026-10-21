@@ -37,6 +37,9 @@ func (r *Relay) registerDist(mux *http.ServeMux) {
 		})
 		fmt.Fprintf(os.Stderr, "wanctl relay: release distribution disabled: %v\n", err)
 	}
+	if signed, ok := handler.(*signedDistHandler); ok && !strings.Contains(signed.version, "-beta.") {
+		r.latestStable = signed.version
+	}
 	mux.Handle("/dl/", http.StripPrefix("/dl/", handler))
 	// Resolved once at startup rather than per request: the value cannot change
 	// under a running relay, and a bad one should be reported on boot instead of
@@ -136,7 +139,7 @@ func newSignedDistHandler(dir string) (http.Handler, error) {
 		rsaSignatureRaw = nil
 	}
 	return &signedDistHandler{
-		dir: dir, manifestRaw: manifestRaw, signatureRaw: signatureRaw,
+		version: manifest.Version, dir: dir, manifestRaw: manifestRaw, signatureRaw: signatureRaw,
 		rsaSignatureRaw: rsaSignatureRaw,
 		artifacts:       artifacts,
 	}, nil
@@ -162,6 +165,7 @@ func verifyArtifactFile(dir string, artifact wanrelease.Artifact) (os.FileInfo, 
 }
 
 type signedDistHandler struct {
+	version         string
 	dir             string
 	manifestRaw     []byte
 	signatureRaw    []byte
