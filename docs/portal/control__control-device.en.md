@@ -68,6 +68,8 @@ restart path: Windows `--managed` relies on its external restart loop,
 including SYSTEM PowerShell scripts and existing scheduled-task supervisors;
 no supervisor restart or new parent marker is needed before using the button.
 A missing version or an unreachable source is reported in one sentence;
-full download diagnostics are in the device's install log. Older agents suggest waiting for their automatic update
-(within six hours) or running `wanctl update` on the device. Progress is
-transient and disappears if the portal restarts.
+full download diagnostics are in the device's install log.
+
+For older agents, the hint says: "This device's wanctl is too old to be upgraded
+from the web. Run `wanctl update` on the device; if auto-update is on, it will
+also update itself." Progress is transient and disappears if the portal restarts.

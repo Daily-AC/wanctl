@@ -1250,7 +1250,8 @@ The authenticated portal console accepts `package_install` with only
 `opencu` + `latest` (Windows). It acknowledges with `package_install`, or
 returns `error` with a plain `reason`. Unknown kinds on older agents already
 return `error` with Data `"unknown RPC kind"`; the portal turns this into the
-six-hour automatic-update / local `wanctl update` hint.
+hint: "This device's wanctl is too old to be upgraded from the web. Run
+`wanctl update` on the device; if auto-update is on, it will also update itself."
 
 `install_progress` is an unsolicited device-to-portal message, never an RPC
 reply. Its Data is `{package, version, stage, reason?}`. Stages are
@@ -1310,3 +1311,16 @@ refused rather than queued. On OpenCU success, WebSocket agents send
 connection; only the currently registered connection may update metadata.
 HTTP agents use their next existing `/h/poll`. Neither needs to reconnect;
 the console progress gives the portal the OpenCU version immediately.
+
+After a successful binary swap, the agent retains its installed version and
+restart-pending state under the shared installation lock. Web and automatic
+updates cannot start another install until the process is replaced. A CLI
+swap of the executable is detected by its changed file identity. Failed
+installs release the reservation without marking restart pending.
+
+Device progress is untrusted: the portal applies `versionmeta.Clean` to its
+version, removes control/format characters from its reason and retains at
+most 400 characters before storing it. The relay persists version metadata
+at most once per device every ten seconds after an attempt, coalescing to the
+latest report and flushing pending changes when the interval ends. Identical
+reports remain deduplicated; database failures use the same minimum interval.

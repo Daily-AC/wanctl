@@ -95,8 +95,9 @@
   var installScene = scene.replace('install-', '');
   if (['downloading','installing','done','failed','old'].indexOf(installScene) >= 0) installState = {package:'wanctl',version:'v0.31.0-beta.1',stage:installScene === 'old' ? 'failed' : installScene,started:new Date(now).toISOString()};
   if (installScene === 'failed') installState.reason = 'binary directory C:\\Program Files\\wanctl is not writable; run wanctl update with sufficient rights on the device';
-  if (installScene === 'old') installState.reason = "this device's wanctl is too old to be upgraded from the web; it will update itself within six hours, or run wanctl update on it";
+  if (installScene === 'old') installState.reason = "This device's wanctl is too old to be upgraded from the web. Run `wanctl update` on the device; if auto-update is on, it will also update itself.";
   if (installScene === 'missing' || installScene === 'unreachable') installState = {package:'wanctl',version:'v0.29.0-beta.9',stage:'failed',started:new Date(now).toISOString(),reason:installScene === 'missing' ? 'version v0.29.0-beta.9 was not found in the official releases' : 'the device could not reach github.com'};
+  if (installScene === 'opencu-done') installState = {package:'opencu',version:'0.4.1',stage:'done',started:new Date(now).toISOString()};
   if (scene === 'version-html') devices[6].opencu_version = '<img src=x onerror=globalThis.versionXSS=1>';
 
   var waiting = [
