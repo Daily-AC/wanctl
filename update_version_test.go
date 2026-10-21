@@ -21,9 +21,9 @@ func TestUpdateVersionSources(t *testing.T) {
 		want []string
 	}{
 		{"https://github.com/Daily-AC/wanctl/releases/latest/download/", []string{"https://github.com/Daily-AC/wanctl/releases/download/v0.26.0-beta.2", "https://relay.example/dl"}},
-		{"https://custom.example/beta/", []string{"https://custom.example/beta", "https://relay.example/dl"}},
-		{"", []string{"https://relay.example/dl"}},
-		{"https://relay.example/dl", []string{"https://relay.example/dl"}},
+		{"https://custom.example/beta/", []string{"https://github.com/Daily-AC/wanctl/releases/download/v0.26.0-beta.2", "https://custom.example/beta", "https://relay.example/dl"}},
+		{"", []string{"https://github.com/Daily-AC/wanctl/releases/download/v0.26.0-beta.2", "https://relay.example/dl"}},
+		{"https://relay.example/dl", []string{"https://github.com/Daily-AC/wanctl/releases/download/v0.26.0-beta.2", "https://relay.example/dl"}},
 	} {
 		t.Setenv("WANCTL_RELEASE_BASE", tc.base)
 		got, err := updateSourcesForVersion("v0.26.0-beta.2")
@@ -186,8 +186,30 @@ func TestExplicitUpdateWithoutSources(t *testing.T) {
 	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
 	t.Setenv("WANCTL_RELAY", "")
 	t.Setenv("WANCTL_RELEASE_BASE", "")
-	err := cmdUpdate(t.Context(), []string{"v0.26.0-beta.1"})
-	if err == nil || !strings.Contains(err.Error(), "v0.26.0-beta.1") || !strings.Contains(err.Error(), "没有可尝试的发布来源") {
-		t.Fatalf("%v", err)
+	bases, err := updateSourcesForVersion("v0.26.0-beta.1")
+	if err != nil || len(bases) != 1 || bases[0] != "https://github.com/Daily-AC/wanctl/releases/download/v0.26.0-beta.1" {
+		t.Fatalf("%v, %v", bases, err)
+	}
+	stable, err := updateSourcesForVersion("v0.26.0")
+	if err != nil || len(stable) != 1 || stable[0] != "https://github.com/Daily-AC/wanctl/releases/download/v0.26.0" {
+		t.Fatalf("stable fallback %v %v", stable, err)
+	}
+	if _, err := updateSourcesForVersion(""); err == nil {
+		t.Fatal("automatic source decision changed")
+	}
+}
+
+func TestExactStableKeepsSourceOrder(t *testing.T) {
+	t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+	t.Setenv("WANCTL_RELEASE_BASE", "https://custom.example/stable")
+	t.Setenv("WANCTL_RELAY", "https://relay.example")
+	got, err := updateSourcesForVersion("v0.27.0")
+	want := []string{"https://custom.example/stable", "https://relay.example/dl", "https://github.com/Daily-AC/wanctl/releases/download/v0.27.0"}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("%v %v", got, err)
+	}
+	auto, err := updateSources()
+	if err != nil || !slices.Equal(auto, want[:2]) {
+		t.Fatalf("automatic sources changed: %v %v", auto, err)
 	}
 }
