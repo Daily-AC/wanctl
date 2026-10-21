@@ -87,6 +87,7 @@ type Config struct {
 
 // Server is the portal web app.
 type Server struct {
+	installs installStore
 	// waitCalls holds the /api/pending aggregate in progress per namespace.
 	waitMu    sync.Mutex
 	waitCalls map[string]*waitingCall
@@ -210,6 +211,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tokens", s.handleTokens)
 	mux.HandleFunc("/api/tokens/revoke", s.handleTokenRevoke)
 	mux.HandleFunc("/api/devices", s.handleDevices)
+	mux.HandleFunc("/api/devices/install", s.handleDeviceInstall)
 	mux.HandleFunc("/api/pending", s.handleWaiting)
 	mux.HandleFunc("/api/devices/alias", s.handleDeviceAlias)
 	mux.HandleFunc("/api/devices/lark", s.handleDeviceLark)
@@ -290,6 +292,7 @@ func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 var mutationPaths = map[string]bool{
+	"/api/devices/install":         true,
 	"/api/delegations/approve":     true,
 	"/api/delegations/reject":      true,
 	"/api/oauth/decide":            true,
@@ -331,13 +334,14 @@ var mutationPaths = map[string]bool{
 }
 
 var readWritePaths = map[string]bool{
-	"/api/tokens":         true,
-	"/api/acl":            true,
-	"/api/devices/lark":   true,
-	"/api/devices/notify": true,
-	"/api/approval-phone": true,
-	"/api/notify":         true,
-	"/api/invites":        true,
+	"/api/devices/install": true,
+	"/api/tokens":          true,
+	"/api/acl":             true,
+	"/api/devices/lark":    true,
+	"/api/devices/notify":  true,
+	"/api/approval-phone":  true,
+	"/api/notify":          true,
+	"/api/invites":         true,
 	// GET is the page behind the link; only the POST confirms.
 	"/auth/email/confirm": true,
 }
@@ -1303,8 +1307,10 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 // owner's namespace, because console dials must target owner/device even for
 // ACL-shared devices.
 type deviceAccess struct {
-	Owner  string
-	Shared bool
+	Online        bool
+	WanctlVersion string
+	Owner         string
+	Shared        bool
 	// Manage is the share's management switch, and is meaningless unless
 	// Shared: an owner needs no switch to administer their own device.
 	Manage bool
@@ -1333,10 +1339,12 @@ func (s *Server) requireDevice(w http.ResponseWriter, r *http.Request, device st
 	}
 	var out struct {
 		Devices []struct {
-			Name   string `json:"name"`
-			Owner  string `json:"owner"`
-			Shared bool   `json:"shared"`
-			Manage bool   `json:"manage"`
+			Online        bool   `json:"online"`
+			WanctlVersion string `json:"wanctl_version"`
+			Name          string `json:"name"`
+			Owner         string `json:"owner"`
+			Shared        bool   `json:"shared"`
+			Manage        bool   `json:"manage"`
 		} `json:"devices"`
 	}
 	json.NewDecoder(resp.Body).Decode(&out)
@@ -1349,14 +1357,14 @@ func (s *Server) requireDevice(w http.ResponseWriter, r *http.Request, device st
 		if owner == "" {
 			owner = ns
 		}
-		matches = append(matches, deviceAccess{Owner: owner, Shared: d.Shared || owner != ns, Manage: d.Manage})
+		matches = append(matches, deviceAccess{Owner: owner, Shared: d.Shared || owner != ns, Manage: d.Manage, Online: d.Online, WanctlVersion: d.WanctlVersion})
 	}
 	if len(matches) == 1 {
 		return matches[0], true
 	}
 	for _, d := range matches {
 		if !d.Shared {
-			return deviceAccess{Owner: d.Owner}, true
+			return d, true
 		}
 	}
 	if len(matches) > 1 {
