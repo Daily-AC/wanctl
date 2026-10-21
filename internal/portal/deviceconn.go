@@ -30,13 +30,14 @@ const maxUnclaimedReplies = 16
 // demultiplexes the read stream into RPC responses and unsolicited approval
 // notifications, and serializes outgoing RPCs.
 type deviceConn struct {
-	conn    net.Conn
-	rpcMu   sync.Mutex // serialize request/response round-trips
-	wmu     sync.Mutex // serialize writes
-	respCh  chan protocol.Message
-	notifMu sync.Mutex
-	notifs  map[chan console.State]struct{}
-	replyCh map[chan protocol.Message]struct{} // approval_reply listeners (approval phone), guarded by notifMu
+	installProgress func(protocol.InstallProgress)
+	conn            net.Conn
+	rpcMu           sync.Mutex // serialize request/response round-trips
+	wmu             sync.Mutex // serialize writes
+	respCh          chan protocol.Message
+	notifMu         sync.Mutex
+	notifs          map[chan console.State]struct{}
+	replyCh         map[chan protocol.Message]struct{} // approval_reply listeners (approval phone), guarded by notifMu
 	// unclaimed holds approval_replies that arrived while nobody listened,
 	// for the next replies() call. Guarded by notifMu.
 	unclaimed []protocol.Message
@@ -62,6 +63,18 @@ func (d *deviceConn) readLoop() {
 		m, err := protocol.ReadMessage(d.conn)
 		if err != nil {
 			return
+		}
+		if m.Kind == protocol.KindInstallProgress {
+			var p protocol.InstallProgress
+			if json.Unmarshal(m.Data, &p) == nil {
+				d.notifMu.Lock()
+				f := d.installProgress
+				d.notifMu.Unlock()
+				if f != nil {
+					f(p)
+				}
+			}
+			continue
 		}
 		if m.Kind == protocol.KindApprovalNotif {
 			var st console.State
