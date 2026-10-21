@@ -41,3 +41,28 @@ The first time you drive a new device, it waits for that device's own
 **Waiting** / **Trusted controllers** page to say yes. Driving a friend's device
 needs a share first, and answering its approvals yourself needs that share to
 carry management (see "Invites, friends and sharing").
+
+## Upgrade from the device page
+
+Only the device owner sees the buttons beside the versions. **Upgrade** for
+wanctl opens a version field: enter a strictly newer stable release such as
+`v0.27.0`, or a beta such as `v0.27.0-beta.1`. The latest stable is prefilled
+only when it is newer. Same versions and downgrades are refused. This explicit
+request works even when the device's `auto_update` setting is off.
+
+On Windows, **Install** installs OpenCU for the signed-in console user;
+**Update to latest** updates that user's existing install. A user must be
+signed in. Close active desktop/computer-use sessions first. wanctl closes its
+own idle OpenCU connections; the official installer refuses if other OpenCU
+processes are still running. OpenCU trusts HTTPS to github.com and the zip's
+SHA-256 embedded in its official installer, just like the manual install.
+
+Offline buttons are disabled. Downloads and installations show their progress;
+wanctl is only done when the device comes back online at the requested version.
+If it fails or does not finish within ten minutes, read the reason and run
+`wanctl logs --type install` on the device. Development builds, Android app
+copies, unwritable binary directories and unsupported restart arrangements
+need a local update instead; the page explains which. The Android app has its
+own update check. Older agents suggest waiting for their automatic update
+(within six hours) or running `wanctl update` on the device. Progress is
+transient and disappears if the portal restarts.
