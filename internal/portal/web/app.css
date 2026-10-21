@@ -51,6 +51,10 @@
      一行摊到 1440 宽会让设备卡稀释成一条，眼睛横扫的距离也过长。 */
   --maxw:1100px;
   --pad:max(clamp(20px,4vw,40px), calc((100vw - var(--maxw)) / 2));
+  --safe-top:env(safe-area-inset-top,0px);
+  --safe-right:env(safe-area-inset-right,0px);
+  --safe-bottom:env(safe-area-inset-bottom,0px);
+  --safe-left:env(safe-area-inset-left,0px);
   --ease:cubic-bezier(.22,.61,.36,1);
   --z-sticky:5;
   --z-overlay:20;
@@ -68,7 +72,7 @@
    量过：全站带 hidden 的元素里，只有 #sInvites 的计算值不是 none，所以这一句
    除了修掉那一处，别处一个像素都不动（tools/portalpreview/sweep.mjs 的 hidden 断言）。 */
 [hidden]{display:none!important}
-html{-webkit-text-size-adjust:100%}
+html{-webkit-text-size-adjust:100%;scroll-padding-top:calc(48px + var(--safe-top))}
 body{
   margin:0;background:var(--canvas);color:var(--ink);
   font-family:var(--sans);font-size:15px;font-weight:400;line-height:1.47;
@@ -89,7 +93,8 @@ a:hover{text-decoration:underline}
    吸顶条压在内容上必须半透，它承担功能而不是装饰。 */
 .top{
   position:sticky;top:0;z-index:var(--z-sticky);
-  display:flex;align-items:center;gap:14px;height:48px;padding:0 var(--pad);
+  display:flex;align-items:center;gap:14px;height:calc(48px + var(--safe-top));
+  padding:var(--safe-top) calc(var(--pad) + var(--safe-right)) 0 calc(var(--pad) + var(--safe-left));
   background:rgba(255,255,255,.86);backdrop-filter:saturate(180%) blur(20px);
 }
 /* 顶栏底下没有分隔线（2026-09-04 甲方拍板，官网同时也拿掉了）。
@@ -167,7 +172,7 @@ a:hover{text-decoration:underline}
 }
 
 /* ── 页面骨架 ──────────────────────────────────────────────────────── */
-main{padding:clamp(26px,4vw,44px) var(--pad) 88px}
+main{padding:clamp(26px,4vw,44px) calc(var(--pad) + var(--safe-right)) calc(88px + var(--safe-bottom)) calc(var(--pad) + var(--safe-left))}
 .view{display:none}
 .view.show{display:block}
 
@@ -452,7 +457,7 @@ td.tempty{padding:26px 0;color:var(--ink-2);font-size:13.5px;text-align:center}
   display:grid;grid-template-columns:212px minmax(0,1fr);
   gap:clamp(24px,4vw,52px);
 }
-.settings > nav{position:sticky;top:64px;align-self:start}
+.settings > nav{position:sticky;top:calc(64px + var(--safe-top));align-self:start}
 .sview{display:none}
 .sview.show{display:block}
 /* 「回到清单」只属于窄屏的两级形态。宽屏上清单一直在左边，没有「回去」可回。 */
@@ -585,7 +590,8 @@ pre code{background:none;padding:0;font-size:1em}
 /* ── 模态 ──────────────────────────────────────────────────────────── */
 .ov{
   position:fixed;inset:0;z-index:var(--z-modal);background:rgba(0,0,0,.32);
-  display:none;align-items:center;justify-content:center;padding:20px;
+  display:none;align-items:center;justify-content:center;
+  padding:calc(20px + var(--safe-top)) calc(20px + var(--safe-right)) calc(20px + var(--safe-bottom)) calc(20px + var(--safe-left));
 }
 .ov.show{display:flex}
 .modal{
@@ -593,8 +599,8 @@ pre code{background:none;padding:0;font-size:1em}
   /* svh 而不是 vh。手机浏览器的 vh 是地址栏收起之后的那个大视口，
      按它算出来的浮层比你眼前看得见的那块高，底下那排按钮正好落在屏幕外面。
      两条都留着：不认 svh 的浏览器读第一条。 */
-  max-height:calc(100vh - 40px);
-  max-height:calc(100svh - 40px);
+  max-height:calc(100vh - 40px - var(--safe-top) - var(--safe-bottom));
+  max-height:calc(100svh - 40px - var(--safe-top) - var(--safe-bottom));
   /* 四张浮层现在是同一个形状：标题钉住、正文自己滚、按钮钉住。
      以前只有更新日志那张是，另外三张是整块一起滚 —— 于是正文一长
      （一个 32 字的设备名、一段中文说明、五个字段的表单），
@@ -617,13 +623,13 @@ pre code{background:none;padding:0;font-size:1em}
 /* ── toast ─────────────────────────────────────────────────────────── */
 /* 反馈只有这一套。以前顶上还挂着一条 6 秒的错误条，两套机制做同一件事。 */
 .toast{
-  position:fixed;left:50%;bottom:26px;transform:translate(-50%,14px);z-index:var(--z-toast);
+  position:fixed;left:calc((100% + var(--safe-left) - var(--safe-right))/2);bottom:calc(26px + var(--safe-bottom));transform:translate(-50%,14px);z-index:var(--z-toast);
   background:var(--ink);color:var(--canvas);border-radius:999px;padding:9px 18px;font-size:13.5px;
   opacity:0;pointer-events:none;transition:opacity .2s var(--ease),transform .2s var(--ease);
   /* width:max-content 是必需的，不是修饰。left:50% 而没有 right，收缩到合适宽度时
      可用宽度只有视口的右半边 —— 360px 上就是 180px，于是底下那条 max-width 从来没
      生效过，一句英文提示在还剩一半空地的时候就折成了两行。 */
-  width:max-content;max-width:calc(100vw - 40px);
+  width:max-content;max-width:calc(100vw - 40px - var(--safe-left) - var(--safe-right));
 }
 .toast.show{opacity:1;transform:translate(-50%,0)}
 /* 认不出来的服务端错误码。等宽是为了让它能被逐字符读准并抄进 issue 里；
@@ -648,8 +654,9 @@ pre code{background:none;padding:0;font-size:1em}
    时容器自己长，不会被裁掉。 */
 .auth main{
   display:flex;flex-direction:column;justify-content:center;
-  min-height:calc(100vh - 48px);min-height:calc(100dvh - 48px);
-  max-width:25rem;margin:0 auto;padding:36px 20px 76px;
+  min-height:calc(100vh - 48px - var(--safe-top));min-height:calc(100dvh - 48px - var(--safe-top));
+  max-width:25rem;margin:0 auto;
+  padding:36px calc(20px + var(--safe-right)) calc(76px + var(--safe-bottom)) calc(20px + var(--safe-left));
 }
 .auth .top .brand{cursor:default}       /* 三张页都无处可去，字标不是链接 */
 .auth .top .tools{margin-left:auto}     /* SPA 里靠 .who 顶开，这里没有 .who */
@@ -831,6 +838,7 @@ pre code{background:none;padding:0;font-size:1em}
   /* 四个裁决键是这个产品里后果最重的点击，它们尤其不该只有 34px 高。 */
   .ask .acts .btn{padding:10px 15px}
   .check{min-height:40px}
+  .duration-set .chip{min-height:40px}
 
   /* 待审批卡的头。设备名是 flex:none，一个 32 字的机器名（DESKTOP-… 那种）
      会把整行顶出卡片，而卡片是 overflow:hidden —— 名字于是被无声地切掉。
