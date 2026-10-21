@@ -206,6 +206,9 @@ func HelperMain(in io.Reader, out io.Writer) int {
 	if json.Unmarshal(raw, &job) != nil {
 		return 1
 	}
+	if job.Action == "install_opencu" {
+		return installHelperMain(in, out)
+	}
 	if err = Validate(job.Action, &job.Request); err != nil {
 		_ = WriteResult(out, protocol.DesktopResult{Status: "rejected", Error: err.Error(), FailedIndex: -1}, nil)
 		return 0

@@ -350,3 +350,29 @@ func (s *Service) PauseForUpdate() func() {
 	s.cuMu.Unlock()
 	return s.busy.Unlock
 }
+
+// TryPauseForInstall reserves the desktop without waiting for a live call.
+// CloseIdleOpenCU runs after the console acknowledgement: closing many idle
+// helper processes must not turn an accepted install into an RPC timeout.
+func (s *Service) TryPauseForInstall() (func(), bool) {
+	if !s.busy.TryLock() {
+		return nil, false
+	}
+	return s.busy.Unlock, true
+}
+
+// CloseIdleOpenCU requires the desktop reservation returned above. No new
+// call can start until that reservation is released.
+func (s *Service) CloseIdleOpenCU() {
+	s.cuMu.Lock()
+	defer s.cuMu.Unlock()
+	for _, e := range s.cu {
+		if e.timer != nil {
+			e.timer.Stop()
+		}
+		if e.conn != nil {
+			e.conn.Close()
+			e.conn = nil
+		}
+	}
+}
