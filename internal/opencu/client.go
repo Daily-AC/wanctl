@@ -25,13 +25,14 @@ var ErrNotInstalled = errors.New(NotInstalledMessage)
 var ErrUnknown = errors.New("OpenCU outcome unknown: the process or stream failed during the call; observe again before acting; never replay this call")
 
 type Manifest struct {
-	MCP struct {
+	Version json.RawMessage `json:"version"`
+	MCP     struct {
 		Command string   `json:"command"`
 		Args    []string `json:"args"`
 	} `json:"mcp"`
 }
 
-// ReadManifest is called only inside the selected user's helper.
+// ReadManifest is used by act inside the selected user's helper.
 func ReadManifest() (Manifest, error) {
 	var m Manifest
 	dir := os.Getenv("LOCALAPPDATA")

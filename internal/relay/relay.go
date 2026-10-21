@@ -88,9 +88,12 @@ type Relay struct {
 	forgetPin       func(namespace, device string)
 	webfetchHandler http.Handler // optional: GET adapter for delegated controllers
 	adminSecret     string
+	latestStable    string // verified distribution version, fixed when Handler is built
 	portalNS        string
 	logs            *serverlog.Buffer
 
+	versionsMu     sync.Mutex
+	versions       map[string]*deviceVersionState
 	registrationMu sync.Mutex
 	mu             sync.Mutex
 	agents         map[string]*agentConn      // key "ns/device" (WebSocket transport)
@@ -467,8 +470,10 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	body.N = limits.RelayControlBodyBytes
 	var reg struct {
 		Op, Device, Fingerprint, Inst, Name string
-		DeviceID                            string `json:"device_id"`
-		Delegation                          string `json:"delegation"`
+		DeviceID                            string          `json:"device_id"`
+		Delegation                          string          `json:"delegation"`
+		WanctlVersion                       json.RawMessage `json:"wanctl_version"`
+		OpenCUVersion                       json.RawMessage `json:"opencu_version"`
 	}
 	if err := dec.Decode(&reg); err != nil || reg.Op != "register" || reg.Device == "" {
 		c.Close(websocket.StatusPolicyViolation, "expected register")
@@ -504,16 +509,18 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
+	if reg.DeviceID == "" {
+		created = r.recordDeviceRegistration(ns, reg.Device, reg.Fingerprint)
+	}
+	kickVersions := r.queueDeviceVersions(ns, reg.Device, reg.Inst, jsonVersion(reg.WanctlVersion), jsonVersion(reg.OpenCUVersion), reg.WanctlVersion != nil || reg.OpenCUVersion != nil)
 	key := ns + "/" + reg.Device
 	wasLive := r.deviceLive(ns, reg.Device)
 	ac := &agentConn{device: reg.Device, name: reg.Name, ns: ns, inst: reg.Inst, ctrl: nc, delegation: reg.Delegation == "1", kick: func() { nc.Close() }}
 	r.mu.Lock()
 	r.agents[key] = ac
 	r.mu.Unlock()
-	if reg.DeviceID == "" {
-		created = r.recordDeviceRegistration(ns, reg.Device, reg.Fingerprint)
-	}
 	r.registrationMu.Unlock()
+	kickVersions()
 	if !wasLive {
 		r.emitDeviceEvent(ns, reg.Device, onlineEvent(reg.Device))
 	}

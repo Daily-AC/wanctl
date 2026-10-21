@@ -67,6 +67,63 @@ WebSocket registration and HTTP polling. Subsequent session, notification,
 pairing, and deregistration requests use the UUID. `inst` remains an ephemeral
 process instance marker, not the persistent identity.
 
+Registrations carry optional `wanctl_version` and `opencu_version` strings:
+JSON fields in the WebSocket `register` message, query parameters on
+`GET /h/poll`. `wanctl_version` is the build string printed by `wanctl version`
+(including `dev` or beta tags), subject to the display-metadata validation below.
+Non-Windows agents never discover OpenCU and omit `opencu_version` entirely.
+
+Windows agents send the cached OpenCU version, empty until known. One background
+reader per agent refreshes at most once a minute, independently of registration;
+reconnects do not spawn more readers. It only reads a regular install manifest,
+limited to 16 KiB, and never starts OpenCU or a helper. OS profile/file I/O can
+block, so shutdown does not join this single metadata-only task; a completed
+read after cancellation is discarded. A missing install, missing version,
+invalid manifest or no console user yields empty. Normal Windows processes use
+`LOCALAPPDATA`; LocalSystem in session 0 uses the active console user's token to
+find their profile's `AppData\Local\OpenCU\opencu.json`. It never falls back to
+SYSTEM's profile if that lookup fails or the active session changes.
+
+Both the agent (before building either payload) and relay apply the same rule:
+each value is limited to 128 ASCII bytes and `[A-Za-z0-9.+_-]`; invalid values
+(including non-string JSON received by the relay) become empty. These values
+never authorize an update or select an executable.
+
+Version persistence is best effort and never refuses registration or delays
+liveness. After identity registration, a per-device background writer stores
+changes outside the global registration lock, with a five-second context limit.
+Unchanged values within the same instance do not write or advance
+`versions_reported_at`; an instance change causes a fresh write. Writes are
+serialized per device, and pending reports coalesce to the latest accepted one,
+so older work cannot overwrite a newer stored report. Failed writes leave the
+last successfully stored metadata intact, retry on subsequent registrations,
+and log once per device per failure streak without values or driver errors.
+Identity failures still refuse registration normally.
+
+Existing rows have empty values and a null report time. A successfully persisted
+old-agent registration without either field clears previous values and time;
+a single missing field clears only that value. Explicit empty or invalid fields
+still count as a report. `versions_reported_at` records the server time of the
+successful metadata write, not a heartbeat. The portal always shows wanctl
+(unknown if absent), and shows the OpenCU row only when its version is known.
+
+`PGStore.ListDevices` includes `wanctl_version`, `opencu_version`, and
+`versions_reported_at` for owned and shared devices. `/admin/devices`, proxied
+unchanged by the portal's `/api/devices`, adds `latest_wanctl_version` at the top
+level and `wanctl_status` (`unknown`, `latest`, `behind`, or `ahead`) per device.
+The comparison uses the existing release parser and the verified stable manifest
+already served under `/dl`; no outbound release lookup is made. Without a stable
+distribution, or for unparseable installed build strings, status is `unknown`.
+A beta whose core version exceeds stable is `ahead`, not `behind`. OpenCU has no
+release comparison. These fields use the existing device visibility permissions,
+including read-only shares, and remain available while a device is offline.
+
+Compatibility: the pre-version WebSocket registration decoder ignores unknown
+JSON fields (it does not call `DisallowUnknownFields`); the HTTP handler reads
+only known query keys. New agents therefore still register with old relays.
+New relays accept old agents with both version fields omitted. No endpoint,
+console command, installation behavior, or release workflow changes.
+
 For compatibility with existing consumers, `/peers` still returns canonical
 routes in `devices`, and labels in `aliases`. Device-list JSON retains `name` as a
 legacy alias for the canonical route and adds explicit `device_id`,

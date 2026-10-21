@@ -905,6 +905,8 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "device registration failed", 409)
 		return
 	}
+	q := req.URL.Query()
+	kickVersions := r.queueDeviceVersions(ns, device, inst, q.Get("wanctl_version"), q.Get("opencu_version"), q.Has("wanctl_version") || q.Has("opencu_version"))
 	r.hmu.Lock()
 	if inst != "" {
 		if a.inst != "" && a.inst != inst {
@@ -925,6 +927,7 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	changed := a.changed
 	r.hmu.Unlock()
 	r.registrationMu.Unlock()
+	kickVersions()
 	defer func() {
 		r.hmu.Lock()
 		a.polls--

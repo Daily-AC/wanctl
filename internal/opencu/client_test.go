@@ -105,3 +105,42 @@ func TestOpenCUManifestAndStopCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestInstalledVersionReadsManifestWithoutStartingEngine(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("LOCALAPPDATA", dir)
+	if got := readInstalledVersion(filepath.Join(dir, "OpenCU", "opencu.json")); got != "" {
+		t.Fatalf("missing install: %q", got)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "OpenCU"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "OpenCU", "opencu.json")
+	for _, version := range []string{"0.3.99", ""} {
+		// No executable exists: discovery must only read metadata.
+		raw, _ := json.Marshal(map[string]any{"version": version, "mcp": map[string]any{"command": filepath.Join(dir, "must-not-start")}})
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := readInstalledVersion(filepath.Join(dir, "OpenCU", "opencu.json")); got != version {
+			t.Fatalf("got %q, want %q", got, version)
+		}
+	}
+	// Invalid optional metadata must not make an otherwise usable act install fail.
+	raw, _ := json.Marshal(map[string]any{"version": 123, "mcp": map[string]any{"command": filepath.Join(dir, "must-not-start")}})
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadManifest(); err != nil {
+		t.Fatalf("metadata broke act discovery: %v", err)
+	}
+	if got := readInstalledVersion(filepath.Join(dir, "OpenCU", "opencu.json")); got != "" {
+		t.Fatalf("non-string version: %q", got)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":"1.0.0","mcp":{"command":"relative"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readInstalledVersion(filepath.Join(dir, "OpenCU", "opencu.json")); got != "" {
+		t.Fatalf("invalid install: %q", got)
+	}
+}
