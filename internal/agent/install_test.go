@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -66,5 +67,35 @@ func TestUnknownConsoleKindLegacyInstallResponse(t *testing.T) {
 	m := a.handleConsoleRPC(protocol.Message{Kind: "future_install_kind"})
 	if m.Kind != protocol.KindError || string(m.Data) != `"unknown RPC kind"` {
 		t.Fatalf("%+v", m)
+	}
+}
+
+func TestInstallFailureKeepsDiagnosticsOnlyInEventLog(t *testing.T) {
+	a := newTestAgent(t)
+	logger, err := eventlog.Open("install-failure.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.log = logger
+	const diagnostic = `fetch https://github.com/Daily-AC/wanctl/releases/download/v0.29.0-beta.9/manifest.json: Get "https://github.com/example": net/http: TLS handshake timeout`
+	const reason = "the device could not reach github.com"
+	a.ConfigureInstall(InstallHooks{Check: func(string) error { return nil }, Run: func(context.Context, string, func(string)) (string, error) {
+		return "", &InstallError{Reason: reason, Err: errors.New(diagnostic)}
+	}})
+	var last protocol.InstallProgress
+	response, work := a.beginInstall(protocol.Message{Kind: protocol.KindPackageInstall, Package: "wanctl", Version: "v0.29.0-beta.9"}, func(p protocol.InstallProgress) { last = p })
+	if response.Kind == protocol.KindError || work == nil {
+		t.Fatal(response)
+	}
+	work()
+	if last.Stage != "failed" || last.Reason != reason {
+		t.Fatalf("wire: %+v", last)
+	}
+	events, err := logger.Read(eventlog.Filter{Type: "install"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || !strings.Contains(events[1].Detail, diagnostic) {
+		t.Fatalf("lost diagnostic: %+v", events)
 	}
 }

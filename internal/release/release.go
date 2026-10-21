@@ -283,7 +283,7 @@ func SelectExact(m Manifest, goos, goarch, requested string) (Artifact, error) {
 		return Artifact{}, err
 	}
 	if m.Version != requested {
-		return Artifact{}, fmt.Errorf("签名清单版本 %s 与指定版本 %s 不一致", m.Version, requested)
+		return Artifact{}, &ExactVersionMismatchError{Offered: m.Version, Requested: requested}
 	}
 	return selectArtifact(m, goos, goarch)
 }
@@ -405,4 +405,12 @@ func compareVersion(a, b version) int {
 		return -1
 	}
 	return compareNumber(a.beta, b.beta)
+}
+
+// ExactVersionMismatchError means a verified source offers a different tag.
+// Callers can distinguish absence from download or signature failures.
+type ExactVersionMismatchError struct{ Offered, Requested string }
+
+func (e *ExactVersionMismatchError) Error() string {
+	return fmt.Sprintf("签名清单版本 %s 与指定版本 %s 不一致", e.Offered, e.Requested)
 }

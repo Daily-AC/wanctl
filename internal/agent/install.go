@@ -58,7 +58,7 @@ func (a *Agent) beginInstall(m protocol.Message, progress func(protocol.InstallP
 	refuse := func(err error) (protocol.Message, func()) {
 		p.Stage, p.Reason = "failed", err.Error()
 		a.installLog(p)
-		return protocol.Message{Kind: protocol.KindError, Reason: p.Reason}, nil
+		return protocol.Message{Kind: protocol.KindError, Reason: installFailureReason(err)}, nil
 	}
 	if err := validateInstall(m.Package, m.Version, runtime.GOOS); err != nil {
 		return refuse(err)
@@ -119,6 +119,9 @@ func (a *Agent) beginInstall(m protocol.Message, progress func(protocol.InstallP
 			}
 		}
 		a.installLog(p)
+		if err != nil {
+			p.Reason = installFailureReason(err)
+		}
 		progress(p)
 		if err == nil && m.Package == "wanctl" && a.installer.Restart != nil {
 			a.installer.Restart()
@@ -129,4 +132,21 @@ func (a *Agent) beginInstall(m protocol.Message, progress func(protocol.InstallP
 func installMessage(p protocol.InstallProgress) protocol.Message {
 	data, _ := json.Marshal(p)
 	return protocol.Message{Kind: protocol.KindInstallProgress, Data: data}
+}
+
+// InstallError keeps full diagnostics in the event log and a separate plain
+// sentence on the console wire. Error deliberately returns the diagnostic.
+type InstallError struct {
+	Reason string
+	Err    error
+}
+
+func (e *InstallError) Error() string { return e.Err.Error() }
+func (e *InstallError) Unwrap() error { return e.Err }
+func installFailureReason(err error) string {
+	var failure *InstallError
+	if errors.As(err, &failure) {
+		return failure.Reason
+	}
+	return err.Error()
 }
