@@ -61,8 +61,13 @@ Offline buttons are disabled. Downloads and installations show their progress;
 wanctl is only done when the device comes back online at the requested version.
 If it fails or does not finish within ten minutes, read the reason and run
 `wanctl logs --type install` on the device. Development builds, Android app
-copies, unwritable binary directories and unsupported restart arrangements
-need a local update instead; the page explains which. The Android app has its
-own update check. Older agents suggest waiting for their automatic update
+copies, standalone Android/Termux and unwritable binary directories are
+refused as with automatic updates; the page explains which. The Android app
+has its own update check. Other launch modes use the automatic updater's
+restart path: Windows `--managed` relies on its external restart loop,
+including SYSTEM PowerShell scripts and existing scheduled-task supervisors;
+no supervisor restart or new parent marker is needed before using the button.
+A missing version or an unreachable source is reported in one sentence;
+full download diagnostics are in the device's install log. Older agents suggest waiting for their automatic update
 (within six hours) or running `wanctl update` on the device. Progress is
 transient and disappears if the portal restarts.

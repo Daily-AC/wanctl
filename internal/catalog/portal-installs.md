@@ -28,14 +28,24 @@ The device validates wanctl tags with `internal/release`, refuses same-version
 installs and downgrades, and uses the CLI updater's signed manifest, exact
 artifact and SHA-256 checks. Beta requests additionally try
 `https://github.com/Daily-AC/wanctl/releases/download/T/`; stable configured/mirror source order
-is unchanged, with that exact tag as a final fallback for intermediate stables. Development builds, APK copies, unwritable binary directories
-and installations without a known restart path are refused before downloading.
-Unix uses the automatic updater's in-place exec. Windows uses its successor
-process or the identified `__supervise` loop; unidentified managed processes,
-native services and unsupervised session-0 tasks are refused. Android copies
-outside the APK also lack a supported automatic restart. Explicit owner
+is unchanged, with that exact tag as a final fallback for intermediate stables.
+Development builds, APK copies, standalone Android/Termux and unwritable binary
+directories are refused before downloading, as with automatic updates. Web
+upgrades use the same restart path and assumptions: Unix exec preserves the
+PID; Windows `--managed` exits so the external supervisor restarts the same
+path, including SYSTEM PowerShell loops and older `__supervise` parents.
+Unmanaged Windows agents start a successor, including in session 0. No parent
+marker or additional supervisor trust gate is required. Explicit owner
 requests do **not** depend on `auto_update`; its schedule and own decision
 table remain unchanged.
+
+If all sources report the tag absent (404 manifest or a verified different
+tag), progress says `version T was not found in the official releases`.
+If a source cannot be reached, progress says `the device could not reach HOST`
+with only its hostname, even if another source returns 404. Other installation
+failures direct the owner to device logs. Full per-source diagnostics are
+recorded in the device event log, not sent to the portal. The UI localizes the
+plain sentences and uses the full-width colon in Chinese.
 
 OpenCU downloads only the official fixed latest-release installer at
 `https://github.com/Daily-AC/opencu/releases/latest/download/install.ps1` and
