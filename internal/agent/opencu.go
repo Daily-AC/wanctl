@@ -58,7 +58,11 @@ func (a *Agent) doOpenCU(conn io.ReadWriter, fp, peer string, m protocol.Message
 	return pending
 }
 
-func (a *Agent) PrepareDesktopUpdate() func() { return a.desktop.PauseForUpdate() }
+func (a *Agent) PrepareDesktopUpdate() func() {
+	a.installMu.Lock()
+	resume := a.desktop.PauseForUpdate()
+	return func() { resume(); a.installMu.Unlock() }
+}
 
 // CloseDesktop is bounded cleanup for the production exit/re-exec path, which
 // must not wait for an unrelated terminal prompt blocked in Scanln.

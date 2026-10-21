@@ -600,11 +600,16 @@ func cmdAgent(ctx context.Context, args []string) error {
 	// the restart below hands the device to the binary now on disk.
 	runCtx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
+	webUpdater := configurePortalUpdate(ag, buildVersion, stopRun)
 	updater := startAutoUpdate(runCtx, buildVersion, ag.Busy, stopRun, ag.PrepareDesktopUpdate)
 	runErr := ag.Run(runCtx)
 	ag.CloseDesktop() // Close persistent peers before shutdown or self-update re-exec.
-	if updater != nil && updater.updated() {
-		over, err := restartAgentForUpdate(updater.binaryPath(), os.Args, lock)
+	if webUpdater.updated.Load() || (updater != nil && updater.updated()) {
+		path := webUpdater.self
+		if updater != nil && updater.updated() {
+			path = updater.binaryPath()
+		}
+		over, err := restartAgentForUpdate(path, os.Args, lock)
 		if err != nil {
 			return err
 		}

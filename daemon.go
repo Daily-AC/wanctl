@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +45,7 @@ func cmdSupervise(ctx context.Context, args []string) error {
 func superviseLoop(ctx context.Context, self string, agentArgs []string, out io.Writer) error {
 	for {
 		cmd := exec.CommandContext(ctx, self, agentArgs...)
+		cmd.Env = append(os.Environ(), "WANCTL_SUPERVISOR_PID="+strconv.Itoa(os.Getpid()))
 		cmd.Stdout = out
 		cmd.Stderr = out
 		err := cmd.Run()
