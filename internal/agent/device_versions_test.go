@@ -298,3 +298,68 @@ func TestVersionCacheRefreshIsRateLimitedAndStops(t *testing.T) {
 		}
 	}
 }
+
+func TestLiveOpenCURefreshWithoutReconnect(t *testing.T) {
+	for _, tr := range []string{"ws", "http"} {
+		t.Run(tr, func(t *testing.T) {
+			t.Setenv("WANCTL_CONFIG_DIR", t.TempDir())
+			reports := make(chan string, 16)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/agent" {
+					c, err := websocket.Accept(w, r, nil)
+					if err != nil {
+						return
+					}
+					conn := wsconn.FromAccepted(r.Context(), c)
+					defer conn.Close()
+					dec := json.NewDecoder(conn)
+					for {
+						var m map[string]string
+						if dec.Decode(&m) != nil {
+							return
+						}
+						reports <- m["opencu_version"]
+					}
+				} else if r.URL.Path == "/h/poll" {
+					reports <- r.URL.Query().Get("opencu_version")
+					select {
+					case <-time.After(10 * time.Millisecond):
+					case <-r.Context().Done():
+					}
+					w.Write([]byte(`{}`))
+				} else {
+					w.Write([]byte(`{}`))
+				}
+			}))
+			defer srv.Close()
+			a, err := New(Options{RelayURL: srv.URL, Token: "x", Name: "refresh", Transport: tr, Version: "v0.26.0"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.openCUVersion = &installedVersionCache{read: func() string { return "0.3.0" }}
+			if tr == "ws" {
+				a.opts.RelayURL = "ws" + strings.TrimPrefix(srv.URL, "http")
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- a.Run(ctx) }()
+			defer func() { cancel(); a.Close(); <-done }()
+			select {
+			case <-reports:
+			case <-time.After(5 * time.Second):
+				t.Fatal("no registration")
+			}
+			a.refreshOpenCUVersion("0.4.0")
+			for {
+				select {
+				case v := <-reports:
+					if v == "0.4.0" {
+						return
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("version did not refresh")
+				}
+			}
+		})
+	}
+}

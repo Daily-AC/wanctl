@@ -90,6 +90,7 @@ func TestVersionStoreFailureNeverRefusesRegistration(t *testing.T) {
 					return nil
 				}}
 				r := New(EnvTokenStore("alice:alice"))
+				r.versionWriteInterval = time.Millisecond
 				r.SetAdmin(store)
 				srv := httptest.NewServer(http.HandlerFunc(r.handleAgent))
 				defer srv.Close()
@@ -159,6 +160,7 @@ func TestSlowVersionStoreDoesNotBlockAnotherNamespace(t *testing.T) {
 		return nil
 	}}
 	r := New(EnvTokenStore("alice:alice,bob:bob"))
+	r.versionWriteInterval = time.Millisecond
 	r.SetAdmin(store)
 	reg := versionRegistration()
 	reg["wanctl_version"] = "v1.0.0"
@@ -202,6 +204,7 @@ func TestVersionWritesKeepLatestAcceptedReport(t *testing.T) {
 		return nil
 	}}
 	r := New(EnvTokenStore("alice:alice"))
+	r.versionWriteInterval = time.Millisecond
 	r.SetAdmin(store)
 	reg := versionRegistration()
 	reg["wanctl_version"] = "v1.0.0"
@@ -279,6 +282,7 @@ func TestIdenticalPollsWriteVersionsOnce(t *testing.T) {
 	}
 	defer db.Close()
 	r := New(EnvTokenStore("alice:alice"))
+	r.versionWriteInterval = time.Millisecond
 	state.relay = r
 	r.SetAdmin(&PGStore{db: db})
 	reg := versionRegistration()
@@ -311,6 +315,7 @@ func TestIdentityFailureStillRefusesRegistration(t *testing.T) {
 				return nil
 			}}
 			r := New(EnvTokenStore("alice:alice"))
+			r.versionWriteInterval = time.Millisecond
 			r.SetAdmin(store)
 			reg := versionRegistration()
 			if tr == "http" {
@@ -339,5 +344,43 @@ func TestIdentityFailureStillRefusesRegistration(t *testing.T) {
 				t.Fatal("identity refusal bypassed")
 			}
 		})
+	}
+}
+
+// WebSocket devices report OpenCU installs on the existing control stream.
+// A displaced connection must not overwrite the new instance's metadata.
+func TestLiveVersionReportWithoutReconnect(t *testing.T) {
+	var mu sync.Mutex
+	var latest string
+	store := &versionTestStore{write: func(_ context.Context, ns, id, w, o string, reported bool) error {
+		mu.Lock()
+		latest = o
+		mu.Unlock()
+		return nil
+	}}
+	r := New(EnvTokenStore("alice:alice"))
+	r.versionWriteInterval = time.Millisecond
+	r.SetAdmin(store)
+	srv := httptest.NewServer(http.HandlerFunc(r.handleAgent))
+	defer srv.Close()
+	conn, _, err := wsconn.Dial(t.Context(), "ws"+strings.TrimPrefix(srv.URL, "http"), admission.Header("alice"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	enc := json.NewEncoder(conn)
+	reg := versionRegistration()
+	reg["wanctl_version"] = "v0.26.0"
+	reg["opencu_version"] = "0.3.0"
+	if err = enc.Encode(reg); err != nil {
+		t.Fatal(err)
+	}
+	waitVersion(t, func() bool { mu.Lock(); defer mu.Unlock(); return latest == "0.3.0" })
+	if err = enc.Encode(map[string]string{"op": "versions", "wanctl_version": "v0.26.0", "opencu_version": "0.4.0"}); err != nil {
+		t.Fatal(err)
+	}
+	waitVersion(t, func() bool { mu.Lock(); defer mu.Unlock(); return latest == "0.4.0" })
+	if !r.deviceLive("alice", versionTestID) {
+		t.Fatal("version refresh disconnected device")
 	}
 }

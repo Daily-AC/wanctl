@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	_ "embed"
 	"fmt"
 	"sort"
 	"strings"
@@ -223,6 +224,9 @@ func fieldOrder(items map[string]any, props map[string]any) []string {
 	return append(out, rest...)
 }
 
+//go:embed portal-installs.md
+var portalInstallContract string
+
 // Markdown renders the whole catalog. docs/contract.md is this output, and a
 // test fails when the file and this function disagree.
 func Markdown() string {
@@ -299,6 +303,7 @@ func Markdown() string {
 		}
 		b.WriteString("\n")
 	}
+	b.WriteString(portalInstallContract)
 	return b.String()
 }
 

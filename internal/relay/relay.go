@@ -92,12 +92,13 @@ type Relay struct {
 	portalNS        string
 	logs            *serverlog.Buffer
 
-	versionsMu     sync.Mutex
-	versions       map[string]*deviceVersionState
-	registrationMu sync.Mutex
-	mu             sync.Mutex
-	agents         map[string]*agentConn      // key "ns/device" (WebSocket transport)
-	pending        map[string]*pendingSession // key session id (WebSocket transport)
+	versionWriteInterval time.Duration // zero uses the production minimum
+	versionsMu           sync.Mutex
+	versions             map[string]*deviceVersionState
+	registrationMu       sync.Mutex
+	mu                   sync.Mutex
+	agents               map[string]*agentConn      // key "ns/device" (WebSocket transport)
+	pending              map[string]*pendingSession // key session id (WebSocket transport)
 
 	hmu      sync.Mutex
 	hagents  map[string]*httpAgent   // key "ns/device" (HTTP transport)
@@ -464,7 +465,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	// A JSON decoder holds a value whole before handing it over, and the
 	// control channel is one stream however it is split into messages, so each
 	// value is bounded here: to what a control request may carry. The channel
-	// carries a registration and, after it, nothing the relay acts on.
+	// carries a registration and optional device version metadata refreshes.
 	body := &io.LimitedReader{R: nc}
 	dec := json.NewDecoder(body)
 	body.N = limits.RelayControlBodyBytes
@@ -540,12 +541,33 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 		}
 		c.Close(websocket.StatusNormalClosure, "")
 	}()
-	// Keep the control connection alive; drain any further messages (e.g. pings).
+	// Keep existing ping/unknown frames inert; accept metadata only from the
+	// connection that still owns this registration.
 	for {
 		body.N = limits.RelayControlBodyBytes
-		var ignore json.RawMessage
-		if err := dec.Decode(&ignore); err != nil {
+		var report struct {
+			Op     string          `json:"op"`
+			Wanctl json.RawMessage `json:"wanctl_version"`
+			OpenCU json.RawMessage `json:"opencu_version"`
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
 			return
+		}
+		if json.Unmarshal(raw, &report) != nil {
+			continue
+		}
+		if report.Op == "versions" {
+			r.registrationMu.Lock()
+			r.mu.Lock()
+			current := r.agents[key] == ac
+			r.mu.Unlock()
+			kick := func() {}
+			if current {
+				kick = r.queueDeviceVersions(ns, reg.Device, reg.Inst, jsonVersion(report.Wanctl), jsonVersion(report.OpenCU), true)
+			}
+			r.registrationMu.Unlock()
+			kick()
 		}
 	}
 }

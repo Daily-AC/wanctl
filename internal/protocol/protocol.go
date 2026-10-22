@@ -65,20 +65,22 @@ const (
 	KindStatus = "status" // client -> server, request read-only agent status
 
 	// console session (portal <-> device control plane)
-	KindConsoleHello  = "console_hello"  // portal -> device, opens a control-plane session
-	KindConsoleState  = "console_state"  // both: request state / device replies with Data
-	KindDecide        = "decide"         // portal -> device, resolve a pending approval
-	KindRuleAdd       = "rule_add"       // portal -> device, add an allow-list rule
-	KindRuleRm        = "rule_rm"        // portal -> device, remove rule by Index
-	KindModeSet       = "mode_set"       // portal -> device, set normal/bypass
-	KindApprovalNotif = "approval_notif" // device -> portal, UNSOLICITED: pending set changed
-	KindPairDecide    = "pair_decide"    // portal -> device, trust/deny a pending controller pairing
-	KindTrustRevoke   = "trust_revoke"   // portal -> device, drop a trusted controller by fingerprint
-	KindADBPair       = "adb_pair"       // console administrator pairs this Android installation with local adbd
-	KindTimeoutSet    = "timeout_set"    // portal -> device, set how long an approval waits (TimeoutSec; 0 = default)
-	KindApprovalPush  = "approval_push"  // portal -> approval phone, show or update an approval card (Data: ApprovalCard)
-	KindApprovalReply = "approval_reply" // approval phone -> portal, UNSOLICITED: the owner's decision (ApprovalID, Verdict)
-	KindGrantOnce     = "grant_once"     // portal -> device, allow one matching request within TimeoutSec (late approval)
+	KindPackageInstall  = "package_install"  // portal -> device: Package + Version only
+	KindInstallProgress = "install_progress" // device -> portal, unsolicited
+	KindConsoleHello    = "console_hello"    // portal -> device, opens a control-plane session
+	KindConsoleState    = "console_state"    // both: request state / device replies with Data
+	KindDecide          = "decide"           // portal -> device, resolve a pending approval
+	KindRuleAdd         = "rule_add"         // portal -> device, add an allow-list rule
+	KindRuleRm          = "rule_rm"          // portal -> device, remove rule by Index
+	KindModeSet         = "mode_set"         // portal -> device, set normal/bypass
+	KindApprovalNotif   = "approval_notif"   // device -> portal, UNSOLICITED: pending set changed
+	KindPairDecide      = "pair_decide"      // portal -> device, trust/deny a pending controller pairing
+	KindTrustRevoke     = "trust_revoke"     // portal -> device, drop a trusted controller by fingerprint
+	KindADBPair         = "adb_pair"         // console administrator pairs this Android installation with local adbd
+	KindTimeoutSet      = "timeout_set"      // portal -> device, set how long an approval waits (TimeoutSec; 0 = default)
+	KindApprovalPush    = "approval_push"    // portal -> approval phone, show or update an approval card (Data: ApprovalCard)
+	KindApprovalReply   = "approval_reply"   // approval phone -> portal, UNSOLICITED: the owner's decision (ApprovalID, Verdict)
+	KindGrantOnce       = "grant_once"       // portal -> device, allow one matching request within TimeoutSec (late approval)
 )
 
 // Message is the JSON body of a FrameJSON frame. Fields are reused across kinds;
@@ -101,6 +103,7 @@ type Message struct {
 	Name    string `json:"name,omitempty"`
 	Label   string `json:"label,omitempty"` // controller self-description shown at pairing/audit
 	Version string `json:"version,omitempty"`
+	Package string `json:"package,omitempty"`
 
 	// exec
 	Command string `json:"command,omitempty"`
@@ -329,3 +332,12 @@ func ReadMessage(r io.Reader) (Message, error) {
 
 // ErrClosed is returned when the peer closes the connection cleanly mid-stream.
 var ErrClosed = errors.New("protocol: connection closed")
+
+// InstallProgress is device-local install state. wanctl never emits done: the
+// portal confirms completion from a fresh online registration of Version.
+type InstallProgress struct {
+	Package string `json:"package"`
+	Version string `json:"version"`
+	Stage   string `json:"stage"`
+	Reason  string `json:"reason,omitempty"`
+}

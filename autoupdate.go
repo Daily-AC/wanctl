@@ -165,7 +165,7 @@ func newAutoUpdater(self, version string, busy func() bool, restart func()) *aut
 // whose directory is system-owned, and a Termux install, whose binary sits in a
 // private data directory that Android refuses to exec directly — so neither can
 // complete the restart half, whatever the swap does.
-func startAutoUpdate(ctx context.Context, version string, busy func() bool, restart func(), prepare ...func() func()) *autoUpdater {
+func startAutoUpdate(ctx context.Context, version string, busy func() bool, restart func(), transaction ...func(context.Context, func(context.Context, string) (string, error)) (string, error)) *autoUpdater {
 	if runtime.GOOS == "android" {
 		return nil
 	}
@@ -180,12 +180,12 @@ func startAutoUpdate(ctx context.Context, version string, busy func() bool, rest
 	// unless a supervisor still is (see replaceBinary on Windows).
 	removeReplacedBinaries(self)
 	u := newAutoUpdater(self, version, busy, restart)
-	if len(prepare) > 0 {
-		install := u.install
+	if len(transaction) > 0 {
 		u.install = func(ctx context.Context) (string, error) {
-			release := prepare[0]()
-			defer release()
-			return install(ctx)
+			return transaction[0](ctx, func(ctx context.Context, current string) (string, error) {
+				u.probe.version = current
+				return u.installLatest(ctx)
+			})
 		}
 	}
 	go u.run(ctx)

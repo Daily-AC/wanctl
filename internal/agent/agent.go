@@ -82,7 +82,12 @@ type Agent struct {
 	notifyPolicy agentNotifyPolicy
 	notifyClient *http.Client
 
-	openCUVersion *installedVersionCache
+	openCUVersion  *installedVersionCache
+	installMu      sync.Mutex
+	installVersion string // protected by installMu
+	restartPending bool   // protected by installMu
+	installer      InstallHooks
+	versionChanged chan struct{}
 
 	sessMu           sync.Mutex
 	sessions         map[string]*server.ShellSession
@@ -273,7 +278,8 @@ func New(opts Options) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{
-		deviceID: deviceID, id: id, known: known, portalAdmins: portalAdmins, opts: opts, engine: engine, log: logger,
+		versionChanged: make(chan struct{}, 1),
+		deviceID:       deviceID, id: id, known: known, portalAdmins: portalAdmins, opts: opts, engine: engine, log: logger,
 		inst:     inst,
 		sessions: map[string]*server.ShellSession{}, jobs: newJobStore(),
 		elevator: elevate.ConfigureDefault(configDirOrEmpty(), os.Getenv),
@@ -471,6 +477,20 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := enc.Encode(reg); err != nil {
 		return err
 	}
+	a.spawn(func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-a.versionChanged:
+				report := a.versionFields()
+				report["op"] = "versions"
+				if enc.Encode(report) != nil {
+					return
+				}
+			}
+		}
+	})
 	fmt.Printf("wanctl agent %q online via %s\n  fingerprint: %s\n", a.opts.Name, a.opts.RelayURL, a.id.Fingerprint)
 	// On an approval phone stdin carries the app's decisions, and a prompt
 	// reading it would swallow them.
@@ -1561,6 +1581,35 @@ func (a *Agent) serveConsole(ctx context.Context, conn net.Conn) {
 		msg, err := protocol.ReadMessage(conn)
 		if err != nil {
 			return
+		}
+		if msg.Kind == protocol.KindPackageInstall {
+			updates := make(chan protocol.InstallProgress, 8)
+			resp, work := a.beginInstall(msg, func(p protocol.InstallProgress) {
+				select {
+				case updates <- p:
+				default:
+				}
+			})
+			_ = send(resp)
+			if work != nil {
+				a.spawn(func() { defer close(updates); work() })
+				a.spawn(func() {
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case p, ok := <-updates:
+							if !ok {
+								return
+							}
+							if send(installMessage(p)) != nil {
+								return
+							}
+						}
+					}
+				})
+			}
+			continue
 		}
 		resp := a.handleConsoleRPC(msg)
 		// Audit who decided remotely (spec: approver=portal:<email>).

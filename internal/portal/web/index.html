@@ -102,9 +102,11 @@
     </div>
 
     <dl class="device-versions">
-      <div><dt>wanctl</dt><dd id="dWanctlVersion"></dd></div>
-      <div id="dOpenCURow" hidden><dt>OpenCU</dt><dd id="dOpenCUVersion"></dd></div>
+      <div><dt>wanctl</dt><dd id="dWanctlVersion"></dd><button class="btn ghost" id="dUpgrade" hidden data-en="Upgrade" data-zh="升级">Upgrade</button></div>
+      <div id="dOpenCURow" hidden><dt>OpenCU</dt><dd id="dOpenCUVersion"></dd><button class="btn ghost" id="dOpenCUInstall" hidden></button></div>
     </dl>
+    <p class="install-status" id="dInstallHint" hidden></p>
+    <p class="install-status" id="dInstallProgress" role="status" aria-live="polite" hidden></p>
     <p class="lead" id="dShared" hidden></p>
 
     <div class="tabs">

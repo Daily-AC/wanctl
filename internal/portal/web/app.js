@@ -853,6 +853,7 @@
   }
 
   /* ── 设备下钻 ────────────────────────────────────────────────────── */
+  var installStates = {}, installPolling = false;
   var cur = null, pollGen = 0, curMode = 'normal';
 
   function devRow(name) { return devices.filter(function (x) { return x.name === name; })[0]; }
@@ -871,9 +872,95 @@
     if (d.wanctl_status === 'latest') status = t().versionLatest;
     if (d.wanctl_status === 'behind' && latestWanctlVersion) status = t().versionUpdate(latestWanctlVersion);
     $('#dWanctlVersion').textContent = installed + (status ? ' · ' + status : '');
-    $('#dOpenCURow').hidden = !d.opencu_version;
-    $('#dOpenCUVersion').textContent = d.opencu_version || '';
+    var owner = !!d.name && !d.shared && (!d.owner || me && d.owner === me.namespace);
+    var state = installStates[cur] || {};
+    var windows = !!d.opencu_version || (consoleFor === cur && lastState && lastState.info && lastState.info.platform === 'windows');
+    var openVersion = state.package === 'opencu' && state.stage === 'done' ? state.version : d.opencu_version;
+    $('#dOpenCURow').hidden = !(d.opencu_version || (owner && windows));
+    $('#dOpenCUVersion').textContent = openVersion || (owner && windows ? (lang === 'zh' ? '未安装' : 'not installed') : '');
+    $('#dUpgrade').hidden = !owner;
+    $('#dOpenCUInstall').hidden = !owner || !windows;
+    $('#dOpenCUInstall').textContent = openVersion ? (lang === 'zh' ? '更新到最新版' : 'Update to latest') : (lang === 'zh' ? '安装' : 'Install');
+    var active = state.stage === 'downloading' || state.stage === 'installing';
+    $('#dUpgrade').disabled = $('#dOpenCUInstall').disabled = !d.online || active;
+    $('#dInstallHint').hidden = !owner || !!d.online;
+    $('#dInstallHint').textContent = lang === 'zh' ? '设备离线，上线后即可安装。' : 'Device offline. Install when it is back online.';
+    $('#dInstallProgress').hidden = !owner || !state.stage;
+    var stages = lang === 'zh' ? {downloading:'正在下载', installing:'正在安装', done:'已完成', failed:'失败'} : {downloading:'Downloading', installing:'Installing', done:'Done', failed:'Failed'};
+    $('#dInstallProgress').textContent = state.stage ? (state.package === 'opencu' ? 'OpenCU' : state.package) + ' · ' + stages[state.stage] + (state.stage === 'done' ? ' ' + state.version : state.stage === 'failed' ? (lang === 'zh' ? '：' : ': ') + installReason(state.reason) : '…') : '';
   }
+
+  function installReason(reason) {
+    if (lang !== 'zh') {
+      if (/版本格式/.test(reason || '')) return 'Use vX.Y.Z or vX.Y.Z-beta.N (N must be a positive integer without leading zeros).';
+      return reason || 'Installation failed; check wanctl logs on the device.';
+    }
+    var missing = /^version (.+) was not found in the official releases$/.exec(reason || '');
+    if (missing) return '找不到 ' + missing[1] + ' 这个版本';
+    var unreachable = /^the device could not reach (.+)$/.exec(reason || '');
+    if (unreachable) return '设备连不上 ' + unreachable[1];
+    var translations = [
+      [/an update was just installed; the agent is restarting/, '更新已安装，agent 正在重启。'],
+      [/^wanctl installation failed; check the device logs$/, 'wanctl 安装失败，请查看设备日志。'],
+      [/too old to be upgraded/, '这台设备的 wanctl 太旧，不能从网页升级。请在设备上运行 wanctl update；开着自动更新的话，它也会自己更新。'],
+      [/did not finish within 10 minutes/, '安装未在 10 分钟内完成，请在设备上运行 wanctl logs 查看日志。'],
+      [/an install is already running/, '已有安装正在进行。'],
+      [/device is offline/, '设备已离线，请上线后重试。'],
+      [/strictly newer/, '目标版本必须比当前版本新；不能安装相同版本或降级。'],
+      [/development builds/, '开发版不能从网页升级。'],
+      [/inside the Android app/, '这是 Android 应用内置副本，请使用应用内的更新检查。'],
+      [/Android installation cannot restart/, '此 Android 安装无法在更新后自动重启，请在设备上运行 wanctl update。'],
+      [/busy/, '设备正忙于会话、任务、桌面操作或审批，请完成后重试。'],
+      [/no signed-in user/, '控制台没有已登录的用户，请先在设备上登录。'],
+      [/cannot restart after/, '无法确认此进程能在更新后重启；请在设备上运行 wanctl update，再重启服务或任务。'],
+      [/OpenCU installation requires Windows/, 'OpenCU 只能在 Windows 上安装。'],
+      [/normal non-elevated token/, 'OpenCU 安装需要控制台用户的普通权限，请不要以管理员身份运行该用户的 agent。'],
+      [/console user's session/, 'OpenCU 安装需要在已登录控制台用户的会话中运行。'],
+      [/timed out/, '安装超时，请在设备上运行 wanctl logs 查看日志。'],
+      [/OpenCU is in use/, 'OpenCU 正在使用中，请关闭使用它的会话后重试。'],
+      [/another.*install|installation.*running/i, '另一个 OpenCU 安装正在进行，请等待完成后重试。'],
+      [/no installed version/, '安装器已结束，但未读到 OpenCU 版本，请查看设备日志。'],
+      [/LOCALAPPDATA/, '无法获取控制台用户的 LOCALAPPDATA 目录。'],
+      [/cannot contain|cannot bound/, '无法限制安装器进程的运行时间，请在设备上手动安装 OpenCU。'],
+      [/installer download/, '官方 OpenCU 安装脚本下载失败，请检查设备网络后重试。'],
+      [/version must|choose wanctl|版本格式/, '版本格式应为 vX.Y.Z 或 vX.Y.Z-beta.N。']
+    ];
+    var path = /^binary directory (.+) is not writable/.exec(reason || '');
+    if (path) return '二进制目录 ' + path[1] + ' 不可写；请在设备上以足够权限运行 wanctl update。';
+    for (var i = 0; i < translations.length; i++) if (translations[i][0].test(reason || '')) return translations[i][1];
+    return reason || '安装失败，请在设备上运行 wanctl logs 查看日志。';
+  }
+  function submitInstall(name, pkg, version) {
+    installStates[name] = {package:pkg, version:version, stage:'downloading'};
+    if (cur === name) paintDeviceVersions(devRow(name) || {});
+    jpost('/api/devices/install?device=' + encodeURIComponent(name), {package:pkg, version:version}).then(function (state) {
+      installStates[name] = state;
+      if (cur === name) paintDeviceVersions(devRow(name) || {});
+    }).catch(function (e) {
+      installStates[name] = {package:pkg, version:version, stage:'failed', reason:e.message};
+      if (cur === name) paintDeviceVersions(devRow(name) || {});
+    });
+  }
+  $('#dUpgrade').onclick = function () {
+    var name = cur, d = devRow(name) || {};
+    var label = lang === 'zh' ? '升级 wanctl' : 'Upgrade wanctl';
+    var promise = formBox(label, lang === 'zh' ? '升级' : 'Upgrade', [{key:'version', label:lang === 'zh' ? '版本（必须比当前版本新）' : 'Version (must be newer than installed)', hint:'v0.27.0-beta.1'}]);
+    $('#formF input').value = d.wanctl_status === 'behind' ? latestWanctlVersion : '';
+    $('#formF input').maxLength = 128;
+    promise.then(function (v) { if (v) submitInstall(name, 'wanctl', v.version); });
+  };
+  $('#dOpenCUInstall').onclick = function () { submitInstall(cur, 'opencu', 'latest'); };
+  setInterval(function () {
+    var name = cur, d = devRow(name);
+    if (!name || !d || d.shared || (d.owner && (!me || d.owner !== me.namespace)) || installPolling) return;
+    installPolling = true;
+    jget('/api/devices/install?device=' + encodeURIComponent(name)).then(function (state) {
+      var previous = installStates[name] || {};
+      installStates[name] = state;
+      if (cur === name) paintDeviceVersions(devRow(name) || {});
+      if (state.stage === 'done' && previous.stage !== 'done') loadDevices();
+    }).catch(function () {}).then(function () { installPolling = false; });
+  }, 2000);
 
   // 这一屏上「你是谁」决定的每一处，都在这里，一次算完。
   // 它要能跑两遍：设备页可能在设备清单到达之前就画完了（见 loadDevices），
@@ -926,6 +1013,7 @@
 
   function openDevice(name) {
     cur = name;
+    lastState = null;
     consoleFor = null;
     paintDeviceName(name);
     var admin = applyDeviceGating(name);
@@ -981,6 +1069,7 @@
   function applyState(st) {
     if (!st || !st.mode) return;
     lastState = st;
+    paintDeviceVersions(devRow(cur) || {});
     $('#dsAdb').hidden = !(st.info && st.info.adb_pair) || !!(devMeta[cur] || {}).shared;   // 属主专属，与 manage 无关
     paintAdb(st.adb);
     // 审批手机只能是自己的安卓设备：只有 app 托管的 agent 收得了推送（ADR 0015）
