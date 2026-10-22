@@ -158,3 +158,26 @@ func openCUToolResponse(header protocol.DesktopResult) *mcpapi.CallToolResult {
 	raw, _ := json.Marshal(r)
 	return mcpapi.NewToolResultError(string(raw))
 }
+
+// Only human-readable text is escaped. Keep every other item and opaque field
+// as raw JSON, preserving images, metadata and large structured numbers.
+func (c openCUContent) escapeText() openCUContent {
+	var item map[string]json.RawMessage
+	if json.Unmarshal(c.raw, &item) != nil {
+		return c
+	}
+	var kind, text string
+	if json.Unmarshal(item["type"], &kind) != nil || kind != "text" {
+		return c
+	}
+	if json.Unmarshal(item["text"], &text) != nil {
+		return c
+	}
+	escaped := escapeDeviceText(text)
+	if escaped == text {
+		return c
+	}
+	item["text"], _ = json.Marshal(escaped)
+	c.raw, _ = json.Marshal(item)
+	return c
+}
