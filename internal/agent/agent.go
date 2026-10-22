@@ -371,6 +371,10 @@ func (a *Agent) gate(req policy.Request, checks ...func() bool) (bool, string) {
 	if a.engine.Allowed(req) {
 		return true, "pre-approved"
 	}
+	ruleReq := req
+	if req.Kind == policy.KindExec || req.Kind == policy.KindExecElevated {
+		req.Cwd = canonicalApprovalDir(req.Cwd)
+	}
 	if ok, decision, handled := a.useLateGrant(req, checks); handled {
 		return ok, decision
 	}
@@ -386,7 +390,7 @@ func (a *Agent) gate(req policy.Request, checks ...func() bool) (bool, string) {
 		return false, "denied"
 	}
 	if d.Remember {
-		a.engine.Add(policy.RuleFor(req, d.Scope))
+		a.engine.Add(policy.RuleFor(ruleReq, d.Scope))
 		return true, "remembered:" + string(d.Scope)
 	}
 	return true, "approved"
