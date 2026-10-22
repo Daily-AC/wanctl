@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -494,11 +496,12 @@ func (g *lateGrants) asked(req policy.Request) {
 }
 
 // find reports the grant that would release req, without spending it.
+// Execution requests carry the directory already resolved by gate.
 func (g *lateGrants) find(req policy.Request) *lateGrant {
 	key, ok := grantKey(req)
 	cwd := ""
 	if req.Kind == policy.KindExec || req.Kind == policy.KindExecElevated {
-		cwd = canonicalApprovalDir(req.Cwd)
+		cwd = req.Cwd
 		if cwd == "" {
 			return nil
 		}
@@ -556,6 +559,27 @@ func (a *Agent) useLateGrant(req policy.Request, checks []func() bool) (ok bool,
 func canonicalApprovalDir(dir string) string {
 	if !filepath.IsAbs(dir) {
 		return ""
+	}
+	// Shell cd can interpret a parent after a symlink logically, whereas
+	// chdir (used by one-shot execution) interprets it physically. Such a
+	// spelling cannot identify one execution directory for a late grant.
+	parts := strings.FieldsFunc(dir[len(filepath.VolumeName(dir)):], func(r rune) bool {
+		return r == '/' || r == rune(filepath.Separator)
+	})
+	if slices.Contains(parts, "..") {
+		prefix := filepath.VolumeName(dir) + string(filepath.Separator)
+		linked := false
+		for _, part := range parts {
+			if part == ".." && linked {
+				return ""
+			}
+			prefix = filepath.Join(prefix, part)
+			info, err := os.Lstat(prefix)
+			if err != nil {
+				return ""
+			}
+			linked = linked || info.Mode()&os.ModeSymlink != 0
+		}
 	}
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
