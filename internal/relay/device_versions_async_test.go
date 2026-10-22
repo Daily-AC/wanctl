@@ -112,8 +112,8 @@ func TestVersionStoreFailureNeverRefusesRegistration(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						// Keep each accepted connection alive until its metadata update finishes.
-						defer conn.Close()
+						// Keep connections alive across the failure streak.
+						t.Cleanup(func() { conn.Close() })
 						if err := json.NewEncoder(conn).Encode(reg); err != nil {
 							t.Fatal(err)
 						}
@@ -250,6 +250,9 @@ type versionSQLTx struct{}
 func (versionSQLTx) Commit() error   { return nil }
 func (versionSQLTx) Rollback() error { return nil }
 func (c *versionSQLConn) QueryContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(q, "SELECT disabled_at FROM users") {
+		return &adminRows{columns: []string{"disabled_at"}, values: [][]driver.Value{{nil}}}, nil
+	}
 	if strings.Contains(q, "SELECT EXISTS") {
 		return &adminRows{columns: []string{"exists"}, values: [][]driver.Value{{true}}}, nil
 	}

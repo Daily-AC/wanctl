@@ -49,7 +49,14 @@ func TestOpenCUMCPPassthroughRealPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(exactJSON(t, raw), exactJSON(t, encoded)) {
+	want := exactJSON(t, raw).(map[string]any)
+	for _, content := range want["content"].([]any) {
+		item := content.(map[string]any)
+		if item["type"] == "text" {
+			item["text"] = escapeDeviceText(item["text"].(string))
+		}
+	}
+	if !reflect.DeepEqual(want, exactJSON(t, encoded)) {
 		t.Fatal("OpenCU content, PNG, isError, _meta or numeric precision changed")
 	}
 	discovery, err := c.Discover(context.Background())

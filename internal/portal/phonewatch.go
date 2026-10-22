@@ -41,10 +41,11 @@ const (
 type phoneSession interface {
 	deviceSession
 	decideFound(id, verdict, approver string) (bool, error)
-	grantOnce(kind, pattern, fp string, ttl time.Duration, approver string) error
+	grantOnce(kind, pattern, fp, cwd string, ttl time.Duration, approver string) error
 	approvalPush(card protocol.ApprovalCard, timeout time.Duration) error
 	replies() (<-chan protocol.Message, func())
 	state() (console.State, error)
+	approvalGeneration() <-chan struct{}
 }
 
 type phoneSupervisor struct {
@@ -93,14 +94,17 @@ type phoneTarget struct {
 // it went to, and how it ended. The card id is the only thing the phone can
 // name in a decision, so this record is what makes a decision valid.
 type phoneCard struct {
-	card      protocol.ApprovalCard // card.Device is the display name
-	ns        string
-	device    string // route name of the target device
-	phone     string // the phone it was pushed to; a decision must come from it
-	pendingID string // approval on the target device, or
-	pairFP    string // pairing on the target device
-	seenAt    time.Time
-	answered  bool
+	card                 protocol.ApprovalCard // card.Device is the display name
+	ns                   string
+	device               string // route name of the target device
+	phone                string // the phone it was pushed to; a decision must come from it
+	pendingID            string // approval on the target device, or
+	pairFP               string // pairing on the target device
+	seenAt               time.Time
+	answered             bool
+	disappearedAt        time.Time
+	disappearanceUnknown bool
+	generation           <-chan struct{} // connection on which this request was observed
 }
 
 func newPhoneSupervisor(s *Server) *phoneSupervisor {
@@ -332,6 +336,7 @@ func (p *phoneSupervisor) reconcileSpace(ns, phone string) error {
 			// Gone from the registry. Its session is already dead or about
 			// to be; the watch would only keep re-dialling a device that is
 			// not there.
+			p.markDisappearanceUnknownLocked(ns, device)
 			t.cancel()
 			delete(sp.targets, device)
 		}
@@ -435,6 +440,11 @@ func (p *phoneSupervisor) startTargetLocked(sp *phoneSpace, device string) {
 			logf:      p.logf,
 			logPrefix: "approval phone",
 			onDial:    func(error) error { return nil },
+			onDisconnect: func() {
+				p.mu.Lock()
+				defer p.mu.Unlock()
+				p.markDisappearanceUnknownLocked(ns, device)
+			},
 			onState: func(ctx context.Context, session deviceSession, state console.State, wait time.Duration) {
 				p.onTargetState(ns, device, session, state, wait, seenPending, seenPairing)
 			},
@@ -444,6 +454,11 @@ func (p *phoneSupervisor) startTargetLocked(sp *phoneSpace, device string) {
 
 // onTargetState pushes what is new and settles what is gone.
 func (p *phoneSupervisor) onTargetState(ns, device string, session deviceSession, state console.State, wait time.Duration, seenPending, seenPairing map[string]string) {
+	var generation <-chan struct{}
+	if source, ok := session.(interface{ approvalGeneration() <-chan struct{} }); ok {
+		generation = source.approvalGeneration()
+	}
+
 	names := map[string]string{}
 	for _, c := range state.Trusted {
 		names[c.FP] = c.Name
@@ -461,7 +476,10 @@ func (p *phoneSupervisor) onTargetState(ns, device string, session deviceSession
 		if pc == nil {
 			continue
 		}
+		p.mu.Lock()
 		pc.pendingID = pend.ID
+		pc.generation = generation
+		p.mu.Unlock()
 		seenPending[pend.ID] = pc.card.ID
 		if err := p.push(ns, pc.phone, pc.card); err != nil {
 			// Nobody will see it: refuse it now, as the device would have
@@ -475,7 +493,7 @@ func (p *phoneSupervisor) onTargetState(ns, device string, session deviceSession
 	for id, cardID := range seenPending {
 		if !current[id] {
 			delete(seenPending, id)
-			p.settle(cardID)
+			p.settle(cardID, generation)
 		}
 	}
 
@@ -495,7 +513,10 @@ func (p *phoneSupervisor) onTargetState(ns, device string, session deviceSession
 		if pc == nil {
 			continue
 		}
+		p.mu.Lock()
 		pc.pairFP = pair.FP
+		pc.generation = generation
+		p.mu.Unlock()
 		seenPairing[pair.FP] = pc.card.ID
 		if err := p.push(ns, pc.phone, pc.card); err != nil {
 			p.phoneLost(ns, pc.phone, err)
@@ -504,7 +525,7 @@ func (p *phoneSupervisor) onTargetState(ns, device string, session deviceSession
 	for fp, cardID := range seenPairing {
 		if !currentPairs[fp] {
 			delete(seenPairing, fp)
-			p.settle(cardID)
+			p.settle(cardID, generation)
 		}
 	}
 }
@@ -538,14 +559,19 @@ func (p *phoneSupervisor) newCard(ns, device string, card protocol.ApprovalCard,
 // settle runs when a request is no longer on its device. If the owner did not
 // answer it from the phone, either its wait ran out (the card turns into a late
 // approval) or someone answered it elsewhere (the card is done).
-func (p *phoneSupervisor) settle(cardID string) {
+func (p *phoneSupervisor) settle(cardID string, generation <-chan struct{}) {
 	p.mu.Lock()
 	pc := p.cards[cardID]
 	if pc == nil || pc.answered || pc.card.State != protocol.ApprovalPending {
 		p.mu.Unlock()
 		return
 	}
-	if !p.now().Before(pc.card.Expires.Add(-phoneExpirySlack)) {
+	if !pc.observationCurrent(generation) {
+		pc.disappearanceUnknown = true
+	} else {
+		pc.disappearedAt = p.now()
+	}
+	if !p.answeredElsewhere(*pc) {
 		pc.card.State = protocol.ApprovalExpired
 	} else {
 		pc.card.State = protocol.ApprovalDone
@@ -566,7 +592,7 @@ func (p *phoneSupervisor) settle(cardID string) {
 // a restarting device dropped as answered, so the phone's approval lets
 // nothing through: wrong, but in the safe direction (ADR 0015).
 func (p *phoneSupervisor) answeredElsewhere(pc phoneCard) bool {
-	return p.now().Before(pc.card.Expires.Add(-phoneExpirySlack))
+	return pc.disappearanceUnknown || pc.disappearedAt.IsZero() || pc.disappearedAt.Before(pc.card.Expires.Add(-phoneExpirySlack))
 }
 
 // push sends a card to the phone over its link, if it is still that
@@ -654,6 +680,9 @@ func (p *phoneSupervisor) apply(pc phoneCard, verdict, approver string) string {
 		}
 		switch err := session.pairDecide(pc.pairFP, verdict); {
 		case errors.Is(err, errPairingGone):
+			if pc.disappearedAt.IsZero() {
+				pc.disappearedAt = p.now()
+			}
 			if p.answeredElsewhere(pc) {
 				return protocol.ResultHandled
 			}
@@ -679,6 +708,16 @@ func (p *phoneSupervisor) apply(pc phoneCard, verdict, approver string) string {
 			}
 			return protocol.ResultDenied
 		}
+		p.mu.Lock()
+		if current := p.cards[pc.card.ID]; current != nil {
+			pc.disappearanceUnknown = current.disappearanceUnknown || !current.observationCurrent(session.approvalGeneration())
+			current.disappearanceUnknown = pc.disappearanceUnknown
+			if !pc.disappearanceUnknown && current.disappearedAt.IsZero() {
+				current.disappearedAt = p.now()
+			}
+			pc.disappearedAt = current.disappearedAt
+		}
+		p.mu.Unlock()
 		if p.answeredElsewhere(pc) {
 			// Gone before its wait ran out: someone answered it on the
 			// portal or at the device first, and that answer stands. A late
@@ -690,11 +729,17 @@ func (p *phoneSupervisor) apply(pc phoneCard, verdict, approver string) string {
 	if verdict != "y" {
 		return protocol.ResultDenied
 	}
+	// An expiry established on a live observation remains evidence after a
+	// reconnect. A still-pending card must establish disappearance on its own
+	// observation generation, including when the tap races expiry.
+	if p.answeredElsewhere(pc) || (pc.card.State != protocol.ApprovalExpired && !pc.observationCurrent(session.approvalGeneration())) {
+		return protocol.ResultHandled
+	}
 	label := pc.card.Cmd
 	if pc.card.Kind != "exec" && pc.card.Kind != "exec-elevated" {
 		label = pc.card.Path
 	}
-	if err := session.grantOnce(pc.card.Kind, label, pc.card.PeerFP, protocol.LateGrantWindow, approver); err != nil {
+	if err := session.grantOnce(pc.card.Kind, label, pc.card.PeerFP, pc.card.Cwd, protocol.LateGrantWindow, approver); err != nil {
 		p.logf("approval phone %s: late grant on %s: %v", pc.ns, pc.card.Device, err)
 		return protocol.ResultGone
 	}
@@ -728,6 +773,7 @@ func (p *phoneSupervisor) teardown(ns string, forget bool) {
 		p.mu.Unlock()
 		return
 	}
+	p.markDisappearanceUnknownLocked(ns, "")
 	targets := sp.targets
 	sp.targets = map[string]*phoneTarget{}
 	sp.online = false
@@ -823,4 +869,28 @@ func (p *phoneSupervisor) testPush(ctx context.Context, ns, device, name string)
 		return fmt.Errorf("%w: %s", errPhoneIncapable, refused.reason)
 	}
 	return err
+}
+
+// A gap in observation cannot establish when a still-pending request left.
+// Already observed expirations retain their recorded disappearance time.
+func (p *phoneSupervisor) markDisappearanceUnknownLocked(ns, device string) {
+	for _, pc := range p.cards {
+		if pc.ns == ns && (device == "" || pc.device == device) && pc.card.State == protocol.ApprovalPending {
+			pc.disappearanceUnknown = true
+		}
+	}
+}
+
+// Channel identity binds the observation to one connection, and closure
+// invalidates it synchronously. A replacement cannot report an old expiry.
+func (pc phoneCard) observationCurrent(generation <-chan struct{}) bool {
+	if pc.generation == nil || pc.generation != generation {
+		return false
+	}
+	select {
+	case <-pc.generation:
+		return false
+	default:
+		return true
+	}
 }

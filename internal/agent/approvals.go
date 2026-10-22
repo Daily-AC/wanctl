@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -319,6 +320,7 @@ type lateGrants struct {
 type lateGrant struct {
 	kind    policy.Kind
 	fp      string
+	cwd     string // canonical directory for execution grants
 	key     string // grantKey of the request it releases
 	expires time.Time
 }
@@ -358,7 +360,7 @@ func grantKey(req policy.Request) (key string, ok bool) {
 // this device, which is where its use is recorded too.
 func (a *Agent) grantOnce(msg protocol.Message) protocol.Message {
 	window := lateGrantWindow(msg.TimeoutSec)
-	if err := a.grants.install(policy.Kind(msg.RuleKind), msg.Pattern, msg.FP, msg.Approver, window); err != nil {
+	if err := a.grants.install(policy.Kind(msg.RuleKind), msg.Pattern, msg.FP, msg.Approver, msg.Cwd, window); err != nil {
 		return protocol.Message{Kind: protocol.KindError, Reason: err.Error()}
 	}
 	if a.log != nil {
@@ -390,7 +392,7 @@ func shortDuration(d time.Duration) string {
 	return d.String()
 }
 
-func (g *lateGrants) install(kind policy.Kind, label, fp, approver string, window time.Duration) error {
+func (g *lateGrants) install(kind policy.Kind, label, fp, approver, cwd string, window time.Duration) error {
 	switch kind {
 	case policy.KindExec, policy.KindExecElevated, policy.KindRead, policy.KindWrite:
 		if label == "" {
@@ -409,6 +411,13 @@ func (g *lateGrants) install(kind policy.Kind, label, fp, approver string, windo
 	if approver == "" {
 		return errors.New("a late approval must name its approver")
 	}
+	if kind == policy.KindExec || kind == policy.KindExecElevated {
+		if !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cwd {
+			return errors.New("an execution approval must name its canonical working directory")
+		}
+	} else {
+		cwd = ""
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.clock()
@@ -422,12 +431,12 @@ func (g *lateGrants) install(kind policy.Kind, label, fp, approver string, windo
 	}
 	// The same approval twice still releases the request once.
 	g.grants = slices.DeleteFunc(g.grants, func(x *lateGrant) bool {
-		return x.kind == kind && x.fp == fp && x.key == key
+		return x.kind == kind && x.fp == fp && x.key == key && x.cwd == cwd
 	})
 	if len(g.grants) >= maxLateGrants {
 		g.grants = slices.Delete(g.grants, 0, 1)
 	}
-	g.grants = append(g.grants, &lateGrant{kind: kind, fp: fp, key: key, expires: now.Add(window)})
+	g.grants = append(g.grants, &lateGrant{kind: kind, fp: fp, key: key, cwd: cwd, expires: now.Add(window)})
 	return nil
 }
 
@@ -485,8 +494,16 @@ func (g *lateGrants) asked(req policy.Request) {
 }
 
 // find reports the grant that would release req, without spending it.
+// Execution requests carry the directory already resolved by gate.
 func (g *lateGrants) find(req policy.Request) *lateGrant {
 	key, ok := grantKey(req)
+	cwd := ""
+	if req.Kind == policy.KindExec || req.Kind == policy.KindExecElevated {
+		cwd = req.Cwd
+		if cwd == "" {
+			return nil
+		}
+	}
 	if !ok || req.Peer == "" {
 		return nil
 	}
@@ -494,7 +511,7 @@ func (g *lateGrants) find(req policy.Request) *lateGrant {
 	defer g.mu.Unlock()
 	g.pruneLocked(g.clock())
 	for _, x := range g.grants {
-		if x.kind == req.Kind && x.fp == req.Peer && x.key == key {
+		if x.kind == req.Kind && x.fp == req.Peer && x.key == key && x.cwd == cwd {
 			return x
 		}
 	}
@@ -533,4 +550,24 @@ func (a *Agent) useLateGrant(req policy.Request, checks []func() bool) (ok bool,
 		return false, "", false
 	}
 	return true, "late-approved", true
+}
+
+// Unknown or relative directories cannot consume an execution grant. In a
+// persistent shell a relative path need not be relative to the agent process.
+func canonicalApprovalDir(dir string) string {
+	if !filepath.IsAbs(dir) {
+		return ""
+	}
+	// Shell cd resolves parent traversal logically, while one-shot chdir
+	// resolves it physically. Accept a spelling only when both name the same
+	// directory; a symlinked ancestor alone does not make it ambiguous.
+	physical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return ""
+	}
+	logical, err := filepath.EvalSymlinks(filepath.Clean(dir))
+	if err != nil || filepath.Clean(physical) != filepath.Clean(logical) {
+		return ""
+	}
+	return filepath.Clean(physical)
 }

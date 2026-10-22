@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -308,7 +309,7 @@ func newGrantAgent(t *testing.T) (*Agent, *countingApprover) {
 func grantOnce(a *Agent, kind policy.Kind, pattern, fp string, sec int) protocol.Message {
 	return a.handleConsoleRPC(protocol.Message{
 		Kind: protocol.KindGrantOnce, RuleKind: string(kind), Pattern: pattern, FP: fp,
-		TimeoutSec: sec, Approver: "phone:PGBM10",
+		Cwd: grantTestDir(), TimeoutSec: sec, Approver: "phone:PGBM10",
 	})
 }
 
@@ -320,7 +321,7 @@ func mustGrant(t *testing.T, a *Agent, kind policy.Kind, pattern, fp string, sec
 }
 
 func execReq(cmd, fp string) policy.Request {
-	return policy.Request{Kind: policy.KindExec, Cmd: cmd, Peer: fp}
+	return policy.Request{Kind: policy.KindExec, Cmd: cmd, Peer: fp, Cwd: grantTestDir()}
 }
 
 func TestLateGrantReleasesOnce(t *testing.T) {
@@ -381,7 +382,7 @@ func TestLateGrantElevated(t *testing.T) {
 	if ok, _ := a.gate(execReq("pm list packages", ctrl)); ok {
 		t.Fatal("an elevated grant released the unelevated command")
 	}
-	if ok, decision := a.gate(policy.Request{Kind: policy.KindExecElevated, Cmd: "pm list packages", Peer: ctrl}); !ok || decision != "late-approved" {
+	if ok, decision := a.gate(policy.Request{Kind: policy.KindExecElevated, Cmd: "pm list packages", Peer: ctrl, Cwd: grantTestDir()}); !ok || decision != "late-approved" {
 		t.Fatalf("elevated retry: %v %q", ok, decision)
 	}
 }
@@ -555,4 +556,9 @@ func TestLateGrantPrecedenceAndChecks(t *testing.T) {
 	if len(a.grants.grants) != 1 {
 		t.Fatal("the grant was spent although a rule or a failed check decided")
 	}
+}
+
+func grantTestDir() string {
+	dir, _ := os.Getwd()
+	return canonicalApprovalDir(dir)
 }

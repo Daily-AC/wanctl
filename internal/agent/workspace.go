@@ -309,6 +309,8 @@ func (a *Agent) startWorkspaceCommand(w *workspace, fp, peer string, m protocol.
 		defer w.mu.Unlock()
 		return w.stateLocked() == "open" && w.active == m.RequestID && !w.jobs[m.RequestID].done
 	}
+	// The gate canonicalizes this actual shell directory for late approvals;
+	// existing directory rules and audit entries retain the shell's spelling.
 	ok, decision := a.gate(policy.Request{Kind: policy.KindExec, Cmd: m.Command, Cwd: cwd, Peer: fp}, stillPending, audit.workspaceCheck)
 	if ok && audit.workspaceCheck != nil && !audit.workspaceCheck() {
 		ok, decision = false, "workspace access inactive"

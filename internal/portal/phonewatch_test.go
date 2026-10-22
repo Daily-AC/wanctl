@@ -20,21 +20,22 @@ import (
 // fakePhoneSession stands in for one device's console session: a target, the
 // phone, or both.
 type fakePhoneSession struct {
-	mu        sync.Mutex
-	states    chan console.State
-	replyCh   chan protocol.Message
-	pushes    []protocol.ApprovalCard
-	pushErr   error
-	decisions []string // "id verdict approver"
-	found     bool
-	grants    []string // "kind|pattern|fp|ttl|approver"
-	pairs     []string
-	pairErr   error
-	timeouts  []int
+	mu         sync.Mutex
+	states     chan console.State
+	generation chan struct{}
+	replyCh    chan protocol.Message
+	pushes     []protocol.ApprovalCard
+	pushErr    error
+	decisions  []string // "id verdict approver"
+	found      bool
+	grants     []string // "kind|pattern|fp|ttl|approver"
+	pairs      []string
+	pairErr    error
+	timeouts   []int
 }
 
 func newFakePhoneSession() *fakePhoneSession {
-	return &fakePhoneSession{states: make(chan console.State, 8), replyCh: make(chan protocol.Message, 8), found: true}
+	return &fakePhoneSession{generation: make(chan struct{}), states: make(chan console.State, 8), replyCh: make(chan protocol.Message, 8), found: true}
 }
 
 func (f *fakePhoneSession) subscribe() (<-chan console.State, func()) { return f.states, func() {} }
@@ -62,10 +63,10 @@ func (f *fakePhoneSession) setApprovalTimeout(sec int) (int, error) {
 	f.timeouts = append(f.timeouts, sec)
 	return sec, nil
 }
-func (f *fakePhoneSession) grantOnce(kind, pattern, fp string, ttl time.Duration, approver string) error {
+func (f *fakePhoneSession) grantOnce(kind, pattern, fp, cwd string, ttl time.Duration, approver string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.grants = append(f.grants, strings.Join([]string{kind, pattern, fp, ttl.String(), approver}, "|"))
+	f.grants = append(f.grants, strings.Join([]string{kind, pattern, fp, ttl.String(), approver, cwd}, "|"))
 	return nil
 }
 func (f *fakePhoneSession) approvalPush(card protocol.ApprovalCard, _ time.Duration) error {
@@ -310,7 +311,7 @@ func TestPhoneLateApprovalGrantsOnce(t *testing.T) {
 	if len(d) != 0 {
 		t.Fatalf("an expired request was decided directly: %v", d)
 	}
-	if want := "exec|Get-Service wanctl|" + controllerFP() + "|30m0s|phone:pgbm10"; g[0] != want {
+	if want := "exec|Get-Service wanctl|" + controllerFP() + "|30m0s|phone:pgbm10|"; g[0] != want {
 		t.Fatalf("grant = %q, want %q", g[0], want)
 	}
 	phoneWaitFor(t, "granted", func() bool { return f.phone.lastPush(t).Result == protocol.ResultGranted })
@@ -545,3 +546,5 @@ func TestPhoneLinkDoesNotUseThePool(t *testing.T) {
 		t.Fatalf("link sessions closed = %d, want 1", f.closed)
 	}
 }
+
+func (f *fakePhoneSession) approvalGeneration() <-chan struct{} { return f.generation }
