@@ -51,35 +51,35 @@ func workspaceResult(ref client.WorkspaceRef, r *protocol.WorkspaceResult) *mcpa
 func workspaceText(ref client.WorkspaceRef, r *protocol.WorkspaceResult) string {
 	var b strings.Builder
 	if r.RequestID == "" {
-		fmt.Fprintf(&b, "workspace: %s\nroot: %s\nstate: %s\n", ref.String(), r.Root, r.State)
+		fmt.Fprintf(&b, "workspace: %q\nroot: %q\nstate: %q\n", ref.String(), r.Root, r.State)
 		if r.ActiveRequestID != "" {
-			fmt.Fprintf(&b, "active request: %s\n", r.ActiveRequestID)
+			fmt.Fprintf(&b, "active request: %q\n", r.ActiveRequestID)
 		}
 		return b.String()
 	}
 	switch {
 	case r.Done:
-		fmt.Fprintf(&b, "request %s: done, exit %d\n", r.RequestID, r.Code)
+		fmt.Fprintf(&b, "request %q: done, exit %d\n", r.RequestID, r.Code)
 	case r.RequestState == "approving":
-		fmt.Fprintf(&b, "request %s: waiting for the device owner's approval\n", r.RequestID)
+		fmt.Fprintf(&b, "request %q: waiting for the device owner's approval\n", r.RequestID)
 	default:
-		fmt.Fprintf(&b, "request %s: running\n", r.RequestID)
+		fmt.Fprintf(&b, "request %q: running\n", r.RequestID)
 	}
 	if r.Error != "" {
-		fmt.Fprintf(&b, "error: %s\n", r.Error)
+		fmt.Fprintf(&b, "error: %q\n", r.Error)
 	}
 	if r.State != "open" {
-		fmt.Fprintf(&b, "workspace state: %s\n", r.State)
+		fmt.Fprintf(&b, "workspace state: %q\n", r.State)
 	}
 	if r.ActiveRequestID != "" && r.ActiveRequestID != r.RequestID {
 		// Inspecting an old request must not hide the one now running: it
 		// is the id a caller needs to poll or cancel.
-		fmt.Fprintf(&b, "active request: %s\n", r.ActiveRequestID)
+		fmt.Fprintf(&b, "active request: %q\n", r.ActiveRequestID)
 	}
 	if r.Done && r.Cwd != "" {
 		// Shown even when it is the root: leaving it out would read the same
 		// as "the shell could not say", after a command that went back.
-		fmt.Fprintf(&b, "cwd: %s\n", r.Cwd)
+		fmt.Fprintf(&b, "cwd: %q\n", r.Cwd)
 	}
 	if !r.Done || r.NextOffset < r.RetainedBytes {
 		fmt.Fprintf(&b, "next_offset: %d\n", r.NextOffset)
@@ -288,7 +288,7 @@ func mcpWorkspace(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Call
 	}
 	r, err := c.Workspace(ctx, ref, action, protocol.Message{Path: reqStr(req, "root", ""), RequestID: reqStr(req, "request_id", "")})
 	if err != nil {
-		return mcpapi.NewToolResultError(errorTextOf(dialErrorResult(sess, err)) + "\nworkspace=" + ref.String()), nil
+		return mcpapi.NewToolResultError(errorTextOf(dialErrorResult(sess, err)) + fmt.Sprintf("\nworkspace=%q", ref.String())), nil
 	}
 	reportWorkspaceOutcome(ctx, ref, r)
 	return workspaceResult(ref, r), nil
@@ -332,7 +332,7 @@ func mcpWorkspaceExec(ctx context.Context, req mcpapi.CallToolRequest, immediate
 		OneShot: reqBool(req, "oneshot"), Elevate: reqBool(req, "elevate"), Via: reqStr(req, "via", ""),
 	})
 	if err != nil {
-		return mcpapi.NewToolResultError(errorTextOf(dialErrorResult(sess, err)) + fmt.Sprintf("\nworkspace=%s request_id=%s", ref.String(), rid)), nil
+		return mcpapi.NewToolResultError(errorTextOf(dialErrorResult(sess, err)) + fmt.Sprintf("\nworkspace=%q request_id=%q", ref.String(), rid)), nil
 	}
 	if !immediate {
 		r = settleWorkspace(ctx, c, ref, 0, r)
