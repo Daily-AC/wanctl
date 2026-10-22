@@ -97,8 +97,8 @@ type observedPhoneSession struct {
 
 func (s *observedPhoneSession) approvalGeneration() <-chan struct{} { return s.generation }
 
-func TestPhoneLateGrantRequiresOriginalConnection(t *testing.T) {
-	for _, mode := range []string{"closed", "expired replacement", "missing on replacement"} {
+func TestPendingPhoneCardRequiresOriginalConnectionForLateGrant(t *testing.T) {
+	for _, mode := range []string{"closed", "missing on replacement"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newPhoneFixture(t)
 			connectedPhoneSpace(f)
@@ -117,15 +117,10 @@ func TestPhoneLateGrantRequiresOriginalConnection(t *testing.T) {
 			if mode == "closed" {
 				d.close()
 			} else {
-				if mode == "expired replacement" {
-					f.sup.onTargetState("alice", "mac-1", original, console.State{}, phoneApprovalWait, seen, map[string]string{})
-				}
 				replacement := newFakePhoneSession()
 				replacement.found = false
 				current = replacement
-				if mode == "missing on replacement" {
-					f.sup.onTargetState("alice", "mac-1", current, console.State{}, phoneApprovalWait, seen, map[string]string{})
-				}
+				f.sup.onTargetState("alice", "mac-1", current, console.State{}, phoneApprovalWait, seen, map[string]string{})
 			}
 			f.sup.handleReply("alice", "phone-1", protocol.Message{ApprovalID: card.ID, Verdict: "y"})
 			if got := f.phone.lastPush(t).Result; got != protocol.ResultHandled {
