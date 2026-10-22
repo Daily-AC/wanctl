@@ -930,6 +930,16 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	r.hagents[key] = a
 	changed := a.changed
 	r.hmu.Unlock()
+	if !r.accountsEnabled(ns) {
+		r.hmu.Lock()
+		delete(r.hagents, key)
+		a.polls--
+		r.hmu.Unlock()
+		r.registrationMu.Unlock()
+		r.pruneDeviceVersions(ns, device)
+		http.Error(w, accountDisabledBody, http.StatusForbidden)
+		return
+	}
 	r.registrationMu.Unlock()
 	kickVersions()
 	defer func() {

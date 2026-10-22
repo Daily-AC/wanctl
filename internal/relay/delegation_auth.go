@@ -99,6 +99,11 @@ func (r *Relay) beginAccessLease(sid, target string, access delegation.Access, t
 	}
 	r.leases[sid] = l
 	r.leaseMu.Unlock()
+	owner, _, _ := strings.Cut(target, "/")
+	if !r.accountsEnabled(access.Namespace, owner) {
+		l.close()
+		return l
+	}
 	if !access.Delegated {
 		return l
 	}
@@ -174,6 +179,10 @@ func (r *Relay) closeRevokedShares(owners ...string) {
 // A normal EOF may still leave final output in the HTTP queue. Revalidate its
 // credential without discarding those bytes merely because the peer closed.
 func (l *accessLease) credentialValid() bool {
+	owner, _, _ := strings.Cut(l.target, "/")
+	if !l.r.accountsEnabled(l.access.Namespace, owner) {
+		return false
+	}
 	if !l.access.Delegated {
 		return true
 	}

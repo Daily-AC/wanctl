@@ -184,11 +184,13 @@ func (r *Relay) disconnectNamespace(ns string) (sessions, devices int) {
 		l.close()
 	}
 
+	r.registrationMu.Lock()
 	var offline []*httpAgent
 	var kick []*agentConn
 	r.mu.Lock()
-	for _, a := range r.agents {
+	for key, a := range r.agents {
 		if a.ns == ns {
+			delete(r.agents, key)
 			kick = append(kick, a)
 		}
 	}
@@ -211,8 +213,32 @@ func (r *Relay) disconnectNamespace(ns string) (sessions, devices int) {
 		}
 	}
 	r.hmu.Unlock()
+	r.registrationMu.Unlock()
+	for _, a := range kick {
+		r.pruneDeviceVersions(a.ns, a.device)
+	}
 	for _, a := range offline {
 		r.pruneDeviceVersions(a.ns, a.device)
 	}
 	return len(held), devices + len(kick)
+}
+
+// Namespaces without user rows (static tokens and the portal) remain enabled.
+// Storage errors fail closed. Called after publication so a disable either sees
+// the published object in its snapshot or this check sees the disabled flag.
+func (r *Relay) accountsEnabled(namespaces ...string) bool {
+	store, ok := r.admin.(AccountDisabler)
+	if !ok {
+		store, ok = r.ts.(AccountDisabler)
+	}
+	if !ok {
+		return true
+	}
+	for _, ns := range namespaces {
+		at, _, err := store.AccountDisabled(ns)
+		if err != nil || at != nil {
+			return false
+		}
+	}
+	return true
 }

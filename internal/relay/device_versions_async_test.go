@@ -250,6 +250,9 @@ type versionSQLTx struct{}
 func (versionSQLTx) Commit() error   { return nil }
 func (versionSQLTx) Rollback() error { return nil }
 func (c *versionSQLConn) QueryContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(q, "SELECT disabled_at FROM users") {
+		return &adminRows{columns: []string{"disabled_at"}, values: [][]driver.Value{{nil}}}, nil
+	}
 	if strings.Contains(q, "SELECT EXISTS") {
 		return &adminRows{columns: []string{"exists"}, values: [][]driver.Value{{true}}}, nil
 	}
