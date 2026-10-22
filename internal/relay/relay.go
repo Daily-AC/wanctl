@@ -476,7 +476,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 		WanctlVersion                       json.RawMessage `json:"wanctl_version"`
 		OpenCUVersion                       json.RawMessage `json:"opencu_version"`
 	}
-	if err := dec.Decode(&reg); err != nil || reg.Op != "register" || reg.Device == "" {
+	if err := dec.Decode(&reg); err != nil || reg.Op != "register" || reg.Device == "" || len(reg.Inst) > 255 {
 		c.Close(websocket.StatusPolicyViolation, "expected register")
 		return
 	}
@@ -520,6 +520,17 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	r.agents[key] = ac
 	r.mu.Unlock()
+	if !r.accountsEnabled(ns) {
+		r.mu.Lock()
+		if r.agents[key] == ac {
+			delete(r.agents, key)
+		}
+		r.mu.Unlock()
+		r.registrationMu.Unlock()
+		r.pruneDeviceVersions(ns, reg.Device)
+		c.Close(websocket.StatusPolicyViolation, accountDisabledBody)
+		return
+	}
 	r.registrationMu.Unlock()
 	kickVersions()
 	if !wasLive {
@@ -536,6 +547,9 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 			removed = true
 		}
 		r.mu.Unlock()
+		if removed {
+			r.pruneDeviceVersions(ns, reg.Device)
+		}
 		if removed && !r.deviceLive(ns, reg.Device) {
 			r.emitDeviceEvent(ns, reg.Device, offlineEvent(reg.Device))
 		}
@@ -601,6 +615,12 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 	ps := &pendingSession{agentSide: make(chan io.ReadWriteCloser, 1), done: make(chan struct{}), ownerNS: auth.OwnerNamespace}
 	lease := r.beginAccessLease(sid, targetKey, access, token, auth.Capabilities)
 	defer lease.close()
+	select {
+	case <-lease.done:
+		http.Error(w, "account access inactive", http.StatusForbidden)
+		return
+	default:
+	}
 	r.mu.Lock()
 	r.pending[sid] = ps
 	r.mu.Unlock()

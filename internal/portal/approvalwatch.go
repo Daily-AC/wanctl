@@ -30,7 +30,8 @@ type residentWatch struct {
 
 	// onDial sees every dial outcome. A non-nil return ends the watch with that
 	// error; nil keeps retrying (after a failure) or proceeds (after a success).
-	onDial func(err error) error
+	onDial       func(err error) error
+	onDisconnect func()
 	// onState runs for every state the device pushes, with the wait the device
 	// actually applied.
 	onState func(ctx context.Context, session deviceSession, state console.State, wait time.Duration)
@@ -96,6 +97,9 @@ func (w residentWatch) run(ctx context.Context) error {
 			}
 		}
 		unsubscribe()
+		if w.onDisconnect != nil {
+			w.onDisconnect()
+		}
 		// A closed channel means visibility was lost, not that pending work
 		// disappeared. The outlet keeps what it has seen across the re-dial.
 		if !w.waitRetry(ctx, backoff) {

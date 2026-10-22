@@ -22,10 +22,10 @@ func parseWorkspaceText(t *testing.T, text string) map[string]any {
 	t.Helper()
 	header, output, _ := strings.Cut(text, "\n\n")
 	d := map[string]any{"done": false, "output": output}
-	request := regexp.MustCompile(`^request (\S+): (done, exit (-?\d+)|running|waiting for the device owner's approval)$`)
+	request := regexp.MustCompile(`^request ("(?:\\.|[^"\\])*"|\S+): (done, exit (-?\d+)|running|waiting for the device owner's approval)$`)
 	for _, line := range strings.Split(header, "\n") {
 		if m := request.FindStringSubmatch(line); m != nil {
-			d["request_id"] = m[1]
+			d["request_id"] = unquoteMetadata(t, m[1])
 			if m[3] != "" {
 				code, _ := strconv.Atoi(m[3])
 				d["done"], d["code"] = true, code
@@ -38,7 +38,7 @@ func parseWorkspaceText(t *testing.T, text string) map[string]any {
 		}
 		switch key {
 		case "workspace", "root", "state", "cwd", "error":
-			d[key] = value
+			d[key] = unquoteMetadata(t, value)
 		case "next_offset":
 			n, err := strconv.ParseInt(value, 10, 64)
 			if err != nil {
@@ -60,8 +60,8 @@ func mustAtoi(t *testing.T, s string) int {
 }
 
 var (
-	readHeader = regexp.MustCompile(`^lines (\d+)-(\d+) of (\d+), (\d+) bytes, sha256 ([0-9a-f]{64})\n`)
-	shaLine    = regexp.MustCompile(`sha256 ([0-9a-f]{64})`)
+	readHeader = regexp.MustCompile(`^lines (\d+)-(\d+) of (\d+), (\d+) bytes, sha256 "([0-9a-f]{64})"\n`)
+	shaLine    = regexp.MustCompile(`sha256 "([0-9a-f]{64})"`)
 )
 
 // checkToolResults drives the registered handlers over authenticated HTTP MCP,
@@ -93,8 +93,8 @@ func checkToolResults(t *testing.T, call func(string, map[string]any) (string, b
 	if !strings.Contains(text, "[output truncated: showing last") || len(text) > maxExecStream+1024 {
 		t.Fatalf("ordinary exec truncation: %d bytes, %.200q", len(text), text)
 	}
-	if m := regexp.MustCompile(`full output at (\S+) on the device`).FindStringSubmatch(text); m != nil {
-		t.Cleanup(func() { os.Remove(m[1]) })
+	if m := regexp.MustCompile(`full output at ("(?:\\.|[^"\\])*") on the device`).FindStringSubmatch(text); m != nil {
+		t.Cleanup(func() { os.Remove(unquoteMetadata(t, m[1])) })
 	}
 	// A gate makes a running poll deterministic even on a busy CI worker. A
 	// poll waits for the job, so the gate is opened only after a poll has
@@ -121,7 +121,7 @@ func checkToolResults(t *testing.T, call func(string, map[string]any) (string, b
 			if !ok {
 				t.Fatalf("async submit: %q", started)
 			}
-			poll["target"], poll["job_id"] = target, id
+			poll["target"], poll["job_id"] = target, unquoteMetadata(t, id)
 		}
 		text = invoke("wanctl_exec_poll", poll)
 		if workspace {
@@ -295,9 +295,21 @@ func TestWorkspaceTextKeepsWhatACallerActsOn(t *testing.T) {
 	ref := client.WorkspaceRef{Target: "alice/box", ID: "w-1"}
 	text := workspaceText(ref, &protocol.WorkspaceResult{ID: "w-1", Root: "/repo", State: "open",
 		RequestID: "old", Done: true, ActiveRequestID: "current", Cwd: "/repo"})
-	for _, want := range []string{"request old: done, exit 0", "active request: current", "cwd: /repo"} {
+	for _, want := range []string{`request "old": done, exit 0`, `active request: "current"`, `cwd: "/repo"`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("workspace text lacks %q:\n%s", want, text)
 		}
 	}
+}
+
+func unquoteMetadata(t *testing.T, value string) string {
+	t.Helper()
+	if !strings.HasPrefix(value, "\"") {
+		return value
+	}
+	decoded, err := strconv.Unquote(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return decoded
 }

@@ -56,7 +56,7 @@ func TestDeviceControlCharactersReachTheModelEscaped(t *testing.T) {
 	}
 
 	text, _ = toolCall(t, h, access, sid, "wanctl_exec_async", map[string]any{"target": target, "command": styled})
-	job := strings.TrimSpace(strings.TrimPrefix(text, "job_id: "))
+	job := unquoteMetadata(t, strings.TrimSpace(strings.TrimPrefix(text, "job_id: ")))
 	for deadline := time.Now().Add(30 * time.Second); ; {
 		text, _ = toolCall(t, h, access, sid, "wanctl_exec_poll", map[string]any{"target": target, "job_id": job})
 		if strings.HasPrefix(text, "state: done") {

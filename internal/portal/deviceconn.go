@@ -158,6 +158,7 @@ func (d *deviceConn) rpcLocked(req protocol.Message, timeout time.Duration) (pro
 	err := protocol.WriteMessage(d.conn, req)
 	d.wmu.Unlock()
 	if err != nil {
+		d.close() // invalidate the observation before another caller can reuse it
 		// Conn is broken. Drain any late response so it cannot contaminate a
 		// future RPC's read on the shared respCh (cap 1, single in-flight).
 		select {
@@ -228,8 +229,8 @@ func (d *deviceConn) decideFound(id, verdict, approver string) (bool, error) {
 // grantOnce installs a late approval on the device: one request of this kind,
 // from this controller, with this label (command label or path), allowed once
 // within ttl.
-func (d *deviceConn) grantOnce(kind, pattern, fp string, ttl time.Duration, approver string) error {
-	_, err := d.rpc(protocol.Message{Kind: protocol.KindGrantOnce, RuleKind: kind, Pattern: pattern, FP: fp,
+func (d *deviceConn) grantOnce(kind, pattern, fp, cwd string, ttl time.Duration, approver string) error {
+	_, err := d.rpc(protocol.Message{Kind: protocol.KindGrantOnce, RuleKind: kind, Pattern: pattern, FP: fp, Cwd: cwd,
 		TimeoutSec: int(ttl / time.Second), Approver: approver})
 	return err
 }
@@ -433,3 +434,7 @@ func (d *deviceConn) pairADB(port int, code string) error {
 	}
 	return nil
 }
+
+// Each connection owns a unique observation generation. close invalidates it
+// before closing the socket or waking subscribers, independent of watch scheduling.
+func (d *deviceConn) approvalGeneration() <-chan struct{} { return d.closed }

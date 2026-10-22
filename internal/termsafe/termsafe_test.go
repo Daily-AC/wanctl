@@ -14,6 +14,7 @@ func TestEscapeMakesControlsVisibleAndKeepsText(t *testing.T) {
 		"nul\x00 del\x7f bell\x07":            `nul\x00 del\x7f bell\x07`,
 		"line one\nline\ttwo\r\nthree":        "line one\nline\ttwo\r\nthree",
 		"\rwanctl: ok":                        `\x0dwanctl: ok`,
+
 		"设备 已拒绝: 路径 /srv/数据 — ok ✓ \uFFFD": "设备 已拒绝: 路径 /srv/数据 — ok ✓ \uFFFD",
 	}
 	for in, want := range cases {

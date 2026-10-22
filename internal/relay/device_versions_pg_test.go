@@ -151,6 +151,7 @@ func TestDeviceVersionsPostgresMigrationAndRegistration(t *testing.T) {
 					}
 					waitForReport()
 					conn.Close()
+					waitVersion(t, func() bool { r.versionsMu.Lock(); defer r.versionsMu.Unlock(); return r.versions["alice/"+id] == nil })
 				} else {
 					q := url.Values{}
 					for k, v := range reg {

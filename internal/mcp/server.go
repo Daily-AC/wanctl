@@ -1204,10 +1204,10 @@ func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return fileOpErrorResult(sess, err), nil
 	}
 	capRead(res, maxReadReturn)
-	head := fmt.Sprintf("lines %d-%d of %d, %d bytes, sha256 %s\n",
+	head := fmt.Sprintf("lines %d-%d of %d, %d bytes, sha256 %q\n",
 		res.FirstLine, res.LastLine, res.TotalLines, res.SizeBytes, res.SHA256)
 	if res.TotalLines == 0 {
-		head = fmt.Sprintf("empty file, 0 bytes, sha256 %s\n", res.SHA256)
+		head = fmt.Sprintf("empty file, 0 bytes, sha256 %q\n", res.SHA256)
 	}
 	switch {
 	case res.LongLine != 0:
@@ -1292,7 +1292,7 @@ func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return fileOpErrorResult(sess, err), nil
 	}
 	return mcpapi.NewToolResultText(fmt.Sprintf(
-		"replaced %d, new sha256 %s, %d bytes\n", res.Replaced, res.SHA256, res.SizeBytes)), nil
+		"replaced %d, new sha256 %q, %d bytes\n", res.Replaced, res.SHA256, res.SizeBytes)), nil
 }
 
 // reqEdits reads the batch form of the edit argument. A malformed entry is
@@ -1363,7 +1363,7 @@ func mcpWrite(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 	if res.Created {
 		verb = "created"
 	}
-	return mcpapi.NewToolResultText(fmt.Sprintf("%s, sha256 %s, %d bytes\n", verb, res.SHA256, res.SizeBytes)), nil
+	return mcpapi.NewToolResultText(fmt.Sprintf("%s, sha256 %q, %d bytes\n", verb, res.SHA256, res.SizeBytes)), nil
 }
 
 // mcpScreenshot returns what is on the device's screen as image content, which
@@ -1438,7 +1438,7 @@ func mcpExecAsync(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.Call
 	if err != nil {
 		return dialErrorResult(sess, err), nil
 	}
-	return mcpapi.NewToolResultText("job_id: " + id + "\n"), nil
+	return mcpapi.NewToolResultText(fmt.Sprintf("job_id: %q\n", id)), nil
 }
 
 func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
@@ -1732,10 +1732,10 @@ func spillNote(res client.ExecOutcome) string {
 	switch {
 	case res.SpillPath != "" && res.SpillKept > 0 && res.SpillKept < res.SpillBytes:
 		return fmt.Sprintf(
-			"the device kept the FIRST %d bytes at %s (its copy is capped, so the middle is gone) — read it with wanctl_read or grep it with wanctl_exec",
+			"the device kept the FIRST %d bytes at %q (its copy is capped, so the middle is gone) — read it with wanctl_read or grep it with wanctl_exec",
 			res.SpillKept, res.SpillPath)
 	case res.SpillPath != "":
-		return "full output at " + res.SpillPath +
+		return fmt.Sprintf("full output at %q", res.SpillPath) +
 			" on the device, kept for 1h — read it with wanctl_read or grep it with wanctl_exec"
 	case res.SpillBytes > 0:
 		// It counted, so it understood the request and the file is what failed.
