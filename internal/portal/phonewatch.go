@@ -729,7 +729,10 @@ func (p *phoneSupervisor) apply(pc phoneCard, verdict, approver string) string {
 	if verdict != "y" {
 		return protocol.ResultDenied
 	}
-	if pc.disappearanceUnknown || !pc.observationCurrent(session.approvalGeneration()) {
+	// An expiry established on a live observation remains evidence after a
+	// reconnect. A still-pending card must establish disappearance on its own
+	// observation generation, including when the tap races expiry.
+	if p.answeredElsewhere(pc) || (pc.card.State != protocol.ApprovalExpired && !pc.observationCurrent(session.approvalGeneration())) {
 		return protocol.ResultHandled
 	}
 	label := pc.card.Cmd
