@@ -60,8 +60,8 @@ func mustAtoi(t *testing.T, s string) int {
 }
 
 var (
-	readHeader = regexp.MustCompile(`^lines (\d+)-(\d+) of (\d+), (\d+) bytes, sha256 ([0-9a-f]{64})\n`)
-	shaLine    = regexp.MustCompile(`sha256 ([0-9a-f]{64})`)
+	readHeader = regexp.MustCompile(`^lines (\d+)-(\d+) of (\d+), (\d+) bytes, sha256 "([0-9a-f]{64})"\n`)
+	shaLine    = regexp.MustCompile(`sha256 "([0-9a-f]{64})"`)
 )
 
 // checkToolResults drives the registered handlers over authenticated HTTP MCP,

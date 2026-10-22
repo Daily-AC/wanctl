@@ -1204,10 +1204,10 @@ func mcpRead(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return fileOpErrorResult(sess, err), nil
 	}
 	capRead(res, maxReadReturn)
-	head := fmt.Sprintf("lines %d-%d of %d, %d bytes, sha256 %s\n",
+	head := fmt.Sprintf("lines %d-%d of %d, %d bytes, sha256 %q\n",
 		res.FirstLine, res.LastLine, res.TotalLines, res.SizeBytes, res.SHA256)
 	if res.TotalLines == 0 {
-		head = fmt.Sprintf("empty file, 0 bytes, sha256 %s\n", res.SHA256)
+		head = fmt.Sprintf("empty file, 0 bytes, sha256 %q\n", res.SHA256)
 	}
 	switch {
 	case res.LongLine != 0:
@@ -1292,7 +1292,7 @@ func mcpEdit(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 		return fileOpErrorResult(sess, err), nil
 	}
 	return mcpapi.NewToolResultText(fmt.Sprintf(
-		"replaced %d, new sha256 %s, %d bytes\n", res.Replaced, res.SHA256, res.SizeBytes)), nil
+		"replaced %d, new sha256 %q, %d bytes\n", res.Replaced, res.SHA256, res.SizeBytes)), nil
 }
 
 // reqEdits reads the batch form of the edit argument. A malformed entry is
@@ -1363,7 +1363,7 @@ func mcpWrite(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallTool
 	if res.Created {
 		verb = "created"
 	}
-	return mcpapi.NewToolResultText(fmt.Sprintf("%s, sha256 %s, %d bytes\n", verb, res.SHA256, res.SizeBytes)), nil
+	return mcpapi.NewToolResultText(fmt.Sprintf("%s, sha256 %q, %d bytes\n", verb, res.SHA256, res.SizeBytes)), nil
 }
 
 // mcpScreenshot returns what is on the device's screen as image content, which
