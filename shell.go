@@ -371,7 +371,7 @@ func (s *remoteShell) restart(ctx context.Context, why string) error {
 		s.stale = true
 		return err
 	}
-	where := s.displayDir()
+	where := promptSafe(s.displayDir())
 	if where == "" {
 		// An older agent does not say where its shell is, so the
 		// new one could only be opened at home.
