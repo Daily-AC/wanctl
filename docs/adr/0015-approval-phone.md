@@ -146,3 +146,9 @@ directory shown on the card. The portal carries it in `grant_once.Cwd`; the
 device requires the same kind, controller, full command and canonical directory
 when consuming the grant. An unknown directory cannot consume an execution
 grant. Workspace execution uses its resolved current directory for this check.
+
+Amendment (2026-10-22): lateness uses the recorded time the request was first
+observed to disappear, not the later tap time. Phone teardown, target removal,
+and a target watch reconnect mark still-pending cards as having an unknown
+disappearance time. Those cards answer `handled` and cannot install a late
+grant; already observed expirations retain their original timing and binding.
