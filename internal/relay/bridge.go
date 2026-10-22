@@ -128,6 +128,11 @@ func (r *Relay) newHTTPSession(sid string, auth sessionauth.Open, access delegat
 		r.hmu.Unlock()
 		s.free()
 	})
+	select {
+	case <-s.lease.done:
+		return nil, errors.New("account access inactive")
+	default:
+	}
 	return s, nil
 }
 
