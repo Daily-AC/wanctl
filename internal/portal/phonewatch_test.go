@@ -20,21 +20,22 @@ import (
 // fakePhoneSession stands in for one device's console session: a target, the
 // phone, or both.
 type fakePhoneSession struct {
-	mu        sync.Mutex
-	states    chan console.State
-	replyCh   chan protocol.Message
-	pushes    []protocol.ApprovalCard
-	pushErr   error
-	decisions []string // "id verdict approver"
-	found     bool
-	grants    []string // "kind|pattern|fp|ttl|approver"
-	pairs     []string
-	pairErr   error
-	timeouts  []int
+	mu         sync.Mutex
+	states     chan console.State
+	generation chan struct{}
+	replyCh    chan protocol.Message
+	pushes     []protocol.ApprovalCard
+	pushErr    error
+	decisions  []string // "id verdict approver"
+	found      bool
+	grants     []string // "kind|pattern|fp|ttl|approver"
+	pairs      []string
+	pairErr    error
+	timeouts   []int
 }
 
 func newFakePhoneSession() *fakePhoneSession {
-	return &fakePhoneSession{states: make(chan console.State, 8), replyCh: make(chan protocol.Message, 8), found: true}
+	return &fakePhoneSession{generation: make(chan struct{}), states: make(chan console.State, 8), replyCh: make(chan protocol.Message, 8), found: true}
 }
 
 func (f *fakePhoneSession) subscribe() (<-chan console.State, func()) { return f.states, func() {} }
@@ -545,3 +546,5 @@ func TestPhoneLinkDoesNotUseThePool(t *testing.T) {
 		t.Fatalf("link sessions closed = %d, want 1", f.closed)
 	}
 }
+
+func (f *fakePhoneSession) approvalGeneration() <-chan struct{} { return f.generation }
