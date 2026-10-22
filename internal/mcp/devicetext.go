@@ -75,7 +75,7 @@ func escapeDeviceOutput(tool string, next server.ToolHandlerFunc) server.ToolHan
 			}
 			return res, err
 		}
-		if res == nil || (tool == rawContentTool && !res.IsError) || (tool == "wanctl_act" && (reqStr(req, "tool", "") != "" || req.GetArguments()["discover"] == true)) {
+		if res == nil || (tool == rawContentTool && !res.IsError) {
 			return res, nil
 		}
 		escapeResult(res)
@@ -86,6 +86,8 @@ func escapeDeviceOutput(tool string, next server.ToolHandlerFunc) server.ToolHan
 func escapeResult(res *mcpapi.CallToolResult) {
 	for i, content := range res.Content {
 		switch c := content.(type) {
+		case openCUContent:
+			res.Content[i] = c.escapeText()
 		case mcpapi.TextContent:
 			c.Text = escapeDeviceText(c.Text)
 			res.Content[i] = c
