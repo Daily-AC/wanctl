@@ -112,8 +112,8 @@ func TestVersionStoreFailureNeverRefusesRegistration(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						// Keep each accepted connection alive until its metadata update finishes.
-						defer conn.Close()
+						// Keep connections alive across the failure streak.
+						t.Cleanup(func() { conn.Close() })
 						if err := json.NewEncoder(conn).Encode(reg); err != nil {
 							t.Fatal(err)
 						}

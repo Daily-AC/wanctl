@@ -860,6 +860,10 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	deviceID := req.URL.Query().Get("device_id")
 	key := ns + "/" + device
 	inst := req.URL.Query().Get("inst")
+	if len(inst) > 255 {
+		http.Error(w, "invalid instance", 400)
+		return
+	}
 	r.startHTTPReaper()
 	r.registrationMu.Lock()
 	r.hmu.Lock()
@@ -1067,6 +1071,9 @@ func (r *Relay) handleHDeregister(w http.ResponseWriter, req *http.Request) {
 		removed = true
 	}
 	r.hmu.Unlock()
+	if removed {
+		r.pruneDeviceVersions(ns, device)
+	}
 	if removed && !r.deviceLive(ns, device) {
 		r.emitDeviceEvent(ns, device, offlineEvent(device))
 	}
@@ -1653,6 +1660,7 @@ func (r *Relay) reapHTTP(now time.Time) {
 	sessions := len(r.hsess)
 	r.hmu.Unlock()
 	for _, a := range offline {
+		r.pruneDeviceVersions(a.ns, a.device)
 		if !r.wsDeviceLive(a.ns + "/" + a.device) {
 			r.emitDeviceEvent(a.ns, a.device, offlineEvent(a.device))
 		}

@@ -476,7 +476,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 		WanctlVersion                       json.RawMessage `json:"wanctl_version"`
 		OpenCUVersion                       json.RawMessage `json:"opencu_version"`
 	}
-	if err := dec.Decode(&reg); err != nil || reg.Op != "register" || reg.Device == "" {
+	if err := dec.Decode(&reg); err != nil || reg.Op != "register" || reg.Device == "" || len(reg.Inst) > 255 {
 		c.Close(websocket.StatusPolicyViolation, "expected register")
 		return
 	}
@@ -536,6 +536,9 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 			removed = true
 		}
 		r.mu.Unlock()
+		if removed {
+			r.pruneDeviceVersions(ns, reg.Device)
+		}
 		if removed && !r.deviceLive(ns, reg.Device) {
 			r.emitDeviceEvent(ns, reg.Device, offlineEvent(reg.Device))
 		}
