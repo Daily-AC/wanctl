@@ -184,6 +184,7 @@ func (r *Relay) disconnectNamespace(ns string) (sessions, devices int) {
 		l.close()
 	}
 
+	var offline []*httpAgent
 	var kick []*agentConn
 	r.mu.Lock()
 	for _, a := range r.agents {
@@ -203,11 +204,15 @@ func (r *Relay) disconnectNamespace(ns string) (sessions, devices int) {
 		if a.ns == ns {
 			// Its parked poll wakes and ends; the next one is refused.
 			delete(r.hagents, key)
+			offline = append(offline, a)
 			close(a.changed)
 			a.changed = make(chan struct{})
 			devices++
 		}
 	}
 	r.hmu.Unlock()
+	for _, a := range offline {
+		r.pruneDeviceVersions(a.ns, a.device)
+	}
 	return len(held), devices + len(kick)
 }

@@ -38,8 +38,11 @@ type deviceVersionState struct {
 	want            versionReport
 	stored          *versionReport
 	revision        uint64
+	attempted       uint64
 	running, failed bool
-	nextWrite       time.Time
+	offline         bool
+	lastWrite       time.Time
+	wake            chan struct{}
 }
 
 // Called under registrationMu so accepted registrations retain their order.
@@ -57,15 +60,16 @@ func (r *Relay) queueDeviceVersions(ns, device, inst, wanctl, opencu string, rep
 	}
 	state := r.versions[key]
 	if state == nil {
-		state = &deviceVersionState{}
+		state = &deviceVersionState{wake: make(chan struct{}, 1)}
 		r.versions[key] = state
 	}
+	state.offline = false
 	state.want = versionReport{inst, cleanDeviceVersion(wanctl), cleanDeviceVersion(opencu), reported}
 	state.revision++
 	r.versionsMu.Unlock()
 	return func() {
 		r.versionsMu.Lock()
-		if state.running || (state.stored != nil && *state.stored == state.want) {
+		if r.versions[key] != state || state.offline || state.running || (state.stored != nil && *state.stored == state.want) {
 			r.versionsMu.Unlock()
 			return
 		}
@@ -76,32 +80,42 @@ func (r *Relay) queueDeviceVersions(ns, device, inst, wanctl, opencu string, rep
 }
 
 func (r *Relay) writeDeviceVersions(store deviceVersionStore, ns, device string, state *deviceVersionState) {
+	interval := r.versionWriteInterval
+	if interval <= 0 {
+		interval = deviceVersionWriteInterval
+	}
 	for {
 		r.versionsMu.Lock()
 		report, revision := state.want, state.revision
-		if state.stored != nil && *state.stored == report {
-			state.running = false
-			r.versionsMu.Unlock()
-			return
+		unchanged := state.stored != nil && *state.stored == report
+		if unchanged || (state.offline && state.attempted == revision) {
+			if !state.offline || !time.Now().Before(state.lastWrite.Add(interval)) {
+				if state.offline {
+					delete(r.versions, ns+"/"+device)
+				}
+				state.running = false
+				r.versionsMu.Unlock()
+				return
+			}
 		}
-		// Enforce the interval since the previous completed write attempt.
-		// Wait without holding the mutex, then read want again: only the latest
-		// report survives the interval, including reports from a new connection.
-		if delay := time.Until(state.nextWrite); delay > 0 {
+
+		if delay := time.Until(state.lastWrite.Add(interval)); delay > 0 {
 			r.versionsMu.Unlock()
-			time.Sleep(delay)
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-state.wake:
+			}
+			timer.Stop()
 			continue
 		}
-		interval := r.versionWriteInterval
-		if interval <= 0 {
-			interval = deviceVersionWriteInterval
-		}
+		state.attempted = revision
+		state.lastWrite = time.Now()
 		r.versionsMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), deviceVersionWriteTimeout)
 		err := store.RecordDeviceVersions(ctx, ns, device, report.wanctl, report.opencu, report.reported)
 		cancel()
 		r.versionsMu.Lock()
-		state.nextWrite = time.Now().Add(interval)
 		logFailure := err != nil && !state.failed
 		if err == nil {
 			state.stored = &report
@@ -117,7 +131,7 @@ func (r *Relay) writeDeviceVersions(store deviceVersionStore, ns, device string,
 			log.Printf("relay: device version metadata write failed (device %x)", id[:8])
 		}
 		r.versionsMu.Lock()
-		done := state.revision == revision
+		done := state.revision == revision && !state.offline
 		if done {
 			state.running = false
 		}
@@ -153,4 +167,31 @@ func deviceVersionStatus(installed, stable string) string {
 		return "latest"
 	}
 	return "ahead"
+}
+
+// Recheck under registrationMu so cleanup cannot remove a replacement's state.
+// Retain the cooldown until its interval ends, including across reconnects.
+// A running writer retires its own state, keeping reconnects serialized with it.
+func (r *Relay) pruneDeviceVersions(ns, device string) {
+	r.registrationMu.Lock()
+	defer r.registrationMu.Unlock()
+	if r.deviceLive(ns, device) {
+		return
+	}
+	r.versionsMu.Lock()
+	defer r.versionsMu.Unlock()
+	key := ns + "/" + device
+	if state := r.versions[key]; state != nil {
+		state.offline = true
+		if !state.running {
+			state.running = true
+			store := r.admin.(deviceVersionStore)
+			go r.writeDeviceVersions(store, ns, device, state)
+		} else {
+			select {
+			case state.wake <- struct{}{}:
+			default:
+			}
+		}
+	}
 }

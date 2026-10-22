@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"wanctl/internal/transport"
@@ -192,7 +191,7 @@ func (r *Relay) handleResolve(w http.ResponseWriter, req *http.Request) {
 // Legacy agents remain usable until upgraded, but cannot take a UUID route or
 // resurrect a migrated hostname and detach it from its existing permissions.
 func (r *Relay) allowLegacyRegistration(ns, device string) error {
-	if device == "" || strings.Contains(device, "/") || transport.ValidDeviceID(device) {
+	if !validDeviceName(device) || transport.ValidDeviceID(device) {
 		return fmt.Errorf("device ID registration required")
 	}
 	if p, ok := r.admin.(*PGStore); ok {
