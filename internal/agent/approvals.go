@@ -8,10 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -560,30 +558,16 @@ func canonicalApprovalDir(dir string) string {
 	if !filepath.IsAbs(dir) {
 		return ""
 	}
-	// Shell cd can interpret a parent after a symlink logically, whereas
-	// chdir (used by one-shot execution) interprets it physically. Such a
-	// spelling cannot identify one execution directory for a late grant.
-	parts := strings.FieldsFunc(dir[len(filepath.VolumeName(dir)):], func(r rune) bool {
-		return r == '/' || r == rune(filepath.Separator)
-	})
-	if slices.Contains(parts, "..") {
-		prefix := filepath.VolumeName(dir) + string(filepath.Separator)
-		linked := false
-		for _, part := range parts {
-			if part == ".." && linked {
-				return ""
-			}
-			prefix = filepath.Join(prefix, part)
-			info, err := os.Lstat(prefix)
-			if err != nil {
-				return ""
-			}
-			linked = linked || info.Mode()&os.ModeSymlink != 0
-		}
-	}
-	real, err := filepath.EvalSymlinks(dir)
+	// Shell cd resolves parent traversal logically, while one-shot chdir
+	// resolves it physically. Accept a spelling only when both name the same
+	// directory; a symlinked ancestor alone does not make it ambiguous.
+	physical, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return ""
 	}
-	return filepath.Clean(real)
+	logical, err := filepath.EvalSymlinks(filepath.Clean(dir))
+	if err != nil || filepath.Clean(physical) != filepath.Clean(logical) {
+		return ""
+	}
+	return filepath.Clean(physical)
 }
