@@ -158,6 +158,8 @@ func contactError(w http.ResponseWriter, err error) {
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
 		}
 		writeErrorToken(w, http.StatusTooManyRequests, rate.Kind.Error())
+	case errors.Is(err, ErrAccountDisabled):
+		writeErrorToken(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, ErrEmailInvalid):
 		writeErrorToken(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrEmailUnchanged):
@@ -189,7 +191,7 @@ func (r *Relay) adminContactEmail(w http.ResponseWriter, req *http.Request) {
 	}
 	out, err := r.admin.ContactEmail(provider, subject)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		contactError(w, err)
 		return
 	}
 	writeJSON(w, out)
@@ -300,7 +302,7 @@ func (r *Relay) adminContactEmailCancel(w http.ResponseWriter, req *http.Request
 		return
 	}
 	if err := r.admin.CancelEmailConfirmations(provider, subject); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		contactError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -368,6 +370,9 @@ func (r *Relay) adminContactEmailConfirm(w http.ResponseWriter, req *http.Reques
 // ContactEmail reads one identity's address and its newest live link in one
 // round trip: the portal's pages ask on every load.
 func (p *PGStore) ContactEmail(provider, subject string) (ContactEmail, error) {
+	if err := contactAccountEnabled(p.db, provider, subject, false); err != nil {
+		return ContactEmail{}, err
+	}
 	var out ContactEmail
 	var address, pending sql.NullString
 	var confirmedAt, sentAt sql.NullTime
@@ -425,6 +430,9 @@ func (p *PGStore) IssueEmailConfirmation(provider, subject, login, address, next
 		return EmailConfirmation{}, "", err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := contactAccountEnabled(tx, provider, subject, true); err != nil {
+		return EmailConfirmation{}, "", err
+	}
 	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('wanctl_contact_email'))`); err != nil {
 		return EmailConfirmation{}, "", err
 	}
@@ -506,11 +514,19 @@ func (p *PGStore) FailEmailConfirmation(id int) error {
 // CancelEmailConfirmations kills every live link for one identity. The rows
 // stay: they were sends, and the daily allowance counts them.
 func (p *PGStore) CancelEmailConfirmations(provider, subject string) error {
-	_, err := p.db.Exec(
-		`UPDATE email_confirmations SET expires_at = now()
-		  WHERE provider = $1 AND subject = $2 AND used_at IS NULL AND expires_at > now()`,
-		provider, subject)
-	return err
+	tx, err := p.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := contactAccountEnabled(tx, provider, subject, true); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE email_confirmations SET expires_at = now()
+ WHERE provider = $1 AND subject = $2 AND used_at IS NULL AND expires_at > now()`, provider, subject); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // emailConfirmationState reads a link by token and says whether it can still
@@ -585,4 +601,25 @@ func (p *PGStore) ConfirmEmail(token string) (EmailConfirmation, error) {
 		return EmailConfirmation{}, err
 	}
 	return link, nil
+}
+
+// Lock admitted users through mutations so disabling the user cannot finish
+// before a previously checked mutation commits. Missing users are applicants.
+func contactAccountEnabled(q accessQuerier, provider, subject string, lock bool) error {
+	query := `SELECT disabled_at FROM users WHERE provider=$1 AND provider_subject=$2`
+	if lock {
+		query += " FOR SHARE"
+	}
+	var at sql.NullTime
+	err := q.QueryRow(query, provider, subject).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if at.Valid {
+		return ErrAccountDisabled
+	}
+	return nil
 }

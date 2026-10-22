@@ -143,6 +143,9 @@ func (s *Server) handleEmailStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not signed in", http.StatusUnauthorized)
 		return
 	}
+	if !s.contactAccountEnabled(w, p) {
+		return
+	}
 	c, err := s.contactFor(p)
 	if err != nil {
 		http.Error(w, "relay unreachable", http.StatusBadGateway)
@@ -165,6 +168,9 @@ func (s *Server) handleEmailSend(w http.ResponseWriter, r *http.Request) {
 	p := s.principalFrom(r)
 	if p == nil {
 		http.Error(w, "not signed in", http.StatusUnauthorized)
+		return
+	}
+	if !s.contactAccountEnabled(w, p) {
 		return
 	}
 	var in struct {
@@ -241,6 +247,9 @@ func (s *Server) handleEmailCancel(w http.ResponseWriter, r *http.Request) {
 	p := s.principalFrom(r)
 	if p == nil {
 		http.Error(w, "not signed in", http.StatusUnauthorized)
+		return
+	}
+	if !s.contactAccountEnabled(w, p) {
 		return
 	}
 	resp, err := s.adminReq("POST", "/admin/contact-email/cancel", nil, map[string]string{"provider": p.Provider, "subject": p.Subject})
@@ -356,4 +365,21 @@ func confirmMail(login, address, origin, link string) (mailContent, error) {
 		"链接 24 小时内有效。不是你填的，忽略这封信即可。\n"+
 		"The link works for 24 hours. If this wasn't you, ignore this mail.\n", login, address, host, link)
 	return mailContent{subject: confirmMailSubject, text: text, html: page.String()}, nil
+}
+
+// The email door precedes admission, but an existing disabled account may not
+// use an old cookie to operate it. Pending applicants still need this door.
+func (s *Server) contactAccountEnabled(w http.ResponseWriter, p *principal) bool {
+	_, _, status, _ := s.resolveNamespace(p)
+	switch status {
+	case resolveOK, resolveNeedsEmail, resolvePending:
+		return true
+	case resolveDisabled:
+		writeErrorJSON(w, http.StatusForbidden, accountDisabledBody, nil)
+	case resolveConflict:
+		writeErrorJSON(w, http.StatusConflict, "identity-conflict", nil)
+	default:
+		writeErrorJSON(w, http.StatusBadGateway, "relay_unreachable", nil)
+	}
+	return false
 }
