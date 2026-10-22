@@ -8,15 +8,6 @@ import (
 	"wanctl/internal/protocol"
 )
 
-// The confirmation mail is sent from the instance's own, DKIM-signed sender,
-// so the link in it must point at the instance. handleEmailSend builds it from
-// requestOrigin(r), which without PORTAL_PUBLIC_ORIGIN is the request's Host
-// header; the same-origin check that guards the POST compares Origin with that
-// same Host, so a client that sets both passes it. Mail is enabled whether or
-// not a public origin is configured, and the door is open to any GitHub
-// account, admitted or not: anyone can make the instance mail an arbitrary
-// address a link to a host of their choosing, carrying a live token.
-
 // A watch outage cannot turn an earlier decision elsewhere into a late grant.
 func TestPhoneTapAfterAnswerElsewhereDuringOutageIsNotAGrant(t *testing.T) {
 	f := newPhoneFixture(t)

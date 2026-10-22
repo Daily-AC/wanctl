@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -234,7 +235,10 @@ func (r *Relay) accountsEnabled(namespaces ...string) bool {
 	if !ok {
 		return true
 	}
-	for _, ns := range namespaces {
+	for i, ns := range namespaces {
+		if slices.Contains(namespaces[:i], ns) {
+			continue
+		}
 		at, _, err := store.AccountDisabled(ns)
 		if err != nil || at != nil {
 			return false

@@ -367,8 +367,8 @@ func (r *Relay) adminContactEmailConfirm(w http.ResponseWriter, req *http.Reques
 
 // --- PGStore ---
 
-// ContactEmail reads one identity's address and its newest live link in one
-// round trip: the portal's pages ask on every load.
+// ContactEmail checks the account state, then reads the identity's address
+// and its newest live link. The portal's pages ask on every load.
 func (p *PGStore) ContactEmail(provider, subject string) (ContactEmail, error) {
 	if err := contactAccountEnabled(p.db, provider, subject, false); err != nil {
 		return ContactEmail{}, err
