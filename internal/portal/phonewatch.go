@@ -41,7 +41,7 @@ const (
 type phoneSession interface {
 	deviceSession
 	decideFound(id, verdict, approver string) (bool, error)
-	grantOnce(kind, pattern, fp string, ttl time.Duration, approver string) error
+	grantOnce(kind, pattern, fp, cwd string, ttl time.Duration, approver string) error
 	approvalPush(card protocol.ApprovalCard, timeout time.Duration) error
 	replies() (<-chan protocol.Message, func())
 	state() (console.State, error)
@@ -694,7 +694,7 @@ func (p *phoneSupervisor) apply(pc phoneCard, verdict, approver string) string {
 	if pc.card.Kind != "exec" && pc.card.Kind != "exec-elevated" {
 		label = pc.card.Path
 	}
-	if err := session.grantOnce(pc.card.Kind, label, pc.card.PeerFP, protocol.LateGrantWindow, approver); err != nil {
+	if err := session.grantOnce(pc.card.Kind, label, pc.card.PeerFP, pc.card.Cwd, protocol.LateGrantWindow, approver); err != nil {
 		p.logf("approval phone %s: late grant on %s: %v", pc.ns, pc.card.Device, err)
 		return protocol.ResultGone
 	}

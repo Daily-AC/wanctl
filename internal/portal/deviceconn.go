@@ -228,8 +228,8 @@ func (d *deviceConn) decideFound(id, verdict, approver string) (bool, error) {
 // grantOnce installs a late approval on the device: one request of this kind,
 // from this controller, with this label (command label or path), allowed once
 // within ttl.
-func (d *deviceConn) grantOnce(kind, pattern, fp string, ttl time.Duration, approver string) error {
-	_, err := d.rpc(protocol.Message{Kind: protocol.KindGrantOnce, RuleKind: kind, Pattern: pattern, FP: fp,
+func (d *deviceConn) grantOnce(kind, pattern, fp, cwd string, ttl time.Duration, approver string) error {
+	_, err := d.rpc(protocol.Message{Kind: protocol.KindGrantOnce, RuleKind: kind, Pattern: pattern, FP: fp, Cwd: cwd,
 		TimeoutSec: int(ttl / time.Second), Approver: approver})
 	return err
 }

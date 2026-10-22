@@ -62,10 +62,10 @@ func (f *fakePhoneSession) setApprovalTimeout(sec int) (int, error) {
 	f.timeouts = append(f.timeouts, sec)
 	return sec, nil
 }
-func (f *fakePhoneSession) grantOnce(kind, pattern, fp string, ttl time.Duration, approver string) error {
+func (f *fakePhoneSession) grantOnce(kind, pattern, fp, cwd string, ttl time.Duration, approver string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.grants = append(f.grants, strings.Join([]string{kind, pattern, fp, ttl.String(), approver}, "|"))
+	f.grants = append(f.grants, strings.Join([]string{kind, pattern, fp, ttl.String(), approver, cwd}, "|"))
 	return nil
 }
 func (f *fakePhoneSession) approvalPush(card protocol.ApprovalCard, _ time.Duration) error {
@@ -310,7 +310,7 @@ func TestPhoneLateApprovalGrantsOnce(t *testing.T) {
 	if len(d) != 0 {
 		t.Fatalf("an expired request was decided directly: %v", d)
 	}
-	if want := "exec|Get-Service wanctl|" + controllerFP() + "|30m0s|phone:pgbm10"; g[0] != want {
+	if want := "exec|Get-Service wanctl|" + controllerFP() + "|30m0s|phone:pgbm10|"; g[0] != want {
 		t.Fatalf("grant = %q, want %q", g[0], want)
 	}
 	phoneWaitFor(t, "granted", func() bool { return f.phone.lastPush(t).Result == protocol.ResultGranted })
