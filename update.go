@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -147,18 +148,37 @@ func updateSources() ([]string, error) {
 
 func updateSourcesForVersion(requested string) ([]string, error) {
 	var bases []string
+	// Betas try their tag first because the mirror only serves stable releases.
+	// Exact stables retain the configured/mirror order, then fall back to their
+	// tag so an intermediate stable newer than this device is still installable.
+	if requested != "" {
+		if err := wanrelease.ValidateVersion(requested); err != nil {
+			return nil, err
+		}
+		if strings.Contains(requested, "-beta.") {
+			bases = append(bases, "https://github.com/Daily-AC/wanctl/releases/download/"+requested)
+		}
+	}
 	if base := config.ReleaseBase(); base != "" {
 		base = strings.TrimRight(base, "/")
 		if requested != "" && strings.HasSuffix(base, "/releases/latest/download") {
 			base = strings.TrimSuffix(base, "/latest/download") + "/download/" + requested
 		}
-		bases = append(bases, base)
+		if len(bases) == 0 || bases[0] != base {
+			bases = append(bases, base)
+		}
 	}
 	relay, relayErr := config.Relay()
 	if relayErr == nil {
 		mirror := strings.TrimRight(relay, "/") + "/dl"
-		if len(bases) == 0 || bases[0] != mirror {
+		if !slices.Contains(bases, mirror) {
 			bases = append(bases, mirror)
+		}
+	}
+	if requested != "" {
+		official := "https://github.com/Daily-AC/wanctl/releases/download/" + requested
+		if !slices.Contains(bases, official) {
+			bases = append(bases, official)
 		}
 	}
 	if len(bases) == 0 {
@@ -637,7 +657,7 @@ func downloadSignedVersion(ctx context.Context, base, dir, goos, goarch, current
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("fetch %s: %s", url, resp.Status)
+		return "", "", &updateHTTPError{URL: url, Status: resp.Status, StatusCode: resp.StatusCode}
 	}
 	if resp.ContentLength > artifact.Size {
 		return "", "", fmt.Errorf("artifact content length %d exceeds signed size %d", resp.ContentLength, artifact.Size)
@@ -675,7 +695,7 @@ func fetchLimited(ctx context.Context, url string, limit int64) ([]byte, error) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch %s: %s", url, resp.Status)
+		return nil, &updateHTTPError{URL: url, Status: resp.Status, StatusCode: resp.StatusCode}
 	}
 	if resp.ContentLength > limit {
 		return nil, fmt.Errorf("fetch %s: response too large", url)
@@ -689,3 +709,12 @@ func fetchLimited(ctx context.Context, url string, limit int64) ([]byte, error) 
 	}
 	return raw, nil
 }
+
+// Keep HTTP status available without parsing diagnostic strings. CLI and
+// automatic-update error text remains unchanged.
+type updateHTTPError struct {
+	URL, Status string
+	StatusCode  int
+}
+
+func (e *updateHTTPError) Error() string { return fmt.Sprintf("fetch %s: %s", e.URL, e.Status) }

@@ -88,6 +88,16 @@
   });
 
   // Negative rendering test: simulate a tampered response (same endpoint shape).
+  if (scene === 'install-empty') devices[1].opencu_version = '';
+  if (scene === 'install-offline') devices[1].online = false;
+  if (scene === 'install-behind') { devices[1].wanctl_version='v0.29.0'; devices[1].wanctl_status='behind'; }
+  var installState = {};
+  var installScene = scene.replace('install-', '');
+  if (['downloading','installing','done','failed','old'].indexOf(installScene) >= 0) installState = {package:'wanctl',version:'v0.31.0-beta.1',stage:installScene === 'old' ? 'failed' : installScene,started:new Date(now).toISOString()};
+  if (installScene === 'failed') installState.reason = 'binary directory C:\\Program Files\\wanctl is not writable; run wanctl update with sufficient rights on the device';
+  if (installScene === 'old') installState.reason = "This device's wanctl is too old to be upgraded from the web. Run `wanctl update` on the device; if auto-update is on, it will also update itself.";
+  if (installScene === 'missing' || installScene === 'unreachable') installState = {package:'wanctl',version:'v0.29.0-beta.9',stage:'failed',started:new Date(now).toISOString(),reason:installScene === 'missing' ? 'version v0.29.0-beta.9 was not found in the official releases' : 'the device could not reach github.com'};
+  if (installScene === 'opencu-done') installState = {package:'opencu',version:'0.4.1',stage:'done',started:new Date(now).toISOString()};
   if (scene === 'version-html') devices[6].opencu_version = '<img src=x onerror=globalThis.versionXSS=1>';
 
   var waiting = [
@@ -279,8 +289,9 @@
       if (p === '/api/acl') return { acl: [] };
     }
     if (p === '/api/access-requests/decide') return {};
-    if (p === '/api/devices/console') { var st = consoles[new URLSearchParams(url.split('?')[1]).get('device')]; if (st) { var android = new URLSearchParams(url.split('?')[1]).get('device') === 'bench-02'; st.info = {platform:android?'android':'linux', adb_pair:android}; if (android && adbState) st.adb = adbState === 'error' ? {state:'error', reason:'connected to adbd on port 41031 but `id` failed: EOF'} : adbState === 'confirm' ? {state:'confirm', reason:'adbd on port 41031 is waiting for someone to allow wanctl\'s key on the device screen'} : {state:adbState}; } }
+    if (p === '/api/devices/console') { var st = consoles[new URLSearchParams(url.split('?')[1]).get('device')]; if (st) { var android = new URLSearchParams(url.split('?')[1]).get('device') === 'bench-02'; st.info = {platform:android?'android':new URLSearchParams(url.split('?')[1]).get('device') === 'DESKTOP-RQFV0SH-workstation-long' ? 'windows':'linux', adb_pair:android}; if (android && adbState) st.adb = adbState === 'error' ? {state:'error', reason:'connected to adbd on port 41031 but `id` failed: EOF'} : adbState === 'confirm' ? {state:'confirm', reason:'adbd on port 41031 is waiting for someone to allow wanctl\'s key on the device screen'} : {state:adbState}; } }
     if (p === '/api/devices/console') return consoles[new URLSearchParams(url.split('?')[1]).get('device')] || { mode: 'normal', pending: [], pending_pairings: [], rules: [], trusted: [] };
+    if (p === '/api/devices/install') return installState;
     if (p === '/api/devices/logs') return { logs: logs.slice().reverse() };
     if (p === '/api/devices/lark') return { approval_enabled: true, pairing_from_card: false, notify_email: 'you@example.com', delivery_health: { result: 'success', attempted_at: ago(300) } };
     if (p === '/api/devices/notify') return { enabled: false };
@@ -328,6 +339,7 @@
       // 写操作一律成功。工装不模拟状态机 —— 它是给眼睛看的，
       // 真正的裁决路径由 go test 覆盖。
       var out = { ok: true };
+      if (url.indexOf('/api/devices/install?') === 0) { var ir = JSON.parse(opts.body); installState = {package:ir.package,version:ir.version,stage:'downloading',started:new Date(now).toISOString()}; out = installState; }
       if (url.indexOf('/api/devices/remove') === 0) {
         var removed = JSON.parse(opts.body).device;
         for (var i = devices.length - 1; i >= 0; i--) if (devices[i].name === removed) devices.splice(i, 1);

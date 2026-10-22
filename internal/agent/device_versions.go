@@ -13,10 +13,11 @@ import (
 const versionRefreshInterval = time.Minute
 
 type installedVersionCache struct {
-	once  sync.Once
-	mu    sync.RWMutex
-	value string
-	read  func() string
+	once     sync.Once
+	mu       sync.RWMutex
+	value    string
+	revision uint64
+	read     func() string
 }
 
 func newInstalledVersionCache() *installedVersionCache {
@@ -36,12 +37,17 @@ func (c *installedVersionCache) start(ctx context.Context) {
 		// it never writes agent configuration or starts a replacement reader.
 		go func() {
 			for ctx.Err() == nil {
+				c.mu.RLock()
+				revision := c.revision
+				c.mu.RUnlock()
 				value := c.read()
 				if ctx.Err() != nil {
 					return
 				}
 				c.mu.Lock()
-				c.value = value
+				if c.revision == revision {
+					c.value = value
+				}
 				c.mu.Unlock()
 				if !sleepCtx(ctx, versionRefreshInterval) {
 					return
@@ -60,4 +66,17 @@ func (a *Agent) versionFields() map[string]string {
 		fields["opencu_version"] = versionmeta.Clean(value)
 	}
 	return fields
+}
+
+func (a *Agent) refreshOpenCUVersion(version string) {
+	if c := a.openCUVersion; c != nil {
+		c.mu.Lock()
+		c.value = version
+		c.revision++
+		c.mu.Unlock()
+	}
+	select {
+	case a.versionChanged <- struct{}{}:
+	default:
+	}
 }
