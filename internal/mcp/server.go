@@ -1144,10 +1144,10 @@ func mcpExec(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallToolR
 	// device really kept them apart.
 	out := fmt.Sprintf("exit: %d\n", res.Code)
 	if stdout.total > 0 {
-		out += lineEnded(stdout.tailText(res))
+		out += lineEnded(leanOutput(stdout.tailText(res), res.Code))
 	}
 	if stderr.total > 0 {
-		out += "--- stderr ---\n" + lineEnded(stderr.clampText())
+		out += "--- stderr ---\n" + lineEnded(leanOutput(stderr.clampText(), res.Code))
 	}
 	if stdout.total == 0 && stderr.total == 0 {
 		out += "(no output)\n"
@@ -1484,12 +1484,12 @@ func mcpExecPoll(ctx context.Context, req mcpapi.CallToolRequest) (*mcpapi.CallT
 		buf.absorb(got)
 		newOffset, running, code = next, stillRunning, nextCode
 	}
-	out := fmt.Sprintf("state: running, next_offset: %d\n", newOffset)
+	out, exit := fmt.Sprintf("state: running, next_offset: %d\n", newOffset), 0
 	if !running {
-		out = fmt.Sprintf("state: done, exit: %d, next_offset: %d\n", code, newOffset)
+		out, exit = fmt.Sprintf("state: done, exit: %d, next_offset: %d\n", code, newOffset), code
 	}
 	if buf.total > 0 {
-		out += lineEnded(buf.clampText())
+		out += lineEnded(leanOutput(buf.clampText(), exit))
 	} else {
 		out += "(no new output)\n"
 	}

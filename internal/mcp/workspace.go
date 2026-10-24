@@ -87,15 +87,20 @@ func workspaceText(ref client.WorkspaceRef, r *protocol.WorkspaceResult) string 
 	if r.Truncated {
 		fmt.Fprintf(&b, "the device kept only the first %d of %d output bytes\n", r.RetainedBytes, r.OutputBytes)
 	}
-	if r.Output == "" {
+	exit := 0
+	if r.Done {
+		exit = r.Code
+	}
+	output := leanOutput(r.Output, exit)
+	if output == "" {
 		if r.Done && r.OutputBytes == 0 {
 			b.WriteString("(no output)\n")
 		}
 		return b.String()
 	}
 	b.WriteString("\n")
-	b.WriteString(r.Output)
-	if !strings.HasSuffix(r.Output, "\n") {
+	b.WriteString(output)
+	if !strings.HasSuffix(output, "\n") {
 		b.WriteString("\n")
 	}
 	return b.String()
