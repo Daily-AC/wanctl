@@ -20,7 +20,8 @@ func (a *Agent) doDesktop(conn *tls.Conn, fp, peerName string, m protocol.Messag
 func (a *Agent) doDesktopUsing(conn io.ReadWriter, fp, peerName string, m protocol.Message, audit sessionAudit, supported bool, run desktop.Runner, checks ...func() bool) <-chan peerRead {
 	// A new non-Windows agent preserves this connection for the old screenshot
 	// verb; an old agent's unknown-request response closes it instead.
-	if !supported {
+	androidOpenCU := a.openCUStart != nil && m.Action == "act" && m.Desktop.IsOpenCU()
+	if !supported && !androidOpenCU {
 		_ = protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindError, Reason: protocol.DesktopWindowsOnly})
 		return nil
 	}
@@ -29,7 +30,11 @@ func (a *Agent) doDesktopUsing(conn io.ReadWriter, fp, peerName string, m protoc
 		return nil
 	}
 	if m.Desktop.IsOpenCU() {
-		return a.doOpenCU(conn, fp, peerName, m, audit, desktop.StartOpenCU, checks...)
+		start := a.openCUStart
+		if start == nil {
+			start = desktop.StartOpenCU
+		}
+		return a.doOpenCU(conn, fp, peerName, m, audit, start, checks...)
 	}
 	ctx, cancel := context.WithCancel(a.shutdown())
 	defer cancel()

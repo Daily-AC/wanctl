@@ -298,6 +298,47 @@ wanctl rules add --kind exec-elevated --pattern "pm install *"
 开关关着的时候，那几条通道连探都不会探——一台已 root 的设备，
 不会为一个没人打开的功能弹出 root 管理器的授权框。
 
+### act / OpenCU
+
+`wanctl act` 的 OpenCU 模式支持 wanctl APK 设备，需要开启 **提权通道**，
+并有可用的无线调试配对或 root。agent 优先选择 su，其次 adb；引擎始终以
+`shell`（uid 2000）运行。Termux 和独立二进制需要改用 wanctl app。
+旧版 `actions[]` 仍只支持 Windows。
+
+```sh
+wanctl act --target phone --discover
+wanctl act --target phone --tool 从发现结果选择工具 --arguments-file arguments.json
+```
+
+先读取发现结果中的工具与说明，再按 Android 工具定义调用。审批、控制端身份、
+设备忙锁、stop latch 和十分钟空闲关闭均沿用现有 act 规则。输入中途断线会返回
+“结果未知”，必须重新观察，不得重放；人主动停止后，即使空闲关闭或调用失败，
+也必须取得新的明确批准才能继续。
+
+首次使用由设备从 OpenCU 官方 GitHub 最新 release 下载 `opencu-android.json`
+和 `opencu-android.jar`。manifest 上限 16 KiB，jar 上限 64 MiB，大小与 SHA-256
+都必须一致。缓存位于 app 私有的 `files/opencu/`，jar 以完整 hash 命名，使用
+临时文件原子替换并保留上一份好副本。每 24 小时最多检查一次 manifest，失败
+尝试和 agent 重启也计入间隔；有任何 OpenCU session 打开时不刷新。刷新失败
+继续使用校验通过的缓存版本；设备注册会上报缓存版本供现有门户显示。
+
+jar 经提权流送入 `/data/local/tmp/opencu-android-<SHA-256 前 16 位>.jar`，
+使用临时文件、0644 权限和 rename；每次启动前核对设备 hash，相同副本免传。
+MCP 初始化成功后删除旧的同名格式 jar。引擎通过 `app_process` 运行，不监听
+端口，stdin EOF 时退出。adb 为它单独连接，空闲 session 不阻塞普通提权命令。
+诊断与 MCP stdout 分离，启动失败仅附带有长度上限、经过转义的 stderr 首行。
+
+`WANCTL_OPENCU_ANDROID_URL` 可将下载源改为包含上述两个固定文件名的目录。
+默认信任 HTTPS GitHub 和同一 release 中的 hash，不属于 wanctl 签名发布链。
+发布文件缺失或 hash 错误会返回带具体原因的 `OPENCU_NOT_INSTALLED`；默认源
+要等 OpenCU Android 资产正式发布后才能首次下载。CLI 将图片原样保存为私有的
+PNG 或 JPEG 文件。
+
+无线调试会因重启或 Wi-Fi 变化断开，按通道提示重新开启或配对。OEM 输入限制、
+Android 隐藏 API、root 管理器下的 shell 身份与 SELinux、物理停止手势及锁屏
+行为仍需签名 beta 真机验证。本次 Go 集成仅使用 fake adbd/MCP 与本地 HTTP
+server 验证，不代表已通过手机验收。
+
 ### 动词
 
 提权通道才是整个功能本身；这些动词只是给 adb 表面上那些在管道里不好使的部分做的简写。
