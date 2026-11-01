@@ -55,7 +55,7 @@ func ReadManifest() (Manifest, error) {
 }
 
 type Client struct {
-	cmd        *exec.Cmd
+	kill       func()
 	in         io.WriteCloser
 	out        io.ReadCloser
 	scan       *bufio.Scanner
@@ -88,9 +88,17 @@ func Start(ctx context.Context, cmd *exec.Cmd) (*Client, error) {
 		return nil, errors.New("cannot start OpenCU MCP server")
 	}
 	writer.Close()
-	c := &Client{cmd: cmd, in: in, out: out, scan: bufio.NewScanner(out), done: make(chan struct{})}
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	return StartPipes(ctx, in, out, done, func() { _ = cmd.Process.Kill() })
+}
+
+// StartPipes speaks the identical MCP protocol over an owned transport. done
+// closes on process/stream exit; kill must unblock its pipes and terminate it.
+// ctx bounds initialization only. Each later call has its own cancellation.
+func StartPipes(ctx context.Context, in io.WriteCloser, out io.ReadCloser, done chan struct{}, kill func()) (*Client, error) {
+	c := &Client{in: in, out: out, scan: bufio.NewScanner(out), done: done, kill: kill}
 	c.scan.Buffer(make([]byte, 64<<10), MaxResult)
-	go func() { _ = cmd.Wait(); close(c.done) }()
 	raw, err := c.rpc(ctx, "initialize", map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "wanctl", "version": "1"}})
 	if err == nil {
 		var init struct {
@@ -113,14 +121,16 @@ func Start(ctx context.Context, cmd *exec.Cmd) (*Client, error) {
 
 func (c *Client) Close() {
 	c.once.Do(func() {
-		c.in.Close()
+		closed := make(chan struct{})
+		go func() { c.in.Close(); close(closed) }()
 		defer c.out.Close()
 		select {
 		case <-c.done:
 		case <-time.After(2 * time.Second):
-			_ = c.cmd.Process.Kill()
+			c.kill()
 			<-c.done
 		}
+		<-closed
 	})
 }
 

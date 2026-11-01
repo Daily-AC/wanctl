@@ -1,7 +1,7 @@
 # 0020 — Android act relays to the OpenCU Android engine
 
 Date: 2026-11-01
-Status: accepted; implementation in progress
+Status: implemented with Go fakes; signed-beta phone acceptance pending
 
 ## Decision
 
@@ -21,7 +21,9 @@ call. This stays within the APK's frozen role of controlled-device agent.
 ## Starting the engine
 
 - **Channel.** su when available, otherwise the phone's own wireless-debugging
-  adbd, in the channel's usual order; `doctor`-style failures map to the
+  adbd, in the channel's usual order; su explicitly switches to `shell` (uid
+  2000), and every placement/start stream checks that uid rather than inheriting
+  root; `doctor`-style failures map to the
   channel's existing link states so the person sees one actionable sentence
   (turn wireless debugging back on, pair again, enable the elevation channel).
   The engine needs a bidirectional stream: adb uses the `shell,v2` protocol with
@@ -43,7 +45,10 @@ github.com and the SHA-256 in the same release's `opencu-android.json`
 manifest (version, file name, size, SHA-256), the same level as the Windows
 `install.ps1`, which embeds the artifact hash ([ADR 0019](0019-portal-triggered-installs.md)).
 The cache is refreshed at most once a day and never while a session is open; a
-failed refresh keeps using the cached engine. The agent reports the cached
+failed refresh keeps using the cached engine. Attempts (including failures) are
+persisted, so agent restarts do not reset the 24-hour interval. The jar is bounded
+at 64 MiB and the manifest at 16 KiB; the private cache retains the previous good
+copy. The agent reports the cached
 OpenCU version at registration, so the portal's existing version display works
 for Android without portal changes. `WANCTL_OPENCU_ANDROID_URL` (a directory
 holding the manifest and jar) overrides the source for testing and self-hosting.
@@ -57,3 +62,24 @@ holding the manifest and jar) overrides the source for testing and self-hosting.
   the boundary, as for elevated exec.
 - A compromised GitHub release could ship a malicious engine; the same is true
   of the Windows installer today. Signing OpenCU releases is out of scope here.
+
+## Implementation clarifications
+
+ADR 0017's PNG-only CLI output assumption does not hold for Android: OpenCU
+ADR 0005 returns JPEG screenshots. The relay preserves MCP content unchanged;
+the CLI now saves PNG or JPEG bytes unchanged with the corresponding extension.
+No relay protocol or portal UI changes are needed. The client already forwards
+act without an OS preflight; the Windows-only gate was on the device agent.
+Only Android OpenCU requests pass the new gate, while legacy actions retain
+`desktop: Windows only`. Standalone Android agents explain that the APK is needed.
+
+The su channel's ordinary Run/Stream still runs as root. The engine path requests
+shell explicitly (Magisk-style `su shell -c`, AOSP-style `su shell sh -c`) and
+refuses a different uid without falling back. This needs root-manager and SELinux
+verification on phones; a uid check alone does not prove the SELinux domain.
+
+Tests use local HTTP releases, a flow-controlled fake adbd and a standalone Go
+MCP peer. They verify cache/placement, bidirectional streams, session and stop
+semantics, approval gates, disconnect without replay, error mapping and version
+reporting. They do not validate the jar's hidden APIs, OEM restrictions, physical
+stop gestures or the default release assets, which are not yet published.

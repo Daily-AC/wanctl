@@ -120,6 +120,10 @@ func (s *Service) DoOpenCU(ctx context.Context, key, requestID string, req proto
 		if err != nil {
 			s.cuMu.Unlock()
 			res.Error = err.Error()
+			var startup *openCUStartError
+			if errors.As(err, &startup) {
+				res.OpenCU = &protocol.OpenCUResult{Code: startup.code, Message: startup.message}
+			}
 			return res
 		}
 		e.conn = conn

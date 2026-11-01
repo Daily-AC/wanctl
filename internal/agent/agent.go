@@ -82,6 +82,7 @@ type Agent struct {
 	notifyPolicy agentNotifyPolicy
 	notifyClient *http.Client
 
+	openCUStart    desktop.OpenCUStart // Android APK launcher; nil uses the Windows helper
 	openCUVersion  *installedVersionCache
 	installMu      sync.Mutex
 	installVersion string // protected by installMu
@@ -311,6 +312,7 @@ func New(opts Options) (*Agent, error) {
 	// everything while the audit log claimed a human said "approved".
 	a.appr = a.console
 	a.openCUVersion = newInstalledVersionCache()
+	a.configureAndroidOpenCU(runtime.GOOS, os.Getenv)
 	return a, nil
 }
 

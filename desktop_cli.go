@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"image/jpeg"
 	"io"
 	"os"
 	"os/signal"
@@ -227,7 +229,7 @@ func writeDesktopOutput(res *client.DesktopResponse, target, path string, stdout
 	return json.NewEncoder(stdout).Encode(out)
 }
 
-// Keep the raw result and decode every image into its own private PNG file.
+// Keep the raw result and decode every image into its own private PNG or JPEG file.
 // Text and metadata stay in stdout JSON, with paths replacing base64 payloads.
 func writeOpenCUOutput(res protocol.DesktopResult, dir string, stdout, stderr io.Writer) error {
 	r := res.OpenCU
@@ -279,14 +281,25 @@ func writeOpenCUOutput(res protocol.DesktopResult, dir string, stdout, stderr io
 			continue
 		}
 		var encoded, mime string
-		if json.Unmarshal(item["data"], &encoded) != nil || json.Unmarshal(item["mimeType"], &mime) != nil || mime != "image/png" {
-			return fmt.Errorf("invalid OpenCU PNG content; raw result saved to %s", resultPath)
+		if json.Unmarshal(item["data"], &encoded) != nil || json.Unmarshal(item["mimeType"], &mime) != nil || (mime != "image/png" && mime != "image/jpeg") {
+			return fmt.Errorf("invalid OpenCU PNG/JPEG content; raw result saved to %s", resultPath)
 		}
 		data, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil || len(data) < 8 || string(data[:8]) != "\x89PNG\r\n\x1a\n" {
-			return fmt.Errorf("invalid OpenCU PNG data; raw result saved to %s", resultPath)
+		ext := "png"
+		valid := err == nil && len(data) >= 8 && string(data[:8]) == "\x89PNG\r\n\x1a\n"
+		if mime == "image/jpeg" {
+			ext = "jpg"
+			_, decodeErr := jpeg.DecodeConfig(bytes.NewReader(data))
+			valid = err == nil && decodeErr == nil
 		}
-		imagePath, err := writeOpenCUFile(dir, "opencu-image-*.png", data)
+		if !valid {
+			format := "PNG"
+			if mime == "image/jpeg" {
+				format = "JPEG"
+			}
+			return fmt.Errorf("invalid OpenCU %s data; raw result saved to %s", format, resultPath)
+		}
+		imagePath, err := writeOpenCUFile(dir, "opencu-image-*."+ext, data)
 		if err != nil {
 			return err
 		}

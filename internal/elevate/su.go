@@ -75,6 +75,8 @@ func (s *Su) Kind() Kind { return KindSu }
 
 // find returns the first su binary present, or "".
 func (s *Su) find() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.path != "" {
 		return s.path
 	}
