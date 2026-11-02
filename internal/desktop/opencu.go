@@ -178,6 +178,11 @@ func (s *Service) DoOpenCU(ctx context.Context, key, requestID string, req proto
 		if e.conn == conn {
 			e.conn = nil
 		}
+		if errors.Is(err, opencu.ErrNotSent) {
+			// Known not executed; never resent automatically.
+			res.Error = err.Error()
+			return res
+		}
 		res.Status = "unknown"
 		res.Error = opencu.ErrUnknown.Error()
 		return res

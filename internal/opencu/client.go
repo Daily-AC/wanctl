@@ -25,6 +25,10 @@ const MaxResult = 64 << 20
 var ErrNotInstalled = errors.New(NotInstalledMessage)
 var ErrUnknown = errors.New("OpenCU outcome unknown: the process or stream failed during the call; observe again before acting; never replay this call")
 
+// ErrNotSent means a request was never written because the engine's output had
+// already ended: nothing was executed.
+var ErrNotSent = errors.New("OpenCU request not sent: the engine connection had already ended, so nothing was executed")
+
 type Manifest struct {
 	Version json.RawMessage `json:"version"`
 	MCP     struct {
@@ -167,13 +171,23 @@ func (c *Client) send(v any) error {
 }
 
 // read is the only reader of the peer's stdout and runs until it ends, so
-// notifications are seen between calls as well as during them.
+// notifications are seen between calls as well as during them. If it stops
+// before the output's normal end (malformed output, a broken stream, or Close
+// giving up on a peer that keeps its output open), a stop sent after that point
+// could not be seen, so the peer is treated as stopped.
 func (c *Client) read(scan *bufio.Scanner) {
 	defer close(c.readDone)
+	if !c.readToEnd(scan) {
+		c.stopped.Store(true)
+	}
+}
+
+// readToEnd reports whether it read the output through to its normal end.
+func (c *Client) readToEnd(scan *bufio.Scanner) bool {
 	for scan.Scan() {
 		var msg rpcMessage
 		if json.Unmarshal(scan.Bytes(), &msg) != nil || msg.JSONRPC != "2.0" {
-			return
+			return false
 		}
 		if msg.Method != "" {
 			if stopNotice(msg) {
@@ -181,7 +195,7 @@ func (c *Client) read(scan *bufio.Scanner) {
 			}
 			if len(msg.ID) > 0 { // No client capabilities were advertised.
 				if c.send(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "error": map[string]any{"code": -32601, "message": "host method not supported"}}) != nil {
-					return
+					return false
 				}
 			}
 			continue
@@ -191,9 +205,10 @@ func (c *Client) read(scan *bufio.Scanner) {
 		select {
 		case c.replies <- msg:
 		default:
-			return
+			return false
 		}
 	}
+	return scan.Err() == nil
 }
 
 // stopNotice recognises the peer's report that the person stopped it: an MCP
@@ -223,6 +238,12 @@ func (c *Client) rpc(ctx context.Context, method string, params any) (json.RawMe
 			<-stopped
 		}
 	}()
+	// Once the output has ended no reply could be read, so do not send.
+	select {
+	case <-c.readDone:
+		return nil, ErrNotSent
+	default:
+	}
 	c.id++
 	if err := c.send(map[string]any{"jsonrpc": "2.0", "id": c.id, "method": method, "params": params}); err != nil {
 		return nil, ErrUnknown
