@@ -314,7 +314,9 @@ wanctl act --target phone --tool TOOL_FROM_DISCOVERY --arguments-file arguments.
 设备忙锁、stop latch 和十分钟空闲关闭均沿用现有 act 规则。输入中途断线会返回
 “结果未知”，必须重新观察，不得重放；人主动停止后，即使空闲关闭或调用失败，
 也必须取得新的明确批准才能继续。没有调用在进行时引擎报告的停止（连按三次音量下键）
-也算在内：wanctl 在两次调用之间也读取引擎输出，并记下这次停止。
+也算在内：wanctl 在两次调用之间也读取引擎输出，并记下这次停止。如果引擎输出在正常结束
+之前就读不下去了（链路断开或输出格式错误），可能漏掉了停止，下一次 act 同样需要新的明确
+批准。引擎已经退出时发出的 act 报告为“未发送”，不会报告为“结果未知”。
 
 首次使用由设备从 OpenCU 官方 GitHub 最新 release 下载 `opencu-android.json`
 和 `opencu-android.jar`。manifest 上限 16 KiB，jar 上限 64 MiB，大小与 SHA-256

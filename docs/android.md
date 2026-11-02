@@ -354,7 +354,11 @@ stop latch and ten-minute idle timeout apply. A disconnect during input returns
 an unknown outcome: observe again, never replay the call. A person's stop
 requires fresh explicit approval, even after an idle close or failed call. That
 includes a stop the engine reports while no call is running (three volume-down
-presses): wanctl reads the engine's output between calls and latches it.
+presses): wanctl reads the engine's output between calls and latches it. If
+wanctl can no longer read that output before it ends normally (the link dropped
+or the output was malformed), a stop may have been missed, so the next act also
+needs fresh explicit approval. An act on an engine that has already exited is
+reported as not sent, never as an unknown outcome.
 
 On first use the device downloads `opencu-android.json` and `opencu-android.jar`
 from the latest official OpenCU GitHub release. The manifest is limited to
