@@ -182,7 +182,7 @@ func (c *AndroidCache) Acquire(ctx context.Context) (AndroidEngine, func(), erro
 			}
 		}
 		if err != nil {
-			s.Failure = err.Error()
+			s.Failure = boundFailure(err.Error())
 			_ = c.save(s)
 		}
 	}
@@ -251,10 +251,32 @@ func (c *AndroidCache) load(m AndroidManifest) (string, error) {
 	}
 	return jar.String(), nil
 }
+
+// maxAndroidFailure bounds the diagnostic kept with the cache state.
+const maxAndroidFailure = 512
+
+func boundFailure(s string) string {
+	if len(s) <= maxAndroidFailure {
+		return s
+	}
+	return strings.ToValidUTF8(s[:maxAndroidFailure], "")
+}
+
+// save writes only what state can read back. The refresh timestamp and the
+// engine records must survive; the diagnostic is bounded, and dropped if the
+// state would still exceed the read limit.
 func (c *AndroidCache) save(s androidCacheState) error {
+	s.Failure = boundFailure(s.Failure)
 	b, err := json.Marshal(s)
+	if err == nil && len(b) > maxVersionManifestBytes {
+		s.Failure = ""
+		b, err = json.Marshal(s)
+	}
 	if err != nil {
 		return err
+	}
+	if len(b) > maxVersionManifestBytes {
+		return errors.New("Android engine cache state exceeds 16 KiB")
 	}
 	return atomicCacheFile(c.dir, "cache.json", func(f *os.File) error { _, err := f.Write(b); return err })
 }
