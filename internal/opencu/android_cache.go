@@ -413,7 +413,8 @@ func atomicCacheFile(dir, name string, write func(*os.File) error) error {
 
 // openRegular opens path only if it is a regular file within limit. The open
 // neither follows a final symlink nor blocks (a FIFO swapped in after the
-// Lstat would otherwise hang it), and what was opened is checked again.
+// Lstat would otherwise hang it). What was opened must be the file the Lstat
+// saw, so it is regular; its size is checked again because it may have grown.
 func openRegular(path string, limit int64) (*os.File, error) {
 	st, err := os.Lstat(path)
 	if err != nil {
@@ -422,17 +423,25 @@ func openRegular(path string, limit int64) (*os.File, error) {
 	if !st.Mode().IsRegular() || st.Size() > limit {
 		return nil, errors.New("cache file is not regular or exceeds its size limit")
 	}
+	if afterCacheLstat != nil {
+		afterCacheLstat(path)
+	}
 	f, err := os.OpenFile(path, os.O_RDONLY|cacheOpenFlags, 0)
 	if err != nil {
 		return nil, err
 	}
 	current, err := f.Stat()
-	if err != nil || !os.SameFile(st, current) || !current.Mode().IsRegular() || current.Size() > limit {
+	if err != nil || !os.SameFile(st, current) || current.Size() > limit {
 		f.Close()
 		return nil, errors.New("cache file changed while opening")
 	}
 	return f, nil
 }
+
+// afterCacheLstat lets tests change the file between openRegular's Lstat and
+// its open. It is always nil outside tests.
+var afterCacheLstat func(path string)
+
 func readRegular(path string, limit int64) ([]byte, error) {
 	f, err := openRegular(path, limit)
 	if err != nil {
