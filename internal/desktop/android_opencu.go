@@ -62,7 +62,9 @@ func (a *AndroidOpenCU) StartOpenCU(ctx context.Context) (OpenCUConnection, erro
 	lifetime, cancel := context.WithCancel(context.Background())
 	stopCancel := context.AfterFunc(initCtx, cancel)
 	defer stopCancel()
-	stream, err := a.Elevator.ShellStream(lifetime, via, "CLASSPATH="+elevate.QuotePOSIX(path)+" exec app_process / dev.opencu.android.Main mcp", "")
+	q := elevate.QuotePOSIX(path)
+	launch := requireShellOwnedJar(q) + "CLASSPATH=" + q + " exec app_process / dev.opencu.android.Main mcp"
+	stream, err := a.Elevator.ShellStream(lifetime, via, launch, "")
 	if err != nil {
 		cancel()
 		return fail(err)
@@ -205,8 +207,23 @@ func (o *limitedOutput) Write(b []byte) (int, error) {
 	return n, nil
 }
 func (o *limitedOutput) String() string { return string(o.b) }
+
+// requireShellOwnedJar is a shell prefix that exits unless q names a regular
+// file (not a symlink) owned by the shell user, uid 2000, with mode 0644 or
+// stricter.
+//
+// /data/local/tmp is writable only by shell and root, and both already hold
+// the identity the engine runs as, so the copy needs no protection from them
+// between the device hash check and the start. Anything else (another owner,
+// group or other write, execute or special bits) is refused, at verification
+// and again at launch.
+func requireShellOwnedJar(q string) string {
+	return `case "$(stat -c '%u %A' ` + q + ` 2>/dev/null)" in '2000 -'[r-][w-]-[r-]--[r-]--) ;; *) echo 'ENGINE_FILE_REFUSED: the engine jar is not a regular file owned by the shell user with mode 0644 or stricter' >&2; exit 1 ;; esac; `
+}
+
 func (a *AndroidOpenCU) deviceHash(ctx context.Context, via elevate.Kind, path string) (string, error) {
-	out, _, err := a.shellCommand(ctx, via, "test ! -L "+elevate.QuotePOSIX(path)+" && test -f "+elevate.QuotePOSIX(path)+" && sha256sum "+elevate.QuotePOSIX(path), nil)
+	q := elevate.QuotePOSIX(path)
+	out, _, err := a.shellCommand(ctx, via, requireShellOwnedJar(q)+"sha256sum "+q, nil)
 	if err != nil {
 		return "", err
 	}

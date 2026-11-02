@@ -35,6 +35,14 @@ call. This stays within the APK's frozen role of controlled-device agent.
   bytes streamed are the ones the cache verified, held in memory and bounded by
   the manifest size; the cache file is not reopened for the copy. It
   runs as `CLASSPATH=<jar> app_process / dev.opencu.android.Main mcp`.
+- **Device copy trust.** `/data/local/tmp` is writable only by the shell user
+  and root, and both already hold the identity the engine runs as. The device
+  copy is therefore not guarded against them between the hash check and the
+  start: binding the start to the verified file (for example by passing a
+  descriptor) would grant nothing they lack. The hash check and the launch
+  command both refuse a jar that is not a regular file owned by uid 2000 with
+  mode 0644 or stricter, so a copy that anyone else could have written is
+  replaced rather than reused, and the SHA-256 is checked before every start.
 - **Lifetime.** One engine process per OpenCU session; stdin EOF ends it. The
   engine's lifetime is the channel's: when wireless debugging drops, the call
   in flight returns an unknown outcome and nothing is replayed.

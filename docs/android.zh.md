@@ -325,6 +325,9 @@ wanctl act --target phone --tool 从发现结果选择工具 --arguments-file ar
 
 jar 经提权流送入 `/data/local/tmp/opencu-android-<SHA-256 前 16 位>.jar`，
 使用临时文件、0644 权限和 rename；每次启动前核对设备 hash，相同副本免传。
+hash 核对和启动命令都拒绝不是普通文件、属主不是 shell 用户（uid 2000）或权限宽于
+0644 的 jar，这样的副本会被重新放置。`/data/local/tmp` 只有 shell 和 root 能写，
+而它们本来就拥有引擎运行的身份，所以核对与启动之间不针对它们做防护。
 MCP 初始化成功后删除旧的同名格式 jar。引擎通过 `app_process` 运行，不监听
 端口，stdin EOF 时退出。adb 为它单独连接，空闲 session 不阻塞普通提权命令。
 诊断与 MCP stdout 分离，启动失败仅附带有长度上限、经过转义的 stderr 首行。
