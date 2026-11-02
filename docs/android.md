@@ -377,7 +377,8 @@ stdout; startup failures include only a bounded, escaped first stderr line.
 `WANCTL_OPENCU_ANDROID_URL` can point the agent at another directory containing
 those two fixed filenames. The default trust is HTTPS to GitHub and the hash in
 the release manifest, not a wanctl release signature. A missing release or failed
-hash check reports `OPENCU_NOT_INSTALLED` with its cause; the planned Android
+hash check reports `OPENCU_NOT_INSTALLED` with its cause (a failed download
+names only its kind, host and HTTP status, never the URL); the planned Android
 assets must be published before first use can succeed from the default source.
 CLI image results are saved unchanged as private PNG or JPEG files.
 
