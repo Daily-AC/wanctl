@@ -31,7 +31,9 @@ call. This stays within the APK's frozen role of controlled-device agent.
   commands are not blocked while a session is open.
 - **Placement.** The jar is copied as shell to
   `/data/local/tmp/opencu-android-<sha256-16>.jar` (create-then-rename,
-  mode 0644) and its SHA-256 is checked on the device before every start. It
+  mode 0644) and its SHA-256 is checked on the device before every start. The
+  bytes streamed are the ones the cache verified, held in memory and bounded by
+  the manifest size; the cache file is not reopened for the copy. It
   runs as `CLASSPATH=<jar> app_process / dev.opencu.android.Main mcp`.
 - **Lifetime.** One engine process per OpenCU session; stdin EOF ends it. The
   engine's lifetime is the channel's: when wireless debugging drops, the call

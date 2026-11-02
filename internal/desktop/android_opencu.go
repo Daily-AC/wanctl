@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -224,20 +223,21 @@ func (a *AndroidOpenCU) place(ctx context.Context, via elevate.Kind, e opencu.An
 	if len(hash) != 64 || strings.Trim(hash, "0123456789abcdef") != "" {
 		return "", errors.New("invalid Android engine SHA-256")
 	}
+	// The bytes the cache verified, bounded by the manifest size; the cache
+	// file is never reopened here.
+	jar, err := e.Reader()
+	if err != nil {
+		return "", err
+	}
 	path := "/data/local/tmp/opencu-android-" + hash[:16] + ".jar"
 	if got, err := a.deviceHash(ctx, via, path); err == nil && got == hash {
 		return path, nil
 	}
-	f, err := os.Open(e.Path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
 	// mktemp creates exclusively, so a pre-existing symlink can never redirect
 	// privileged writes. The source path is not sent to shell (SELinux forbids it).
 	q := elevate.QuotePOSIX(path)
 	command := `t=$(mktemp /data/local/tmp/.opencu-android-XXXXXXXX) || exit 1; trap 'rm -f "$t"' EXIT; cat > "$t" && chmod 0644 "$t" && test ! -L ` + q + " && { test ! -e " + q + " || test -f " + q + `; } && mv -f "$t" ` + q
-	if _, _, err = a.shellCommand(ctx, via, command, f); err != nil {
+	if _, _, err = a.shellCommand(ctx, via, command, jar); err != nil {
 		return "", fmt.Errorf("place Android engine: %w", err)
 	}
 	got, err := a.deviceHash(ctx, via, path)
