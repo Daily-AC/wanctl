@@ -65,3 +65,45 @@ func TestConfigSubdirectoryIsProtectedLikeTheConfigDir(t *testing.T) {
 	}
 	unchanged()
 }
+
+// A directory created inside the config dir after the protected set was
+// loaded (the engine cache's directory on its first use), and a file created
+// in it, are refused by the opened-handle check as well.
+func TestConfigSubdirectoryCreatedAfterLoadIsRefused(t *testing.T) {
+	cfg := protectedConfig(t)
+	guard := loadProtected()
+	late := filepath.Join(cfg, "opencu")
+	if err := os.MkdirAll(late, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	meta := filepath.Join(late, "cache.json")
+	if err := os.WriteFile(meta, []byte("ORIGINAL\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(late)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := guard.checkOpened(root, nil, "cache.json"); err == nil {
+		t.Error("a config subdirectory created after load was accepted")
+	}
+
+	elsewhere := t.TempDir()
+	link := filepath.Join(elsewhere, "innocent.json")
+	if err := os.Link(meta, link); err != nil {
+		t.Skipf("hard link unavailable: %v", err)
+	}
+	outside, err := os.OpenRoot(elsewhere)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outside.Close()
+	info, err := outside.Lstat("innocent.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.checkOpened(outside, info, link); err == nil {
+		t.Error("a file created in the config dir after load was accepted through a hard link")
+	}
+}
