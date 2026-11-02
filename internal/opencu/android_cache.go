@@ -431,7 +431,9 @@ func openRegular(path string, limit int64) (*os.File, error) {
 		return nil, err
 	}
 	current, err := f.Stat()
-	if err != nil || !os.SameFile(st, current) || current.Size() > limit {
+	// SameFile alone is not enough: Linux can hand a replacement the inode number
+	// the removed file just freed, so check the opened file's type again.
+	if err != nil || !current.Mode().IsRegular() || !os.SameFile(st, current) || current.Size() > limit {
 		f.Close()
 		return nil, errors.New("cache file changed while opening")
 	}
