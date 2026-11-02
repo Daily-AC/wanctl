@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,9 +80,10 @@ func (a *AndroidOpenCU) StartOpenCU(ctx context.Context) (OpenCUConnection, erro
 		cancel()
 		stream.Close()
 		<-drained
-		detail := diagnostic.String()
-		if detail != "" {
+		if detail := diagnostic.String(); detail != "" {
 			err = fmt.Errorf("%w: engine stderr: %s", err, detail)
+		} else {
+			err = fmt.Errorf("%w (engine diagnostics stay on the device)", err)
 		}
 		return fail(err)
 	}
@@ -130,8 +132,10 @@ func (c *androidOpenCUConnection) Do(ctx context.Context, req protocol.DesktopRe
 }
 
 // The diagnostic is drained in full, retaining at most 512 bytes of its first
-// line. Quoting escapes control/format characters and invalid UTF-8 bytes.
-// It is never included in audit/notification summaries.
+// line. Only a line in the engine's own error-code form ("CODE: text") is
+// passed on, quoted so control/format characters and invalid UTF-8 bytes are
+// escaped; any other stderr stays on the device. It is never included in
+// audit/notification summaries.
 type firstDiagnostic struct {
 	mu    sync.Mutex
 	line  []byte
@@ -158,11 +162,13 @@ func (d *firstDiagnostic) Write(b []byte) (int, error) {
 func (d *firstDiagnostic) String() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(d.line) == 0 {
+	if !engineErrorLine.Match(d.line) {
 		return ""
 	}
 	return strconv.QuoteToASCII(string(d.line))
 }
+
+var engineErrorLine = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,40}: `)
 
 // shellCommand streams bytes, never a base64 command or an app-private path.
 // Both outputs are drained, bounded, and wait failure is never retried.
@@ -194,7 +200,11 @@ func (a *AndroidOpenCU) shellCommand(ctx context.Context, via elevate.Kind, comm
 		err = waitErr
 	}
 	if err == nil && code != 0 {
-		err = fmt.Errorf("Android engine command exited %d: %s", code, diag.String())
+		if detail := diag.String(); detail != "" {
+			err = fmt.Errorf("Android engine command exited %d: %s", code, detail)
+		} else {
+			err = fmt.Errorf("Android engine command exited %d", code)
+		}
 	}
 	return out.String(), code, err
 }
