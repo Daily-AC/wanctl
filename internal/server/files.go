@@ -403,26 +403,46 @@ func (p protected) target(target string) string {
 // handle the operation works in, and the file found there. The path check above
 // runs before the open, and this one closes the distance between the two — a
 // directory swapped in between, or a file reachable under a second name.
+//
+// It compares with the protected set as loaded for the path check and as it is
+// now, so a directory or file created inside the config dir in between (the
+// engine cache's directory on first use) is refused like the rest.
 func (p protected) checkOpened(dir *os.Root, file os.FileInfo, path string) error {
-	if p.configDir != nil {
-		if info, err := dir.Stat("."); err != nil {
+	now := loadProtected()
+	var opened os.FileInfo
+	if p.configDir != nil || now.configDir != nil {
+		info, err := dir.Stat(".")
+		if err != nil {
 			return err
-		} else if p.inConfig(info) {
-			return fmt.Errorf("refusing %s: %q", reasonConfigDir, path)
 		}
+		opened = info
 	}
-	if file == nil {
-		return nil
-	}
-	if p.binary != nil && os.SameFile(file, p.binary) {
-		return fmt.Errorf("refusing %s: %q", reasonBinary, path)
-	}
-	for _, f := range p.configFile {
-		if os.SameFile(file, f) {
-			return fmt.Errorf("refusing %s: %q", reasonConfigDir, path)
+	for _, q := range []protected{p, now} {
+		if reason := q.refuses(opened, file); reason != "" {
+			return fmt.Errorf("refusing %s: %q", reason, path)
 		}
 	}
 	return nil
+}
+
+// refuses names why an operation in directory dir on file may not proceed, or
+// returns "" if it may. Either may be nil.
+func (p protected) refuses(dir, file os.FileInfo) string {
+	if dir != nil && p.inConfig(dir) {
+		return reasonConfigDir
+	}
+	if file == nil {
+		return ""
+	}
+	if p.binary != nil && os.SameFile(file, p.binary) {
+		return reasonBinary
+	}
+	for _, f := range p.configFile {
+		if os.SameFile(file, f) {
+			return reasonConfigDir
+		}
+	}
+	return ""
 }
 
 // inConfig reports whether info is the config dir or a directory beneath it.
