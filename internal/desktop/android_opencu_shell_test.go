@@ -34,7 +34,9 @@ type posixChannel struct {
 	root, bin string
 	// owner is the uid stat reports for files this test owns, standing in for
 	// the shell user (2000) or for another user.
-	owner  string
+	owner string
+	// uid is what `id -u` reports; empty means the shell user, 2000.
+	uid    string
 	before func(command string)
 }
 
@@ -56,7 +58,11 @@ func (c *posixChannel) Stream(ctx context.Context, command, cwd string) (elevate
 	if runtime.GOOS == "darwin" {
 		stat, sum = `/usr/bin/stat -f '%u %Sp' "$3"`, `sha256sum() { /usr/bin/shasum -a 256 "$@"; }; `
 	}
-	prelude := `id() { printf '2000\n'; }; ` + sum +
+	uid := c.uid
+	if uid == "" {
+		uid = "2000"
+	}
+	prelude := `id() { printf '` + uid + `\n'; }; ` + sum +
 		`stat() { o=$(` + stat + `) || return 1; set -- $o; [ "$1" = ` + strconv.Itoa(os.Getuid()) + ` ] && set -- ` + c.owner + ` "$2"; printf '%s %s\n' "$1" "$2"; }; `
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", prelude+command)
 	cmd.Env = append(os.Environ(), "PATH="+c.bin+":/usr/bin:/bin")
@@ -340,5 +346,56 @@ func TestAndroidLaunchRefusesAJarChangedAfterVerification(t *testing.T) {
 				t.Fatal("app_process ran a jar changed after verification")
 			}
 		})
+	}
+}
+
+// The commands wanctl generates keep their own first stderr line in the error:
+// a stream that is not running as the shell user says so, on the placement
+// path and on the launch path alike.
+func TestAndroidStartReportsAWrongShellUser(t *testing.T) {
+	for _, path := range []string{"placement", "launch"} {
+		t.Run(path, func(t *testing.T) {
+			host, ch, _, _, loaded := posixHost(t, ocutest.Build(t))
+			if path == "placement" {
+				ch.uid = "0"
+			} else {
+				ch.before = func(command string) {
+					if strings.Contains(command, "CLASSPATH=") {
+						ch.uid = "0"
+					}
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			c, err := host.StartOpenCU(ctx)
+			if err == nil {
+				c.Close()
+				t.Fatal("started as another user")
+			}
+			if !strings.Contains(err.Error(), "SHELL_USER_REQUIRED: OpenCU requires the shell user (uid 2000)") {
+				t.Fatalf("error does not name the reason: %v", err)
+			}
+			if _, statErr := os.Stat(loaded); !os.IsNotExist(statErr) {
+				t.Fatal("app_process ran as another user")
+			}
+		})
+	}
+}
+
+// A placement that cannot create its file reports the command's own reason.
+func TestAndroidPlacementReportsAnUnwritableDirectory(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("directory permissions do not bind root")
+	}
+	host, ch, _, _, _ := posixHost(t, "unused")
+	if err := os.Chmod(ch.root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(ch.root, 0o755) })
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_, err := host.StartOpenCU(ctx)
+	if err == nil || !strings.Contains(err.Error(), "mktemp") || !strings.Contains(err.Error(), "Permission denied") {
+		t.Fatalf("error does not name the reason: %v", err)
 	}
 }

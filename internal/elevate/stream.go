@@ -88,7 +88,7 @@ func (s *statusStream) Wait() (int, error) { <-s.done; return s.code, s.err }
 
 func openStream(ctx context.Context, c Channel, command, cwd string, shell bool) (Stream, error) {
 	if shell {
-		command = `if [ "$(id -u)" != 2000 ]; then echo 'OpenCU requires the shell user (uid 2000)' >&2; exit 1; fi; ` + command
+		command = `if [ "$(id -u)" != 2000 ]; then echo 'SHELL_USER_REQUIRED: OpenCU requires the shell user (uid 2000)' >&2; exit 1; fi; ` + command
 		if c.Kind() == KindSu {
 			if su, ok := c.(interface {
 				ShellStream(context.Context, string, string) (Stream, error)

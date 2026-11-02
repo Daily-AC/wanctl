@@ -80,12 +80,7 @@ func (a *AndroidOpenCU) StartOpenCU(ctx context.Context) (OpenCUConnection, erro
 		cancel()
 		stream.Close()
 		<-drained
-		if detail := diagnostic.String(); detail != "" {
-			err = fmt.Errorf("%w: engine stderr: %s", err, detail)
-		} else {
-			err = fmt.Errorf("%w (engine diagnostics stay on the device)", err)
-		}
-		return fail(err)
+		return fail(diagnostic.engineError(err))
 	}
 	if !stopCancel() && initCtx.Err() != nil {
 		peer.Close()
@@ -132,10 +127,9 @@ func (c *androidOpenCUConnection) Do(ctx context.Context, req protocol.DesktopRe
 }
 
 // The diagnostic is drained in full, retaining at most 512 bytes of its first
-// line. Only a line in the engine's own error-code form ("CODE: text") is
-// passed on, quoted so control/format characters and invalid UTF-8 bytes are
-// escaped; any other stderr stays on the device. It is never included in
-// audit/notification summaries.
+// line. Quoting escapes control/format characters and invalid UTF-8 bytes.
+// For the engine process only a line in its error-code form is passed on (see
+// engineError). It is never included in audit/notification summaries.
 type firstDiagnostic struct {
 	mu    sync.Mutex
 	line  []byte
@@ -159,13 +153,32 @@ func (d *firstDiagnostic) Write(b []byte) (int, error) {
 	}
 	return n, nil
 }
+
+// String is the bounded, escaped first line, used for the commands wanctl
+// itself generates (placement, hash check, cleanup).
 func (d *firstDiagnostic) String() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if !engineErrorLine.Match(d.line) {
+	if len(d.line) == 0 {
 		return ""
 	}
 	return strconv.QuoteToASCII(string(d.line))
+}
+
+// engineError adds the engine process's first stderr line to err only when
+// that line is in the engine's own error-code form ("CODE: text"). Any other
+// engine stderr is not forwarded, and the error says so.
+func (d *firstDiagnostic) engineError(err error) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch {
+	case len(d.line) == 0:
+		return err
+	case engineErrorLine.Match(d.line):
+		return fmt.Errorf("%w: engine stderr: %s", err, strconv.QuoteToASCII(string(d.line)))
+	default:
+		return fmt.Errorf("%w (engine stderr not forwarded: its first line is not in the engine's error-code form)", err)
+	}
 }
 
 var engineErrorLine = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,40}: `)
@@ -200,11 +213,7 @@ func (a *AndroidOpenCU) shellCommand(ctx context.Context, via elevate.Kind, comm
 		err = waitErr
 	}
 	if err == nil && code != 0 {
-		if detail := diag.String(); detail != "" {
-			err = fmt.Errorf("Android engine command exited %d: %s", code, detail)
-		} else {
-			err = fmt.Errorf("Android engine command exited %d", code)
-		}
+		err = fmt.Errorf("Android engine command exited %d: %s", code, diag.String())
 	}
 	return out.String(), code, err
 }
