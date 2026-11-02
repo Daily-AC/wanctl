@@ -307,7 +307,7 @@ wanctl rules add --kind exec-elevated --pattern "pm install *"
 
 ```sh
 wanctl act --target phone --discover
-wanctl act --target phone --tool 从发现结果选择工具 --arguments-file arguments.json
+wanctl act --target phone --tool TOOL_FROM_DISCOVERY --arguments-file arguments.json
 ```
 
 先读取发现结果中的工具与说明，再按 Android 工具定义调用。审批、控制端身份、
