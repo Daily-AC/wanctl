@@ -50,10 +50,24 @@ func (m AndroidManifest) validate() error {
 	return nil
 }
 
+// AndroidEngine is one acquired engine. It carries the bytes that were
+// verified against the manifest, so placement never reopens the cache file:
+// whatever happens to Path after Acquire cannot change what is uploaded.
 type AndroidEngine struct {
 	Manifest AndroidManifest
-	Path     string
+	Path     string // where the verified copy is cached; informational
+	jar      string // the verified bytes, immutable
 }
+
+// Reader returns exactly the verified bytes, refusing an engine whose bytes do
+// not match its manifest size or exceed the 64 MiB limit.
+func (e AndroidEngine) Reader() (io.Reader, error) {
+	if e.Manifest.Size <= 0 || e.Manifest.Size > MaxAndroidJar || int64(len(e.jar)) != e.Manifest.Size {
+		return nil, errors.New("Android engine bytes do not match the verified manifest")
+	}
+	return io.LimitReader(strings.NewReader(e.jar), e.Manifest.Size), nil
+}
+
 type androidCacheState struct {
 	Current  AndroidManifest `json:"current"`
 	Previous AndroidManifest `json:"previous"`
@@ -125,13 +139,15 @@ func (c *AndroidCache) Acquire(ctx context.Context) (AndroidEngine, func(), erro
 	defer c.mu.Unlock()
 	s := c.state()
 	current := s.Current
-	cacheErr := c.verify(current)
+	jar, cacheErr := c.load(current)
 	good := cacheErr == nil
-	if !good && c.verify(s.Previous) == nil {
-		current = s.Previous
-		s.Current, s.Previous = current, AndroidManifest{}
-		_ = c.save(s)
-		good = true
+	if !good {
+		if previous, err := c.load(s.Previous); err == nil {
+			current, jar = s.Previous, previous
+			s.Current, s.Previous = current, AndroidManifest{}
+			_ = c.save(s)
+			good = true
+		}
 	}
 	now := c.now()
 	if c.active == 0 && (s.Checked.IsZero() || now.Sub(s.Checked) >= AndroidRefresh) {
@@ -145,6 +161,10 @@ func (c *AndroidCache) Acquire(ctx context.Context) (AndroidEngine, func(), erro
 		if err == nil {
 			m, err = c.fetch(ctx)
 		}
+		var fetched string
+		if err == nil {
+			fetched, err = c.load(m)
+		}
 		if err == nil {
 			next := s
 			next.Current, next.Failure = m, ""
@@ -155,7 +175,7 @@ func (c *AndroidCache) Acquire(ctx context.Context) (AndroidEngine, func(), erro
 			if err == nil {
 				s = next
 				c.prune(s)
-				current = m
+				current, jar = m, fetched
 				good = true
 			}
 		}
@@ -174,7 +194,7 @@ func (c *AndroidCache) Acquire(ctx context.Context) (AndroidEngine, func(), erro
 	c.active++
 	var once sync.Once
 	release := func() { once.Do(func() { c.mu.Lock(); c.active--; c.mu.Unlock() }) }
-	return AndroidEngine{Manifest: current, Path: c.path(current)}, release, nil
+	return AndroidEngine{Manifest: current, Path: c.path(current), jar: jar}, release, nil
 }
 
 // Only hash-named regular jar files belong to this cache. Keep the current
@@ -199,26 +219,35 @@ func (c *AndroidCache) prune(s androidCacheState) {
 }
 
 func (c *AndroidCache) verify(m AndroidManifest) error {
+	_, err := c.load(m)
+	return err
+}
+
+// load reads a cached jar into memory and returns it only if its size and
+// SHA-256 match m. The returned bytes, not the file, are what gets placed.
+func (c *AndroidCache) load(m AndroidManifest) (string, error) {
 	if err := m.validate(); err != nil {
-		return err
+		return "", err
 	}
 	f, err := openRegular(c.path(m), m.Size)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer f.Close()
+	var jar strings.Builder
+	jar.Grow(int(m.Size))
 	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(f, m.Size+1))
+	n, err := io.Copy(io.MultiWriter(&jar, h), io.LimitReader(f, m.Size+1))
 	if err != nil {
-		return err
+		return "", err
 	}
 	if n != m.Size {
-		return errors.New("cached jar size mismatch")
+		return "", errors.New("cached jar size mismatch")
 	}
 	if hex.EncodeToString(h.Sum(nil)) != m.SHA256 {
-		return errors.New("cached jar SHA-256 mismatch")
+		return "", errors.New("cached jar SHA-256 mismatch")
 	}
-	return nil
+	return jar.String(), nil
 }
 func (c *AndroidCache) save(s androidCacheState) error {
 	b, err := json.Marshal(s)
@@ -309,6 +338,10 @@ func atomicCacheFile(dir, name string, write func(*os.File) error) error {
 	}
 	return os.Rename(f.Name(), filepath.Join(dir, name))
 }
+
+// openRegular opens path only if it is a regular file within limit. The open
+// neither follows a final symlink nor blocks (a FIFO swapped in after the
+// Lstat would otherwise hang it), and what was opened is checked again.
 func openRegular(path string, limit int64) (*os.File, error) {
 	st, err := os.Lstat(path)
 	if err != nil {
@@ -317,12 +350,12 @@ func openRegular(path string, limit int64) (*os.File, error) {
 	if !st.Mode().IsRegular() || st.Size() > limit {
 		return nil, errors.New("cache file is not regular or exceeds its size limit")
 	}
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|cacheOpenFlags, 0)
 	if err != nil {
 		return nil, err
 	}
 	current, err := f.Stat()
-	if err != nil || !os.SameFile(st, current) {
+	if err != nil || !os.SameFile(st, current) || !current.Mode().IsRegular() || current.Size() > limit {
 		f.Close()
 		return nil, errors.New("cache file changed while opening")
 	}
