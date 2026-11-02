@@ -331,7 +331,8 @@ MCP 初始化成功后删除旧的同名格式 jar。引擎通过 `app_process` 
 
 `WANCTL_OPENCU_ANDROID_URL` 可将下载源改为包含上述两个固定文件名的目录。
 默认信任 HTTPS GitHub 和同一 release 中的 hash，不属于 wanctl 签名发布链。
-发布文件缺失或 hash 错误会返回带具体原因的 `OPENCU_NOT_INSTALLED`；默认源
+发布文件缺失或 hash 错误会返回带具体原因的 `OPENCU_NOT_INSTALLED`（下载失败只给出
+类别、主机和 HTTP 状态码，不含 URL）；默认源
 要等 OpenCU Android 资产正式发布后才能首次下载。CLI 将图片原样保存为私有的
 PNG 或 JPEG 文件。
 

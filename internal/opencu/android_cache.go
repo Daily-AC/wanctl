@@ -3,11 +3,13 @@ package opencu
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -264,17 +266,65 @@ func (c *AndroidCache) get(ctx context.Context, file string) (*http.Response, er
 	u.Path = strings.TrimRight(u.Path, "/") + "/" + file
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("invalid Android engine directory URL")
 	}
 	res, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s download failed: %w", file, err)
+		failed := u
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			if p, perr := url.Parse(uerr.URL); perr == nil {
+				failed = p
+			}
+		}
+		return nil, downloadError(file, failed, 0, err)
 	}
 	if res.StatusCode != http.StatusOK {
 		res.Body.Close()
-		return nil, fmt.Errorf("%s download: HTTP %d", file, res.StatusCode)
+		return nil, downloadError(file, responseURL(res, u), res.StatusCode, nil)
 	}
 	return res, nil
+}
+
+// downloadError describes a failed release request by its kind, the host it
+// went to and the HTTP status, and nothing else: the URL of a redirected
+// download can carry credentials in its user info, path or query.
+func downloadError(file string, u *url.URL, status int, err error) error {
+	host := "unknown host"
+	if u != nil && u.Host != "" && len(u.Host) <= 255 && strings.Trim(strings.ToLower(u.Host), "abcdefghijklmnopqrstuvwxyz0123456789.-:[]") == "" {
+		host = strings.ToLower(u.Host)
+	}
+	if err == nil {
+		return fmt.Errorf("%s download: HTTP %d from %s", file, status, host)
+	}
+	var dns *net.DNSError
+	var cert *tls.CertificateVerificationError
+	var record tls.RecordHeaderError
+	var timeout net.Error
+	var dial *net.OpError
+	kind := "request failed"
+	switch {
+	case errors.Is(err, context.Canceled):
+		kind = "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		kind = "timed out"
+	case errors.As(err, &dns):
+		kind = "DNS lookup failed"
+	case errors.As(err, &cert), errors.As(err, &record):
+		kind = "TLS failed"
+	case errors.As(err, &timeout) && timeout.Timeout():
+		kind = "timed out"
+	case errors.As(err, &dial):
+		kind = "connection failed"
+	}
+	return fmt.Errorf("%s download failed: %s (%s)", file, kind, host)
+}
+
+func responseURL(res *http.Response, fallback *url.URL) *url.URL {
+	if res.Request != nil && res.Request.URL != nil {
+		return res.Request.URL
+	}
+	return fallback
 }
 func (c *AndroidCache) fetch(ctx context.Context) (AndroidManifest, error) {
 	var m AndroidManifest
@@ -285,7 +335,7 @@ func (c *AndroidCache) fetch(ctx context.Context) (AndroidManifest, error) {
 	b, err := io.ReadAll(io.LimitReader(res.Body, maxVersionManifestBytes+1))
 	res.Body.Close()
 	if err != nil {
-		return m, fmt.Errorf("manifest download: %w", err)
+		return m, downloadError("opencu-android.json", responseURL(res, nil), 0, err)
 	}
 	if len(b) > maxVersionManifestBytes {
 		return m, errors.New("Android engine manifest exceeds 16 KiB")
@@ -308,7 +358,7 @@ func (c *AndroidCache) fetch(ctx context.Context) (AndroidManifest, error) {
 		h := sha256.New()
 		n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(res.Body, m.Size+1))
 		if err != nil {
-			return fmt.Errorf("jar download: %w", err)
+			return downloadError("opencu-android.jar", responseURL(res, nil), 0, err)
 		}
 		if n != m.Size {
 			return fmt.Errorf("jar size mismatch: got %d, want %d", n, m.Size)
