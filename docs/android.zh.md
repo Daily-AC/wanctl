@@ -317,8 +317,9 @@ wanctl act --target phone --tool 从发现结果选择工具 --arguments-file ar
 
 首次使用由设备从 OpenCU 官方 GitHub 最新 release 下载 `opencu-android.json`
 和 `opencu-android.jar`。manifest 上限 16 KiB，jar 上限 64 MiB，大小与 SHA-256
-都必须一致。缓存位于 app 私有的 `files/opencu/`，jar 以完整 hash 命名，使用
-临时文件原子替换并保留上一份好副本。每 24 小时最多检查一次 manifest，失败
+都必须一致。缓存位于 app 配置目录里的 `files/wanctl/opencu/`，jar 以完整 hash
+命名，使用临时文件原子替换并保留上一份好副本。文件操作拒绝这个目录，与拒绝设备
+身份文件的方式相同，所以能写文件的控制端也放不进引擎字节或缓存元数据。每 24 小时最多检查一次 manifest，失败
 尝试和 agent 重启也计入间隔；有任何 OpenCU session 打开时不刷新。刷新失败
 继续使用校验通过的缓存版本；设备注册会上报缓存版本供现有门户显示。
 
