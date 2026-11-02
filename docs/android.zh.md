@@ -330,7 +330,9 @@ hash 核对和启动命令都拒绝不是普通文件、属主不是 shell 用�
 而它们本来就拥有引擎运行的身份，所以核对与启动之间不针对它们做防护。
 MCP 初始化成功后删除旧的同名格式 jar。引擎通过 `app_process` 运行，不监听
 端口，stdin EOF 时退出。adb 为它单独连接，空闲 session 不阻塞普通提权命令。
-诊断与 MCP stdout 分离，启动失败仅附带有长度上限、经过转义的 stderr 首行。
+诊断与 MCP stdout 分离。引擎启动失败时，只有错误码格式（`CODE: 说明`）的 stderr
+首行会经长度限制和转义后转给控制端，其他内容不转发，错误信息会说明这一点；wanctl
+自己的放置命令失败时，照旧附带有长度上限、经过转义的 stderr 首行。
 
 `WANCTL_OPENCU_ANDROID_URL` 可将下载源改为包含上述两个固定文件名的目录。
 默认信任 HTTPS GitHub 和同一 release 中的 hash，不属于 wanctl 签名发布链。

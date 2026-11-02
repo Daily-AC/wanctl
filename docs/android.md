@@ -373,10 +373,14 @@ successful MCP initialization. The hash check and the start both refuse a jar
 that is not a regular file owned by the shell user (uid 2000) with mode 0644 or
 stricter, and such a copy is replaced. Only shell and root can write
 `/data/local/tmp`, and both already hold the identity the engine runs as, so the
-copy is not guarded against them between the check and the start. The engine runs through `app_process`, opens no
-port, and exits on stdin EOF. adb uses a dedicated connection, so ordinary
-elevated commands can continue while it is idle. Diagnostics never enter MCP
-stdout; startup failures include only a bounded, escaped first stderr line.
+copy is not guarded against them between the check and the start. The engine
+runs through `app_process`, opens no port, and exits on stdin EOF. adb uses a
+dedicated connection, so ordinary elevated commands can continue while it is
+idle. Diagnostics never enter MCP stdout. When the engine fails to start, the
+first line of its stderr reaches the controller only in the engine's error-code
+form (`CODE: text`), bounded and escaped; otherwise the error says the engine's
+stderr was not forwarded. A failure of wanctl's own placement commands carries
+their bounded, escaped first stderr line.
 
 `WANCTL_OPENCU_ANDROID_URL` can point the agent at another directory containing
 those two fixed filenames. The default trust is HTTPS to GitHub and the hash in
