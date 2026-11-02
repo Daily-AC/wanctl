@@ -298,6 +298,57 @@ wanctl rules add --kind exec-elevated --pattern "pm install *"
 开关关着的时候，那几条通道连探都不会探——一台已 root 的设备，
 不会为一个没人打开的功能弹出 root 管理器的授权框。
 
+### act / OpenCU
+
+`wanctl act` 的 OpenCU 模式支持 wanctl APK 设备，需要开启 **提权通道**，
+并有可用的无线调试配对或 root。agent 优先选择 su，其次 adb；引擎始终以
+`shell`（uid 2000）运行。Termux 和独立二进制需要改用 wanctl app。
+旧版 `actions[]` 仍只支持 Windows。
+
+```sh
+wanctl act --target phone --discover
+wanctl act --target phone --tool TOOL_FROM_DISCOVERY --arguments-file arguments.json
+```
+
+先读取发现结果中的工具与说明，再按 Android 工具定义调用。审批、控制端身份、
+设备忙锁、stop latch 和十分钟空闲关闭均沿用现有 act 规则。输入中途断线会返回
+“结果未知”，必须重新观察，不得重放；人主动停止后，即使空闲关闭或调用失败，
+也必须取得新的明确批准才能继续。没有调用在进行时引擎报告的停止（连按三次音量下键）
+也算在内：wanctl 在两次调用之间也读取引擎输出，并记下这次停止。如果引擎输出在正常结束
+之前就读不下去了（链路断开或输出格式错误），可能漏掉了停止，下一次 act 同样需要新的明确
+批准。引擎已经退出时发出的 act 报告为“未发送”，不会报告为“结果未知”。
+
+首次使用由设备从 OpenCU 官方 GitHub 最新 release 下载 `opencu-android.json`
+和 `opencu-android.jar`。manifest 上限 16 KiB，jar 上限 64 MiB，大小与 SHA-256
+都必须一致。缓存位于 app 配置目录里的 `files/wanctl/opencu/`，jar 以完整 hash
+命名，使用临时文件原子替换并保留上一份好副本。文件操作拒绝这个目录，与拒绝设备
+身份文件的方式相同，所以能写文件的控制端也放不进引擎字节或缓存元数据。每 24 小时最多检查一次 manifest，失败
+尝试和 agent 重启也计入间隔；有任何 OpenCU session 打开时不刷新。刷新失败
+继续使用校验通过的缓存版本；设备注册会上报缓存版本供现有门户显示。
+
+jar 经提权流送入 `/data/local/tmp/opencu-android-<SHA-256 前 16 位>.jar`，
+使用临时文件、0644 权限和 rename；每次启动前核对设备 hash，相同副本免传。
+hash 核对和启动命令都拒绝不是普通文件、属主不是 shell 用户（uid 2000）或权限宽于
+0644 的 jar，这样的副本会被重新放置。`/data/local/tmp` 只有 shell 和 root 能写，
+而它们本来就拥有引擎运行的身份，所以核对与启动之间不针对它们做防护。
+MCP 初始化成功后删除旧的同名格式 jar。引擎通过 `app_process` 运行，不监听
+端口，stdin EOF 时退出。adb 为它单独连接，空闲 session 不阻塞普通提权命令。
+诊断与 MCP stdout 分离。引擎启动失败时，只有错误码格式（`CODE: 说明`）的 stderr
+首行会经长度限制和转义后转给控制端，其他内容不转发，错误信息会说明这一点；wanctl
+自己的放置命令失败时，照旧附带有长度上限、经过转义的 stderr 首行。
+
+`WANCTL_OPENCU_ANDROID_URL` 可将下载源改为包含上述两个固定文件名的目录。
+默认信任 HTTPS GitHub 和同一 release 中的 hash，不属于 wanctl 签名发布链。
+发布文件缺失或 hash 错误会返回带具体原因的 `OPENCU_NOT_INSTALLED`（下载失败只给出
+类别、主机和 HTTP 状态码，不含 URL）；默认源
+要等 OpenCU Android 资产正式发布后才能首次下载。CLI 将图片原样保存为私有的
+PNG 或 JPEG 文件。
+
+无线调试会因重启或 Wi-Fi 变化断开，按通道提示重新开启或配对。OEM 输入限制、
+Android 隐藏 API、root 管理器下的 shell 身份与 SELinux、物理停止手势及锁屏
+行为仍需签名 beta 真机验证。本次 Go 集成仅使用 fake adbd/MCP 与本地 HTTP
+server 验证，不代表已通过手机验收。
+
 ### 动词
 
 提权通道才是整个功能本身；这些动词只是给 adb 表面上那些在管道里不好使的部分做的简写。

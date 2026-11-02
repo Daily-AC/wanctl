@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,6 +24,10 @@ const MaxResult = 64 << 20
 
 var ErrNotInstalled = errors.New(NotInstalledMessage)
 var ErrUnknown = errors.New("OpenCU outcome unknown: the process or stream failed during the call; observe again before acting; never replay this call")
+
+// ErrNotSent means a request was never written because the engine's output had
+// already ended: nothing was executed.
+var ErrNotSent = errors.New("OpenCU request not sent: the engine connection had already ended, so nothing was executed")
 
 type Manifest struct {
 	Version json.RawMessage `json:"version"`
@@ -55,14 +60,27 @@ func ReadManifest() (Manifest, error) {
 }
 
 type Client struct {
-	cmd        *exec.Cmd
+	kill       func()
 	in         io.WriteCloser
 	out        io.ReadCloser
-	scan       *bufio.Scanner
 	done       chan struct{}
 	once       sync.Once
 	id         int
 	initialize json.RawMessage
+
+	writeMu  sync.Mutex
+	replies  chan rpcMessage // responses read by read, in order
+	readDone chan struct{}   // closed when stdout ends or stops being MCP
+	stopped  atomic.Bool
+}
+
+type rpcMessage struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+	Result  json.RawMessage `json:"result"`
+	Error   json.RawMessage `json:"error"`
 }
 
 // Start receives a prepared, hidden, non-elevated command from the helper.
@@ -88,9 +106,19 @@ func Start(ctx context.Context, cmd *exec.Cmd) (*Client, error) {
 		return nil, errors.New("cannot start OpenCU MCP server")
 	}
 	writer.Close()
-	c := &Client{cmd: cmd, in: in, out: out, scan: bufio.NewScanner(out), done: make(chan struct{})}
-	c.scan.Buffer(make([]byte, 64<<10), MaxResult)
-	go func() { _ = cmd.Wait(); close(c.done) }()
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	return StartPipes(ctx, in, out, done, func() { _ = cmd.Process.Kill() })
+}
+
+// StartPipes speaks the identical MCP protocol over an owned transport. done
+// closes on process/stream exit; kill must unblock its pipes and terminate it.
+// ctx bounds initialization only. Each later call has its own cancellation.
+func StartPipes(ctx context.Context, in io.WriteCloser, out io.ReadCloser, done chan struct{}, kill func()) (*Client, error) {
+	c := &Client{in: in, out: out, done: done, kill: kill, replies: make(chan rpcMessage, 1), readDone: make(chan struct{})}
+	scan := bufio.NewScanner(out)
+	scan.Buffer(make([]byte, 64<<10), MaxResult)
+	go c.read(scan)
 	raw, err := c.rpc(ctx, "initialize", map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "wanctl", "version": "1"}})
 	if err == nil {
 		var init struct {
@@ -101,7 +129,7 @@ func Start(ctx context.Context, cmd *exec.Cmd) (*Client, error) {
 		}
 	}
 	if err == nil {
-		err = json.NewEncoder(c.in).Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
+		err = c.send(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
 	}
 	if err != nil {
 		c.Close()
@@ -113,15 +141,89 @@ func Start(ctx context.Context, cmd *exec.Cmd) (*Client, error) {
 
 func (c *Client) Close() {
 	c.once.Do(func() {
-		c.in.Close()
-		defer c.out.Close()
+		closed := make(chan struct{})
+		go func() { c.in.Close(); close(closed) }()
 		select {
 		case <-c.done:
 		case <-time.After(2 * time.Second):
-			_ = c.cmd.Process.Kill()
+			c.kill()
 			<-c.done
 		}
+		// Read what the peer wrote before it exited, so a stop it reported
+		// on the way out is still recorded.
+		select {
+		case <-c.readDone:
+		case <-time.After(time.Second):
+		}
+		c.out.Close()
+		<-closed
 	})
+}
+
+// StoppedByPerson reports whether the peer has said that the person stopped
+// it. The notice may arrive at any time, including while no call is running.
+func (c *Client) StoppedByPerson() bool { return c.stopped.Load() }
+
+func (c *Client) send(v any) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return json.NewEncoder(c.in).Encode(v)
+}
+
+// read is the only reader of the peer's stdout and runs until it ends, so
+// notifications are seen between calls as well as during them. If it stops
+// before the output's normal end (malformed output, a broken stream, or Close
+// giving up on a peer that keeps its output open), a stop sent after that point
+// could not be seen, so the peer is treated as stopped.
+func (c *Client) read(scan *bufio.Scanner) {
+	defer close(c.readDone)
+	if !c.readToEnd(scan) {
+		c.stopped.Store(true)
+	}
+}
+
+// readToEnd reports whether it read the output through to its normal end.
+func (c *Client) readToEnd(scan *bufio.Scanner) bool {
+	for scan.Scan() {
+		var msg rpcMessage
+		if json.Unmarshal(scan.Bytes(), &msg) != nil || msg.JSONRPC != "2.0" {
+			return false
+		}
+		if msg.Method != "" {
+			if stopNotice(msg) {
+				c.stopped.Store(true)
+			}
+			if len(msg.ID) > 0 { // No client capabilities were advertised.
+				if c.send(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "error": map[string]any{"code": -32601, "message": "host method not supported"}}) != nil {
+					return false
+				}
+			}
+			continue
+		}
+		// Only one call is ever outstanding; a second unanswered reply means
+		// the peer is no longer following the protocol.
+		select {
+		case c.replies <- msg:
+		default:
+			return false
+		}
+	}
+	return scan.Err() == nil
+}
+
+// stopNotice recognises the peer's report that the person stopped it: an MCP
+// log notification whose data is {"event":"stop",...}.
+func stopNotice(msg rpcMessage) bool {
+	if msg.Method != "notifications/message" {
+		return false
+	}
+	var params struct {
+		Data json.RawMessage `json:"data"`
+	}
+	var data struct {
+		Event string `json:"event"`
+	}
+	return json.Unmarshal(msg.Params, &params) == nil && json.Unmarshal(params.Data, &data) == nil && data.Event == "stop"
 }
 
 // rpc is serialized by the host's device lock. It never retries a request.
@@ -136,41 +238,36 @@ func (c *Client) rpc(ctx context.Context, method string, params any) (json.RawMe
 			<-stopped
 		}
 	}()
+	// Once the output has ended no reply could be read, so do not send.
+	select {
+	case <-c.readDone:
+		return nil, ErrNotSent
+	default:
+	}
 	c.id++
-	if err := json.NewEncoder(c.in).Encode(map[string]any{"jsonrpc": "2.0", "id": c.id, "method": method, "params": params}); err != nil {
+	if err := c.send(map[string]any{"jsonrpc": "2.0", "id": c.id, "method": method, "params": params}); err != nil {
 		return nil, ErrUnknown
 	}
-	for c.scan.Scan() {
-		var msg struct {
-			JSONRPC string          `json:"jsonrpc"`
-			ID      json.RawMessage `json:"id"`
-			Method  string          `json:"method"`
-			Result  json.RawMessage `json:"result"`
-			Error   json.RawMessage `json:"error"`
-		}
-		if json.Unmarshal(c.scan.Bytes(), &msg) != nil || msg.JSONRPC != "2.0" {
+	var msg rpcMessage
+	select {
+	case msg = <-c.replies:
+	case <-c.readDone:
+		select {
+		case msg = <-c.replies:
+		default:
 			return nil, ErrUnknown
 		}
-		if msg.Method != "" {
-			if len(msg.ID) > 0 { // No client capabilities were advertised.
-				if json.NewEncoder(c.in).Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "error": map[string]any{"code": -32601, "message": "host method not supported"}}) != nil {
-					return nil, ErrUnknown
-				}
-			}
-			continue
-		}
-		if string(msg.ID) != fmt.Sprint(c.id) {
-			return nil, ErrUnknown
-		}
-		if len(msg.Error) > 0 {
-			return nil, &RPCError{Raw: msg.Error}
-		}
-		if len(msg.Result) == 0 {
-			return nil, ErrUnknown
-		}
-		return msg.Result, nil
 	}
-	return nil, ErrUnknown
+	if string(msg.ID) != fmt.Sprint(c.id) {
+		return nil, ErrUnknown
+	}
+	if len(msg.Error) > 0 {
+		return nil, &RPCError{Raw: msg.Error}
+	}
+	if len(msg.Result) == 0 {
+		return nil, ErrUnknown
+	}
+	return msg.Result, nil
 }
 
 type RPCError struct{ Raw json.RawMessage }

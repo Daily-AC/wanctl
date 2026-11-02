@@ -83,6 +83,8 @@ wanctl id                                 # this controller's fingerprint
   Names and aliases may repeat: use the full ID whenever a label is ambiguous.
   Renaming does not change identity; a changed certificate still requires verification.
   If exactly one device is online you may omit `--target`.
+- `wanctl act --target PHONE --discover` also works on Android APK devices with
+  提权通道 enabled and working wireless debugging or root; follow the discovered OpenCU tools.
 - Persistent session: separate `exec` calls share working dir + env (like a real
   shell) unless `--oneshot`.
 - A device may be an **Android phone or tablet**; it behaves like any other
