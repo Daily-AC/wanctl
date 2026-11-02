@@ -86,7 +86,7 @@ REFUSALS — none of these mean retry as-is:
 | `friends` | — | List and manage friend relationships between namespaces |
 | `share` | — | Grant another namespace the use of one of your devices |
 | `screenshot` | `wanctl_screenshot` | Capture a device's screen and desktop coordinates |
-| `act` | `wanctl_act` | Operate the owner's visible Windows desktop |
+| `act` | `wanctl_act` | Operate a Windows desktop or Android device |
 | `config` | — | Show or persist relay, portal and transport settings |
 | `label` | — | Show or set this controller's self-description |
 | `admin` | — | Mint, list and revoke admission invites |
@@ -997,14 +997,17 @@ wanctl_screenshot{"target":"home-pc"}
 
 ## `wanctl act` / `wanctl_act`
 
-*Operate the owner's visible Windows desktop*
+*Operate a Windows desktop or Android device*
 
-Operate the device owner's Windows desktop.
+Operate the device owner's Windows desktop or Android device (wanctl APK with
+the elevation channel on). Android downloads its OpenCU engine on first use;
+it needs working wireless debugging or root. Legacy actions remain
+Windows-only.
 
 OpenCU (preferred): call with discover=true and target first. If OpenCU is
 installed, call its discovered tools with tool and arguments and follow the
-instructions discovery returns. If not, ask the person to install it in
-PowerShell on that device (no admin needed): irm
+instructions discovery returns. If it is missing on Windows, ask the person to
+install it in PowerShell on that device (no admin needed): irm
 https://github.com/Daily-AC/opencu/releases/latest/download/install.ps1 | iex
 — legacy actions work meanwhile. Every conversation of this controller shares
 one OpenCU connection on the device, so observe again before input; it closes
@@ -1031,14 +1034,15 @@ completed: never replay clicks or typing.
 **On the command line.**
 
 For OpenCU, --discover prints discovery JSON. Tool calls decode each image
-content item to its own private PNG file in a temporary directory (or -o DIR).
-JSON output includes text, metadata and absolute image paths with byte sizes;
-it also points to the complete raw result JSON saved alongside the images. -o
-- prints the complete raw result including base64 PNGs. --arguments-file keeps
-typed/pasted text off argv. For legacy mode, provide an actions JSON array
-with --actions or --actions-file (use - for stdin). Files/stdin keep typed
-text out of the controller's process arguments. Prints JSON results and saves
-the returned image; -o - puts image bytes on stdout and metadata on stderr.
+content item to its own private PNG or JPEG file in a temporary directory (or
+-o DIR). JSON output includes text, metadata and absolute image paths with
+byte sizes; it also points to the complete raw result JSON saved alongside the
+images. -o - prints the complete raw result including base64 images.
+--arguments-file keeps typed/pasted text off argv. For legacy mode, provide an
+actions JSON array with --actions or --actions-file (use - for stdin).
+Files/stdin keep typed text out of the controller's process arguments. Prints
+JSON results and saves the returned image; -o - puts image bytes on stdout and
+metadata on stderr.
 
 **As an MCP tool.**
 
@@ -1054,7 +1058,7 @@ Read a result even when isError is true: earlier actions may already have run.
 | `screenshot_id` | `--screenshot-id ID` | string | no | Legacy actions: the screenshot whose pixels the coordinates refer to. |
 | `actions` | `--actions JSON` | array of {type} | no | Legacy actions: the ordered batch. |
 | — | `--actions-file FILE` | string | no | Read the action array from a local file or stdin (-), instead of --actions. |
-| — | `-o DIR\|FILE` | string | no | OpenCU: output directory for individual PNGs and raw result JSON; default is a private temp directory. Legacy: returned JPEG file. - prints raw OpenCU JSON or legacy image bytes (with legacy metadata on stderr). |
+| — | `-o DIR\|FILE` | string | no | OpenCU: output directory for individual PNG/JPEG images and raw result JSON; default is a private temp directory. Legacy: returned JPEG file. - prints raw OpenCU JSON or legacy image bytes (with legacy metadata on stderr). |
 
 ```
 wanctl act home-pc --screenshot-id ID --actions-file actions.json

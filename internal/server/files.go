@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -306,8 +307,9 @@ const (
 )
 
 // protected is what no file operation may touch: wanctl's own config dir — the
-// device identity key, the namespace token, the trust and policy files — and
-// the running binary.
+// device identity key, the namespace token, the trust and policy files, and
+// everything in the directories beneath it, such as the Android engine cache —
+// and the running binary.
 //
 // They are recognised by file identity (os.SameFile), not by comparing path
 // strings. A path is only one spelling of a file, and the filesystem accepts
@@ -319,7 +321,8 @@ const (
 type protected struct {
 	configDir  os.FileInfo   // nil if there is none
 	configPath string        // its resolved path, for the fallback comparison
-	configFile []os.FileInfo // what sits directly inside it
+	configSub  []os.FileInfo // the directories beneath it
+	configFile []os.FileInfo // the files anywhere beneath it
 	binary     os.FileInfo   // nil if it cannot be found
 	binaryPath string
 }
@@ -332,13 +335,24 @@ func loadProtected() protected {
 	if dir, err := transport.ConfigDir(); err == nil && dir != "" {
 		if info, err := os.Stat(dir); err == nil && info.IsDir() {
 			p.configDir, p.configPath = info, longestRealPrefix(dir)
-			if entries, err := os.ReadDir(dir); err == nil {
-				for _, e := range entries {
-					if info, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && !info.IsDir() {
-						p.configFile = append(p.configFile, info)
-					}
+			// The whole tree, not only its top level: a directory inside it
+			// (the Android engine cache) is as much wanctl's own state as the
+			// files beside it. WalkDir does not follow symlinked directories.
+			_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+				if err != nil || path == dir {
+					return nil
 				}
-			}
+				info, err := os.Stat(path)
+				if err != nil {
+					return nil
+				}
+				if d.IsDir() {
+					p.configSub = append(p.configSub, info)
+				} else if !info.IsDir() {
+					p.configFile = append(p.configFile, info)
+				}
+				return nil
+			})
 		}
 	}
 	if self, err := os.Executable(); err == nil {
@@ -360,7 +374,7 @@ func (p protected) target(target string) string {
 	resolved := longestRealPrefix(target)
 	for dir := resolved; ; {
 		if info, err := os.Stat(dir); err == nil {
-			if p.configDir != nil && os.SameFile(info, p.configDir) {
+			if p.inConfig(info) {
 				return reasonConfigDir
 			}
 			if dir == resolved && p.binary != nil && os.SameFile(info, p.binary) {
@@ -389,26 +403,62 @@ func (p protected) target(target string) string {
 // handle the operation works in, and the file found there. The path check above
 // runs before the open, and this one closes the distance between the two — a
 // directory swapped in between, or a file reachable under a second name.
+//
+// It compares with the protected set as loaded for the path check and as it is
+// now, so a directory or file created inside the config dir in between (the
+// engine cache's directory on first use) is refused like the rest.
 func (p protected) checkOpened(dir *os.Root, file os.FileInfo, path string) error {
-	if p.configDir != nil {
-		if info, err := dir.Stat("."); err != nil {
+	now := loadProtected()
+	var opened os.FileInfo
+	if p.configDir != nil || now.configDir != nil {
+		info, err := dir.Stat(".")
+		if err != nil {
 			return err
-		} else if os.SameFile(info, p.configDir) {
-			return fmt.Errorf("refusing %s: %q", reasonConfigDir, path)
 		}
+		opened = info
 	}
-	if file == nil {
-		return nil
-	}
-	if p.binary != nil && os.SameFile(file, p.binary) {
-		return fmt.Errorf("refusing %s: %q", reasonBinary, path)
-	}
-	for _, f := range p.configFile {
-		if os.SameFile(file, f) {
-			return fmt.Errorf("refusing %s: %q", reasonConfigDir, path)
+	for _, q := range []protected{p, now} {
+		if reason := q.refuses(opened, file); reason != "" {
+			return fmt.Errorf("refusing %s: %q", reason, path)
 		}
 	}
 	return nil
+}
+
+// refuses names why an operation in directory dir on file may not proceed, or
+// returns "" if it may. Either may be nil.
+func (p protected) refuses(dir, file os.FileInfo) string {
+	if dir != nil && p.inConfig(dir) {
+		return reasonConfigDir
+	}
+	if file == nil {
+		return ""
+	}
+	if p.binary != nil && os.SameFile(file, p.binary) {
+		return reasonBinary
+	}
+	for _, f := range p.configFile {
+		if os.SameFile(file, f) {
+			return reasonConfigDir
+		}
+	}
+	return ""
+}
+
+// inConfig reports whether info is the config dir or a directory beneath it.
+func (p protected) inConfig(info os.FileInfo) bool {
+	if p.configDir == nil {
+		return false
+	}
+	if os.SameFile(info, p.configDir) {
+		return true
+	}
+	for _, sub := range p.configSub {
+		if os.SameFile(info, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func pathWithin(target, dir string) bool {

@@ -60,6 +60,8 @@ func Dial(ctx context.Context, addr string, key *Key, tlsConfig TLSConfigFunc) (
 	if err != nil {
 		return nil, err
 	}
+	stop := context.AfterFunc(ctx, func() { nc.Close() })
+	defer stop()
 	// Start permissive: the very first packet a modern adbd sends already
 	// carries a zero checksum, so there is no window in which insisting on it
 	// would be correct.

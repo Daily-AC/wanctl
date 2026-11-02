@@ -152,7 +152,7 @@ wanctl exec --target phone --elevate -- pm list packages -3
 wanctl exec --target phone --elevate --via su -- dumpsys battery
 ```
 
-Three channels exist; the agent probes them in order and uses the first
+Two channels exist; the agent probes them in order and uses the first
 available one. `--via` pins one, and pinning an unavailable channel is an error
 rather than a downgrade — a command that ran unprivileged after you asked for
 root is a wrong answer wearing a right answer's clothes.
@@ -333,6 +333,75 @@ can answer *what has run as root on this phone*.
 
 With the switch off, the channels are not even probed — a rooted device raises
 no root-manager consent dialog for a feature nobody turned on.
+
+### act / OpenCU
+
+OpenCU mode works on devices running the wanctl APK with **提权通道** enabled
+and a working elevation channel: paired wireless debugging, or root. The
+agent selects su first, then adb; both must start the engine as the `shell`
+user (uid 2000). Termux and standalone binaries require the wanctl app for act.
+Legacy `actions[]` remains Windows-only.
+
+```sh
+wanctl act --target phone --discover
+wanctl act --target phone --tool TOOL_FROM_DISCOVERY --arguments-file arguments.json
+```
+
+Discovery returns the engine's instructions and tools. Follow those descriptions
+for Android capabilities and limits; wanctl does not maintain a separate tool
+list. The existing act approval policy, controller identity, device busy lock,
+stop latch and ten-minute idle timeout apply. A disconnect during input returns
+an unknown outcome: observe again, never replay the call. A person's stop
+requires fresh explicit approval, even after an idle close or failed call. That
+includes a stop the engine reports while no call is running (three volume-down
+presses): wanctl reads the engine's output between calls and latches it. If
+wanctl can no longer read that output before it ends normally (the link dropped
+or the output was malformed), a stop may have been missed, so the next act also
+needs fresh explicit approval. An act on an engine that has already exited is
+reported as not sent, never as an unknown outcome.
+
+On first use the device downloads `opencu-android.json` and `opencu-android.jar`
+from the latest official OpenCU GitHub release. The manifest is limited to
+16 KiB and the jar to 64 MiB; the exact size and SHA-256 must match. The private
+cache is `files/wanctl/opencu/`, inside the app's config directory, with
+full-hash jar names and atomic writes. File operations refuse that directory the
+same way they refuse the device identity, so a controller that may write files
+cannot place engine bytes or cache metadata. The previous good copy is retained. Manifest checks happen at most once per 24 hours,
+including failed attempts and agent restarts, and only when no OpenCU session is
+open. A failed refresh uses the verified cached engine. The cached version is
+reported through the existing device version display.
+
+The agent streams the jar through elevation into
+`/data/local/tmp/opencu-android-<first 16 SHA-256 hex digits>.jar`, using a temporary
+file and rename with mode 0644. It checks the device hash before every start;
+matching copies are reused, and older matching jar names are removed after a
+successful MCP initialization. The hash check and the start both refuse a jar
+that is not a regular file owned by the shell user (uid 2000) with mode 0644 or
+stricter, and such a copy is replaced. Only shell and root can write
+`/data/local/tmp`, and both already hold the identity the engine runs as, so the
+copy is not guarded against them between the check and the start. The engine
+runs through `app_process`, opens no port, and exits on stdin EOF. adb uses a
+dedicated connection, so ordinary elevated commands can continue while it is
+idle. Diagnostics never enter MCP stdout. When the engine fails to start, the
+first line of its stderr reaches the controller only in the engine's error-code
+form (`CODE: text`), bounded and escaped; otherwise the error says the engine's
+stderr was not forwarded. A failure of wanctl's own placement commands carries
+their bounded, escaped first stderr line.
+
+`WANCTL_OPENCU_ANDROID_URL` can point the agent at another directory containing
+those two fixed filenames. The default trust is HTTPS to GitHub and the hash in
+the release manifest, not a wanctl release signature. A missing release or failed
+hash check reports `OPENCU_NOT_INSTALLED` with its cause (a failed download
+names only its kind, host and HTTP status, never the URL); the planned Android
+assets must be published before first use can succeed from the default source.
+CLI image results are saved unchanged as private PNG or JPEG files.
+
+Wireless debugging can disappear on reboot or Wi-Fi changes; re-enable it or
+pair again as the channel's message directs. OEM input restrictions, the
+engine's hidden Android APIs, root-manager shell identity/SELinux behavior,
+physical stop gestures and screen-lock behavior still require signed-beta
+verification on a real phone. The Go integration is tested with fake adbd/MCP
+peers and local HTTP servers, not a phone.
 
 ### Verbs
 
