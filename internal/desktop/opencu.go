@@ -20,6 +20,31 @@ type OpenCUConnection interface {
 	Close()
 }
 type OpenCUStart func(context.Context) (OpenCUConnection, error)
+
+// personStopped reports a stop the engine announced outside any call result
+// (the Android engine sends one when the person makes the stop gesture, even
+// while idle). Connections that cannot announce one report false.
+func personStopped(c OpenCUConnection) bool {
+	r, ok := c.(interface{ StoppedByPerson() bool })
+	return ok && r.StoppedByPerson()
+}
+
+// closeConn closes e's connection and keeps any stop it announced, so the
+// stop outlives the connection (idle close, update, install) and the next
+// call needs fresh explicit approval.
+func (e *openCUSession) closeConn() {
+	if e.conn == nil {
+		return
+	}
+	e.conn.Close()
+	if personStopped(e.conn) {
+		e.stopped = true
+	}
+	e.conn = nil
+}
+
+const openCUStoppedMessage = "The person stopped OpenCU. Fresh explicit approval is required; no connection was opened. Ask the person; do not retry automatically."
+
 type openCUSession struct {
 	conn       OpenCUConnection
 	stopped    bool
@@ -66,6 +91,9 @@ func (s *Service) DoOpenCU(ctx context.Context, key, requestID string, req proto
 	if e.timer != nil {
 		e.timer.Stop()
 	}
+	if e.conn != nil && personStopped(e.conn) {
+		e.stopped = true
+	}
 	stopped := e.stopped
 	s.cuMu.Unlock()
 	defer func() {
@@ -83,16 +111,15 @@ func (s *Service) DoOpenCU(ctx context.Context, key, requestID string, req proto
 		e.timer = time.AfterFunc(idle, func() {
 			s.cuMu.Lock()
 			defer s.cuMu.Unlock()
-			if s.cu[key] == e && e.generation == generation && !e.active && e.conn != nil {
-				e.conn.Close()
-				e.conn = nil
+			if s.cu[key] == e && e.generation == generation && !e.active {
+				e.closeConn()
 			}
 		})
 	}()
 	if !approve(stopped) {
 		res.Error = "command denied by device policy"
 		if stopped {
-			res.OpenCU = &protocol.OpenCUResult{Code: "OPENCU_STOPPED", Message: "The person stopped OpenCU. Fresh explicit approval is required; no connection was opened. Ask the person; do not retry automatically."}
+			res.OpenCU = &protocol.OpenCUResult{Code: "OPENCU_STOPPED", Message: openCUStoppedMessage}
 		}
 		return res
 	}
@@ -106,6 +133,15 @@ func (s *Service) DoOpenCU(ctx context.Context, key, requestID string, req proto
 	if s.cuClosed || s.cu[key] != e {
 		s.cuMu.Unlock()
 		res.Error = "OpenCU service closed"
+		return res
+	}
+	if !stopped && e.conn != nil && personStopped(e.conn) {
+		// The stop arrived while approval was pending; that approval was not
+		// a fresh one, so the connection is not reused.
+		e.stopped = true
+		s.cuMu.Unlock()
+		res.Error = openCUStoppedMessage
+		res.OpenCU = &protocol.OpenCUResult{Code: "OPENCU_STOPPED", Message: openCUStoppedMessage}
 		return res
 	}
 	if stopped {
@@ -136,6 +172,9 @@ func (s *Service) DoOpenCU(ctx context.Context, key, requestID string, req proto
 	defer s.cuMu.Unlock()
 	if err != nil {
 		conn.Close()
+		if personStopped(conn) {
+			e.stopped = true
+		}
 		if e.conn == conn {
 			e.conn = nil
 		}
@@ -144,12 +183,15 @@ func (s *Service) DoOpenCU(ctx context.Context, key, requestID string, req proto
 		return res
 	}
 	code := opencu.ErrorCode(reply.Result)
-	if code == "USER_STOPPED" || code == "STOPPED_BY_PERSON" {
+	if code == "USER_STOPPED" || code == "STOPPED_BY_PERSON" || personStopped(conn) {
 		e.stopped = true
 	}
 	// RPC failure is known; retain its exact error object and do not replay it.
 	if reply.Code == "OPENCU_NOT_INSTALLED" || reply.Code == "OPENCU_START_FAILED" {
 		conn.Close()
+		if personStopped(conn) {
+			e.stopped = true
+		}
 		if e.conn == conn {
 			e.conn = nil
 		}
@@ -346,10 +388,7 @@ func (s *Service) PauseForUpdate() func() {
 		if e.timer != nil {
 			e.timer.Stop()
 		}
-		if e.conn != nil {
-			e.conn.Close()
-			e.conn = nil
-		}
+		e.closeConn()
 	}
 	s.cuMu.Unlock()
 	return s.busy.Unlock
@@ -374,9 +413,6 @@ func (s *Service) CloseIdleOpenCU() {
 		if e.timer != nil {
 			e.timer.Stop()
 		}
-		if e.conn != nil {
-			e.conn.Close()
-			e.conn = nil
-		}
+		e.closeConn()
 	}
 }

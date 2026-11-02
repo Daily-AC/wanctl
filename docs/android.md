@@ -352,7 +352,9 @@ for Android capabilities and limits; wanctl does not maintain a separate tool
 list. The existing act approval policy, controller identity, device busy lock,
 stop latch and ten-minute idle timeout apply. A disconnect during input returns
 an unknown outcome: observe again, never replay the call. A person's stop
-requires fresh explicit approval, even after an idle close or failed call.
+requires fresh explicit approval, even after an idle close or failed call. That
+includes a stop the engine reports while no call is running (three volume-down
+presses): wanctl reads the engine's output between calls and latches it.
 
 On first use the device downloads `opencu-android.json` and `opencu-android.jar`
 from the latest official OpenCU GitHub release. The manifest is limited to

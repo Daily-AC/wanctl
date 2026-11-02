@@ -109,6 +109,10 @@ type androidOpenCUConnection struct {
 func (c *androidOpenCUConnection) Close() {
 	c.once.Do(func() { c.peer.Close(); c.cancel(); c.stream.Close(); c.release() })
 }
+
+// StoppedByPerson reports the engine's stop notice, which it sends when the
+// person makes the stop gesture, whether or not a call is running.
+func (c *androidOpenCUConnection) StoppedByPerson() bool { return c.peer.StoppedByPerson() }
 func (c *androidOpenCUConnection) Do(ctx context.Context, req protocol.DesktopRequest) (protocol.OpenCUResult, error) {
 	var r protocol.OpenCUResult
 	var err error
