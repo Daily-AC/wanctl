@@ -258,3 +258,87 @@ func TestAndroidPlacementRefusesASymlinkAtTheDevicePath(t *testing.T) {
 		t.Fatal("engine started despite the symlink")
 	}
 }
+
+// A device jar with the right hash but a looser mode is not reused: it is
+// replaced by a fresh copy with mode 0644 before the engine starts from it.
+func TestAndroidPlacementReplacesADeviceJarWithALooseMode(t *testing.T) {
+	for _, mode := range []os.FileMode{0o666, 0o664, 0o755} {
+		t.Run(mode.String(), func(t *testing.T) {
+			host, _, _, deviceJar, loaded := posixHost(t, ocutest.Build(t))
+			if err := os.WriteFile(deviceJar, []byte(posixGenuineJar), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(deviceJar, mode); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			c, err := host.StartOpenCU(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.Close()
+			st, err := os.Lstat(deviceJar)
+			if err != nil || st.Mode() != 0o644 {
+				t.Fatalf("device jar kept mode %v (%v)", st.Mode(), err)
+			}
+			if b, _ := os.ReadFile(loaded); string(b) != posixGenuineJar {
+				t.Fatalf("engine loaded %q", b)
+			}
+		})
+	}
+}
+
+// A jar that is not owned by the shell user is never started, even with the
+// right hash: placement cannot produce an acceptable copy, so startup fails.
+func TestAndroidStartRefusesAJarNotOwnedByTheShellUser(t *testing.T) {
+	host, ch, _, _, loaded := posixHost(t, ocutest.Build(t))
+	ch.owner = "1000"
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if c, err := host.StartOpenCU(ctx); err == nil {
+		c.Close()
+		t.Fatal("started a jar owned by another user")
+	}
+	if _, err := os.Stat(loaded); !os.IsNotExist(err) {
+		t.Fatal("app_process ran a jar owned by another user")
+	}
+}
+
+// The launch command repeats the owner and mode check: a jar whose mode was
+// loosened, or that was replaced by a symlink, after verification is not run.
+func TestAndroidLaunchRefusesAJarChangedAfterVerification(t *testing.T) {
+	for _, change := range []string{"mode", "symlink"} {
+		t.Run(change, func(t *testing.T) {
+			host, ch, _, deviceJar, loaded := posixHost(t, ocutest.Build(t))
+			ch.before = func(command string) {
+				if !strings.Contains(command, "CLASSPATH=") {
+					return
+				}
+				if change == "mode" {
+					if err := os.Chmod(deviceJar, 0o666); err != nil {
+						t.Error(err)
+					}
+					return
+				}
+				other := filepath.Join(t.TempDir(), "other.jar")
+				if err := os.WriteFile(other, []byte(posixGenuineJar), 0o644); err != nil {
+					t.Error(err)
+				}
+				os.Remove(deviceJar)
+				if err := os.Symlink(other, deviceJar); err != nil {
+					t.Error(err)
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if c, err := host.StartOpenCU(ctx); err == nil {
+				c.Close()
+				t.Fatal("launched a jar changed after verification")
+			}
+			if _, err := os.Stat(loaded); !os.IsNotExist(err) {
+				t.Fatal("app_process ran a jar changed after verification")
+			}
+		})
+	}
+}

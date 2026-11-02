@@ -369,7 +369,11 @@ The agent streams the jar through elevation into
 `/data/local/tmp/opencu-android-<first 16 SHA-256 hex digits>.jar`, using a temporary
 file and rename with mode 0644. It checks the device hash before every start;
 matching copies are reused, and older matching jar names are removed after a
-successful MCP initialization. The engine runs through `app_process`, opens no
+successful MCP initialization. The hash check and the start both refuse a jar
+that is not a regular file owned by the shell user (uid 2000) with mode 0644 or
+stricter, and such a copy is replaced. Only shell and root can write
+`/data/local/tmp`, and both already hold the identity the engine runs as, so the
+copy is not guarded against them between the check and the start. The engine runs through `app_process`, opens no
 port, and exits on stdin EOF. adb uses a dedicated connection, so ordinary
 elevated commands can continue while it is idle. Diagnostics never enter MCP
 stdout; startup failures include only a bounded, escaped first stderr line.
