@@ -357,8 +357,10 @@ requires fresh explicit approval, even after an idle close or failed call.
 On first use the device downloads `opencu-android.json` and `opencu-android.jar`
 from the latest official OpenCU GitHub release. The manifest is limited to
 16 KiB and the jar to 64 MiB; the exact size and SHA-256 must match. The private
-cache is `files/opencu/`, with full-hash jar names and atomic writes. The previous
-good copy is retained. Manifest checks happen at most once per 24 hours,
+cache is `files/wanctl/opencu/`, inside the app's config directory, with
+full-hash jar names and atomic writes. File operations refuse that directory the
+same way they refuse the device identity, so a controller that may write files
+cannot place engine bytes or cache metadata. The previous good copy is retained. Manifest checks happen at most once per 24 hours,
 including failed attempts and agent restarts, and only when no OpenCU session is
 open. A failed refresh uses the verified cached engine. The cached version is
 reported through the existing device version display.

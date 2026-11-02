@@ -71,11 +71,15 @@ type AndroidCache struct {
 	active    int
 }
 
+// NewAndroidCache keeps the cache inside the APK's config dir
+// (files/wanctl, which the app passes as WANCTL_CONFIG_DIR). File operations
+// refuse that whole tree, so a session that may write files can neither place
+// engine bytes nor choose the cache metadata that selects them.
 func NewAndroidCache(filesDir, base string) *AndroidCache {
 	if base == "" {
 		base = AndroidReleaseURL
 	}
-	return &AndroidCache{dir: filepath.Join(filesDir, "opencu"), base: base, client: &http.Client{Timeout: 90 * time.Second}, now: time.Now}
+	return &AndroidCache{dir: filepath.Join(filesDir, "wanctl", "opencu"), base: base, client: &http.Client{Timeout: 90 * time.Second}, now: time.Now}
 }
 
 // AndroidFilesDir uses the existing APK state-file contract, never the cwd or

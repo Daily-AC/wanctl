@@ -40,7 +40,10 @@ call. This stays within the APK's frozen role of controlled-device agent.
 ## Getting the engine
 
 The agent fetches the engine from the official OpenCU GitHub release on first
-use and caches it in the app's files directory by hash. Trust root: HTTPS to
+use and caches it by hash in `files/wanctl/opencu/`, inside the app's config
+directory. File operations refuse the config directory's whole tree by path, by
+the directory actually opened and by file identity, so a controller allowed to
+write files cannot supply engine bytes or the cache metadata that selects them. Trust root: HTTPS to
 github.com and the SHA-256 in the same release's `opencu-android.json`
 manifest (version, file name, size, SHA-256), the same level as the Windows
 `install.ps1`, which embeds the artifact hash ([ADR 0019](0019-portal-triggered-installs.md)).
