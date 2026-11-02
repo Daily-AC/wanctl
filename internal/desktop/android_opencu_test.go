@@ -366,10 +366,10 @@ func TestAndroidStartErrorsAreActionableAndDiagnosticsBounded(t *testing.T) {
 	}
 	host.Elevator.SetEnabled(true, "")
 	d.mu.Lock()
-	d.startupDiagnostic = "hidden API missing\x1b" + strings.Repeat("x", 700) + "\nSECOND_LINE_PRIVATE\n"
+	d.startupDiagnostic = "HIDDEN_API_MISSING: hidden API missing\x1b" + strings.Repeat("x", 700) + "\nSECOND_LINE_PRIVATE\n"
 	d.mu.Unlock()
 	res = call()
-	if res.OpenCU == nil || res.OpenCU.Code != "OPENCU_START_FAILED" || !strings.Contains(res.Error, `hidden API missing\x1b`) || strings.Contains(res.Error, "SECOND_LINE_PRIVATE") || strings.ContainsRune(res.Error, '\x1b') || len(res.Error) > 650 {
+	if res.OpenCU == nil || res.OpenCU.Code != "OPENCU_START_FAILED" || !strings.Contains(res.Error, `HIDDEN_API_MISSING: hidden API missing\x1b`) || strings.Contains(res.Error, "SECOND_LINE_PRIVATE") || strings.ContainsRune(res.Error, '\x1b') || len(res.Error) > 650 {
 		t.Fatalf("diagnostic %q", res.Error)
 	}
 	d.mu.Lock()
