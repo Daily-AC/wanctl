@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"wanctl/internal/release"
 	"wanctl/internal/versionmeta"
 )
 
@@ -25,6 +26,16 @@ const AndroidURLEnv = "WANCTL_OPENCU_ANDROID_URL"
 const AndroidReleaseURL = "https://github.com/Daily-AC/opencu/releases/latest/download/"
 const MaxAndroidJar = 64 << 20
 const AndroidRefresh = 24 * time.Hour
+
+// androidRefreshBudget bounds a refresh when an engine is already available.
+// A network that cannot reach the release must not stall the call that happens
+// to be first in a 24-hour interval for the HTTP client's full 90 seconds.
+const androidRefreshBudget = 10 * time.Second
+
+// errBuiltInCurrent ends a refresh whose manifest offers nothing newer than the
+// engine built into this binary, so there is no jar to download.
+var errBuiltInCurrent = errors.New("the built-in Android engine is current")
+
 const AndroidNeedsApp = "OpenCU on Android needs the wanctl app (APK); Termux and plain binaries are not supported"
 
 type AndroidManifest struct {
@@ -57,7 +68,7 @@ func (m AndroidManifest) validate() error {
 // whatever happens to Path after Acquire cannot change what is uploaded.
 type AndroidEngine struct {
 	Manifest AndroidManifest
-	Path     string // where the verified copy is cached; informational
+	Path     string // where the verified copy is cached, empty for the built-in engine; informational
 	jar      string // the verified bytes, immutable
 }
 
@@ -85,6 +96,46 @@ type AndroidCache struct {
 	client    *http.Client
 	now       func() time.Time
 	active    int
+	builtIn   *builtInAndroidEngine // nil outside Android builds
+	override  bool                  // the source was chosen with AndroidURLEnv
+	budget    time.Duration
+}
+
+// builtInAndroidEngine is the engine compiled into the signed binary. Its bytes
+// are checked against its manifest when loaded, like a cached jar.
+type builtInAndroidEngine struct {
+	manifest AndroidManifest
+	jar      string
+}
+
+func parseBuiltInAndroidEngine(manifest []byte, jar string) (*builtInAndroidEngine, error) {
+	var m AndroidManifest
+	if err := json.Unmarshal(manifest, &m); err != nil {
+		return nil, errors.New("invalid built-in Android engine manifest JSON")
+	}
+	if err := m.validate(); err != nil {
+		return nil, err
+	}
+	if int64(len(jar)) != m.Size {
+		return nil, errors.New("built-in Android engine size mismatch")
+	}
+	h := sha256.Sum256([]byte(jar))
+	if hex.EncodeToString(h[:]) != m.SHA256 {
+		return nil, errors.New("built-in Android engine SHA-256 mismatch")
+	}
+	return &builtInAndroidEngine{manifest: m, jar: jar}, nil
+}
+
+// builtInCovers reports whether the built-in engine should be used instead of
+// m: a downloaded engine replaces it only by being newer. A source chosen with
+// AndroidURLEnv is exempt, because whoever set it wants that engine; the
+// built-in engine then only stands in when that source has supplied nothing.
+func (c *AndroidCache) builtInCovers(m AndroidManifest) bool {
+	if c.builtIn == nil || c.override {
+		return false
+	}
+	cmp, err := release.CompareVersions("v"+m.Version, "v"+c.builtIn.manifest.Version)
+	return err != nil || cmp <= 0
 }
 
 // NewAndroidCache keeps the cache inside the APK's config dir
@@ -92,10 +143,12 @@ type AndroidCache struct {
 // refuse that whole tree, so a session that may write files can neither place
 // engine bytes nor choose the cache metadata that selects them.
 func NewAndroidCache(filesDir, base string) *AndroidCache {
+	override := base != ""
 	if base == "" {
 		base = AndroidReleaseURL
 	}
-	return &AndroidCache{dir: filepath.Join(filesDir, "wanctl", "opencu"), base: base, client: &http.Client{Timeout: 90 * time.Second}, now: time.Now}
+	return &AndroidCache{dir: filepath.Join(filesDir, "wanctl", "opencu"), base: base, client: &http.Client{Timeout: 90 * time.Second}, now: time.Now,
+		builtIn: loadBuiltInAndroidEngine(), override: override, budget: androidRefreshBudget}
 }
 
 // AndroidFilesDir uses the existing APK state-file contract, never the cwd or
@@ -127,11 +180,15 @@ func (c *AndroidCache) CachedVersion() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	m := c.state().Current
-	if m.validate() != nil {
-		return ""
+	cached := m.validate() == nil
+	if cached {
+		st, err := os.Lstat(c.path(m))
+		cached = err == nil && st.Mode().IsRegular() && st.Size() == m.Size
 	}
-	st, err := os.Lstat(c.path(m))
-	if err != nil || !st.Mode().IsRegular() || st.Size() != m.Size {
+	if c.builtIn != nil && (!cached || c.builtInCovers(m)) {
+		return c.builtIn.manifest.Version
+	}
+	if !cached {
 		return ""
 	}
 	return m.Version
@@ -159,15 +216,26 @@ func (c *AndroidCache) Acquire(ctx context.Context) (AndroidEngine, func(), erro
 		if err == nil {
 			err = c.save(s)
 		}
+		refresh := ctx
+		if good || c.builtIn != nil {
+			var cancel context.CancelFunc
+			refresh, cancel = context.WithTimeout(ctx, c.budget)
+			defer cancel()
+		}
 		var m AndroidManifest
 		if err == nil {
-			m, err = c.fetch(ctx)
+			m, err = c.fetch(refresh)
+		}
+		covered := errors.Is(err, errBuiltInCurrent)
+		if covered {
+			err, s.Failure = nil, ""
+			_ = c.save(s)
 		}
 		var fetched string
-		if err == nil {
+		if err == nil && !covered {
 			fetched, err = c.load(m)
 		}
-		if err == nil {
+		if err == nil && !covered {
 			next := s
 			next.Current, next.Failure = m, ""
 			if good && current.SHA256 != m.SHA256 {
@@ -186,6 +254,10 @@ func (c *AndroidCache) Acquire(ctx context.Context) (AndroidEngine, func(), erro
 			_ = c.save(s)
 		}
 	}
+	path := c.path(current)
+	if c.builtIn != nil && (!good || c.builtInCovers(current)) {
+		current, jar, good, path = c.builtIn.manifest, c.builtIn.jar, true, ""
+	}
 	if !good {
 		reason := s.Failure
 		if reason == "" {
@@ -196,7 +268,7 @@ func (c *AndroidCache) Acquire(ctx context.Context) (AndroidEngine, func(), erro
 	c.active++
 	var once sync.Once
 	release := func() { once.Do(func() { c.mu.Lock(); c.active--; c.mu.Unlock() }) }
-	return AndroidEngine{Manifest: current, Path: c.path(current), jar: jar}, release, nil
+	return AndroidEngine{Manifest: current, Path: path, jar: jar}, release, nil
 }
 
 // Only hash-named regular jar files belong to this cache. Keep the current
@@ -367,6 +439,9 @@ func (c *AndroidCache) fetch(ctx context.Context) (AndroidManifest, error) {
 	}
 	if err = m.validate(); err != nil {
 		return m, err
+	}
+	if c.builtInCovers(m) {
+		return m, errBuiltInCurrent
 	}
 	if c.verify(m) == nil {
 		return m, nil
