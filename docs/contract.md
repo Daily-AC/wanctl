@@ -1000,9 +1000,8 @@ wanctl_screenshot{"target":"home-pc"}
 *Operate a Windows desktop or Android device*
 
 Operate the device owner's Windows desktop or Android device (wanctl APK with
-the elevation channel on). Android downloads its OpenCU engine on first use;
-it needs working wireless debugging or root. Legacy actions remain
-Windows-only.
+the elevation channel on). Android needs working wireless debugging or root;
+its OpenCU engine is built into the app. Legacy actions remain Windows-only.
 
 OpenCU (preferred): call with discover=true and target first. If OpenCU is
 installed, call its discovered tools with tool and arguments and follow the
