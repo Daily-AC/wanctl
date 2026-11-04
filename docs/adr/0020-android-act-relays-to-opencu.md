@@ -49,6 +49,8 @@ call. This stays within the APK's frozen role of controlled-device agent.
 
 ## Getting the engine
 
+(v0.29.1 changed where the first engine comes from; see the next section.)
+
 The agent fetches the engine from the official OpenCU GitHub release on first
 use and caches it by hash in `files/wanctl/opencu/`, inside the app's config
 directory. File operations refuse the config directory's whole tree by path, by
@@ -65,6 +67,38 @@ copy. The agent reports the cached
 OpenCU version at registration, so the portal's existing version display works
 for Android without portal changes. `WANCTL_OPENCU_ANDROID_URL` (a directory
 holding the manifest and jar) overrides the source for testing and self-hosting.
+
+## Change in v0.29.1: the engine ships inside the APK
+
+Downloading from GitHub failed on the first real use over the relay. On a home
+network in China the phone could not reach github.com (a 90-second timeout), and
+because failed attempts count against the 24-hour interval, even with no engine
+at all, every later call returned the same error without trying again until the
+interval expired. Restarting the agent did not help, by design. wanctl's own
+updates survive this through the relay mirror; the engine had no such path.
+
+The jar is 68 KB and is held in memory for placement anyway, so the Android build
+now embeds the jar and its manifest from an OpenCU release, unchanged
+(`internal/opencu/androidengine/`). Mirroring it on the relay was the alternative:
+that keeps the wanctl repository free of a binary, but adds a release step, a
+relay allowlist entry, a fallback path, and a new way to bind the hash to the
+signed release. Embedding needs none of them, and the APK signature already
+covers the bytes, which is stronger than the HTTPS-plus-manifest trust of a
+download.
+
+- There is now always an engine, so a failed refresh cannot lock anyone out. A
+  refresh gets 10 seconds when an engine is available, so an unreachable release
+  does not stall a call.
+- A download is used only if newer than the built-in engine; the same or an older
+  release costs one manifest request and no jar. An app update with a newer
+  built-in engine takes over from an older download.
+- `WANCTL_OPENCU_ANDROID_URL` still means "use this source": its engine wins
+  whatever its version, and the built-in one stands in only until it has supplied
+  one.
+
+The costs are that a phone that cannot reach GitHub gets a new engine only with a
+new wanctl release, and that each engine bump commits a binary to this repository.
+A test fails if the jar and its manifest disagree.
 
 ## Consequences
 

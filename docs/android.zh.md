@@ -318,13 +318,15 @@ wanctl act --target phone --tool TOOL_FROM_DISCOVERY --arguments-file arguments.
 之前就读不下去了（链路断开或输出格式错误），可能漏掉了停止，下一次 act 同样需要新的明确
 批准。引擎已经退出时发出的 act 报告为“未发送”，不会报告为“结果未知”。
 
-首次使用由设备从 OpenCU 官方 GitHub 最新 release 下载 `opencu-android.json`
-和 `opencu-android.jar`。manifest 上限 16 KiB，jar 上限 64 MiB，大小与 SHA-256
-都必须一致。缓存位于 app 配置目录里的 `files/wanctl/opencu/`，jar 以完整 hash
+官方引擎内置在 APK 的 wanctl 程序里，由 APK 签名覆盖，所以首次使用不需要下载，
+GitHub 连不上也能用。设备还会去 OpenCU 官方 GitHub 最新 release 检查有没有更新的引擎
+（`opencu-android.json`，然后 `opencu-android.jar`），只有版本比内置的新才会使用；App
+更新可能带来更新的内置引擎，这时它优先于较旧的下载版本。manifest 上限 16 KiB，jar
+上限 64 MiB，大小与 SHA-256 都必须一致。缓存位于 app 配置目录里的 `files/wanctl/opencu/`，jar 以完整 hash
 命名，使用临时文件原子替换并保留上一份好副本。文件操作拒绝这个目录，与拒绝设备
 身份文件的方式相同，所以能写文件的控制端也放不进引擎字节或缓存元数据。每 24 小时最多检查一次 manifest，失败
-尝试和 agent 重启也计入间隔；有任何 OpenCU session 打开时不刷新。刷新失败
-继续使用校验通过的缓存版本；设备注册会上报缓存版本供现有门户显示。
+尝试和 agent 重启也计入间隔；有任何 OpenCU session 打开时不刷新。每次检查最多等
+10 秒，失败不影响这次调用，继续用手上已有的引擎；设备注册会上报正在使用的版本供现有门户显示。
 
 jar 经提权流送入 `/data/local/tmp/opencu-android-<SHA-256 前 16 位>.jar`，
 使用临时文件、0644 权限和 rename；每次启动前核对设备 hash，相同副本免传。
@@ -337,17 +339,16 @@ MCP 初始化成功后删除旧的同名格式 jar。引擎通过 `app_process` 
 首行会经长度限制和转义后转给控制端，其他内容不转发，错误信息会说明这一点；wanctl
 自己的放置命令失败时，照旧附带有长度上限、经过转义的 stderr 首行。
 
-`WANCTL_OPENCU_ANDROID_URL` 可将下载源改为包含上述两个固定文件名的目录。
-默认信任 HTTPS GitHub 和同一 release 中的 hash，不属于 wanctl 签名发布链。
-发布文件缺失或 hash 错误会返回带具体原因的 `OPENCU_NOT_INSTALLED`（下载失败只给出
-类别、主机和 HTTP 状态码，不含 URL）；默认源
-要等 OpenCU Android 资产正式发布后才能首次下载。CLI 将图片原样保存为私有的
-PNG 或 JPEG 文件。
+`WANCTL_OPENCU_ANDROID_URL` 可将下载源改为包含上述两个固定文件名的目录。来自该目录的
+引擎不比版本直接使用；内置引擎只在该目录还没提供过引擎时顶上。下载的引擎信任 HTTPS
+GitHub 和同一 release 中的 hash，不属于 wanctl 签名发布链，所以必须比内置版本新才会使用；
+内置引擎由 APK 签名保证。刷新失败的原因（只有类别、主机和 HTTP 状态码，不含 URL）记在缓存
+状态里，不会让调用失败；现在 `OPENCU_NOT_INSTALLED` 表示引擎无法放到设备上。CLI 将图片
+原样保存为私有的 PNG 或 JPEG 文件。
 
-无线调试会因重启或 Wi-Fi 变化断开，按通道提示重新开启或配对。OEM 输入限制、
-Android 隐藏 API、root 管理器下的 shell 身份与 SELinux、物理停止手势及锁屏
-行为仍需签名 beta 真机验证。本次 Go 集成仅使用 fake adbd/MCP 与本地 HTTP
-server 验证，不代表已通过手机验收。
+无线调试会因重启或 Wi-Fi 变化断开，按通道提示重新开启或配对。引擎本身已在一部 Android 14 的 OPPO 手机上经 USB 真机验收过（含物理停止手势）；
+经 relay 的完整链路还没有在手机上验收通过，其他厂商的输入限制、root 管理器下的 shell
+身份与 SELinux 也还没有验证。
 
 ### 动词
 

@@ -360,16 +360,21 @@ or the output was malformed), a stop may have been missed, so the next act also
 needs fresh explicit approval. An act on an engine that has already exited is
 reported as not sent, never as an unknown outcome.
 
-On first use the device downloads `opencu-android.json` and `opencu-android.jar`
-from the latest official OpenCU GitHub release. The manifest is limited to
-16 KiB and the jar to 64 MiB; the exact size and SHA-256 must match. The private
-cache is `files/wanctl/opencu/`, inside the app's config directory, with
+The official engine is built into the wanctl program inside the APK, covered by
+the APK's signature, so first use needs no download and works when GitHub is
+unreachable. The device also checks the latest official OpenCU GitHub release for
+a newer engine (`opencu-android.json`, then `opencu-android.jar`) and uses it
+only if its version is newer than the built-in one; an update of the app can
+bring a newer built-in engine, which then wins over an older download. The
+manifest is limited to 16 KiB and the jar to 64 MiB; the exact size and SHA-256
+must match. The private cache is `files/wanctl/opencu/`, inside the app's config directory, with
 full-hash jar names and atomic writes. File operations refuse that directory the
 same way they refuse the device identity, so a controller that may write files
 cannot place engine bytes or cache metadata. The previous good copy is retained. Manifest checks happen at most once per 24 hours,
 including failed attempts and agent restarts, and only when no OpenCU session is
-open. A failed refresh uses the verified cached engine. The cached version is
-reported through the existing device version display.
+open. Such a check gets 10 seconds and its failure changes nothing: the call goes
+on with the engine already available. The version in use is reported through the
+existing device version display.
 
 The agent streams the jar through elevation into
 `/data/local/tmp/opencu-android-<first 16 SHA-256 hex digits>.jar`, using a temporary
@@ -389,19 +394,21 @@ stderr was not forwarded. A failure of wanctl's own placement commands carries
 their bounded, escaped first stderr line.
 
 `WANCTL_OPENCU_ANDROID_URL` can point the agent at another directory containing
-those two fixed filenames. The default trust is HTTPS to GitHub and the hash in
-the release manifest, not a wanctl release signature. A missing release or failed
-hash check reports `OPENCU_NOT_INSTALLED` with its cause (a failed download
-names only its kind, host and HTTP status, never the URL); the planned Android
-assets must be published before first use can succeed from the default source.
+those two fixed filenames. An engine from that directory is used whatever its
+version; the built-in one stands in only until the directory has supplied one. A
+downloaded engine is trusted through HTTPS to GitHub and the hash in the release
+manifest, not a wanctl release signature, which is why it must be newer to be
+used. The built-in engine is trusted through the APK signature. A failed refresh
+keeps its cause (its kind, host and HTTP status, never the URL) in the cache state
+without failing the call. `OPENCU_NOT_INSTALLED` now means the engine could not be
+placed on the device.
 CLI image results are saved unchanged as private PNG or JPEG files.
 
 Wireless debugging can disappear on reboot or Wi-Fi changes; re-enable it or
-pair again as the channel's message directs. OEM input restrictions, the
-engine's hidden Android APIs, root-manager shell identity/SELinux behavior,
-physical stop gestures and screen-lock behavior still require signed-beta
-verification on a real phone. The Go integration is tested with fake adbd/MCP
-peers and local HTTP servers, not a phone.
+pair again as the channel's message directs. The engine itself was accepted hands-on on an
+Android 14 OPPO phone over USB, including the physical stop gesture. The whole
+path through the relay has not yet passed on a phone, and other vendors' input
+restrictions and root-manager shell identity/SELinux behavior are unverified.
 
 ### Verbs
 
