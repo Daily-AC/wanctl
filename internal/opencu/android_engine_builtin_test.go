@@ -219,3 +219,36 @@ func TestBuiltInAndroidEngineMatchesItsManifest(t *testing.T) {
 		t.Fatalf("changed jar: %v", err)
 	}
 }
+
+// A controller that goes away mid-refresh says nothing about the release, so
+// the next call checks again instead of waiting out the interval.
+func TestCancelledRefreshDoesNotUseUpTheInterval(t *testing.T) {
+	var checks atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if checks.Add(1) == 1 {
+			cancel()
+			<-r.Context().Done()
+			return
+		}
+		http.Error(w, "offline", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	c := builtInCache(t, t.TempDir(), srv.URL, "built in jar", "1.0.0")
+	if _, release, err := c.Acquire(ctx); err != nil {
+		t.Fatal(err)
+	} else {
+		release()
+	}
+	if got := c.state(); !got.Checked.IsZero() || got.Failure != "" {
+		t.Fatalf("a cancelled refresh was recorded: %+v", got)
+	}
+	acquireBytes(t, c)
+	if checks.Load() != 2 {
+		t.Fatalf("%d checks, want the next call to check again", checks.Load())
+	}
+	if c.state().Checked.IsZero() {
+		t.Fatal("a real failure must still use up the interval")
+	}
+}

@@ -210,6 +210,7 @@ func (c *AndroidCache) Acquire(ctx context.Context) (AndroidEngine, func(), erro
 	}
 	now := c.now()
 	if c.active == 0 && (s.Checked.IsZero() || now.Sub(s.Checked) >= AndroidRefresh) {
+		lastChecked := s.Checked
 		s.Checked = now
 		// Record attempts as well as successes, including across agent restarts.
 		err := os.MkdirAll(c.dir, 0700)
@@ -250,7 +251,13 @@ func (c *AndroidCache) Acquire(ctx context.Context) (AndroidEngine, func(), erro
 			}
 		}
 		if err != nil {
-			s.Failure = boundFailure(err.Error())
+			if ctx.Err() != nil {
+				// The controller went away; that says nothing about the release,
+				// so it must not use up the interval.
+				s.Checked = lastChecked
+			} else {
+				s.Failure = boundFailure(err.Error())
+			}
 			_ = c.save(s)
 		}
 	}
