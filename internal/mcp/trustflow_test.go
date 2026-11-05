@@ -186,6 +186,15 @@ func TestRefusalsCarryTheirOwnInstructions(t *testing.T) {
 	if !strings.Contains(adb, "停用") || !strings.Contains(adb, "Wireless debugging") {
 		t.Errorf("adb failure arrives without its remedy: %s", adb)
 	}
+	dropped := withRemedy("could not reach adbd on this device (41031: EOF; 5555: connection refused); adbd is running, but this connection was closed; retry, and if it persists, pair the device again")
+	for _, want := range []string{"adbd is running", "retry", "ADB pairing"} {
+		if !strings.Contains(dropped, want) {
+			t.Errorf("dropped adb failure lacks %q: %s", want, dropped)
+		}
+	}
+	if strings.Contains(dropped, "停用") || strings.Contains(dropped, "Wireless debugging") {
+		t.Errorf("dropped adb failure got the wireless-debugging remedy: %s", dropped)
+	}
 	if got := withRemedy("exit status 1"); got != "exit status 1" {
 		t.Errorf("an ordinary error grew a remedy: %s", got)
 	}

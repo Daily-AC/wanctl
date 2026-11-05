@@ -223,7 +223,11 @@ func (m *Manager) Select(ctx context.Context, via Kind) (Channel, Status, error)
 			}
 			st := m.probe(ctx, c)
 			if !st.Available {
-				return nil, st, fmt.Errorf("elevation channel %q is not available: %s", via, st.Reason)
+				reason := st.Reason
+				if via == KindADB {
+					reason = adbAggregateReason(reason)
+				}
+				return nil, st, fmt.Errorf("elevation channel %q is not available: %s", via, reason)
 			}
 			return c, st, nil
 		}
@@ -240,13 +244,31 @@ func (m *Manager) Select(ctx context.Context, via Kind) (Channel, Status, error)
 			if st.Available {
 				return c, st, nil
 			}
-			reasons = append(reasons, fmt.Sprintf("%s: %s", st.Kind, st.Reason))
+			reason := st.Reason
+			if st.Kind == KindADB {
+				reason = adbAggregateReason(reason)
+			}
+			reasons = append(reasons, fmt.Sprintf("%s: %s", st.Kind, reason))
 		}
 	}
 	if len(reasons) == 0 {
 		return nil, Status{}, fmt.Errorf("no elevation channels are built into this agent")
 	}
 	return nil, Status{}, fmt.Errorf("no elevation channel is available (%s)", strings.Join(reasons, "; "))
+}
+
+// adbAggregateReason keeps the unnamed-channel summary actionable even when
+// an older or unusual adbd failure only supplied a low-level transport error.
+// The ADB implementation emits more specific advice where it can; this is the
+// final guard for every other failure that reaches the manager.
+func adbAggregateReason(reason string) string {
+	if strings.Contains(strings.ToLower(reason), "turn on") ||
+		strings.Contains(strings.ToLower(reason), "pair") ||
+		strings.Contains(strings.ToLower(reason), "allow") ||
+		strings.Contains(strings.ToLower(reason), "retry") {
+		return reason
+	}
+	return reason + "; retry the adb channel; if it keeps failing, turn on Wireless debugging or pair the device again"
 }
 
 // Run selects a channel and executes command on it, returning the channel that

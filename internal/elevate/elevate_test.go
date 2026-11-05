@@ -136,6 +136,22 @@ func TestSelectReportsEveryReasonWhenNothingIsAvailable(t *testing.T) {
 	}
 }
 
+func TestSelectAddsRecoveryToAnADBTransportError(t *testing.T) {
+	m := NewManager(true, "",
+		&fakeChannel{kind: KindSu, ok: false, reason: "no su binary found"},
+		&fakeChannel{kind: KindADB, ok: false, reason: "unexpected EOF"},
+	)
+	_, _, err := m.Select(context.Background(), "")
+	if err == nil {
+		t.Fatal("Select succeeded with no channel available")
+	}
+	for _, want := range []string{"adb: unexpected EOF", "retry", "pair the device again"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want actionable adb advice containing %q", err, want)
+		}
+	}
+}
+
 func TestProbeResultIsCachedThenExpires(t *testing.T) {
 	su := &fakeChannel{kind: KindSu, ok: true}
 	m := NewManager(true, "", su)
