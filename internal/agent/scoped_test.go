@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -259,5 +260,43 @@ func TestScopedTokenBoundToWrongDeviceOrAgentIsRefused(t *testing.T) {
 	defer cancel()
 	if _, err := c.ExecTo(ctx, client.ExecRequest{Target: f.target, Command: f.command, OneShot: true}, io.Discard, io.Discard); err == nil {
 		t.Fatal("scoped token for another device reached this one")
+	}
+}
+
+// Codex review finding: the wire decoder drops unknown keys and accepts
+// duplicate or differently-cased keys, so the device compares the DECODED
+// message. That is sound because the decoded message is also exactly what the
+// device would execute; this test pins that: whatever spelling the bytes use,
+// a request is accepted only if the struct that would run is the canonical one.
+func TestScopedRequestJSONSpellingCannotSmuggleAnything(t *testing.T) {
+	cmd := "printf scoped-ok"
+	decode := func(raw string) protocol.Message {
+		t.Helper()
+		var m protocol.Message
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	for name, raw := range map[string]string{
+		"unknown key":      `{"kind":"exec","command":"printf scoped-ok","oneshot":true,"future_field":"x"}`,
+		"case alias":       `{"KIND":"exec","Command":"printf scoped-ok","OneShot":true}`,
+		"overridden cwd":   `{"kind":"exec","command":"printf scoped-ok","oneshot":true,"cwd":"/","cwd":""}`,
+		"overridden extra": `{"kind":"exec","command":"id","oneshot":true,"command":"printf scoped-ok"}`,
+	} {
+		m := decode(raw)
+		if !scopedRequestAllowed(m, cmd) || m.Command != cmd || m.Cwd != "" || m.Elevate || m.Script != "" {
+			t.Fatalf("%s: decoded %+v", name, m)
+		}
+	}
+	for name, raw := range map[string]string{
+		"duplicate command, last wins": `{"kind":"exec","command":"printf scoped-ok","oneshot":true,"command":"id"}`,
+		"duplicate cwd, last wins":     `{"kind":"exec","command":"printf scoped-ok","oneshot":true,"cwd":"","cwd":"/"}`,
+		"case alias of a real field":   `{"kind":"exec","command":"printf scoped-ok","oneshot":true,"CWD":"/"}`,
+		"escaped key":                  `{"kind":"exec","command":"printf scoped-ok","oneshot":true,"cwd":"/"}`,
+	} {
+		if m := decode(raw); scopedRequestAllowed(m, cmd) {
+			t.Fatalf("%s: accepted %+v", name, m)
+		}
 	}
 }

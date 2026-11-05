@@ -89,8 +89,11 @@ places that each hold part of it:
    request to be *exactly* the canonical form of "exec this command": kind
    `exec`, `oneshot`, command equal byte for byte, and every other field zero
    except `spill_after` (output handling). It is an allow-list over the whole
-   message, not a deny-list of known-bad fields, so a field added to the
-   protocol later is rejected until someone decides otherwise. Everything else
+   decoded message, not a deny-list of known-bad fields, so a field added to
+   `protocol.Message` later is rejected until someone decides otherwise. The
+   wire decoder drops unknown keys and lets the last duplicate or any key
+   spelling win; that is sound because the decoded struct that is compared is
+   the struct that would run (pinned by `TestScopedRequestJSONSpelling…`). Everything else
    — file put/get/read/edit/write, logs, status, desktop, workspace, async
    exec, elevation, a different `cwd`, a different command, a pipe or `;`
    appended — gets a reject and is never executed. A changed client cannot get
