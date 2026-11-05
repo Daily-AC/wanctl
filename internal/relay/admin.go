@@ -1078,6 +1078,7 @@ func (p *PGStore) ListTokens(namespace string) ([]map[string]any, error) {
 			"kind": kind, "grant_id": grantID, "devices": devices,
 		}
 		if scopedCommand != "" {
+			row["kind"] = "scoped"
 			row["scoped_command"], row["scoped_device"] = scopedCommand, scopedDevice
 		}
 		out = append(out, row)

@@ -40,7 +40,7 @@ func TestScopedTokenPostgresLifecycle(t *testing.T) {
 	}
 	// Stored as a hash, never the token.
 	var n int
-	if err := p.db.QueryRow(`SELECT count(*) FROM tokens WHERE hash=$1 AND kind='scoped'`, HashToken(raw)).Scan(&n); err != nil || n != 1 {
+	if err := p.db.QueryRow(`SELECT count(*) FROM tokens t JOIN scoped_tokens s ON s.token_id=t.id WHERE t.hash=$1 AND t.kind='delegated'`, HashToken(raw)).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("hash row: %d %v", n, err)
 	}
 	if err := p.db.QueryRow(`SELECT count(*) FROM tokens WHERE hash=$1`, raw).Scan(&n); err != nil || n != 0 {
@@ -64,6 +64,13 @@ func TestScopedTokenPostgresLifecycle(t *testing.T) {
 	}
 	if p.TokenAccountDisabled(raw) {
 		t.Fatal("scoped token reported as an account token")
+	}
+	// Rolling the relay binary back must not turn it into an account token: the
+	// namespace-only lookup of every earlier release is exactly this query.
+	var legacyNS string
+	if err := p.db.QueryRow(`SELECT namespace FROM tokens WHERE hash=$1 AND revoked_at IS NULL AND kind <> 'delegated'
+ AND (expires_at IS NULL OR expires_at > now())`, HashToken(raw)).Scan(&legacyNS); err == nil {
+		t.Fatalf("an older relay's Resolve query would accept the scoped token as %q", legacyNS)
 	}
 	// Listing shows it, without the secret.
 	list, err := p.ListScopedTokens("alice")
@@ -223,7 +230,7 @@ func TestScopedTokenPostgresRefusesBadIssues(t *testing.T) {
 			t.Fatalf("%.20q: %v", ok, err)
 		}
 	}
-	if n := countRows(t, p, `SELECT count(*) FROM tokens WHERE kind='scoped'`); n != 2 {
+	if n := countRows(t, p, `SELECT count(*) FROM scoped_tokens`); n != 2 {
 		t.Fatalf("refused issues left rows behind: %d scoped tokens", n)
 	}
 	// A device with no stable id (legacy registration) cannot be scoped.

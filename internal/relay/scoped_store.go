@@ -99,7 +99,7 @@ func (p *PGStore) IssueScopedToken(namespace, device, command, label string, day
 	}
 	var live int
 	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM tokens
- WHERE namespace=$1 AND kind='scoped' AND revoked_at IS NULL AND expires_at>now()`, namespace).Scan(&live); err != nil {
+ WHERE namespace=$1 AND revoked_at IS NULL AND expires_at>now() AND EXISTS (SELECT 1 FROM scoped_tokens s WHERE s.token_id=tokens.id)`, namespace).Scan(&live); err != nil {
 		return "", out, err
 	}
 	if live >= scopedMaxLive {
@@ -108,7 +108,7 @@ func (p *PGStore) IssueScopedToken(namespace, device, command, label string, day
 	raw := delegation.ScopedTokenPrefix + randHex(20)
 	expires := time.Now().Add(time.Duration(days) * 24 * time.Hour)
 	var tokenID int
-	if err = tx.QueryRowContext(ctx, `INSERT INTO tokens(namespace,kind,hash,label,expires_at) VALUES ($1,'scoped',$2,$3,$4) RETURNING id`,
+	if err = tx.QueryRowContext(ctx, `INSERT INTO tokens(namespace,kind,hash,label,expires_at) VALUES ($1,'delegated',$2,$3,$4) RETURNING id`,
 		namespace, HashToken(raw), label, expires).Scan(&tokenID); err != nil {
 		return "", out, err
 	}
@@ -124,7 +124,7 @@ func (p *PGStore) IssueScopedToken(namespace, device, command, label string, day
 
 func (p *PGStore) ListScopedTokens(namespace string) ([]ScopedToken, error) {
 	rows, err := p.db.Query(`SELECT t.id,COALESCE(t.label,''),s.device_id,s.command,t.created_at,t.expires_at,t.revoked_at
- FROM tokens t JOIN scoped_tokens s ON s.token_id=t.id WHERE t.namespace=$1 AND t.kind='scoped' ORDER BY t.id DESC`, namespace)
+ FROM tokens t JOIN scoped_tokens s ON s.token_id=t.id WHERE t.namespace=$1 ORDER BY t.id DESC`, namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func (p *PGStore) ListScopedTokens(namespace string) ([]ScopedToken, error) {
 // false when there is no such live scoped token, so a mistyped id is not
 // mistaken for a revocation.
 func (p *PGStore) RevokeScopedToken(namespace string, id int) (bool, error) {
-	res, err := p.db.Exec(`UPDATE tokens SET revoked_at=now() WHERE id=$1 AND namespace=$2 AND kind='scoped' AND revoked_at IS NULL`, id, namespace)
+	res, err := p.db.Exec(`UPDATE tokens SET revoked_at=now() WHERE id=$1 AND namespace=$2 AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM scoped_tokens s WHERE s.token_id=tokens.id)`, id, namespace)
 	if err != nil {
 		return false, err
 	}
@@ -156,7 +156,12 @@ func (p *PGStore) RevokeScopedToken(namespace string, id int) (bool, error) {
 	return n == 1, err
 }
 
-// resolveScoped completes ResolveAccess for a token whose kind is "scoped". The
+// resolveScoped completes ResolveAccess for a token that has a scoped_tokens
+// row. Its tokens row is stored with kind 'delegated', not a kind of its own:
+// every release before this one refuses that kind on its namespace-only lookup
+// and cannot resolve it as a grant (no delegation request), so rolling the
+// relay binary back leaves the token dead instead of turning it into a full
+// account token. The
 // token's row has already been checked for revocation, expiry and a disabled
 // account; what is left is that the device it was issued for is still the same
 // device.

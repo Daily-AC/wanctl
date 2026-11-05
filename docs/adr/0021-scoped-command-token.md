@@ -34,9 +34,14 @@ verbs); more scopes can be added later behind the same field.
 
 - Token: `wcs_<40 hex>`. The distinct prefix, like `wfd_`, lets every legacy
   code path refuse it by prefix without a database lookup.
-- Stored as a SHA-256 hash in the existing `tokens` table with
-  `kind = 'scoped'`, so expiry, revocation, listing and the "disabled account"
-  predicate come from the machinery that already exists and is already tested.
+- Stored as a SHA-256 hash in the existing `tokens` table, so expiry,
+  revocation, listing and the "disabled account" predicate come from the
+  machinery that already exists and is already tested. Its `kind` is
+  `delegated`, the kind earlier releases already refuse on every
+  namespace-only lookup (`Resolve`, `TokenAccountDisabled`); a row in
+  `scoped_tokens` is what marks it scoped. A new kind of its own would have
+  been accepted as a full account token by the old queries (`kind <>
+  'delegated'`) the moment a relay was rolled back.
 - Scope lives in a new table (migration 016):
   `scoped_tokens(token_id PK → tokens.id, namespace, device_id, device_fp, command)`.
   `device_fp` is the device's fingerprint at issue time; if the device is later
@@ -58,7 +63,8 @@ verbs); more scopes can be added later behind the same field.
 - At most 50 live scoped tokens per namespace.
 - Revocation reuses `tokens.revoked_at` (the same `RevokeToken` the portal's
   token list already calls), so a scoped token also shows up and can be revoked
-  from the portal's existing token page, where it appears with `kind: scoped`.
+  from the portal's existing token page, where it appears as "one command
+  only" with its command and device.
   The portal gets no new issue form in this version.
 
 ### Enforcement: two places, and why the relay cannot be the only one
@@ -76,7 +82,7 @@ places that each hold part of it:
    authenticated agent control channel. The controller cannot declare or alter
    it. Any other device, `/peers` entry, account endpoint, enrollment, or
    agent endpoint is refused the same way a delegated credential is
-   (`Resolve` rejects `kind='scoped'`; `wcs_` is refused by prefix on every
+   (`Resolve` rejects kind `delegated`; `wcs_` is refused by prefix on every
    namespace-only path, including satellite relays).
 2. **Agent (device).** Reads the command from the relay-stamped `Open`
    message and, before any other handling of each request, requires the
@@ -150,5 +156,8 @@ on a relay that has migration 016 and knows the kind.
   `ExecOnly` field is empty for them and every new branch is guarded on it.
 - A device must run a version of wanctl that includes this change to be
   reachable with a scoped token; older devices refuse. The public docs say so.
-- Rollback: scoped tokens stop working the moment a relay without the code
-  starts (the kind is unknown to `Resolve`), and the table can stay in place.
+- Rollback: a relay binary without this code cannot resolve a scoped token
+  (kind `delegated` with no delegation request) and refuses it on the
+  namespace-only paths, so the tokens go dead rather than gaining account
+  rights; the table can stay in place. A regression test runs the old
+  `Resolve` query against a scoped token.

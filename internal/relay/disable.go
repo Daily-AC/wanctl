@@ -45,7 +45,7 @@ func namespaceEnabled(col string) string {
 func (p *PGStore) TokenAccountDisabled(token string) bool {
 	var disabled bool
 	err := p.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM tokens t JOIN users u ON u.namespace = t.namespace
-		WHERE t.hash = $1 AND t.revoked_at IS NULL AND t.kind NOT IN ('delegated','scoped')
+		WHERE t.hash = $1 AND t.revoked_at IS NULL AND t.kind <> 'delegated'
 		  AND (t.expires_at IS NULL OR t.expires_at > now()) AND u.disabled_at IS NOT NULL)`, HashToken(token)).Scan(&disabled)
 	return err == nil && disabled
 }
