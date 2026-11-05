@@ -81,6 +81,9 @@ func TestScopedTokenPostgresLifecycle(t *testing.T) {
 	var kinds []string
 	for _, row := range all {
 		kinds = append(kinds, row["kind"].(string))
+		if row["kind"] == "scoped" && (row["scoped_command"] != "systemctl restart app" || row["scoped_device"] != device) {
+			t.Fatalf("portal token list lost the scope: %+v", row)
+		}
 	}
 	if !strings.Contains(strings.Join(kinds, ","), "scoped") {
 		t.Fatalf("portal token list lost the scoped token: %v", kinds)

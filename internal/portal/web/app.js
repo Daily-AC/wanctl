@@ -95,7 +95,7 @@
       accept: 'Accept', decline: 'Decline', withdraw: 'Withdraw',
       shareDevice: 'Share a device', shareGrantee: 'Grant to', sharePerms: 'Permissions', share: 'Share',
       never2: 'never', revoked: 'revoked', active: 'active', expired: 'expired',
-      delegated: 'Temporary device use', allDevices: 'Account access',
+      delegated: 'Temporary device use', allDevices: 'Account access', scoped: 'One command only',
       copied: 'Copied', copy: 'Copy',
       saved: 'Saved', cleared: 'Cleared', sent: 'Test delivered',
       aliasNone: 'no alias',
@@ -261,7 +261,7 @@
       accept: '接受', decline: '拒绝', withdraw: '撤回',
       shareDevice: '共享一台设备', shareGrantee: '授权给', sharePerms: '权限', share: '授权',
       never2: '永不', revoked: '已吊销', active: '有效', expired: '已过期',
-      delegated: '临时设备使用权', allDevices: '账号访问权限',
+      delegated: '临时设备使用权', allDevices: '账号访问权限', scoped: '仅限一条命令',
       copied: '已复制', copy: '复制',
       saved: '已保存', cleared: '已清除', sent: '测试通知已送达',
       aliasNone: '未设置',
@@ -1569,6 +1569,7 @@
         }).join(', ');
         var delegated = x.kind === 'delegated' || !!x.grant_id;
         var scopeLine = delegated ? t().delegated + (scope ? ' · ' + scope : '') : t().allDevices;
+        if (x.kind === 'scoped') scopeLine = t().scoped + ' · ' + (x.scoped_command || '') + ' · ' + (x.scoped_device || '');
         return '<tr' + (rev || expired ? ' class="dim"' : '') + '><td>' + esc(x.label || '—') +
           '<span class="token-scope">' + esc(scopeLine) + '</span></td>' +
           '<td>' + esc(fmt(x.created_at)) + '</td>' +

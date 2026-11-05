@@ -1051,9 +1051,9 @@ func (p *PGStore) IssueToken(namespace, label string, days int) (string, error) 
 func (p *PGStore) ListTokens(namespace string) ([]map[string]any, error) {
 	rows, err := p.db.Query(
 		`SELECT t.id, COALESCE(t.label,''), t.created_at, t.expires_at, t.revoked_at,
- t.kind,COALESCE(r.id,''),COALESCE((SELECT json_agg(json_build_object('namespace',d.namespace,'id',d.device_id,'fingerprint',d.fingerprint) ORDER BY d.device_id)
+ t.kind,COALESCE(r.id,''),COALESCE(s.command,''),COALESCE(s.device_id,''),COALESCE((SELECT json_agg(json_build_object('namespace',d.namespace,'id',d.device_id,'fingerprint',d.fingerprint) ORDER BY d.device_id)
  FROM delegation_devices d WHERE d.grant_id=r.id),'[]'::json)
- FROM tokens t LEFT JOIN delegation_requests r ON r.token_id=t.id WHERE t.namespace = $1 ORDER BY t.id DESC`, namespace)
+ FROM tokens t LEFT JOIN delegation_requests r ON r.token_id=t.id LEFT JOIN scoped_tokens s ON s.token_id=t.id WHERE t.namespace = $1 ORDER BY t.id DESC`, namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -1061,22 +1061,26 @@ func (p *PGStore) ListTokens(namespace string) ([]map[string]any, error) {
 	out := []map[string]any{}
 	for rows.Next() {
 		var id int
-		var label, kind, grantID string
+		var label, kind, grantID, scopedCommand, scopedDevice string
 		var devicesJSON []byte
 		var devices []map[string]string
 		var created time.Time
 		var expires, revoked sql.NullTime
-		if err := rows.Scan(&id, &label, &created, &expires, &revoked, &kind, &grantID, &devicesJSON); err != nil {
+		if err := rows.Scan(&id, &label, &created, &expires, &revoked, &kind, &grantID, &scopedCommand, &scopedDevice, &devicesJSON); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(devicesJSON, &devices); err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{
+		row := map[string]any{
 			"id": id, "label": label, "created_at": created,
 			"expires_at": nullTime(expires), "revoked_at": nullTime(revoked),
 			"kind": kind, "grant_id": grantID, "devices": devices,
-		})
+		}
+		if scopedCommand != "" {
+			row["scoped_command"], row["scoped_device"] = scopedCommand, scopedDevice
+		}
+		out = append(out, row)
 	}
 	return out, rows.Err()
 }
