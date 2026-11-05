@@ -1,7 +1,7 @@
 # 0021 — Scoped command token: a credential that can run one command on one device
 
 Date: 2026-11-06
-Status: proposed (implementation on `feat/scoped-token`; not released)
+Status: accepted (2026-11-06; ships with the next regular release)
 
 ## Context
 
