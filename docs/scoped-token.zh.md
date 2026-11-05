@@ -36,6 +36,9 @@ wanctl scoped-token revoke 12     # 下一次请求就被拒
 WANCTL_TOKEN=wcs_… wanctl exec --target home-pc --oneshot -- 'systemctl restart app'
 ```
 
+用令牌的那台机器和任何控制端一样，要先确认一次设备身份：
+`wanctl trust server --target home-pc --fingerprint SHA256:…`，指纹是设备上 agent 启动时打印的那一个。
+
 除了这一条请求，别的都会被 relay 或设备拒绝，什么都不会执行。撤销或过期的令牌在下一次请求时失效，
 已经打开的会话也一样。
 

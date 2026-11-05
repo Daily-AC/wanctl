@@ -42,6 +42,10 @@ with `--oneshot`:
 WANCTL_TOKEN=wcs_… wanctl exec --target home-pc --oneshot -- 'systemctl restart app'
 ```
 
+The machine using the token must trust the device's identity once, like any
+controller: `wanctl trust server --target home-pc --fingerprint SHA256:…` with
+the fingerprint the device prints when its agent starts.
+
 Anything but that exact request is refused by the relay or by the device, and
 nothing is executed. A revoked or expired token fails on the next request,
 including on a session that was already open.
