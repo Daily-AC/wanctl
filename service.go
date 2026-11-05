@@ -146,6 +146,12 @@ func run(name string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+// launchctlRun is kept behind a variable so lifecycle tests can inspect the
+// exact launchctl transaction without touching the host's launchd.
+var launchctlRun = func(args ...string) (string, error) {
+	return run("launchctl", args...)
+}
+
 // --- Linux: systemd user unit ---
 
 func linuxUnitPath() (string, error) {
@@ -286,8 +292,8 @@ func macInstall(self string, extra []string) error {
 		return err
 	}
 	// Reload: unload an old copy first (ignore error), then load enabled.
-	run("launchctl", "unload", plist)
-	if out, err := run("launchctl", "load", "-w", plist); err != nil {
+	launchctlRun("unload", plist)
+	if out, err := launchctlRun("load", "-w", plist); err != nil {
 		return fmt.Errorf("launchctl load: %v\n%s", err, out)
 	}
 	fmt.Printf("✓ installed launchd agent → %s\n  status: launchctl list | grep %s\n  logs:   tail -f %s\n", plist, macLabel, logPath)
@@ -297,7 +303,7 @@ func macInstall(self string, extra []string) error {
 func macUninstall() error {
 	plist, err := macPlistPath()
 	if err == nil {
-		run("launchctl", "unload", "-w", plist)
+		launchctlRun("unload", "-w", plist)
 		os.Remove(plist)
 	}
 	fmt.Println("✓ removed launchd agent")
@@ -310,7 +316,7 @@ func macStatus() error {
 	if _, err := os.Stat(plist); err == nil {
 		installed = plist
 	}
-	out, _ := run("launchctl", "list")
+	out, _ := launchctlRun("list")
 	active := "no"
 	if strings.Contains(out, macLabel) {
 		active = "yes"

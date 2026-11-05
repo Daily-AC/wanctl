@@ -64,7 +64,7 @@ final class ApprovalNotifier {
     private ApprovalNotifier() {
     }
 
-    static final class Card {
+    static final class Card implements ApprovalOrder.Item {
         final String json, id, state, kind, device, peer, peerFp, cmd, path, cwd, result;
         final long created, expires;
         /** When this process got the card; a final card lingers from here, however often it is redrawn. */
@@ -102,6 +102,16 @@ final class ApprovalNotifier {
 
         boolean pairing() {
             return PAIR.equals(kind);
+        }
+
+        @Override
+        public String state() {
+            return state;
+        }
+
+        @Override
+        public long created() {
+            return created;
         }
 
         private static String text(JSONObject o, String key) {
@@ -229,7 +239,7 @@ final class ApprovalNotifier {
                 out.add(k);
             }
         }
-        out.sort((a, b) -> Long.compare(a.created, b.created));
+        ApprovalOrder.sort(out);
         return out;
     }
 

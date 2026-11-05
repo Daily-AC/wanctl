@@ -123,7 +123,7 @@ func cmdUpdate(ctx context.Context, args []string) error {
 
 	fmt.Printf("✓ 已安装 wanctl %s: %s\n", version, self)
 	reportPATHShadow(self)
-	return applyUpdateRestart(ctx, self, plan)
+	return applyUpdateRestart(ctx, self, plan, version)
 }
 
 var errAPKSelfUpdate = fmt.Errorf(
@@ -349,6 +349,11 @@ func splitUpdateViaSudo(ctx context.Context, self, requested string) error {
 		return fmt.Errorf("sudo wanctl update: %w", err)
 	}
 
+	// The root phase owns the download and swap, so recover the version from the
+	// freshly replaced binary before the user phase checks its successor.
+	if out, err := exec.Command(self, "version").Output(); err == nil {
+		return applyUpdateRestart(ctx, self, plan, strings.TrimSpace(string(out)))
+	}
 	return applyUpdateRestart(ctx, self, plan)
 }
 
@@ -414,7 +419,7 @@ func applyUpdateStop(plan updateRestartPlan) error {
 	return nil
 }
 
-func applyUpdateRestart(ctx context.Context, self string, plan updateRestartPlan) error {
+func applyUpdateRestart(ctx context.Context, self string, plan updateRestartPlan, expectedVersion ...string) error {
 	switch {
 	case plan.restartDetached:
 		fmt.Println("正在重启后台 agent …")
@@ -424,7 +429,7 @@ func applyUpdateRestart(ctx context.Context, self string, plan updateRestartPlan
 		return nil
 	case plan.restartManagedPID > 0:
 		fmt.Println("正在通过原 supervisor 重启 agent …")
-		return restartManagedAgent(self, plan.restartManagedPID)
+		return restartManagedAgent(self, plan.restartManagedPID, expectedVersion...)
 	default:
 		return nil
 	}
@@ -455,7 +460,7 @@ const (
 // it. The kill happens in a detached helper whose error goes nowhere, so the
 // update printed "正在通过原 supervisor 重启 agent …" and exited 0 while the old
 // build kept serving — the new binary on disk made it look done.
-func restartManagedAgent(self string, pid int) error {
+func restartManagedAgent(self string, pid int, expectedVersion ...string) error {
 	if !canTerminatePID(pid) {
 		return fmt.Errorf(`新二进制已装好,但运行中的 agent (pid %d) 属于另一个账户(由 supervisor 托管),当前用户无权终止它 —— 旧版本仍在服务。
 请以管理员/root 重启那个服务,例如:
@@ -466,19 +471,77 @@ func restartManagedAgent(self string, pid int) error {
 	if err := scheduleManagedRestart(self, pid); err != nil {
 		return fmt.Errorf("restart supervised agent: %w", err)
 	}
-	switch awaitManagedRestart(pid, processAlive, config.ReadPID, managedRestartAttempts, managedRestartPoll, time.Sleep) {
-	case managedRestartReplaced:
+	result := awaitManagedRestart(pid, processAlive, config.ReadPID, managedRestartAttempts, managedRestartPoll, time.Sleep)
+	if result == managedRestartReplaced {
 		fmt.Println("✓ agent 已重启,新版本生效")
 		return nil
-	case managedRestartStopped:
-		return fmt.Errorf(`旧 agent (pid %d) 已停止,但 %s 内没有新 agent 接上 —— 这台机器现在没有 agent 在跑。
+	}
+
+	// A macOS LaunchAgent can remain registered but refuse to spawn the new
+	// inode after an atomic replacement. launchd reports this as an LWCR
+	// update requirement. Recover only when the live record and plist prove that
+	// this is exactly the service interrupted by this update.
+	var snapshot launchdSnapshot
+	if managedRestartGOOS == "darwin" {
+		snapshot = inspectLaunchd()
+		if launchdRecoveryEligible(snapshot, self) {
+			recovered, err := recoverLaunchdAndAwait(snapshot, func() managedRestartResult {
+				return awaitManagedRestart(pid, processAlive, config.ReadPID, managedRestartAttempts, managedRestartPoll, time.Sleep)
+			})
+			if err != nil {
+				return fmt.Errorf("旧 agent 重启失败，自动恢复 launchd 也失败: %w\n请手动运行:\n  %s\n%s", err, launchdRecoveryCommand(snapshot), launchdDiagnostic(snapshot))
+			}
+			if recovered == managedRestartReplaced {
+				if err := verifyManagedRestartVersion(self, expectedVersion); err != nil {
+					return fmt.Errorf("%w\n请手动运行:\n  %s\n%s", err, launchdRecoveryCommand(snapshot), launchdDiagnostic(snapshot))
+				}
+				version := "这次更新"
+				if len(expectedVersion) > 0 && expectedVersion[0] != "" {
+					version = "wanctl " + expectedVersion[0]
+				}
+				fmt.Printf("✓ agent 已重启,%s 生效（已自动恢复 launchd 一次）\n", version)
+				return nil
+			}
+			return fmt.Errorf(`旧 agent (pid %d) 在自动恢复 launchd 后仍未接上新 agent。
+请手动运行:
+  %s
+然后用 wanctl status 确认 pid 变了
+%s`, pid, launchdRecoveryCommand(snapshot), launchdDiagnostic(snapshot))
+		}
+	}
+
+	if result == managedRestartStopped {
+		extra := ""
+		if managedRestartGOOS == "darwin" {
+			extra = "\n" + launchdDiagnostic(snapshot)
+		}
+		message := fmt.Sprintf(`旧 agent (pid %d) 已停止,但 %s 内没有新 agent 接上 —— 这台机器现在没有 agent 在跑。
 如果它由「登录时触发」的任务托管,重新登录或手动启动该服务;或者跑 wanctl start 先把它拉起来`,
 			pid, time.Duration(managedRestartAttempts)*managedRestartPoll)
-	default:
-		return fmt.Errorf(`旧 agent (pid %d) 在 %s 后仍在运行,新二进制没有生效。
-手动重启它托管的服务,然后用 wanctl status 确认 pid 变了`,
-			pid, time.Duration(managedRestartAttempts)*managedRestartPoll)
+		return fmt.Errorf("%s%s", message, extra)
 	}
+	extra := ""
+	if managedRestartGOOS == "darwin" {
+		extra = "\n" + launchdDiagnostic(snapshot)
+	}
+	message := fmt.Sprintf(`旧 agent (pid %d) 在 %s 后仍在运行,新二进制没有生效。
+手动重启它托管的服务,然后用 wanctl status 确认 pid 变了`,
+		pid, time.Duration(managedRestartAttempts)*managedRestartPoll)
+	return fmt.Errorf("%s%s", message, extra)
+}
+
+func verifyManagedRestartVersion(self string, expected []string) error {
+	if len(expected) == 0 || expected[0] == "" {
+		return nil
+	}
+	out, err := exec.Command(self, "version").Output()
+	if err != nil {
+		return fmt.Errorf("新 agent 已接上,但无法核对 wanctl 版本 %s: %w", expected[0], err)
+	}
+	if got := strings.TrimSpace(string(out)); got != expected[0] {
+		return fmt.Errorf("新 agent 已接上,但版本是 %s，不是这次更新的 %s", got, expected[0])
+	}
+	return nil
 }
 
 // awaitManagedRestart polls until a live agent other than oldPID is registered,
