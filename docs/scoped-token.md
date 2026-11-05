@@ -9,6 +9,10 @@ another command, the same command with a different argument, a pipe or `;`
 appended, another device, files, logs, a shell, your account, other tokens.
 It expires, and you can revoke it at any time.
 
+> **Not available yet.** Scoped tokens need the next relay release (after
+> v0.29.1), and devices updated to it. Until the relay you use is upgraded,
+> `wanctl scoped-token` and the tokens it issues are refused.
+
 ## Issue one
 
 With your normal login (`wanctl login`), on any machine:
