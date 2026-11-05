@@ -27,8 +27,8 @@ wanctl scoped-token create --device home-pc --command 'systemctl restart app' --
 - 同时有效的限权令牌最多 50 把。
 
 ```bash
-wanctl scoped-token list          # 编号、状态、命令、设备、备注
-wanctl scoped-token revoke 12     # 下一次请求就被拒
+wanctl scoped-token list          # id, state, command, device, label
+wanctl scoped-token revoke 12     # its next request is refused
 ```
 
 ## 使用
