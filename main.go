@@ -222,6 +222,8 @@ func main() {
 		err = cmdFriends(ctx, os.Args[2:])
 	case "share":
 		err = cmdShare(ctx, os.Args[2:])
+	case "scoped-token":
+		err = cmdScopedToken(ctx, os.Args[2:])
 	case "start":
 		err = cmdStart(ctx)
 	case "stop":
@@ -268,7 +270,7 @@ var relayCommands = map[string]bool{
 	"start": true, "login": true,
 	"exec": true, "screenshot": true, "act": true, "push": true, "pull": true,
 	"read": true, "edit": true, "write": true, "workspace": true, "shell": true,
-	"peers": true, "pair": true, "friends": true, "share": true,
+	"peers": true, "pair": true, "friends": true, "share": true, "scoped-token": true,
 	"docs": true, "admin": true,
 }
 

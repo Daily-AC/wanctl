@@ -89,7 +89,15 @@ type Access struct {
 	// of it. The job allowance is a property of the approval, so it must not
 	// shrink as the grant runs down.
 	GrantedMinutes int `json:"granted_minutes,omitempty"`
+	// ExecOnly marks a scoped command token (docs/adr/0021): the one command
+	// its holder may run on its one device. Empty for every other credential.
+	// A scoped token is a delegated credential with no controller binding.
+	ExecOnly string `json:"exec_only,omitempty"`
 }
+
+// ScopedTokenPrefix starts every scoped command token. Like "wfd_" it lets each
+// namespace-only code path refuse the credential by prefix, with no lookup.
+const ScopedTokenPrefix = "wcs_"
 
 func (a Access) Allows(target string) bool {
 	if !a.Delegated {

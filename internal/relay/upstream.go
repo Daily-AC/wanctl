@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -53,7 +52,7 @@ func NewUpstreamTokenStore(upstreamURL, secret string) *UpstreamTokenStore {
 
 // Resolve implements TokenStore.
 func (u *UpstreamTokenStore) Resolve(token string) (string, bool) {
-	if strings.HasPrefix(token, "wfd_") {
+	if restrictedToken(token) {
 		return "", false
 	}
 	u.mu.Lock()
@@ -143,7 +142,7 @@ func (u *UpstreamTokenStore) ResolveAccess(token string) (delegation.Access, boo
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		if strings.HasPrefix(token, "wfd_") {
+		if restrictedToken(token) {
 			return delegation.Access{}, false
 		}
 		// A pre-delegation upstream has no inspect route. Its legacy route is

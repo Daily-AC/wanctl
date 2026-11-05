@@ -208,7 +208,7 @@ func (r *Relay) handleWSDialToHTTP(w http.ResponseWriter, req *http.Request, tar
 		http.Error(w, "device offline", http.StatusNotFound)
 		return
 	}
-	if access.Delegated && !a.delegation {
+	if !agentServes(access, a.delegation, a.scopedExec) {
 		r.hmu.Unlock()
 		http.Error(w, "device agent must be upgraded for delegated access", http.StatusConflict)
 		return
@@ -255,7 +255,7 @@ func (r *Relay) handleHDialToWS(w http.ResponseWriter, targetKey string, auth se
 		return
 	}
 
-	if access.Delegated && !ac.delegation {
+	if !agentServes(access, ac.delegation, ac.scopedExec) {
 		http.Error(w, "device agent must be upgraded for delegated access", http.StatusConflict)
 		return
 	}

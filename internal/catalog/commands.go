@@ -492,6 +492,18 @@ var Commands = []Command{
 		CLIExample: "wanctl friends\n  wanctl friends add other-ns\n  wanctl friends accept other-ns",
 	},
 	{
+		Name:    "scoped-token",
+		Summary: "Issue a token that can run one command on one device",
+		Desc:    "A scoped token is for a program that needs exactly one thing from a device. It runs one literal command on one device of yours and is refused everything else: any other command or argument, a pipe or `;`, files, logs, other devices, your account. It expires (default 90 days, at most 365) and `revoke` stops it on its next request. It narrows access and never widens it: the device's own mode, rules and pairing still apply, and the device must run a wanctl version that knows scoped tokens. Hold it in WANCTL_TOKEN and run the command with `wanctl exec --oneshot`.",
+		Params: []Param{
+			{Name: "device", CLI: "--device DEV", Type: TypeString, CLIOnly: true, Desc: "The device of yours the token is bound to (create)."},
+			{Name: "command", CLI: "--command CMD", Type: TypeString, CLIOnly: true, Desc: "The one command it may run, one printable line, matched byte for byte (create)."},
+			{Name: "days", CLI: "--days N", Type: TypeString, CLIOnly: true, Desc: "Lifetime in days, 1-365; default 90 (create)."},
+			{Name: "label", CLI: "--label TEXT", Type: TypeString, CLIOnly: true, Desc: "A note about who holds it (create)."},
+		},
+		CLIExample: "wanctl scoped-token create --device home-pc --command 'uptime' --days 30\n  wanctl scoped-token list\n  wanctl scoped-token revoke 12",
+	},
+	{
 		Name:    "share",
 		Summary: "Grant another namespace the use of one of your devices",
 		Desc:    "Sharing hands a friend the use of a device, not ownership of it: they drive it under your device's policy, and --manage additionally lets them change that policy. Revoking takes effect on their next call.",

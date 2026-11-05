@@ -41,12 +41,31 @@ func (r *Relay) dialAccessAllowed(a delegation.Access, target string) (string, s
 			return "", sessionauth.Open{}, "", false
 		}
 		auth.Capabilities = sessionauth.UseCapabilities
+		if a.ExecOnly != "" {
+			// A scoped command token runs one command and nothing else. The
+			// agent enforces the exact command; the relay's part is to admit
+			// it to its one device and to stamp the scope where the controller
+			// cannot reach it.
+			auth.Capabilities = sessionauth.Exec
+			auth.ExecOnly = a.ExecOnly
+		}
 		auth.GrantID = a.GrantID
 		auth.CredentialID = a.CredentialID
 		auth.ControllerFingerprint = a.ControllerFingerprint
 		auth.ExpiresAt = a.ExpiresAt
 	}
 	return key, auth, "", true
+}
+
+// agentServes reports whether a device's agent may be handed this credential.
+// A delegated credential needs an agent that revalidates grants; a scoped
+// command token additionally needs one that enforces ExecOnly, because an agent
+// that does not know the field would ignore it and run whatever it was asked.
+func agentServes(access delegation.Access, delegationOK, scopedOK bool) bool {
+	if !access.Delegated {
+		return true
+	}
+	return delegationOK && (access.ExecOnly == "" || scopedOK)
 }
 
 func (r *Relay) accessPeers(a delegation.Access) map[string]any {
@@ -273,7 +292,7 @@ func (r *Relay) handleAgentDelegationCheck(w http.ResponseWriter, req *http.Requ
 	l := r.leases[req.URL.Query().Get("session")]
 	r.leaseMu.Unlock()
 	if l == nil || !l.access.Delegated || l.target != ns+"/"+device || l.access.GrantID != req.URL.Query().Get("grant") ||
-		l.access.ControllerFingerprint != req.URL.Query().Get("controller_fp") || !l.valid() {
+		l.access.ControllerFingerprint != req.URL.Query().Get("controller_fp") && l.access.ExecOnly == "" || !l.valid() {
 		http.Error(w, "delegation inactive", http.StatusForbidden)
 		return
 	}

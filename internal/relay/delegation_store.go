@@ -280,6 +280,9 @@ func (p *PGStore) ResolveAccess(raw string) (delegation.Access, bool) {
 	if expires.Valid {
 		out.ExpiresAt = expires.Time
 	}
+	if kind == "scoped" {
+		return p.resolveScoped(ctx, id, out)
+	}
 	if kind != "delegated" {
 		return out, true
 	}
