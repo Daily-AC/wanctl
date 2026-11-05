@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"reflect"
 	"time"
 
 	"wanctl/internal/admission"
@@ -16,6 +17,26 @@ import (
 type sessionAudit struct {
 	grantID, credentialID, sessionID string
 	workspaceCheck                   func() bool
+	// execOnly is the one command a scoped command token may run; empty for
+	// every other session. See docs/adr/0021-scoped-command-token.md.
+	execOnly string
+}
+
+// scopedRequestAllowed is the device's half of a scoped command token: the
+// request must be exactly "run this command, once, synchronously", and nothing
+// else. It compares the whole message against the one canonical form instead
+// of listing forbidden fields, so a field the protocol grows later is refused
+// until someone decides it is safe. SpillAfter only chooses what happens to
+// the output of that same command, so it is the one field left free. A cancel
+// is accepted because a controller may send one after its command finished.
+func scopedRequestAllowed(m protocol.Message, command string) bool {
+	if m.Kind == protocol.KindCancel {
+		return reflect.DeepEqual(m, protocol.Message{Kind: protocol.KindCancel})
+	}
+	if m.SpillAfter < 0 {
+		return false
+	}
+	return reflect.DeepEqual(m, protocol.Message{Kind: protocol.KindExec, Command: command, OneShot: true, SpillAfter: m.SpillAfter})
 }
 
 func (a *Agent) workspaceSessionActive(ctx context.Context, auth sessionauth.Open, fp string) bool {
@@ -40,7 +61,7 @@ func auditSession(auth sessionauth.Open) sessionAudit {
 	if auth.GrantID == "" {
 		return sessionAudit{}
 	}
-	return sessionAudit{grantID: auth.GrantID, credentialID: auth.CredentialID, sessionID: auth.Session}
+	return sessionAudit{grantID: auth.GrantID, credentialID: auth.CredentialID, sessionID: auth.Session, execOnly: auth.ExecOnly}
 }
 
 func (a *Agent) logSessionEvent(scope sessionAudit, e eventlog.Event) {
@@ -88,7 +109,7 @@ func (a *Agent) delegationActive(ctx context.Context, auth sessionauth.Open, fp 
 	if auth.GrantID == "" {
 		return true
 	}
-	if ctx.Err() != nil || !auth.ValidFor(a.DeviceID()) || auth.ControllerFingerprint != fp {
+	if ctx.Err() != nil || !auth.ValidFor(a.DeviceID()) || !auth.ControllerOK(fp) {
 		return false
 	}
 	query := url.Values{

@@ -84,6 +84,7 @@ REFUSALS — none of these mean retry as-is:
 | `mcp` | — | Run wanctl as an MCP server |
 | `docs` | — | Read and write the portal's documentation articles |
 | `friends` | — | List and manage friend relationships between namespaces |
+| `scoped-token` | — | Issue a token that can run one command on one device |
 | `share` | — | Grant another namespace the use of one of your devices |
 | `screenshot` | `wanctl_screenshot` | Capture a device's screen and desktop coordinates |
 | `act` | `wanctl_act` | Operate a Windows desktop or Android device |
@@ -926,6 +927,32 @@ them.
 wanctl friends
   wanctl friends add other-ns
   wanctl friends accept other-ns
+```
+
+## `wanctl scoped-token`
+
+*Issue a token that can run one command on one device*
+
+A scoped token is for a program that needs exactly one thing from a device. It
+runs one literal command on one device of yours and is refused everything
+else: any other command or argument, a pipe or `;`, files, logs, other
+devices, your account. It expires (default 90 days, at most 365) and `revoke`
+stops it on its next request. It narrows access and never widens it: the
+device's own mode, rules and pairing still apply, and the device must run a
+wanctl version that knows scoped tokens. Hold it in WANCTL_TOKEN and run the
+command with `wanctl exec --oneshot`.
+
+| Parameter | CLI | Type | Required | Meaning |
+|---|---|---|---|---|
+| — | `--device DEV` | string | no | The device of yours the token is bound to (create). |
+| — | `--command CMD` | string | no | The one command it may run, one printable line, matched byte for byte (create). |
+| — | `--days N` | string | no | Lifetime in days, 1-365; default 90 (create). |
+| — | `--label TEXT` | string | no | A note about who holds it (create). |
+
+```
+wanctl scoped-token create --device home-pc --command 'uptime' --days 30
+  wanctl scoped-token list
+  wanctl scoped-token revoke 12
 ```
 
 ## `wanctl share`

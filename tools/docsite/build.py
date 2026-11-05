@@ -119,6 +119,7 @@ TECH_GROUPS = [
             "architecture.md",
             "device-identity.md",
             "webfetch.md",
+            "scoped-token.md",
             "self-hosting.md",
             "environment.md",
             "release-signing.md",

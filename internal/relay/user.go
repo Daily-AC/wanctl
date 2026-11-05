@@ -21,6 +21,8 @@ func (r *Relay) registerUser(mux *http.ServeMux) {
 	mux.HandleFunc("/u/shares/grant", r.userShareGrant)
 	mux.HandleFunc("/u/shares/manage", r.userShareManage)
 	mux.HandleFunc("/u/shares/revoke", r.userShareRevoke)
+	mux.HandleFunc("/u/scoped-tokens", r.userScopedTokens)
+	mux.HandleFunc("/u/scoped-tokens/revoke", r.userScopedTokenRevoke)
 	mux.HandleFunc("/u/notify", r.userNotify)
 	mux.HandleFunc("/u/notify/test", r.userNotifyTest)
 	mux.HandleFunc("/u/devices/notify", r.userDeviceNotify)

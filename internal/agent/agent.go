@@ -476,7 +476,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// cancellation (SIGTERM, `wanctl stop`) is never observed.
 	defer wsconn.CloseOnCancel(ctx, nc)()
 	enc := json.NewEncoder(nc)
-	reg := map[string]string{"op": "register", "device": a.DeviceID(), "device_id": a.DeviceID(), "name": a.opts.Name, "fingerprint": a.id.Fingerprint, "inst": a.inst, "delegation": "1"}
+	reg := map[string]string{"op": "register", "device": a.DeviceID(), "device_id": a.DeviceID(), "name": a.opts.Name, "fingerprint": a.id.Fingerprint, "inst": a.inst, "delegation": "1", "scoped_exec": "1"}
 	for k, v := range a.versionFields() {
 		reg[k] = v
 	}
@@ -611,7 +611,7 @@ func (a *Agent) handleSession(ctx context.Context, nc net.Conn, auth sessionauth
 		a.refuse(conn, fp, hello.Name, "rejected:session", protocol.Message{Kind: protocol.KindReject, Reason: "invalid relay session capabilities"}, audit)
 		return
 	}
-	if auth.GrantID != "" && (auth.ControllerFingerprint != fp || !a.delegationActive(ctx, auth, fp)) {
+	if auth.GrantID != "" && (!auth.ControllerOK(fp) || !a.delegationActive(ctx, auth, fp)) {
 		a.refuse(conn, fp, hello.Name, "rejected:delegation", protocol.Message{Kind: protocol.KindReject, Reason: "delegation is inactive or controller fingerprint does not match"}, audit)
 		return
 	}
@@ -837,6 +837,11 @@ func (a *Agent) serveAuthorized(conn *tls.Conn, fp, peerName string, caps sessio
 			a.logSessionEvent(audit, rejectedRequestEvent(fp, peerName, m, "delegation inactive"))
 			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "delegation inactive"})
 			return
+		}
+		if audit.execOnly != "" && !scopedRequestAllowed(m, audit.execOnly) {
+			a.logSessionEvent(audit, rejectedRequestEvent(fp, peerName, m, "scoped token allows only its one command"))
+			protocol.WriteMessage(conn, protocol.Message{Kind: protocol.KindReject, Reason: "scoped token: only the exact command it was issued for may run"})
+			continue
 		}
 		if check != nil && (m.Kind == protocol.KindWorkspace || m.Kind == protocol.KindExecAsync || m.Kind == protocol.KindExecPoll || (m.Kind == protocol.KindExec && !m.OneShot)) {
 			a.logSessionEvent(audit, rejectedRequestEvent(fp, peerName, m, "delegated execution requires a synchronous one-shot command"))
@@ -1251,7 +1256,7 @@ func (a *Agent) runHTTP(ctx context.Context) error {
 	// The poll loop shares the relay transport with the sessions it spawns, so
 	// the connection it keeps warm (and its HTTP/3 probe) serves them too.
 	hc := &http.Client{Transport: relayhttp.Shared(), Timeout: 35 * time.Second}
-	q := url.Values{"device": {a.DeviceID()}, "device_id": {a.DeviceID()}, "name": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}, "delegation": {"1"}}
+	q := url.Values{"device": {a.DeviceID()}, "device_id": {a.DeviceID()}, "name": {a.opts.Name}, "fp": {a.id.Fingerprint}, "inst": {a.inst}, "delegation": {"1"}, "scoped_exec": {"1"}}
 	// Registration lives or dies by this loop: the relay keeps a device listed
 	// only while its polls keep arriving. Until 2026-08-07 every failure here
 	// was swallowed — sleep two seconds, try again, say nothing — so an agent

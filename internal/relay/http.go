@@ -27,6 +27,7 @@ type httpAgent struct {
 	retired          map[string]struct{}
 	changed          chan struct{}
 	delegation       bool
+	scopedExec       bool
 	// polls counts this device's /h/poll requests in flight. A live agent
 	// always has one parked or is about to send the next, so none in flight
 	// and no poll for deviceGoneAfter means the process is gone.
@@ -925,6 +926,7 @@ func (r *Relay) handleHPoll(w http.ResponseWriter, req *http.Request) {
 	}
 	a.name = req.URL.Query().Get("name")
 	a.delegation = req.URL.Query().Get("delegation") == "1"
+	a.scopedExec = req.URL.Query().Get("scoped_exec") == "1"
 	a.lastSeen = time.Now()
 	a.polls++
 	r.hagents[key] = a
@@ -1026,7 +1028,7 @@ func (r *Relay) handleHDial(w http.ResponseWriter, req *http.Request) {
 		r.handleHDialToWS(w, targetKey, auth, access, token)
 		return
 	}
-	if access.Delegated && !a.delegation {
+	if !agentServes(access, a.delegation, a.scopedExec) {
 		r.hmu.Unlock()
 		http.Error(w, "device agent must be upgraded for delegated access", http.StatusConflict)
 		return

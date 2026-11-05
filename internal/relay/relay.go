@@ -36,6 +36,7 @@ type agentConn struct {
 	inst       string
 	ctrl       io.Writer
 	delegation bool
+	scopedExec bool       // understands sessionauth.Open.ExecOnly; see agentServes
 	mu         sync.Mutex // serialize control writes
 	kick       func()     // closes the control channel (an account being disabled)
 }
@@ -341,7 +342,7 @@ func (r *Relay) auth(w http.ResponseWriter, req *http.Request) (ns string, ok bo
 	if !ok {
 		return "", false
 	}
-	if strings.HasPrefix(token, "wfd_") {
+	if restrictedToken(token) {
 		return "", false
 	}
 	return r.ts.Resolve(token)
@@ -473,6 +474,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 		Op, Device, Fingerprint, Inst, Name string
 		DeviceID                            string          `json:"device_id"`
 		Delegation                          string          `json:"delegation"`
+		ScopedExec                          string          `json:"scoped_exec"`
 		WanctlVersion                       json.RawMessage `json:"wanctl_version"`
 		OpenCUVersion                       json.RawMessage `json:"opencu_version"`
 	}
@@ -516,7 +518,7 @@ func (r *Relay) handleAgent(w http.ResponseWriter, req *http.Request) {
 	kickVersions := r.queueDeviceVersions(ns, reg.Device, reg.Inst, jsonVersion(reg.WanctlVersion), jsonVersion(reg.OpenCUVersion), reg.WanctlVersion != nil || reg.OpenCUVersion != nil)
 	key := ns + "/" + reg.Device
 	wasLive := r.deviceLive(ns, reg.Device)
-	ac := &agentConn{device: reg.Device, name: reg.Name, ns: ns, inst: reg.Inst, ctrl: nc, delegation: reg.Delegation == "1", kick: func() { nc.Close() }}
+	ac := &agentConn{device: reg.Device, name: reg.Name, ns: ns, inst: reg.Inst, ctrl: nc, delegation: reg.Delegation == "1", scopedExec: reg.ScopedExec == "1", kick: func() { nc.Close() }}
 	r.mu.Lock()
 	r.agents[key] = ac
 	r.mu.Unlock()
@@ -604,7 +606,7 @@ func (r *Relay) handleDial(w http.ResponseWriter, req *http.Request) {
 		r.handleWSDialToHTTP(w, req, targetKey, auth, access, token)
 		return
 	}
-	if access.Delegated && !ac.delegation {
+	if !agentServes(access, ac.delegation, ac.scopedExec) {
 		http.Error(w, "device agent must be upgraded for delegated access", http.StatusConflict)
 		return
 	}

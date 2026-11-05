@@ -115,10 +115,30 @@ type Open struct {
 	CredentialID          string       `json:"credential_id,omitempty"`
 	ControllerFingerprint string       `json:"controller_fingerprint,omitempty"`
 	ExpiresAt             time.Time    `json:"expires_at,omitempty"`
+	// ExecOnly, when set, is the one command this session may run: a scoped
+	// command token's scope (docs/adr/0021-scoped-command-token.md). The relay
+	// stamps it here, on the authenticated agent control channel, and the agent
+	// refuses every request that is not exactly that command.
+	ExecOnly string `json:"exec_only,omitempty"`
+}
+
+// ControllerOK reports whether the controller that completed the handshake
+// (fingerprint fp) is the one this grant names. A scoped command token names
+// none: it works for whoever holds it, behind the device's own pairing gate.
+func (o Open) ControllerOK(fp string) bool {
+	return o.ExecOnly != "" || o.ControllerFingerprint == fp
 }
 
 func (o Open) ValidFor(device string) bool {
-	if o.GrantID != "" && (o.CredentialID == "" || o.ControllerFingerprint == "" || o.ExpiresAt.IsZero() || !time.Now().Before(o.ExpiresAt) || o.Capabilities != UseCapabilities) {
+	if o.ExecOnly != "" {
+		// A scoped session is a grant session that may only execute: exec-only
+		// capabilities, no file or log verbs. An agent from before scoped
+		// tokens requires UseCapabilities for a grant session and so drops this
+		// one instead of serving it with the scope ignored.
+		if o.GrantID == "" || o.CredentialID == "" || o.ExpiresAt.IsZero() || !time.Now().Before(o.ExpiresAt) || o.Capabilities != Exec {
+			return false
+		}
+	} else if o.GrantID != "" && (o.CredentialID == "" || o.ControllerFingerprint == "" || o.ExpiresAt.IsZero() || !time.Now().Before(o.ExpiresAt) || o.Capabilities != UseCapabilities) {
 		return false
 	}
 	return o.Session != "" && o.CallerNamespace != "" && o.OwnerNamespace != "" &&
