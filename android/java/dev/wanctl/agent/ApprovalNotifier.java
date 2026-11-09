@@ -44,7 +44,6 @@ final class ApprovalNotifier {
     /** The card id is the notification tag; 1 is the service's own notification. */
     private static final int ID = 2;
     private static final int KEEP = 32;
-    private static final long DONE_LINGER_MS = 60_000;
     private static final String EXTRA_CARD = "dev.wanctl.agent.card";
     private static final String SCHEME = "wanctl-approval";
 
@@ -65,7 +64,7 @@ final class ApprovalNotifier {
     private ApprovalNotifier() {
     }
 
-    static final class Card {
+    static final class Card implements ApprovalOrder.Item {
         final String json, id, state, kind, device, peer, peerFp, cmd, path, cwd, result;
         final long created, expires;
         /** When this process got the card; a final card lingers from here, however often it is redrawn. */
@@ -105,6 +104,16 @@ final class ApprovalNotifier {
             return PAIR.equals(kind);
         }
 
+        @Override
+        public String state() {
+            return state;
+        }
+
+        @Override
+        public long created() {
+            return created;
+        }
+
         private static String text(JSONObject o, String key) {
             return o.isNull(key) ? "" : o.optString(key);
         }
@@ -130,7 +139,6 @@ final class ApprovalNotifier {
         if (k == null) {
             return false;
         }
-        boolean showing = active(c, k.id) != null;
         synchronized (ApprovalNotifier.class) {
             cards.put(k.id, k);
             if (DONE.equals(k.state)) {
@@ -140,9 +148,12 @@ final class ApprovalNotifier {
         if (TEST.equals(k.state) && !k.id.startsWith(LOCAL_TEST)) {
             new Prefs(c).setApprovalPhone();
         }
-        // A final state only updates a notification that is still there: one the
-        // owner swiped away or ignored stays gone.
-        if (!DONE.equals(k.state) || showing) {
+        // A final state settles the request. Do not leave the old "command is
+        // running" notification in the shade: the portal has no later card
+        // for command completion, and a reconnect could otherwise redraw it.
+        if (DONE.equals(k.state)) {
+            nm(c).cancel(k.id, ID);
+        } else {
             post(c, k, locked(c));
         }
         changed();
@@ -228,7 +239,7 @@ final class ApprovalNotifier {
                 out.add(k);
             }
         }
-        out.sort((a, b) -> Long.compare(a.created, b.created));
+        ApprovalOrder.sort(out);
         return out;
     }
 
@@ -381,7 +392,9 @@ final class ApprovalNotifier {
                 continue;
             }
             Card k = card(c, s.getTag());
-            if (k != null && !TEST.equals(k.state)) {
+            if (k != null && DONE.equals(k.state)) {
+                nm(c).cancel(k.id, ID);
+            } else if (k != null && !TEST.equals(k.state)) {
                 post(c, k, locked);
             }
         }
@@ -389,7 +402,6 @@ final class ApprovalNotifier {
 
     private static void post(Context c, Card k, boolean locked) {
         channel(c);
-        boolean done = DONE.equals(k.state);
         Notification.Builder b = new Notification.Builder(c, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_agent)
                 .setWhen(k.created)
@@ -417,7 +429,7 @@ final class ApprovalNotifier {
             nm(c).notify(k.id, ID, b.build());
             return;
         }
-        String line = done ? "1 个审批请求已处理" : "有 1 个待审批请求";
+        String line = "有 1 个待审批请求";
         Notification cover = new Notification.Builder(c, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_agent)
                 .setWhen(k.created)
@@ -449,17 +461,6 @@ final class ApprovalNotifier {
                 b.addAction(action(c, k.id, "y", choices[0]));
                 b.addAction(action(c, k.id, "n", choices[1]));
             }
-        }
-        if (done) {
-            // Every lock and unlock redraws the card; restarting the timer
-            // each time would keep a final card up for as long as the phone
-            // keeps being picked up.
-            long left = DONE_LINGER_MS - (System.currentTimeMillis() - k.seen);
-            if (left <= 0) {
-                nm(c).cancel(k.id, ID);
-                return;
-            }
-            b.setTimeoutAfter(left);
         }
         nm(c).notify(k.id, ID, b.build());
     }

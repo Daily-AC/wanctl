@@ -825,6 +825,7 @@ func dialErrorResult(sess sessionAPI, err error) *mcpapi.CallToolResult {
 // inside "could not reach adbd on this device (...)", and a port whose adbd
 // refused the key means the pairing lapsed, not that debugging is off.
 var remedied = []struct{ marker, failure string }{
+	{"adbd is running, but this connection was closed", "adbd is running, but this connection was closed"},
 	{"TLS handshake with adbd", "TLS handshake with adbd"},
 	{"remote error: tls", "TLS handshake with adbd"},
 	{"could not reach adbd on this device", "could not reach adbd on this device"},

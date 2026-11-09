@@ -85,6 +85,9 @@ wanctl id                                 # this controller's fingerprint
   If exactly one device is online you may omit `--target`.
 - `wanctl act --target PHONE --discover` also works on Android APK devices with
   提权通道 enabled and working wireless debugging or root; follow the discovered OpenCU tools.
+  On Android, call `agent_desktop` with `action: start` first and work on that background
+  display: approving a request takes the phone's foreground and collides with an app on the
+  main screen.
 - Persistent session: separate `exec` calls share working dir + env (like a real
   shell) unless `--oneshot`.
 - A device may be an **Android phone or tablet**; it behaves like any other

@@ -286,7 +286,8 @@ wanctl_exec{"target":"home-pc","command":"uname -a"}
 | `DEVICE IDENTITY CONFIRMATION REQUIRED` | First contact with this device: nothing was sent. Pin what it presented (`wanctl trust server --target … --fingerprint …`, or the wanctl_trust_server tool) and retry. |
 | `DEVICE IDENTITY MISMATCH` | The device presented a different identity than the pinned one. Refused; nothing was sent. Report both fingerprints and stop — re-pinning is a human decision at a terminal. |
 | `LOGIN REQUIRED` | No usable credential. Run `wanctl login` (CLI) or wanctl_login (local MCP). The hosted endpoint never says this: it answers a missing or revoked authorization with HTTP 401, and the AI host authorizes again. |
-| `could not reach adbd on this device` | The adb elevation channel found no adbd it could use, and the fix is on the phone. Usually wireless debugging is off: Android turns it off on every reboot, when Wi-Fi drops and when the phone joins a different access point, so ask the owner to turn Developer options → Wireless debugging back on. If it is on, the agent does not have its current port: apps up to v0.14.0 do not start looking when 提权通道 is switched on while the agent runs, and stop trusting a port half an hour after finding it — ask the owner to tap 停用 and then 启用 on the app's home screen (updating the app fixes both for good). A port whose own failure reads `remote error: tls` or `TLS handshake with adbd` had adbd on it refusing the key: the owner has to pair again in the portal (Device settings → ADB pairing). |
+| `could not reach adbd on this device` | The adb elevation channel could not complete a usable connection, and the fix is on the phone. If every port says `connection refused`, ask the owner to turn on Developer options → Wireless debugging; Android turns it off on every reboot, when Wi-Fi drops and when the phone joins a different access point. If the app has no current port, ask the owner to tap 停用 and then 启用 so it discovers the port again. If a port says `adbd is running, but this connection was closed`, retry; if it keeps happening, pair the device again in the portal (Device settings → ADB pairing). A port whose own failure reads `remote error: tls` or `TLS handshake with adbd` likewise needs pairing again. |
+| `adbd is running, but this connection was closed` | TCP reached adbd but this connection ended during its handshake or read. Retry the command once; if it keeps happening, pair the device again in the portal (Device settings → ADB pairing). Wireless-debugging advice is not the fix for this failure. |
 | `TLS handshake with adbd` | adbd is running but does not accept wanctl's key (an app up to v0.14.0 prints `remote error: tls: …` after the port number instead). The pairing lapsed — Android revokes one that has not connected for 7 days unless Developer options → Disable adb authorization timeout is on — or the owner used Revoke USB debugging authorizations. Ask the owner to pair again in the portal (Device settings → ADB pairing); retrying will not help. |
 
 ## `wanctl shell`
@@ -1028,7 +1029,10 @@ wanctl_screenshot{"target":"home-pc"}
 
 Operate the device owner's Windows desktop or Android device (wanctl APK with
 the elevation channel on). Android needs working wireless debugging or root;
-its OpenCU engine is built into the app. Legacy actions remain Windows-only.
+its OpenCU engine is built into the app; call OpenCU's agent_desktop with
+action start first and work on that background display, because approving a
+request takes the phone's foreground and collides with an app driven on the
+main screen. Legacy actions remain Windows-only.
 
 OpenCU (preferred): call with discover=true and target first. If OpenCU is
 installed, call its discovered tools with tool and arguments and follow the

@@ -297,6 +297,80 @@ func TestADBProbeDoesNotRetryAFreshConnection(t *testing.T) {
 	}
 }
 
+func TestADBProbeDistinguishesEOFFromPortsThatRefuseTCP(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		ports      []int
+		dialErrors map[int]error
+		wantLink   string
+		want       []string
+		absent     []string
+	}{
+		{
+			name:       "handshake EOF",
+			ports:      []int{41031, 5555},
+			dialErrors: map[int]error{41031: io.EOF, 5555: errors.New("connection refused")},
+			wantLink:   LinkError,
+			want:       []string{"adbd is running", "connection was closed", "retry", "pair"},
+			absent:     []string{"turn on Wireless debugging"},
+		},
+		{
+			name:       "mixed refusal only",
+			ports:      []int{41031, 5555},
+			dialErrors: map[int]error{41031: errors.New("connection refused"), 5555: errors.New("connection refused")},
+			wantLink:   LinkNoPort,
+			want:       []string{"turn on Wireless debugging"},
+			absent:     []string{"adbd is running", "retry, and if it persists"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewADB(t.TempDir(), "wanctl@test")
+			a.ports = func() ([]int, string) { return tc.ports, "turn on Wireless debugging" }
+			a.dial = func(_ context.Context, addr string, _ *adb.Key) (shellConn, error) {
+				var port int
+				if _, err := fmt.Sscanf(addr, "127.0.0.1:%d", &port); err != nil {
+					t.Fatal(err)
+				}
+				return nil, tc.dialErrors[port]
+			}
+			st := a.Probe(context.Background())
+			if st.Available || st.Link != tc.wantLink {
+				t.Fatalf("status = %+v, want unavailable link %s", st, tc.wantLink)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(st.Reason, want) {
+					t.Errorf("reason = %q, want %q", st.Reason, want)
+				}
+			}
+			for _, absent := range tc.absent {
+				if strings.Contains(st.Reason, absent) {
+					t.Errorf("reason = %q, must not contain %q", st.Reason, absent)
+				}
+			}
+		})
+	}
+}
+
+func TestADBProbeClassifiesEOFWhileReadingID(t *testing.T) {
+	a := NewADB(t.TempDir(), "wanctl@test")
+	a.ports = func() ([]int, string) { return []int{41031}, "turn on Wireless debugging" }
+	a.dial = func(context.Context, string, *adb.Key) (shellConn, error) {
+		return &stubConn{err: io.ErrUnexpectedEOF}, nil
+	}
+	st := a.Probe(context.Background())
+	if st.Available || st.Link != LinkError {
+		t.Fatalf("status = %+v, want dropped connection", st)
+	}
+	for _, want := range []string{"adbd is running", "connection was closed", "reading `id`", "retry", "pair"} {
+		if !strings.Contains(st.Reason, want) {
+			t.Errorf("reason = %q, want %q", st.Reason, want)
+		}
+	}
+	if strings.Contains(st.Reason, "turn on Wireless debugging") {
+		t.Errorf("reason = %q, must not blame wireless debugging", st.Reason)
+	}
+}
+
 func TestPortFromState(t *testing.T) {
 	write := func(t *testing.T, v any) string {
 		t.Helper()
@@ -395,4 +469,52 @@ func TestFreshLeavesABusyChannelAlone(t *testing.T) {
 	if _, ok := NewManager(false, "off", a).Fresh(context.Background(), KindADB); ok {
 		t.Fatal("Fresh probed with elevation switched off")
 	}
+}
+
+// Turning wireless debugging off shows up first as an EOF on the open
+// connection. The redial is the truth about adbd: every port refuses, so the
+// owner has to be sent to the switch, not told that adbd is running.
+func TestADBEOFThenRefusedPortsSaysTurnOnWirelessDebugging(t *testing.T) {
+	refused := errors.New("connect: connection refused")
+	setup := func(t *testing.T) *ADB {
+		t.Helper()
+		a := NewADB(t.TempDir(), "wanctl@test")
+		a.ports = func() ([]int, string) { return []int{41031, 5555}, "turn on Wireless debugging" }
+		dialed := 0
+		a.dial = func(context.Context, string, *adb.Key) (shellConn, error) {
+			dialed++
+			if dialed == 1 {
+				return &stubConn{uid: "uid=2000(shell)"}, nil
+			}
+			return nil, refused
+		}
+		if st := a.Probe(context.Background()); !st.Available {
+			t.Fatalf("first probe = %+v", st)
+		}
+		a.conn.(*stubConn).err = io.ErrUnexpectedEOF
+		return a
+	}
+	check := func(t *testing.T, text string) {
+		t.Helper()
+		if !strings.Contains(text, "turn on Wireless debugging") {
+			t.Errorf("error = %q, want the wireless debugging hint", text)
+		}
+		if strings.Contains(text, adbDroppedMarker) {
+			t.Errorf("error = %q, must not claim adbd is running", text)
+		}
+	}
+	t.Run("probe", func(t *testing.T) {
+		st := setup(t).Probe(context.Background())
+		if st.Available || st.Link != LinkNoPort {
+			t.Fatalf("status = %+v, want link %s", st, LinkNoPort)
+		}
+		check(t, st.Reason)
+	})
+	t.Run("run", func(t *testing.T) {
+		_, err := setup(t).Run(context.Background(), "id", "", io.Discard)
+		if err == nil || linkOf(err) != LinkNoPort {
+			t.Fatalf("err = %v (link %s), want link %s", err, linkOf(err), LinkNoPort)
+		}
+		check(t, err.Error())
+	})
 }

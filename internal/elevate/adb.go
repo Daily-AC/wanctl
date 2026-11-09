@@ -60,6 +60,12 @@ const (
 	LinkError = "error"
 )
 
+// adbDroppedMarker is also a catalog marker: it describes the one case where
+// TCP reached adbd but the protocol connection ended before it could be used.
+// Keeping it distinct from LinkNoPort prevents the owner being sent to the
+// wireless-debugging switch when the daemon is demonstrably already there.
+const adbDroppedMarker = "adbd is running, but this connection was closed"
+
 // linkError is a connect failure that knows its Link state.
 type linkError struct {
 	link, msg string
@@ -201,6 +207,9 @@ func (a *ADB) probe(ctx context.Context) Status {
 	case err != nil && !adb.ErrNoExitCode(err):
 		detail := describeConn(conn)
 		a.reset()
+		if isEOFLike(err) {
+			return Status{Available: false, Link: LinkError, Reason: droppedReason(port, "reading `id`", err) + detail}
+		}
 		return Status{Available: false, Reason: fmt.Sprintf(
 			"connected to adbd on port %d but `id` failed: %v%s", port, err, detail)}
 	case code != 0 && !adb.ErrNoExitCode(err):
@@ -237,11 +246,22 @@ func (a *ADB) Run(ctx context.Context, command, cwd string, out io.Writer) (int,
 		// A dead connection is worth one transparent retry: wireless debugging
 		// drops the socket when the screen locks on some ROMs.
 		a.reset()
-		conn, _, _, derr := a.connect(ctx)
+		conn, port, _, derr := a.connect(ctx)
 		if derr != nil {
+			// The redial says what is true of adbd now. Wireless debugging being
+			// turned off shows up first as this EOF, and only the redial can tell
+			// the owner which switch to go to.
+			var link *linkError
+			if errors.As(derr, &link) {
+				return -1, derr
+			}
 			return -1, err
 		}
-		return conn.Shell(ctx, command, out)
+		code, err = conn.Shell(ctx, command, out)
+		if err != nil && !adb.ErrNoExitCode(err) && isEOFLike(err) {
+			return -1, &linkError{LinkError, droppedReason(port, "running the command", err)}
+		}
+		return code, err
 	}
 	return code, err
 }
@@ -273,6 +293,7 @@ func (a *ADB) connect(ctx context.Context) (conn shellConn, port int, reused boo
 	var last error
 	var failures []string
 	rejected := false
+	dropped := false
 	for _, p := range ports {
 		conn, err := dial(ctx, fmt.Sprintf("127.0.0.1:%d", p), key)
 		if err == nil {
@@ -291,6 +312,9 @@ func (a *ADB) connect(ctx context.Context) (conn shellConn, port int, reused boo
 			// already on.
 			rejected = true
 		}
+		if isEOFLike(err) {
+			dropped = true
+		}
 		// Every port's failure is kept. Reporting only the last one hid the
 		// real diagnosis behind the fallback port's timeout — the useful error
 		// came from the port that actually had adbd on it.
@@ -303,6 +327,9 @@ func (a *ADB) connect(ctx context.Context) (conn shellConn, port int, reused boo
 	reason := fmt.Sprintf("could not reach adbd on this device (%s)", strings.Join(failures, "; "))
 	if rejected {
 		return nil, 0, false, &linkError{LinkUnpaired, reason}
+	}
+	if dropped {
+		return nil, 0, false, &linkError{LinkError, reason + "; " + adbDroppedMarker + "; retry, and if it persists, pair the device again"}
 	}
 	return nil, 0, false, &linkError{LinkNoPort, reason + "; " + hint}
 }
@@ -340,4 +367,20 @@ func describeConn(c shellConn) string {
 		return ""
 	}
 	return fmt.Sprintf(" [device banner: %q; shell_v2=%v]", d.Banner(), d.HasFeature("shell_v2"))
+}
+
+func isEOFLike(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.HasSuffix(text, " eof") || strings.HasSuffix(text, ": eof") ||
+		strings.Contains(text, "unexpected eof")
+}
+
+func droppedReason(port int, phase string, err error) string {
+	return fmt.Sprintf("%s on port %d while %s (%v); retry, and if it persists, pair the device again", adbDroppedMarker, port, phase, err)
 }
