@@ -21,6 +21,9 @@ wanctl_targets() {
   # not gone away: 32-bit Windows installs, armv6/v7 single-board computers and
   # NAS boxes, MIPS routers. macOS has no 32-bit target — Go dropped darwin/386
   # in 1.15, and Catalina stopped running 32-bit binaries a year earlier.
+  # windows amd64.win7 is not a GOARCH: it is windows/amd64 again, linked by a
+  # toolchain that still targets Windows 7 and 8.x (see wanctl_go_build and
+  # internal/release.Windows7Arch). Only x64 gets one.
   cat <<'EOF'
 linux amd64
 linux arm64
@@ -31,6 +34,7 @@ linux mipsle
 darwin amd64
 darwin arm64
 windows amd64
+windows amd64.win7
 windows 386
 windows arm64
 android arm64
@@ -136,6 +140,13 @@ wanctl_android_cc() {
 #                  softfloat binary runs on the ones that do.
 #   android/arm    GOARM=7, the only ARM Android supports.
 #   android/!arm64 cgo through the NDK (see wanctl_android_cc).
+#   windows/amd64.win7  GOARCH=amd64 with the go-legacy-win7 toolchain, the
+#                  one artifact not built by the go on PATH: official Go links
+#                  Windows binaries for 10.0, which Windows 7 and 8.x refuse to
+#                  load. GOTOOLCHAIN=local keeps go.mod from swapping it for an
+#                  official release, and GOROOT is dropped so a GOROOT exported
+#                  for the other go (setup-go does) cannot hand it the wrong
+#                  standard library.
 # The signing keys are scrubbed from the build environment: a binary must
 # never be able to observe the key that will sign it.
 wanctl_go_build() {
@@ -151,6 +162,13 @@ wanctl_go_build() {
     linux/mips | linux/mipsle) gomips=softfloat ;;
     android/arm) goarm=7; cgo=1 ;;
     android/386 | android/amd64) cgo=1 ;;
+    windows/amd64.win7)
+      legacy_go=$(./scripts/go-legacy-win7.sh) || return 1
+      env -u WANCTL_RELEASE_SIGNING_KEY -u WANCTL_RELEASE_RSA_KEY -u GOROOT \
+        CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOTOOLCHAIN=local \
+        "$legacy_go" build -trimpath -ldflags "$ldflags" -o "$out" .
+      return
+      ;;
   esac
   if [ "$cgo" = 1 ]; then
     cc=$(wanctl_android_cc "$arch") || return 1
