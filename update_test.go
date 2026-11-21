@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,6 +100,33 @@ func TestDownloadSignedUpdateRejectsTamperedArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
+		t.Fatalf("failed update left files behind: %v", entries)
+	}
+}
+
+// A Windows 7 machine asking a release that only has the official
+// windows/amd64 build (every release before the win7 one existed) must come
+// away with nothing: that build would install and never start again. The
+// server here would happily serve it if asked.
+func TestWin7UpdateRefusesThePlainWindowsBuild(t *testing.T) {
+	var fetched []string
+	srv := signedUpdateServer(t, []byte("windows 10 binary"), "windows", "amd64", "v2.0.0", func(path string, body []byte) []byte {
+		fetched = append(fetched, path)
+		return body
+	})
+	defer srv.Close()
+	dir := t.TempDir()
+	arch := wanrelease.ArtifactArch("windows", "amd64", 6)
+	_, _, err := downloadSignedUpdate(t.Context(), srv.URL+"/dl", dir, "windows", arch, "v1.0.0")
+	if err == nil || !strings.Contains(err.Error(), "no artifact for windows/amd64.win7") {
+		t.Fatalf("err = %v", err)
+	}
+	for _, path := range fetched {
+		if path == "/dl/wanctl-windows-amd64.exe" {
+			t.Fatal("the plain windows/amd64 build was downloaded for a Windows 7 machine")
+		}
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Fatalf("failed update left files behind: %v", entries)
 	}
 }

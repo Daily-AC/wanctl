@@ -24,7 +24,8 @@ func cmdSupervise(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	// The task runs this under a headless console, so anything printed to it
+	// The task runs this under a console nobody can see (conhost --headless, or
+	// a hidden PowerShell window before Windows 10), so anything printed to it
 	// is lost. Write where `wanctl start` and the launchd agent do instead.
 	logPath, err := config.LogPath()
 	if err != nil {

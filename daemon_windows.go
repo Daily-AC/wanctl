@@ -103,8 +103,9 @@ func enableDebugPrivilege() {
 }
 
 // exitWithParent cancels the supervisor when the process that started it exits.
-// Under the logon task that parent is the headless conhost, and ending the task
-// (`schtasks /end`, part of `service uninstall`) terminates only that conhost:
+// Under the logon task that parent is the task's launcher (see winTaskAction):
+// conhost on Windows 10 and later, powershell.exe on 7 and 8.x. Ending the task
+// (`schtasks /end`, part of `service uninstall`) terminates only that launcher:
 // without this the supervisor outlives it and keeps restarting the agent.
 func exitWithParent(cancel context.CancelFunc) {
 	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(os.Getppid()))

@@ -85,7 +85,7 @@ func configurePortalUpdate(a *agent.Agent, version string, restart func()) *port
 				return "", err
 			}
 			got, err := fetchPortalUpdate(target, bases, func(base string) (updateFetch, error) {
-				path, v, err := downloadSignedVersion(ctx, base, filepath.Dir(self), runtime.GOOS, runtime.GOARCH, current, target)
+				path, v, err := downloadSignedVersion(ctx, base, filepath.Dir(self), runtime.GOOS, release.HostArtifactArch(), current, target)
 				return updateFetch{path: path, version: v}, err
 			})
 			if err != nil {

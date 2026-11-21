@@ -121,3 +121,48 @@ stable releases only. A beta client is always tested against it. So:
 Build locally; nothing is published. The version stays `dev`, so no update
 source ever offers the build to anyone and auto-update never replaces it.
 `wanctl update` on a `dev` build installs the current stable.
+
+## The Windows 7 build and its toolchain pin
+
+Every release carries one artifact the Go on `PATH` does not build:
+`wanctl-windows-amd64.win7.exe`, listed in the manifest as `windows/amd64.win7`
+(see `internal/release.Windows7Arch`). Official Go dropped Windows 7 and 8.x in
+1.21 and stamps every Windows binary for 10.0, which those systems refuse to
+load. That one target is built by `wanctl_go_build` in
+`scripts/release-targets.sh` with
+[go-legacy-win7](https://github.com/thongtech/go-legacy-win7), upstream Go with
+Windows 7 support restored, under `GOTOOLCHAIN=local`; every other target keeps
+the official toolchain.
+
+`scripts/go-legacy-win7.sh` pins the toolchain's version and the SHA-256 of its
+archive for each build host it supports (darwin and linux, amd64 and arm64;
+any other host is refused). It checks the download against the pin before
+unpacking it and caches the result under `$WANCTL_GO_LEGACY_WIN7_CACHE`, by
+default `~/Library/Caches/wanctl/go-legacy-win7` on macOS and
+`${XDG_CACHE_HOME:-~/.cache}/wanctl/go-legacy-win7` on Linux. CI does not cache
+that directory, so the cross-compile job and the release job each download it
+(about 60 MB).
+
+The pin moves with the Go version in `go.mod`. Because of `GOTOOLCHAIN=local`,
+a `go.mod` asking for a newer Go than the pinned toolchain fails the win7 build
+(and `scripts/cross-compile.sh` in CI) rather than building it with something
+else. The win7 binary also gets its standard library from the pinned
+toolchain, so a Go security fix reaches it only when the pin moves; the
+release workflow's govulncheck runs on the official toolchain and does not see
+it. To bump:
+
+1. Find the go-legacy-win7 release for the new Go version (tags look like
+   `v1.26.11-1`). If there is none yet, the Go bump waits for it: a release
+   cannot be validated without the win7 artifact.
+2. In `scripts/go-legacy-win7.sh`, set `VERSION` and the four SHA-256 values
+   from that release's asset digests:
+   ```sh
+   gh api repos/thongtech/go-legacy-win7/releases/tags/v1.26.11-1 \
+     --jq '.assets[] | select(.name | endswith(".tar.gz")) | [.name, .digest] | @tsv'
+   ```
+3. Bump `go` in `go.mod` in the same pull request, run `scripts/cross-compile.sh OUT`, and check the
+   win7 binary: `go version OUT/wanctl-windows-amd64.win7.exe` names the
+   pinned version, and its PE header still says 6.1:
+   ```sh
+   python3 -c 'import struct,sys; d=open(sys.argv[1],"rb").read(); o=struct.unpack_from("<I",d,0x3c)[0]+24; print("OS %d.%d subsystem %d.%d" % struct.unpack_from("<HHxxxxHH",d,o+40))' OUT/wanctl-windows-amd64.win7.exe
+   ```

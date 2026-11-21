@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -160,6 +161,21 @@ for arch in arm64 arm 386 amd64; do
  printf '%s APK\n' "$arch" > "build/android/wanctl-android-$arch.apk"
 done
 `), 0755)
+	// The Windows 7 toolchain is downloaded in a real build. Its stand-in marks
+	// what it built, so the test can tell which compiler made which file, and
+	// refuses the environment the matrix promises to scrub.
+	write("scripts/go-legacy-win7.sh", []byte("#!/bin/sh\necho \"$(cd \"$(dirname \"$0\")/..\" && pwd)/bin/go-legacy\"\n"), 0755)
+	write("bin/go-legacy", []byte(`#!/bin/sh
+set -eu
+[ "$1" = build ] || exit 1
+if [ -n "${GOROOT+set}${WANCTL_RELEASE_SIGNING_KEY+set}${WANCTL_RELEASE_RSA_KEY+set}" ] || [ "$GOTOOLCHAIN" != local ]; then
+ echo "legacy go: GOROOT or a signing key leaked in, or GOTOOLCHAIN is not local" >&2
+ exit 1
+fi
+while [ "$1" != -o ]; do shift; done
+printf 'legacy %s/%s test binary\n' "$GOOS" "$GOARCH" > "$2"
+`), 0755)
+	t.Setenv("GOROOT", filepath.Join(root, "some-other-go"))
 	// Stable's NDK lookup still runs even though the compiler is a test stub.
 	host := "linux-x86_64"
 	if runtime.GOOS == "darwin" {
@@ -215,10 +231,28 @@ done
 	if _, err := os.Stat(filepath.Join(root, "apk-built")); !os.IsNotExist(err) {
 		t.Fatal("beta invoked APK builder")
 	}
+	win7 := false
 	for _, a := range manifest().Artifacts {
 		if a.OS == "android" || strings.HasSuffix(a.Name, ".apk") {
 			t.Fatalf("beta artifact: %+v", a)
 		}
+		body, err := os.ReadFile(filepath.Join(root, "release", a.Name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Exactly one artifact comes from the legacy toolchain.
+		legacy := strings.HasPrefix(string(body), "legacy ")
+		if a.Arch == wanrelease.Windows7Arch {
+			win7 = true
+			if a.OS != "windows" || a.Name != "wanctl-windows-amd64.win7.exe" || string(body) != "legacy windows/amd64 test binary\n" {
+				t.Fatalf("win7 artifact %+v holds %q", a, body)
+			}
+		} else if legacy {
+			t.Fatalf("%s was built with the legacy toolchain", a.Name)
+		}
+	}
+	if !win7 {
+		t.Fatal("beta manifest has no windows/amd64.win7 artifact")
 	}
 	must("validate-release.sh", "v1.2.3-beta.1", "release")
 	write("release/wanctl-android-arm64.apk", []byte("unexpected APK"), 0644)
@@ -297,5 +331,97 @@ func TestAPKBuilderRejectsBeta(t *testing.T) {
 	out, err := exec.Command("sh", "scripts/build-apk.sh", "v1.2.3-beta.1").CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "beta releases do not ship APKs") {
 		t.Fatalf("%v: %s", err, out)
+	}
+}
+
+// go-legacy-win7.sh downloads a compiler that then builds a signed release, so
+// the archive must match its pin before a single file of it is unpacked, and a
+// build host with no pin gets no toolchain at all. uname and curl are stubs:
+// the archive offered here is a well-formed toolchain that is not the pinned one.
+func TestLegacyWin7ToolchainIsVerifiedBeforeUse(t *testing.T) {
+	script, err := filepath.Abs("scripts/go-legacy-win7.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := regexp.MustCompile(`linux_amd64\) sha256=([0-9a-f]{64})`).FindSubmatch(src)
+	if pin == nil {
+		t.Fatal("no linux_amd64 pin in go-legacy-win7.sh")
+	}
+	realTar, err := exec.LookPath("tar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stubs := t.TempDir()
+	for name, body := range map[string]string{
+		"uname": "#!/bin/sh\ncase \"$1\" in -s) echo \"$FAKE_UNAME_S\" ;; -m) echo \"$FAKE_UNAME_M\" ;; esac\n",
+		"curl":  "#!/bin/sh\necho fetched >> \"$FAKE_LOG\"\nwhile [ $# -gt 0 ]; do [ \"$1\" = --output ] && out=$2; shift; done\ncp \"$FAKE_CURL_BODY\" \"$out\"\n",
+		"tar":   "#!/bin/sh\necho unpacked >> \"$FAKE_LOG\"\nexec '" + realTar + "' \"$@\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(stubs, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A real tar.gz holding go-legacy-win7/bin/go, built with the system tar.
+	tree := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tree, "go-legacy-win7", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "go-legacy-win7", "bin", "go"), []byte("#!/bin/sh\necho impostor\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := filepath.Join(t.TempDir(), "archive.tar.gz")
+	if out, err := exec.Command("tar", "-czf", body, "-C", tree, "go-legacy-win7").CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v %s", err, out)
+	}
+	// run reports how many times the script downloaded and unpacked.
+	run := func(cache, unameS, unameM string) (string, int, int, error) {
+		t.Helper()
+		log := filepath.Join(t.TempDir(), "calls.log")
+		cmd := exec.Command("sh", script)
+		cmd.Env = append(os.Environ(),
+			"PATH="+stubs+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"WANCTL_GO_LEGACY_WIN7_CACHE="+cache, "FAKE_UNAME_S="+unameS, "FAKE_UNAME_M="+unameM,
+			"FAKE_LOG="+log, "FAKE_CURL_BODY="+body)
+		out, err := cmd.CombinedOutput()
+		calls, _ := os.ReadFile(log)
+		return string(out), strings.Count(string(calls), "fetched"), strings.Count(string(calls), "unpacked"), err
+	}
+
+	cache := t.TempDir()
+	if out, fetched, _, err := run(cache, "FreeBSD", "amd64"); err == nil || fetched != 0 || !strings.Contains(out, "no pinned archive for build host FreeBSD_amd64") {
+		t.Fatalf("unknown host: err=%v fetched=%d %s", err, fetched, out)
+	}
+	if out, fetched, unpacked, err := run(cache, "Linux", "x86_64"); err == nil || fetched != 1 || unpacked != 0 || !strings.Contains(out, "does not match the pinned") {
+		t.Fatalf("wrong archive: err=%v fetched=%d unpacked=%d %s", err, fetched, unpacked, out)
+	}
+	if entries, _ := os.ReadDir(cache); len(entries) != 0 {
+		t.Fatalf("a rejected archive left %d entries in the cache", len(entries))
+	}
+
+	// A tree recorded against today's pin is used as it is, with no download;
+	// one recorded against another pin is fetched again.
+	dir := filepath.Join(cache, "go-legacy-win7-1.26.11-1.linux_amd64")
+	gobin := filepath.Join(dir, "go-legacy-win7", "bin", "go")
+	if err := os.MkdirAll(filepath.Dir(gobin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gobin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".sha256"), append(pin[1], '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, fetched, _, err := run(cache, "Linux", "x86_64"); err != nil || fetched != 0 || strings.TrimSpace(out) != gobin {
+		t.Fatalf("cached toolchain: err=%v fetched=%d %s", err, fetched, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".sha256"), []byte(strings.Repeat("0", 64)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, fetched, unpacked, err := run(cache, "Linux", "x86_64"); err == nil || fetched != 1 || unpacked != 0 || !strings.Contains(out, "does not match the pinned") {
+		t.Fatalf("stale cache: err=%v fetched=%d unpacked=%d %s", err, fetched, unpacked, out)
 	}
 }

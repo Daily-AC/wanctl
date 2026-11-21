@@ -92,7 +92,7 @@ func cmdUpdate(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	got, err := fetchUpdateVersion(ctx, bases, dir, runtime.GOOS, runtime.GOARCH, buildVersion, requested)
+	got, err := fetchUpdateVersion(ctx, bases, dir, runtime.GOOS, wanrelease.HostArtifactArch(), buildVersion, requested)
 	if err != nil {
 		return err
 	}
@@ -278,7 +278,7 @@ func fetchAndroidAPK(ctx context.Context, dir string) error {
 		fmt.Fprintf(os.Stderr, "正在验证 %s 的签名发布清单 …\n", base)
 		// The APK that carries this binary's own ABI: an arm64 app must not be
 		// handed the armeabi-v7a package, even though the device would install it.
-		path, version, err := downloadSignedUpdate(ctx, base, dir, "android", wanrelease.APKArch(runtime.GOARCH), buildVersion)
+		path, version, err := downloadSignedUpdate(ctx, base, dir, "android", wanrelease.APKArch(wanrelease.HostArtifactArch()), buildVersion)
 		return updateFetch{path: path, version: version}, err
 	})
 	if err != nil {
@@ -464,7 +464,7 @@ func restartManagedAgent(self string, pid int, expectedVersion ...string) error 
 	if !canTerminatePID(pid) {
 		return fmt.Errorf(`新二进制已装好,但运行中的 agent (pid %d) 属于另一个账户(由 supervisor 托管),当前用户无权终止它 —— 旧版本仍在服务。
 请以管理员/root 重启那个服务,例如:
-  Windows 计划任务  Stop-ScheduledTask -TaskName WanctlAgent; Start-ScheduledTask -TaskName WanctlAgent
+  Windows 计划任务  schtasks /end /tn WanctlAgent，再 schtasks /run /tn WanctlAgent
   systemd           sudo systemctl restart <unit>
   launchd           sudo launchctl kickstart -k system/<label>`, pid)
 	}

@@ -11,7 +11,7 @@ wanctl start
 
 No OpenSSL needed — the installer verifies the release signature with
 PowerShell's own cryptography interfaces, and writes nothing until it checks
-out. Every Windows since 7 ships a PowerShell new enough for this.
+out.
 
 Signing in opens the portal login in a browser (GitHub account) and gives you a
 one-time code; paste it back into the terminal. After that:
@@ -24,6 +24,28 @@ This registers a scheduled task that starts when you log in, runs as you, and
 keeps running after you close the terminal window (the relay address goes straight into the task, so a
 reboot does not depend on environment variables). `wanctl status` shows how it
 is doing, `wanctl stop` stops it.
+
+## Which Windows versions are supported
+
+- **Windows 10 and 11**: use the commands above; the built-in PowerShell 5.1
+  is enough. There are x64, ARM64 and 32-bit builds, and the installer picks
+  the right one.
+- **Windows 7 and 8.x, 64-bit (x64) only**: programs built by the official Go
+  toolchain do not start at all there, so there is a separate build,
+  `wanctl-windows-amd64.win7.exe`. The installer picks it when the Windows
+  version is below 10, and from then on `wanctl update` and automatic updates
+  only ever install that build, never the one that cannot start. The one-line
+  installer needs PowerShell 5.1 (install WMF 5.1) or PowerShell 7.2: Windows 7
+  ships PowerShell 2.0, which has no `irm`, so the first line above fails
+  there; without upgrading PowerShell you can download that file from GitHub
+  Releases directly. On these systems `wanctl service install` starts the
+  agent through the built-in Windows PowerShell in a hidden window (2.0 on
+  Windows 7 is enough; WMF 5.1 is not needed for this), so a console window
+  may flash briefly at logon. Desktop control (the legacy `wanctl act`
+  actions) needs Windows 10 2004 or newer and reports an error on these
+  systems.
+- **32-bit or ARM Windows 7 and 8.x**: no build runs there; the installer
+  stops with an error instead of downloading one.
 
 ## About trust
 
