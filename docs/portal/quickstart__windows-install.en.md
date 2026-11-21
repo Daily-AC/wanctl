@@ -38,8 +38,12 @@ is doing, `wanctl stop` stops it.
   installer needs PowerShell 5.1 (install WMF 5.1) or PowerShell 7.2: Windows 7
   ships PowerShell 2.0, which has no `irm`, so the first line above fails
   there; without upgrading PowerShell you can download that file from GitHub
-  Releases directly. Desktop control (the legacy `wanctl act` actions) needs Windows 10
-  2004 or newer and reports an error on these systems.
+  Releases directly. On these systems `wanctl service install` starts the
+  agent through the built-in Windows PowerShell in a hidden window (2.0 on
+  Windows 7 is enough; WMF 5.1 is not needed for this), so a console window
+  may flash briefly at logon. Desktop control (the legacy `wanctl act`
+  actions) needs Windows 10 2004 or newer and reports an error on these
+  systems.
 - **32-bit or ARM Windows 7 and 8.x**: no build runs there; the installer
   stops with an error instead of downloading one.
 

@@ -19,7 +19,7 @@ wanctl service install
 ## 支持哪些 Windows
 
 - **Windows 10 和 11**：照上面的命令装即可，系统自带的 PowerShell 5.1 就够用。x64、ARM64 和 32 位都有对应的版本，安装器自己挑。
-- **Windows 7 和 8.x，仅限 64 位（x64）**：官方 Go 编出来的程序在这些系统上根本起不来，所以有一个单独的版本 `wanctl-windows-amd64.win7.exe`。安装器看到系统版本低于 10 就装它，之后 `wanctl update` 和自动更新也只装这个版本，不会换成起不来的那个。一行安装需要 PowerShell 5.1（装 WMF 5.1）或 PowerShell 7.2：Windows 7 自带的是 PowerShell 2.0，没有 `irm`，上面第一行会直接报错；不想升级 PowerShell 的话，也可以从 GitHub Releases 直接下载这个文件。桌面操作（`wanctl act` 的旧版动作）要求 Windows 10 2004 以上，在这些系统上会报错。
+- **Windows 7 和 8.x，仅限 64 位（x64）**：官方 Go 编出来的程序在这些系统上根本起不来，所以有一个单独的版本 `wanctl-windows-amd64.win7.exe`。安装器看到系统版本低于 10 就装它，之后 `wanctl update` 和自动更新也只装这个版本，不会换成起不来的那个。一行安装需要 PowerShell 5.1（装 WMF 5.1）或 PowerShell 7.2：Windows 7 自带的是 PowerShell 2.0，没有 `irm`，上面第一行会直接报错；不想升级 PowerShell 的话，也可以从 GitHub Releases 直接下载这个文件。`wanctl service install` 在这些系统上改用系统自带的 Windows PowerShell（Windows 7 上是 2.0，不需要装 WMF 5.1）在隐藏窗口里拉起 agent，登录时可能会闪一下控制台窗口。桌面操作（`wanctl act` 的旧版动作）要求 Windows 10 2004 以上，在这些系统上会报错。
 - **32 位或 ARM 的 Windows 7 和 8.x**：没有能在上面运行的版本，安装器会报错退出，不会下载。
 
 ## 关于信任
