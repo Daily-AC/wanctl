@@ -43,8 +43,9 @@ try {
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 }
 
-# Verification runs on RSACryptoServiceProvider, which is present in the
-# PowerShell 5.1 every Windows ships with. The previous Ed25519 signature had no
+# Verification runs on RSACryptoServiceProvider, which is present in Windows
+# PowerShell 5.1 (built into Windows 10 and later, the WMF 5.1 update on 7 and
+# 8.x) and in PowerShell 7. The previous Ed25519 signature had no
 # native verifier here at all and required installing OpenSSL first — a
 # multi-minute download from a slow origin, when it did not simply time out.
 function Test-ReleaseSignature([string]$manifestPath, [string]$signaturePath) {
@@ -62,7 +63,7 @@ function Test-ReleaseSignature([string]$manifestPath, [string]$signaturePath) {
   }
 }
 
-# Which of the three Windows builds this machine runs. The OS word size comes
+# Which of the three Windows architectures this machine runs. The OS word size comes
 # first because it decides what can execute at all: a 32-bit Windows on a 64-bit
 # CPU can only run the 386 build. On a 64-bit OS the CPU says which 64-bit build:
 # Win32_Processor.Architecture is 12 for ARM64 and 9 for x64, and unlike
@@ -85,6 +86,22 @@ function Get-WindowsGoArch {
     '^x86$' { return '386' }
   }
   throw "unsupported Windows architecture: cpu=$cpu env=$native (wanctl ships amd64, 386 and arm64)"
+}
+
+# Which build of that architecture can start here. Go stopped supporting
+# Windows 7 and 8.x (major version 6) in 1.21, and the loader there refuses
+# its binaries outright. x64 has a separate build, amd64.win7, made with a
+# toolchain that still targets them; 32-bit and ARM have none, so stop here
+# rather than install a binary that cannot start. A release from before that
+# build existed has no amd64.win7 entry and fails below with no fallback.
+# [Environment]::OSVersion can understate the version under the compatibility
+# shim, never overstate it, so the worst it does is pick amd64.win7 on a newer
+# Windows, where that build runs too.
+function Get-WindowsArtifactArch([string]$goarch) {
+  $os = [Environment]::OSVersion.Version
+  if ($os.Major -ge 10) { return $goarch }
+  if ($goarch -eq 'amd64') { return 'amd64.win7' }
+  throw "Windows $($os.Major).$($os.Minor) is supported only on 64-bit x86 (x64); there is no $goarch build of wanctl that starts below Windows 10"
 }
 
 function Receive-SizedFile([string]$uri, [string]$path, [int64]$maxBytes) {
@@ -146,7 +163,7 @@ try {
       throw "refusing release $($manifest.version): installed version is $currentText"
     }
   }
-  $arch = Get-WindowsGoArch
+  $arch = Get-WindowsArtifactArch (Get-WindowsGoArch)
   $artifact = @($manifest.artifacts | Where-Object { $_.os -eq 'windows' -and $_.arch -eq $arch })
   if ($artifact.Count -ne 1 -or $artifact[0].name -ne "wanctl-windows-$arch.exe") { throw "signed manifest has no unique windows/$arch artifact" }
   if ([int64]$artifact[0].size -le 0 -or [int64]$artifact[0].size -gt 67108864) { throw 'signed artifact size is invalid' }
