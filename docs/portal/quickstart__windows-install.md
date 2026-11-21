@@ -6,7 +6,7 @@ wanctl config set relay=https://relay.example.com portal=https://portal.example.
 wanctl start
 ```
 
-不需要装 OpenSSL——安装器用 PowerShell 自带的加密接口验证发布签名，验过了才落盘。Windows 7 之后的每个版本都自带够用的 PowerShell。
+不需要装 OpenSSL——安装器用 PowerShell 自带的加密接口验证发布签名，验过了才落盘。
 
 登录时浏览器会弹门户登录（GitHub 账号）并给一个一次性 code，贴回终端回车。之后：
 
@@ -15,6 +15,12 @@ wanctl service install
 ```
 
 这会注册一个登录时自启的计划任务，以你自己的身份运行，关掉终端窗口它也继续跑（relay 地址会直接写进计划任务，重启后不依赖环境变量）。`wanctl status` 看状态、`wanctl stop` 停。
+
+## 支持哪些 Windows
+
+- **Windows 10 和 11**：照上面的命令装即可，系统自带的 PowerShell 5.1 就够用。x64、ARM64 和 32 位都有对应的版本，安装器自己挑。
+- **Windows 7 和 8.x，仅限 64 位（x64）**：官方 Go 编出来的程序在这些系统上根本起不来，所以有一个单独的版本 `wanctl-windows-amd64.win7.exe`。安装器看到系统版本低于 10 就装它，之后 `wanctl update` 和自动更新也只装这个版本，不会换成起不来的那个。一行安装需要 PowerShell 5.1（装 WMF 5.1）或 PowerShell 7.2：Windows 7 自带的是 PowerShell 2.0，没有 `irm`，上面第一行会直接报错；不想升级 PowerShell 的话，也可以从 GitHub Releases 直接下载这个文件。桌面操作（`wanctl act` 的旧版动作）要求 Windows 10 2004 以上，在这些系统上会报错。
+- **32 位或 ARM 的 Windows 7 和 8.x**：没有能在上面运行的版本，安装器会报错退出，不会下载。
 
 ## 关于信任
 

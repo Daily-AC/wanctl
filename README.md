@@ -49,7 +49,7 @@ matching one, and `wanctl update` does the same from inside the binary.
 |---|---|---|
 | Linux | amd64, arm64 | 386, arm (armv6/v7), mips, mipsle (softfloat, routers) |
 | macOS | amd64, arm64 (Apple silicon) | — (macOS has run no 32-bit code since Catalina) |
-| Windows | amd64, arm64 | 386 |
+| Windows | amd64, arm64 (Windows 10+); amd64.win7 (Windows 7 and 8.x) | 386 (Windows 10+) |
 | Android | arm64, amd64 — binary + APK each | arm (armeabi-v7a), 386 — binary + APK each |
 
 The list lives in `scripts/release-targets.sh`, which the release build, the
