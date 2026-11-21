@@ -240,7 +240,7 @@ func (tu *testUpdater) binary(t *testing.T) string {
 // exec: a signed release the device does not have becomes the file on disk, and
 // the agent is asked to stop so the new image can take over.
 func TestAutoUpdaterInstallsAndHandsOver(t *testing.T) {
-	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, runtime.GOARCH, "v2.0.0", nil)
+	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, wanrelease.HostArtifactArch(), "v2.0.0", nil)
 	defer srv.Close()
 	tu := newTestUpdater(t, srv.URL+"/dl", "v1.0.0", no0)
 
@@ -275,7 +275,7 @@ func TestAutoUpdaterInstallsAndHandsOver(t *testing.T) {
 // under it — but it must not be stranded on the old build either, so the very
 // next check once it goes idle installs.
 func TestAutoUpdaterWaitsForIdle(t *testing.T) {
-	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, runtime.GOARCH, "v2.0.0", nil)
+	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, wanrelease.HostArtifactArch(), "v2.0.0", nil)
 	defer srv.Close()
 	var busy atomic.Bool
 	busy.Store(true)
@@ -313,7 +313,7 @@ func TestAutoUpdaterWaitsForIdle(t *testing.T) {
 // agent without a restart — and nothing is logged about a device that was
 // asked to stay where it is.
 func TestAutoUpdaterObeysTheSetting(t *testing.T) {
-	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, runtime.GOARCH, "v2.0.0", nil)
+	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, wanrelease.HostArtifactArch(), "v2.0.0", nil)
 	defer srv.Close()
 	tu := newTestUpdater(t, srv.URL+"/dl", "v1.0.0", no0)
 	t.Setenv("WANCTL_AUTO_UPDATE", "off")
@@ -341,7 +341,7 @@ func TestAutoUpdaterObeysTheSetting(t *testing.T) {
 // /usr/local/bin: the daemon cannot write there and must never try sudo. It
 // says so once for the version it cannot install, not every six hours forever.
 func TestAutoUpdaterWarnsOncePerVersionWhenUnwritable(t *testing.T) {
-	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, runtime.GOARCH, "v2.0.0", nil)
+	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, wanrelease.HostArtifactArch(), "v2.0.0", nil)
 	defer srv.Close()
 	tu := newTestUpdater(t, srv.URL+"/dl", "v1.0.0", no0)
 	tu.probe.writable = no1
@@ -405,7 +405,7 @@ func TestAutoUpdaterLogsRepeatedFailureOnce(t *testing.T) {
 // The loop itself: it waits the first delay before the first check, and stops
 // on its own once the binary has been handed over.
 func TestAutoUpdateLoopStopsAfterHandOver(t *testing.T) {
-	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, runtime.GOARCH, "v2.0.0", nil)
+	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, wanrelease.HostArtifactArch(), "v2.0.0", nil)
 	defer srv.Close()
 	tu := newTestUpdater(t, srv.URL+"/dl", "v1.0.0", no0)
 	tu.first = autoUpdateFirstDelay
@@ -467,7 +467,7 @@ func TestUpdateSourceFallsBackToTheMirror(t *testing.T) {
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 	}))
 	defer primary.Close()
-	mirror := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, runtime.GOARCH, "v2.0.0", nil)
+	mirror := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, wanrelease.HostArtifactArch(), "v2.0.0", nil)
 	defer mirror.Close()
 
 	tu := newTestUpdater(t, primary.URL+"/dl", "v1.0.0", no0)
@@ -494,7 +494,7 @@ func TestUpToDatePrimaryDoesNotConsultTheMirror(t *testing.T) {
 		http.Error(w, "should not be reached", http.StatusInternalServerError)
 	}))
 	defer mirror.Close()
-	primary := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, runtime.GOARCH, "v1.0.0", nil)
+	primary := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, wanrelease.HostArtifactArch(), "v1.0.0", nil)
 	defer primary.Close()
 
 	tu := newTestUpdater(t, primary.URL+"/dl", "v1.0.0", no0)
@@ -521,7 +521,7 @@ func TestUpToDatePrimaryDoesNotConsultTheMirror(t *testing.T) {
 // hand-over: enrollment writes a token there, and starting an agent writes a
 // pid file and a lock.
 func TestAutoUpdateNeverEnrollsTheHost(t *testing.T) {
-	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, runtime.GOARCH, "v2.0.0", nil)
+	srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, wanrelease.HostArtifactArch(), "v2.0.0", nil)
 	defer srv.Close()
 	tu := newTestUpdater(t, srv.URL+"/dl", "v1.0.0", no0)
 	cfg := os.Getenv("WANCTL_CONFIG_DIR")
@@ -554,7 +554,7 @@ func TestAutoUpdaterReleaseChannels(t *testing.T) {
 		{"beta rehearsal", "v0.26.0-beta.1", "v0.26.0-beta.2", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, runtime.GOARCH, tc.offered, nil)
+			srv := signedUpdateServer(t, []byte("new binary"), runtime.GOOS, wanrelease.HostArtifactArch(), tc.offered, nil)
 			defer srv.Close()
 			tu := newTestUpdater(t, srv.URL+"/dl", tc.current, no0)
 			decision := decideAutoUpdate(t.Context(), tu.probe)

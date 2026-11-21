@@ -92,7 +92,7 @@ func cmdUpdate(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	got, err := fetchUpdateVersion(ctx, bases, dir, runtime.GOOS, runtime.GOARCH, buildVersion, requested)
+	got, err := fetchUpdateVersion(ctx, bases, dir, runtime.GOOS, wanrelease.HostArtifactArch(), buildVersion, requested)
 	if err != nil {
 		return err
 	}
@@ -278,7 +278,7 @@ func fetchAndroidAPK(ctx context.Context, dir string) error {
 		fmt.Fprintf(os.Stderr, "正在验证 %s 的签名发布清单 …\n", base)
 		// The APK that carries this binary's own ABI: an arm64 app must not be
 		// handed the armeabi-v7a package, even though the device would install it.
-		path, version, err := downloadSignedUpdate(ctx, base, dir, "android", wanrelease.APKArch(runtime.GOARCH), buildVersion)
+		path, version, err := downloadSignedUpdate(ctx, base, dir, "android", wanrelease.APKArch(wanrelease.HostArtifactArch()), buildVersion)
 		return updateFetch{path: path, version: version}, err
 	})
 	if err != nil {

@@ -26,10 +26,10 @@ import (
 func TestInvariant3AutoUpdateRace(t *testing.T) {
 	for _, path := range []string{"auto", "CLI"} {
 		t.Run(path, func(t *testing.T) {
-			newer := signedUpdateServer(t, []byte("v3.0.0"), runtime.GOOS, runtime.GOARCH, "v3.0.0", nil)
+			newer := signedUpdateServer(t, []byte("v3.0.0"), runtime.GOOS, release.HostArtifactArch(), "v3.0.0", nil)
 			defer newer.Close()
 			newerKey := release.TrustedPublicKeys
-			older := signedUpdateServer(t, []byte("v2.0.0"), runtime.GOOS, runtime.GOARCH, "v2.0.0", nil)
+			older := signedUpdateServer(t, []byte("v2.0.0"), runtime.GOOS, release.HostArtifactArch(), "v2.0.0", nil)
 			defer older.Close()
 			release.TrustedPublicKeys += "," + newerKey
 			a, self, conn := raceInstallAgent(t)

@@ -112,7 +112,7 @@ func TestExplicitUpdateCLI(t *testing.T) {
 		t.Skip("builds a binary")
 	}
 	const current = "v0.27.0"
-	srv := signedUpdateServer(t, []byte("installed beta"), runtime.GOOS, runtime.GOARCH, "v0.26.0-beta.1", nil)
+	srv := signedUpdateServer(t, []byte("installed beta"), runtime.GOOS, wanrelease.HostArtifactArch(), "v0.26.0-beta.1", nil)
 	defer srv.Close()
 	bin := filepath.Join(t.TempDir(), "wanctl")
 	flags := "-X main.buildVersion=" + current + " -X wanctl/internal/release.TrustedPublicKeys=" + wanrelease.TrustedPublicKeys

@@ -199,7 +199,7 @@ func (u *autoUpdater) offered(ctx context.Context) (string, error) {
 		return "", err
 	}
 	got, err := overSources(bases, func(base string) (updateFetch, error) {
-		version, err := checkSignedUpdate(ctx, base, runtime.GOOS, runtime.GOARCH, u.probe.version)
+		version, err := checkSignedUpdate(ctx, base, runtime.GOOS, wanrelease.HostArtifactArch(), u.probe.version)
 		return updateFetch{version: version}, err
 	})
 	return got.version, err
@@ -217,7 +217,7 @@ func (u *autoUpdater) installLatest(ctx context.Context) (string, error) {
 		return "", err
 	}
 	got, err := overSources(bases, func(base string) (updateFetch, error) {
-		path, version, err := downloadSignedUpdate(ctx, base, dir, runtime.GOOS, runtime.GOARCH, u.probe.version)
+		path, version, err := downloadSignedUpdate(ctx, base, dir, runtime.GOOS, wanrelease.HostArtifactArch(), u.probe.version)
 		return updateFetch{path: path, version: version}, err
 	})
 	if err != nil {
