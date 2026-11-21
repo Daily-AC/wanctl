@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode"
 	"unicode/utf16"
 
 	"wanctl/internal/config"
+	wanrelease "wanctl/internal/release"
 )
 
 // cmdService installs, removes, or reports an OS-native autostart unit for the
@@ -341,10 +343,10 @@ func xmlEscape(s string) string {
 //
 //   - The action is a console program, so every logon opened a console window,
 //     and closing that stray window killed the agent (this took a real device
-//     offline). conhost --headless gives the supervisor a console nobody can
-//     see or close, while keeping it in the interactive session (a "run whether
-//     logged on or not" task would move it to session 0, away from the user's
-//     desktop).
+//     offline). The launcher from winTaskAction gives the supervisor a console
+//     nobody can see or close, while keeping it in the interactive session (a
+//     "run whether logged on or not" task would move it to session 0, away from
+//     the user's desktop).
 //   - DisallowStartIfOnBatteries and StopIfGoingOnBatteries default to true, so
 //     a laptop that logs in on battery never starts the agent, and unplugging
 //     one stops it.
@@ -356,13 +358,7 @@ func xmlEscape(s string) string {
 // so the install used to need an elevated prompt; the agent only ever runs as
 // this user anyway. Task Scheduler has no restart-on-exit policy; the
 // __supervise loop keeps the agent alive and picks up updated binaries.
-func winTaskXML(user, conhost, self string, extra []string) string {
-	// The arguments reach wanctl as one command line, so each one that could
-	// contain a space needs its own quotes.
-	args := fmt.Sprintf(`--headless "%s" __supervise`, self)
-	for _, a := range extra {
-		args += ` "` + strings.ReplaceAll(a, `"`, `\"`) + `"`
-	}
+func winTaskXML(user, command, args string) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -396,7 +392,102 @@ func winTaskXML(user, conhost, self string, extra []string) string {
     </Exec>
   </Actions>
 </Task>
-`, xmlEscape(user), xmlEscape(conhost), xmlEscape(args))
+`, xmlEscape(user), xmlEscape(command), xmlEscape(args))
+}
+
+// winTaskAction picks the program the logon task starts, and its arguments,
+// for a Windows whose major version is osMajor (release.OSMajorVersion).
+//
+// Windows 10 and later get conhost --headless, a console with no window at
+// all. Windows 7 and 8.x have no conhost --headless (it arrived with Windows
+// 10 1809; earlier Windows 10 releases are left as they always were), so there
+// the task started nothing and the agent never came back after a reboot. On 7
+// and 8.x the supervisor runs under the stock Windows PowerShell instead (2.0
+// on Windows 7), which hides its own console window right after it starts and
+// waits for the supervisor, so the task's process lives as long as the
+// supervisor does: schtasks /query reports it truthfully, and schtasks /end
+// ends it, which exitWithParent turns into the supervisor and agent exiting.
+func winTaskAction(conhost, powershell, self string, extra []string, osMajor uint32) (command, args string) {
+	if osMajor >= 10 {
+		// The arguments reach wanctl as one command line, so each one that could
+		// contain a space needs its own quotes.
+		args = fmt.Sprintf(`--headless "%s" __supervise`, self)
+		for _, a := range extra {
+			args += ` "` + strings.ReplaceAll(a, `"`, `\"`) + `"`
+		}
+		return conhost, args
+	}
+	script := "& " + psQuote(self) + " __supervise"
+	for _, a := range extra {
+		script += " " + psQuote(psNativeArg(a))
+	}
+	return powershell, "-NoProfile -WindowStyle Hidden -Command " + cmdlineQuote(script)
+}
+
+// psQuote makes s a PowerShell single-quoted string, in which nothing is
+// expanded and only a quote needs doubling. PowerShell also ends such a string
+// at the typographic single quotes, so those are doubled too.
+func psQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('\'')
+	for _, r := range s {
+		b.WriteRune(r)
+		switch r {
+		case '\'', '\u2018', '\u2019', '\u201a', '\u201b':
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
+}
+
+// psNativeArg pre-escapes one argument for the way Windows PowerShell (2.0 to
+// 5.1) hands arguments to a native program: it wraps an argument that contains
+// whitespace in double quotes and escapes nothing, so an embedded quote, or a
+// backslash in front of the closing quote, would reach wanctl mangled. This
+// adds the escaping that CommandLineToArgvW then undoes and leaves the
+// wrapping to PowerShell. Every quote that results has a backslash in front,
+// so the PowerShell versions that skip the wrapping when an argument already
+// holds a quoted section find none and wrap exactly when there is whitespace.
+// PowerShell drops an empty argument altogether; "" survives as an empty one.
+func psNativeArg(a string) string {
+	if a == "" {
+		return `""`
+	}
+	return escapeQuotes(a, strings.IndexFunc(a, unicode.IsSpace) >= 0)
+}
+
+// cmdlineQuote quotes s as a single argument under the CommandLineToArgvW
+// rules, which powershell.exe uses to split its own command line.
+func cmdlineQuote(s string) string {
+	return `"` + escapeQuotes(s, true) + `"`
+}
+
+// escapeQuotes applies the CommandLineToArgvW rules to s: n backslashes before
+// a literal quote become 2n+1, and, when s will be wrapped in quotes, the n
+// backslashes at its end become 2n so the closing quote stays a quote.
+func escapeQuotes(s string, wrapped bool) string {
+	var b strings.Builder
+	backslashes := 0
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '\\':
+			backslashes++
+			continue
+		case '"':
+			b.WriteString(strings.Repeat(`\`, 2*backslashes+1))
+			b.WriteByte(c)
+		default:
+			b.WriteString(strings.Repeat(`\`, backslashes))
+			b.WriteByte(c)
+		}
+		backslashes = 0
+	}
+	if wrapped {
+		backslashes *= 2
+	}
+	b.WriteString(strings.Repeat(`\`, backslashes))
+	return b.String()
 }
 
 // utf16File encodes s as UTF-16LE with a byte-order mark, the encoding the
@@ -421,12 +512,14 @@ func winInstall(self string, extra []string) error {
 		sysRoot = `C:\Windows`
 	}
 	conhost := filepath.Join(sysRoot, "System32", "conhost.exe")
+	powershell := filepath.Join(sysRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+	command, args := winTaskAction(conhost, powershell, self, extra, wanrelease.OSMajorVersion())
 	f, err := os.CreateTemp("", "wanctl-task-*.xml")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
-	_, err = f.Write(utf16File(winTaskXML(u.Username, conhost, self, extra)))
+	_, err = f.Write(utf16File(winTaskXML(u.Username, command, args)))
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

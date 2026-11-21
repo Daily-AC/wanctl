@@ -34,5 +34,5 @@ func ArtifactArch(goos, goarch string, osMajor uint32) string {
 // HostArtifactArch is ArtifactArch for the running binary on this machine.
 // Everything that fetches this binary's own successor goes through it.
 func HostArtifactArch() string {
-	return ArtifactArch(runtime.GOOS, runtime.GOARCH, osMajorVersion())
+	return ArtifactArch(runtime.GOOS, runtime.GOARCH, OSMajorVersion())
 }
