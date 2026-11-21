@@ -464,7 +464,7 @@ func restartManagedAgent(self string, pid int, expectedVersion ...string) error 
 	if !canTerminatePID(pid) {
 		return fmt.Errorf(`新二进制已装好,但运行中的 agent (pid %d) 属于另一个账户(由 supervisor 托管),当前用户无权终止它 —— 旧版本仍在服务。
 请以管理员/root 重启那个服务,例如:
-  Windows 计划任务  Stop-ScheduledTask -TaskName WanctlAgent; Start-ScheduledTask -TaskName WanctlAgent
+  Windows 计划任务  schtasks /end /tn WanctlAgent，再 schtasks /run /tn WanctlAgent
   systemd           sudo systemctl restart <unit>
   launchd           sudo launchctl kickstart -k system/<label>`, pid)
 	}
