@@ -1939,8 +1939,8 @@
           ['wanctl-linux-amd64.tar.gz', 'Linux · x86_64'], ['wanctl-linux-arm64.tar.gz', 'Linux · ARM64'],
           ['wanctl-linux-386.tar.gz', 'Linux · x86 32-bit'], ['wanctl-linux-arm.tar.gz', 'Linux · ARM 32-bit'],
           ['wanctl-linux-mipsle.tar.gz', 'Linux · MIPS LE'], ['wanctl-linux-mips.tar.gz', 'Linux · MIPS BE'],
-          ['wanctl-windows-amd64.exe', 'Windows · x86_64'], ['wanctl-windows-386.exe', 'Windows · x86 32-bit'],
-          ['wanctl-windows-arm64.exe', 'Windows · ARM64'],
+          ['wanctl-windows-amd64.exe', 'Windows · x86_64'], ['wanctl-windows-amd64.win7.exe', 'Windows 7 / 8.x · x86_64'],
+          ['wanctl-windows-386.exe', 'Windows · x86 32-bit'], ['wanctl-windows-arm64.exe', 'Windows · ARM64'],
           ['wanctl-android-arm64.tar.gz', 'Android · binary (ARM64)'], ['wanctl-android-arm.tar.gz', 'Android · binary (ARM 32-bit)'],
           ['wanctl-android-386.tar.gz', 'Android · binary (x86)'], ['wanctl-android-amd64.tar.gz', 'Android · binary (x86_64)']
         ];
@@ -1969,7 +1969,7 @@
             '<pre data-copy>' + esc('irm ' + latest + '/install.ps1 | iex') + '</pre>' +
             '<p class="note">' + esc(t().dlJoin) + '</p>' +
             '<pre data-copy>' + esc(join) + '</pre></div>' +
-          // 15 行全平台表默认折叠：99% 的人用上面那三行，这张表是给 MIPS 路由器那种人的。
+          // 16 行全平台表默认折叠：99% 的人用上面那三行，这张表是给 MIPS 路由器那种人的。
           '<details class="card"><summary>' + esc(t().dlAll) + '</summary>' +
             '<table style="margin-top:14px"><tbody>' + NAMES.map(function (p) {
               var a = asset(p[0]);
