@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -403,6 +404,35 @@ func TestRegistrationRefusesUnsafeRedirects(t *testing.T) {
 	rr := adminRegister(t, r, map[string]any{"client_name": "x", "redirect_uris": []string{"http://127.0.0.1:7777/cb"}})
 	if rr.Code != http.StatusCreated {
 		t.Errorf("loopback redirect refused: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRegistrationRedirectURICountLimits(t *testing.T) {
+	r, _, _ := newOAuthRelay(t)
+	makeURIs := func(n int) []string {
+		uris := make([]string, n)
+		for i := range uris {
+			uris[i] = fmt.Sprintf("https://oauth-redirect.example/r/cb-%d", i)
+		}
+		return uris
+	}
+	// Six URIs is what hosted clients like Google Gemini's OpenAuth send across
+	// production and sandbox callbacks; this failed under the old limit of 5.
+	for _, n := range []int{6, oauthMaxRedirects} {
+		rr := adminRegister(t, r, map[string]any{"client_name": "Gemini", "redirect_uris": makeURIs(n)})
+		if rr.Code != http.StatusCreated {
+			t.Fatalf("%d redirect_uris refused: %d %s", n, rr.Code, rr.Body.String())
+		}
+	}
+	for _, n := range []int{0, oauthMaxRedirects + 1} {
+		rr := adminRegister(t, r, map[string]any{"client_name": "TooMany", "redirect_uris": makeURIs(n)})
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("%d redirect_uris = %d, want 400 (%s)", n, rr.Code, rr.Body.String())
+		}
+		out := decode(t, rr)
+		if out["error"] != "invalid_redirect_uri" {
+			t.Fatalf("%d redirect_uris error = %v, want invalid_redirect_uri", n, out)
+		}
 	}
 }
 
