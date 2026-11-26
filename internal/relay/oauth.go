@@ -34,12 +34,15 @@ import (
 // namespace a login resolves to. The two talk over the existing admin-secret
 // channel. See docs/adr/0008-mcp-oauth-split-portal-relay.md.
 const (
-	oauthScope        = "wanctl"
-	oauthAccessTTL    = time.Hour
-	oauthRefreshTTL   = 30 * 24 * time.Hour
-	oauthRequestTTL   = 10 * time.Minute
-	oauthCodeTTL      = 10 * time.Minute
-	oauthMaxRedirects = 5
+	oauthScope      = "wanctl"
+	oauthAccessTTL  = time.Hour
+	oauthRefreshTTL = 30 * 24 * time.Hour
+	oauthRequestTTL = 10 * time.Minute
+	oauthCodeTTL    = 10 * time.Minute
+	// oauthMaxRedirects caps redirect_uris in RFC 7591 registration. Hosted AI
+	// clients such as Google Gemini's OpenAuth register more than five
+	// production and sandbox callback URIs in a single request.
+	oauthMaxRedirects = 16
 	// oauthTokenDays is the namespace token's life at minting, in the unit
 	// IssueToken takes. writeOAuthTokens then pins it to the exact expiry of
 	// the refresh token issued beside it.
