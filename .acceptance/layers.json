@@ -1,0 +1,11 @@
+{
+  "L0": { "cmd": "go vet ./... && out=$(gofmt -l $(git ls-files '*.go')) && if [ -n \"$out\" ]; then echo \"gofmt needed: $out\"; exit 1; fi" },
+  "L1": { "cmd": "go test -json -count=1 ./...", "count": "go-json" },
+  "L2": { "cmd": "go test -json -count=1 -run '(Contract|Compat|Wire|Legacy|RoundTrip)' ./...", "count": "go-json" },
+  "L3": { "golden": { "debt": "CLI 输出（peers、help、错误提示）和 relay 事件日志用固定输入做规范化快照；阶段三补" } },
+  "L4": {
+    "pbt": { "debt": "协议帧和传输层编解码的往返律，用 Go 原生 fuzz，seed 语料进 L1 回归；阶段四补" },
+    "dst": { "debt": "relay 断线重连、长轮询下行、续传在弱网和乱序下不丢数据：时钟和网络接口化后做种子驱动的仿真；阶段四做最小闭环" }
+  },
+  "protect": ["**/*_test.go", "**/testdata/**", "go.mod", "go.sum", ".github/**", ".acceptance/bin/**"]
+}
